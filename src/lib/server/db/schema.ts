@@ -119,6 +119,16 @@ export const taskConfigs = sqliteTable('task_configs', {
 	options: text('options', { mode: 'json' })
 });
 
+// Every save of a task's system prompt lands here, newest first, so edits
+// are always recoverable (restore = save an old version as the new current).
+export const taskPromptVersions = sqliteTable('task_prompt_versions', {
+	id: text('id').primaryKey(),
+	task: text('task').notNull(),
+	systemPrompt: text('system_prompt').notNull(),
+	author: text('author').notNull(),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+});
+
 export const usageLog = sqliteTable('usage_log', {
 	id: text('id').primaryKey(),
 	ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),

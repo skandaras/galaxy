@@ -163,7 +163,7 @@ Each milestone ends **deployed on the dev subdomain**; promote to prod when stab
 - **M4 — Skills + Library:** SKILL.md template + categorised index, skills git-versioning, Library editor + snippets + FTS5, context bootstrap for all agents.
 - **M5 — Memory & optimisation:** memory cron with watermark + editable frequency, memory items, skill candidate approval queue, skill-optimiser task.
 - **M6 — Deep research + visual:** research pipeline with progress UI and citations, save-to-Library, Mermaid/HTML artifact rendering.
-- **M7 — Theme + mobile polish + promotion:** ASCII-galaxy aesthetic, Theme settings with live preview + presets, PWA install, responsive audit, Promote/Rollback admin buttons, promotion-gate smoke suite.
+- **M7 — Theme + mobile polish + promotion + docs:** ASCII-galaxy aesthetic, Theme settings with live preview + presets, PWA install, responsive audit, Promote/Rollback admin buttons, promotion-gate smoke suite, and **`docs/INSTALL.md`** — a start-to-finish Ubuntu server guide (Docker + compose deployment, reverse proxy + Authelia wiring, env vars, backups, dev→prod promotion) written last so it documents the platform as it actually landed.
 
 ## Verification
 

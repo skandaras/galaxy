@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import Observatory from '$lib/components/Observatory.svelte';
 
 	let { data, children } = $props();
 
@@ -23,9 +24,14 @@
 				>
 			{/each}
 		</nav>
-		<div class="pane-footer">
-			<span class="env-badge">{data.galaxyEnv}</span>
-			{#if data.user}<span class="user">{data.user.username}</span>{/if}
+		<div class="pane-bottom">
+			{#if data.user}
+				<Observatory />
+			{/if}
+			<div class="pane-footer">
+				<span class="env-badge">{data.galaxyEnv}</span>
+				{#if data.user}<span class="user">{data.user.username}</span>{/if}
+			</div>
 		</div>
 	</aside>
 	<main class="main">
@@ -89,12 +95,15 @@
 		color: var(--fg);
 		background: var(--border);
 	}
-	.pane-footer {
+	.pane-bottom {
 		margin-top: auto;
+	}
+	.pane-footer {
 		display: flex;
 		align-items: center;
 		gap: 0.6rem;
 		font-size: 0.75rem;
+		margin-top: 0.6rem;
 	}
 	.env-badge {
 		color: var(--bg);

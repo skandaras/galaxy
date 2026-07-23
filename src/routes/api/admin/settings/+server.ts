@@ -7,6 +7,7 @@ import {
 	getSetting,
 	setSetting
 } from '$lib/server/settings';
+import { emitEvent } from '$lib/server/engine/events';
 
 const KNOWN_KEYS = ['websearch', 'compaction'] as const;
 const DEFAULTS: Record<string, unknown> = {
@@ -22,12 +23,18 @@ export const GET: RequestHandler = ({ locals }) => {
 };
 
 export const PUT: RequestHandler = async ({ locals, request }) => {
-	requireAdmin(locals);
+	const admin = requireAdmin(locals);
 	const body = await request.json().catch(() => ({}));
 	const key = body.key as string;
 	if (!KNOWN_KEYS.includes(key as (typeof KNOWN_KEYS)[number])) {
 		error(400, `Unknown settings key: ${key}`);
 	}
 	setSetting(key, { ...(DEFAULTS[key] as object), ...(body.value ?? {}) });
+	emitEvent({
+		userId: admin.id,
+		type: 'admin',
+		name: `settings.${key}`,
+		status: 'ok'
+	});
 	return json({ ok: true });
 };

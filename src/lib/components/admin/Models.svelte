@@ -1,0 +1,152 @@
+<script lang="ts">
+	interface Model {
+		id: string;
+		providerId: string;
+		modelKey: string;
+		displayName: string;
+		contextWindow: number | null;
+		supportsTools: boolean;
+		supportsVision: boolean;
+		promptCostPerMTok: number | null;
+		completionCostPerMTok: number | null;
+		enabled: boolean;
+	}
+
+	let models = $state<Model[]>([]);
+	let filter = $state('');
+	let showDisabled = $state(false);
+
+	let { refreshKey = 0 }: { refreshKey?: number } = $props();
+
+	async function load() {
+		models = await (await fetch('/api/admin/models')).json();
+	}
+	$effect(() => {
+		void refreshKey;
+		void load();
+	});
+
+	const visible = $derived(
+		models
+			.filter((m) => showDisabled || m.enabled || filter.length > 1)
+			.filter((m) =>
+				filter
+					? (m.displayName + m.modelKey).toLowerCase().includes(filter.toLowerCase())
+					: true
+			)
+			.sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.displayName.localeCompare(b.displayName))
+			.slice(0, 200)
+	);
+
+	async function toggle(m: Model) {
+		await fetch(`/api/admin/models/${m.id}`, {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ enabled: !m.enabled })
+		});
+		await load();
+	}
+
+	const fmtCost = (v: number | null) => (v == null ? '—' : `$${v.toFixed(2)}/M`);
+</script>
+
+<section>
+	<div class="bar">
+		<input placeholder="Filter models… (type to search all synced models)" bind:value={filter} />
+		<label class="chk">
+			<input type="checkbox" bind:checked={showDisabled} /> show disabled
+		</label>
+		<span class="count">{models.filter((m) => m.enabled).length} enabled / {models.length} synced</span>
+	</div>
+
+	<table>
+		<thead>
+			<tr><th>On</th><th>Model</th><th>Caps</th><th>Context</th><th>In</th><th>Out</th></tr>
+		</thead>
+		<tbody>
+			{#each visible as m (m.id)}
+				<tr class:disabled={!m.enabled}>
+					<td><input type="checkbox" checked={m.enabled} onchange={() => toggle(m)} /></td>
+					<td>
+						<div>{m.displayName}</div>
+						<div class="key">{m.modelKey}</div>
+					</td>
+					<td>
+						{#if m.supportsTools}<span class="badge" title="tool calling">T</span>{/if}
+						{#if m.supportsVision}<span class="badge" title="vision">V</span>{/if}
+					</td>
+					<td>{m.contextWindow ? `${Math.round(m.contextWindow / 1024)}k` : '—'}</td>
+					<td>{fmtCost(m.promptCostPerMTok)}</td>
+					<td>{fmtCost(m.completionCostPerMTok)}</td>
+				</tr>
+			{:else}
+				<tr><td colspan="6" class="empty">No models — sync a provider first.</td></tr>
+			{/each}
+		</tbody>
+	</table>
+</section>
+
+<style>
+	.bar {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		margin-bottom: 0.6rem;
+	}
+	.bar input {
+		flex: 1;
+	}
+	input:not([type='checkbox']) {
+		background: var(--bg-pane);
+		border: 1px solid var(--border);
+		border-radius: 5px;
+		color: var(--fg);
+		font-family: inherit;
+		font-size: 0.78rem;
+		padding: 0.35rem 0.5rem;
+		min-width: 16rem;
+	}
+	.chk {
+		font-size: 0.72rem;
+		color: var(--fg-dim);
+	}
+	.count {
+		font-size: 0.72rem;
+		color: var(--fg-dim);
+		margin-left: auto;
+	}
+	table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 0.8rem;
+	}
+	th,
+	td {
+		text-align: left;
+		padding: 0.4rem 0.6rem;
+		border-bottom: 1px solid var(--border);
+	}
+	th {
+		color: var(--fg-dim);
+		font-weight: normal;
+	}
+	tr.disabled td {
+		opacity: 0.5;
+	}
+	.key {
+		font-size: 0.68rem;
+		color: var(--fg-dim);
+	}
+	.badge {
+		display: inline-block;
+		border: 1px solid var(--accent);
+		color: var(--accent);
+		border-radius: 3px;
+		font-size: 0.62rem;
+		padding: 0 0.25rem;
+		margin-right: 0.2rem;
+	}
+	.empty {
+		color: var(--fg-dim);
+	}
+</style>
