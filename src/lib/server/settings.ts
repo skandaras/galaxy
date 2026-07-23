@@ -1,0 +1,48 @@
+import { and, eq } from 'drizzle-orm';
+import { db } from '$lib/server/db';
+import { settings } from '$lib/server/db/schema';
+
+export const GLOBAL_SCOPE = 'global';
+
+export function getSetting<T>(key: string, fallback: T, scope = GLOBAL_SCOPE): T {
+	const row = db
+		.select()
+		.from(settings)
+		.where(and(eq(settings.scope, scope), eq(settings.key, key)))
+		.get();
+	if (!row) return fallback;
+	return row.value as T;
+}
+
+export function setSetting(key: string, value: unknown, scope = GLOBAL_SCOPE): void {
+	db.insert(settings)
+		.values({ scope, key, value, updatedAt: new Date() })
+		.onConflictDoUpdate({
+			target: [settings.scope, settings.key],
+			set: { value, updatedAt: new Date() }
+		})
+		.run();
+}
+
+export interface WebSearchSettings {
+	provider: 'brave' | 'tavily' | 'searxng' | 'none';
+	apiKey?: string;
+	baseUrl?: string; // searxng instance
+	maxResults: number;
+	timeoutMs: number;
+}
+
+export const DEFAULT_WEB_SEARCH: WebSearchSettings = {
+	provider: 'none',
+	maxResults: 5,
+	timeoutMs: 10_000
+};
+
+export interface CompactionSettings {
+	/** Compact when estimated context exceeds this share of the model's window. */
+	ratio: number;
+	/** Always keep this many recent messages verbatim. */
+	keepRecent: number;
+}
+
+export const DEFAULT_COMPACTION: CompactionSettings = { ratio: 0.7, keepRecent: 8 };

@@ -1,15 +1,27 @@
 <script lang="ts">
+	import { page } from '$app/state';
+
 	let { data, children } = $props();
+
+	const links = $derived([
+		{ href: '/chat', label: 'Chat' },
+		{ href: '/code', label: 'Code' },
+		{ href: '/library', label: 'Library' },
+		...(data.user?.isAdmin ? [{ href: '/admin', label: 'Admin' }] : [])
+	]);
 </script>
 
 <div class="shell">
 	<aside class="pane">
 		<div class="brand">✦ GALAXY</div>
 		<nav class="nav">
-			<span class="nav-item active">Chat</span>
-			<span class="nav-item">Code</span>
-			<span class="nav-item">Library</span>
-			<span class="nav-item">Admin</span>
+			{#each links as link (link.href)}
+				<a
+					class="nav-item"
+					class:active={page.url.pathname.startsWith(link.href)}
+					href={link.href}>{link.label}</a
+				>
+			{/each}
 		</nav>
 		<div class="pane-footer">
 			<span class="env-badge">{data.galaxyEnv}</span>
@@ -68,6 +80,10 @@
 		font-size: 0.85rem;
 		padding: 0.4rem 0.6rem;
 		border-radius: 4px;
+		text-decoration: none;
+	}
+	.nav-item:hover {
+		color: var(--fg);
 	}
 	.nav-item.active {
 		color: var(--fg);
@@ -94,8 +110,8 @@
 	.main {
 		flex: 1;
 		display: flex;
-		align-items: center;
-		justify-content: center;
+		min-height: 100vh;
+		min-width: 0;
 	}
 	@media (max-width: 720px) {
 		.shell {

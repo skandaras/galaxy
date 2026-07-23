@@ -2,10 +2,12 @@ import type { Handle } from '@sveltejs/kit';
 import { error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { runMigrations } from '$lib/server/db';
+import { seedTaskConfigs } from '$lib/server/bootstrap';
 import { isTrustedProxy, parseAuthHeaders, isAdminFromGroups } from '$lib/server/auth';
 import { provisionUser } from '$lib/server/users';
 
 runMigrations();
+seedTaskConfigs();
 
 const PUBLIC_PATHS = new Set(['/healthz']);
 

@@ -8,6 +8,13 @@
       "when": 1784798251263,
       "tag": "0000_bright_magneto",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1784799803046,
+      "tag": "0001_funny_red_wolf",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, primaryKey } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, primaryKey } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
 	id: text('id').primaryKey(),
@@ -36,4 +36,111 @@ export const events = sqliteTable('events', {
 	status: text('status', { enum: ['ok', 'error', 'running'] }).notNull(),
 	durationMs: integer('duration_ms'),
 	detail: text('detail', { mode: 'json' })
+});
+
+// Hidden chats never appear here — they live only in the in-memory store
+// (see $lib/server/chats.ts) and vanish on restart.
+export const chats = sqliteTable('chats', {
+	id: text('id').primaryKey(),
+	userId: text('user_id').notNull(),
+	mode: text('mode', { enum: ['chat', 'code'] }).notNull().default('chat'),
+	title: text('title').notNull().default('New chat'),
+	compactSummary: text('compact_summary'),
+	compactedUpTo: integer('compacted_up_to').notNull().default(0),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+	updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+});
+
+export const messages = sqliteTable('messages', {
+	id: text('id').primaryKey(),
+	chatId: text('chat_id').notNull(),
+	seq: integer('seq').notNull(),
+	role: text('role', { enum: ['user', 'assistant', 'tool'] }).notNull(),
+	content: text('content').notNull(),
+	attachments: text('attachments', { mode: 'json' }).$type<AttachmentRef[] | null>(),
+	modelKey: text('model_key'),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+});
+
+export interface AttachmentRef {
+	id: string;
+	name: string;
+	mime: string;
+}
+
+export const attachments = sqliteTable('attachments', {
+	id: text('id').primaryKey(),
+	chatId: text('chat_id').notNull(),
+	name: text('name').notNull(),
+	mime: text('mime').notNull(),
+	size: integer('size').notNull(),
+	path: text('path').notNull(),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+});
+
+export const providers = sqliteTable('providers', {
+	id: text('id').primaryKey(),
+	kind: text('kind', { enum: ['openrouter', 'openai-compatible'] }).notNull(),
+	name: text('name').notNull(),
+	baseUrl: text('base_url').notNull(),
+	apiKeyEnc: text('api_key_enc'),
+	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+});
+
+export const models = sqliteTable('models', {
+	id: text('id').primaryKey(),
+	providerId: text('provider_id').notNull(),
+	modelKey: text('model_key').notNull(),
+	displayName: text('display_name').notNull(),
+	contextWindow: integer('context_window'),
+	supportsTools: integer('supports_tools', { mode: 'boolean' }).notNull().default(false),
+	supportsVision: integer('supports_vision', { mode: 'boolean' }).notNull().default(false),
+	promptCostPerMTok: real('prompt_cost_per_mtok'),
+	completionCostPerMTok: real('completion_cost_per_mtok'),
+	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true)
+});
+
+export const CORE_TASKS = [
+	'chat',
+	'coding',
+	'deep-research',
+	'visual',
+	'memory',
+	'skill-optimiser'
+] as const;
+export type CoreTask = (typeof CORE_TASKS)[number];
+
+export const taskConfigs = sqliteTable('task_configs', {
+	task: text('task').primaryKey(),
+	systemPrompt: text('system_prompt').notNull().default(''),
+	primaryModelId: text('primary_model_id'),
+	backupModelId: text('backup_model_id'),
+	options: text('options', { mode: 'json' })
+});
+
+export const usageLog = sqliteTable('usage_log', {
+	id: text('id').primaryKey(),
+	ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),
+	userId: text('user_id'),
+	chatId: text('chat_id'),
+	task: text('task').notNull(),
+	modelKey: text('model_key').notNull(),
+	promptTokens: integer('prompt_tokens').notNull().default(0),
+	completionTokens: integer('completion_tokens').notNull().default(0),
+	costUsd: real('cost_usd'),
+	status: text('status', { enum: ['ok', 'error'] }).notNull()
+});
+
+// Job history for non-hidden chats; the live stream state is in-memory
+// (see $lib/server/engine/jobs.ts).
+export const jobs = sqliteTable('jobs', {
+	id: text('id').primaryKey(),
+	chatId: text('chat_id'),
+	userId: text('user_id').notNull(),
+	task: text('task').notNull(),
+	status: text('status', { enum: ['running', 'done', 'error'] }).notNull(),
+	error: text('error'),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+	finishedAt: integer('finished_at', { mode: 'timestamp_ms' })
 });

@@ -1,0 +1,32 @@
+import { error, json } from '@sveltejs/kit';
+import type { RequestHandler } from './$types';
+import { requireUser } from '$lib/server/api';
+import { getChat } from '$lib/server/chats';
+import { EngineError, startChatTurn } from '$lib/server/engine/engine';
+import { findRunningJobForChat } from '$lib/server/engine/jobs';
+
+export const POST: RequestHandler = async ({ locals, params, request }) => {
+	const user = requireUser(locals);
+	const chat = getChat(params.id, user.id);
+	if (!chat) error(404, 'Chat not found');
+	if (findRunningJobForChat(chat.id)) error(409, 'A response is already running for this chat');
+
+	const body = await request.json().catch(() => ({}));
+	const content = typeof body.content === 'string' ? body.content.trim() : '';
+	if (!content && !body.attachments?.length) error(400, 'Empty message');
+
+	try {
+		const job = startChatTurn({
+			chatId: chat.id,
+			userId: user.id,
+			content,
+			attachments: Array.isArray(body.attachments) ? body.attachments : undefined,
+			modelId: typeof body.modelId === 'string' ? body.modelId : undefined,
+			webSearch: body.webSearch !== false
+		});
+		return json({ jobId: job.id }, { status: 202 });
+	} catch (err) {
+		if (err instanceof EngineError) error(400, err.message);
+		throw err;
+	}
+};
