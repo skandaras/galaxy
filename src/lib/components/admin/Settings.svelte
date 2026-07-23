@@ -7,18 +7,20 @@
 		timeoutMs: 10000
 	});
 	let compaction = $state({ ratio: 0.7, keepRecent: 8 });
+	let budget = $state({ enabled: false, limitUsd: 25, period: 'month' });
 	let saved = $state<string | null>(null);
 
 	async function load() {
 		const data = await (await fetch('/api/admin/settings')).json();
 		websearch = { apiKey: '', baseUrl: '', ...data.websearch };
 		compaction = { ...data.compaction };
+		budget = { ...data.budget };
 	}
 	$effect(() => {
 		void load();
 	});
 
-	async function save(key: 'websearch' | 'compaction', value: unknown) {
+	async function save(key: 'websearch' | 'compaction' | 'budget', value: unknown) {
 		await fetch('/api/admin/settings', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
@@ -69,6 +71,34 @@
 	</article>
 
 	<article class="card">
+		<h3>Budget cap</h3>
+		<div class="grid">
+			<label class="row">
+				<input type="checkbox" bind:checked={budget.enabled} /> enforce a spending cap
+			</label>
+			<label>
+				limit (USD)
+				<input type="number" min="0" step="1" bind:value={budget.limitUsd} />
+			</label>
+			<label>
+				per
+				<select bind:value={budget.period}>
+					<option value="day">day</option>
+					<option value="week">week (Mon–Sun)</option>
+					<option value="month">calendar month</option>
+				</select>
+			</label>
+		</div>
+		<p class="hint">
+			When the estimated spend for the current period reaches the limit, all new model calls are
+			refused until the period rolls over (or the cap is raised here).
+		</p>
+		<button class="btn primary" onclick={() => save('budget', budget)}>
+			{saved === 'budget' ? 'Saved ✓' : 'Save'}
+		</button>
+	</article>
+
+	<article class="card">
 		<h3>Conversation compaction</h3>
 		<div class="grid">
 			<label>
@@ -112,6 +142,15 @@
 		gap: 0.3rem;
 		font-size: 0.7rem;
 		color: var(--fg-dim);
+	}
+	label.row {
+		flex-direction: row;
+		align-items: center;
+	}
+	.hint {
+		font-size: 0.68rem;
+		color: var(--fg-dim);
+		margin: 0 0 0.7rem;
 	}
 	input,
 	select {

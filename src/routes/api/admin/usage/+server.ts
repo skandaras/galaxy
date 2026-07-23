@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import type { RequestHandler } from './$types';
 import { requireAdmin } from '$lib/server/api';
 import { db } from '$lib/server/db';
+import { getBudgetStatus } from '$lib/server/engine/budget';
 
 export const GET: RequestHandler = ({ locals, url }) => {
 	requireAdmin(locals);
@@ -39,5 +40,5 @@ export const GET: RequestHandler = ({ locals, url }) => {
 		WHERE l.ts >= ${since}
 		GROUP BY l.user_id ORDER BY cost DESC`);
 
-	return json({ days, totals, byDay, byModel, byUser });
+	return json({ days, totals, byDay, byModel, byUser, budget: getBudgetStatus() });
 };

@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
 import { getChat } from '$lib/server/chats';
 import { EngineError, startChatTurn } from '$lib/server/engine/engine';
+import { BudgetExceededError } from '$lib/server/engine/budget';
 import { findRunningJobForChat } from '$lib/server/engine/jobs';
 
 export const POST: RequestHandler = async ({ locals, params, request }) => {
@@ -26,6 +27,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 		});
 		return json({ jobId: job.id }, { status: 202 });
 	} catch (err) {
+		if (err instanceof BudgetExceededError) error(402, err.message);
 		if (err instanceof EngineError) error(400, err.message);
 		throw err;
 	}

@@ -9,7 +9,7 @@ export interface GalaxyEvent {
 	userId?: string;
 	chatId?: string;
 	task?: string;
-	type: 'model.call' | 'tool.call' | 'job' | 'failover' | 'compaction' | 'admin';
+	type: 'model.call' | 'tool.call' | 'job' | 'failover' | 'compaction' | 'admin' | 'budget';
 	name: string;
 	status: 'ok' | 'error' | 'running';
 	durationMs?: number;

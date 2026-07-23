@@ -38,6 +38,14 @@ export const DEFAULT_WEB_SEARCH: WebSearchSettings = {
 	timeoutMs: 10_000
 };
 
+export interface BudgetSettings {
+	enabled: boolean;
+	limitUsd: number;
+	period: 'day' | 'week' | 'month';
+}
+
+export const DEFAULT_BUDGET: BudgetSettings = { enabled: false, limitUsd: 25, period: 'month' };
+
 export interface CompactionSettings {
 	/** Compact when estimated context exceeds this share of the model's window. */
 	ratio: number;

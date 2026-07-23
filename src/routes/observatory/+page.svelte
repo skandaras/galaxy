@@ -14,7 +14,7 @@
 		detail: Record<string, unknown> | null;
 	}
 
-	const TYPES = ['', 'model.call', 'tool.call', 'job', 'failover', 'compaction', 'admin'];
+	const TYPES = ['', 'model.call', 'tool.call', 'job', 'failover', 'compaction', 'admin', 'budget'];
 	let type = $state('');
 	let status = $state('');
 	let rows = $state<Ev[]>([]);

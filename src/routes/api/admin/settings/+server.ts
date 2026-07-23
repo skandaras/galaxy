@@ -2,6 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireAdmin } from '$lib/server/api';
 import {
+	DEFAULT_BUDGET,
 	DEFAULT_COMPACTION,
 	DEFAULT_WEB_SEARCH,
 	getSetting,
@@ -9,10 +10,11 @@ import {
 } from '$lib/server/settings';
 import { emitEvent } from '$lib/server/engine/events';
 
-const KNOWN_KEYS = ['websearch', 'compaction'] as const;
+const KNOWN_KEYS = ['websearch', 'compaction', 'budget'] as const;
 const DEFAULTS: Record<string, unknown> = {
 	websearch: DEFAULT_WEB_SEARCH,
-	compaction: DEFAULT_COMPACTION
+	compaction: DEFAULT_COMPACTION,
+	budget: DEFAULT_BUDGET
 };
 
 export const GET: RequestHandler = ({ locals }) => {

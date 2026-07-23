@@ -13,6 +13,13 @@
 			errors: number;
 		}[];
 		byUser: { username: string; prompt: number; completion: number; cost: number; calls: number }[];
+		budget: {
+			enabled: boolean;
+			limitUsd: number;
+			period: string;
+			spentUsd: number;
+			blocked: boolean;
+		};
 	}
 
 	let days = $state(30);
@@ -39,6 +46,12 @@
 
 	{#if data}
 		<div class="tiles">
+			{#if data.budget.enabled}
+				<div class="tile" class:alert={data.budget.blocked}>
+					<span>{money(data.budget.spentUsd)} / ${data.budget.limitUsd}</span>
+					<small>{data.budget.blocked ? 'CAP REACHED' : `this ${data.budget.period}`}</small>
+				</div>
+			{/if}
 			<div class="tile"><span>{money(data.totals.cost)}</span><small>estimated cost</small></div>
 			<div class="tile"><span>{fmt(data.totals.calls)}</span><small>model calls</small></div>
 			<div class="tile"><span>{fmt(data.totals.prompt)}</span><small>prompt tokens</small></div>
@@ -133,6 +146,13 @@
 		display: block;
 		font-size: 1.15rem;
 		color: var(--accent);
+	}
+	.tile.alert {
+		border-color: var(--danger);
+	}
+	.tile.alert span,
+	.tile.alert small {
+		color: var(--danger);
 	}
 	.tile small {
 		font-size: 0.65rem;

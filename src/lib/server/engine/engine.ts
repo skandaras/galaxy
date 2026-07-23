@@ -17,6 +17,7 @@ import {
 	getSetting,
 	type WebSearchSettings
 } from '$lib/server/settings';
+import { assertBudget } from './budget';
 import { buildContext } from './context';
 import { maybeCompact } from './compaction';
 import { emitEvent } from './events';
@@ -45,6 +46,7 @@ export class EngineError extends Error {}
 export function startChatTurn(opts: TurnOptions): LiveJob {
 	const chat = getChat(opts.chatId, opts.userId);
 	if (!chat) throw new EngineError('Chat not found');
+	assertBudget(opts.userId, 'chat');
 
 	const cfg = db.select().from(taskConfigs).where(eq(taskConfigs.task, 'chat')).get();
 	const choice = pickModel(opts.modelId ?? cfg?.primaryModelId ?? null);
