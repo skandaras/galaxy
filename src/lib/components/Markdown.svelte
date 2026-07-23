@@ -1,14 +1,43 @@
 <script lang="ts">
 	import { marked } from 'marked';
 	import DOMPurify from 'dompurify';
+	import MermaidBlock from './MermaidBlock.svelte';
 
 	let { text }: { text: string } = $props();
-	const html = $derived(
-		DOMPurify.sanitize(marked.parse(text, { async: false }) as string)
-	);
+
+	interface Segment {
+		kind: 'md' | 'mermaid';
+		content: string;
+	}
+
+	// Split out ```mermaid fences so diagrams render as SVG instead of code.
+	function segment(input: string): Segment[] {
+		const out: Segment[] = [];
+		const re = /```mermaid\n([\s\S]*?)```/g;
+		let last = 0;
+		for (let m = re.exec(input); m; m = re.exec(input)) {
+			if (m.index > last) out.push({ kind: 'md', content: input.slice(last, m.index) });
+			out.push({ kind: 'mermaid', content: m[1] });
+			last = m.index + m[0].length;
+		}
+		if (last < input.length) out.push({ kind: 'md', content: input.slice(last) });
+		return out;
+	}
+
+	const segments = $derived(segment(text));
+	const render = (md: string) =>
+		DOMPurify.sanitize(marked.parse(md, { async: false }) as string);
 </script>
 
-<div class="md">{@html html}</div>
+<div class="md">
+	{#each segments as seg, i (i)}
+		{#if seg.kind === 'mermaid'}
+			<MermaidBlock code={seg.content} />
+		{:else}
+			{@html render(seg.content)}
+		{/if}
+	{/each}
+</div>
 
 <style>
 	.md :global(pre) {

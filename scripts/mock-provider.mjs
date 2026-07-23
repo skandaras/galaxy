@@ -44,17 +44,30 @@ const server = createServer(async (req, res) => {
 
 	if (req.method === 'GET' && url.pathname === '/searxng/search') {
 		res.writeHead(200, { 'content-type': 'application/json' });
+		const q = url.searchParams.get('q');
 		res.end(
 			JSON.stringify({
 				results: [
 					{
 						title: 'Mock result one',
-						url: 'https://example.com/one',
-						content: `Snippet about ${url.searchParams.get('q')}`
+						url: `http://127.0.0.1:${port}/page/one?q=${encodeURIComponent(q ?? '')}`,
+						content: `Snippet about ${q}`
 					},
-					{ title: 'Mock result two', url: 'https://example.com/two', content: 'More detail.' }
+					{
+						title: 'Mock result two',
+						url: `http://127.0.0.1:${port}/page/two`,
+						content: 'More detail.'
+					}
 				]
 			})
+		);
+		return;
+	}
+
+	if (req.method === 'GET' && url.pathname.startsWith('/page/')) {
+		res.writeHead(200, { 'content-type': 'text/html' });
+		res.end(
+			`<html><head><title>Mock page</title><style>body{}</style></head><body><script>var x=1;</script><h1>Mock page ${url.pathname}</h1><p>Nebulae are born in collapsing clouds. The secret evidence number is FACT-42.</p></body></html>`
 		);
 		return;
 	}
@@ -76,7 +89,11 @@ const server = createServer(async (req, res) => {
 		if (!parsed.stream) {
 			const userText = String(last?.content ?? '');
 			let content = 'Mock completion.';
-			if (userText.includes('MEMORY-AUDIT')) {
+			if (userText.includes('RESEARCH-PLAN')) {
+				content = JSON.stringify({ queries: ['nebula formation', 'nebula composition'] });
+			} else if (userText.includes('RESEARCH-REVIEW')) {
+				content = JSON.stringify({ sufficient: true });
+			} else if (userText.includes('MEMORY-AUDIT')) {
 				content = JSON.stringify({
 					memories: [
 						{ kind: 'preference', content: 'User prefers concise replies' },
@@ -162,6 +179,25 @@ const server = createServer(async (req, res) => {
 				choices: [],
 				usage: { prompt_tokens: 30, completion_tokens: 10 }
 			});
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
+		// Research synthesis: streamed answer citing the provided sources.
+		if (String(last?.content ?? '').includes('RESEARCH-SYNTHESIS')) {
+			const hasEvidence = String(last.content).includes('FACT-42');
+			const parts = [
+				'Nebulae form from collapsing gas clouds [1]. ',
+				`Evidence check: ${hasEvidence ? 'FACT-42 confirmed' : 'no page evidence'} [2].\n\n`,
+				'```mermaid\ngraph TD; Cloud-->Collapse; Collapse-->Nebula;\n```'
+			];
+			for (const p of parts) {
+				delta(res, { content: p });
+				await new Promise((r) => setTimeout(r, 10));
+			}
+			delta(res, {}, 'stop');
+			sseChunk(res, { id: 'mock', choices: [], usage: { prompt_tokens: 60, completion_tokens: 30 } });
 			res.write('data: [DONE]\n\n');
 			res.end();
 			return;

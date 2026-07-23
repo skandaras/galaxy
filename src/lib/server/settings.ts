@@ -44,6 +44,26 @@ export interface GithubSettings {
 	tokenEnc?: string;
 }
 
+export interface ResearchSettings {
+	/** 'inherit' uses the web-search provider; 'searxng' can point elsewhere. */
+	provider: 'inherit' | 'searxng';
+	baseUrl?: string;
+	maxQueries: number;
+	maxPages: number;
+	maxTokens: number;
+	timeoutMs: number;
+	iterationCap: number;
+}
+
+export const DEFAULT_RESEARCH: ResearchSettings = {
+	provider: 'inherit',
+	maxQueries: 4,
+	maxPages: 6,
+	maxTokens: 2048,
+	timeoutMs: 20_000,
+	iterationCap: 1
+};
+
 export interface BudgetSettings {
 	enabled: boolean;
 	limitUsd: number;

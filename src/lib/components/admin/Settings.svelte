@@ -10,6 +10,15 @@
 	let budget = $state({ enabled: false, limitUsd: 25, period: 'month' });
 	let github = $state({ token: '', hasToken: false });
 	let hasSearchKey = $state(false);
+	let research = $state({
+		provider: 'inherit',
+		baseUrl: '',
+		maxQueries: 4,
+		maxPages: 6,
+		maxTokens: 2048,
+		timeoutMs: 20000,
+		iterationCap: 1
+	});
 	let saved = $state<string | null>(null);
 
 	async function load() {
@@ -19,12 +28,16 @@
 		compaction = { ...data.compaction };
 		budget = { ...data.budget };
 		github = { token: '', hasToken: Boolean(data.github?.hasToken) };
+		research = { baseUrl: '', ...data.research };
 	}
 	$effect(() => {
 		void load();
 	});
 
-	async function save(key: 'websearch' | 'compaction' | 'budget' | 'github', value: unknown) {
+	async function save(
+		key: 'websearch' | 'compaction' | 'budget' | 'github' | 'research',
+		value: unknown
+	) {
 		await fetch('/api/admin/settings', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
@@ -75,6 +88,48 @@
 		</div>
 		<button class="btn primary" onclick={() => save('websearch', websearch)}>
 			{saved === 'websearch' ? 'Saved ✓' : 'Save'}
+		</button>
+	</article>
+
+	<article class="card">
+		<h3>Deep research</h3>
+		<div class="grid">
+			<label>
+				search engine
+				<select bind:value={research.provider}>
+					<option value="inherit">same as web search</option>
+					<option value="searxng">dedicated SearXNG</option>
+				</select>
+			</label>
+			{#if research.provider === 'searxng'}
+				<label>
+					SearXNG URL
+					<input bind:value={research.baseUrl} placeholder="http://searxng:8080" />
+				</label>
+			{/if}
+			<label>
+				max queries
+				<input type="number" min="1" max="10" bind:value={research.maxQueries} />
+			</label>
+			<label>
+				max pages read
+				<input type="number" min="1" max="20" bind:value={research.maxPages} />
+			</label>
+			<label>
+				synthesis max tokens
+				<input type="number" min="256" step="256" bind:value={research.maxTokens} />
+			</label>
+			<label>
+				page timeout (ms)
+				<input type="number" min="2000" step="1000" bind:value={research.timeoutMs} />
+			</label>
+			<label>
+				extra rounds
+				<input type="number" min="0" max="3" bind:value={research.iterationCap} />
+			</label>
+		</div>
+		<button class="btn primary" onclick={() => save('research', research)}>
+			{saved === 'research' ? 'Saved ✓' : 'Save'}
 		</button>
 	</article>
 

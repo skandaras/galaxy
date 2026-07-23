@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
 import { getChat } from '$lib/server/chats';
 import { EngineError, startChatTurn } from '$lib/server/engine/engine';
+import { startResearchTurn } from '$lib/server/engine/research';
 import { BudgetExceededError } from '$lib/server/engine/budget';
 import { findRunningJobForChat } from '$lib/server/engine/jobs';
 
@@ -17,14 +18,16 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	if (!content && !body.attachments?.length) error(400, 'Empty message');
 
 	try {
-		const job = startChatTurn({
-			chatId: chat.id,
-			userId: user.id,
-			content,
-			attachments: Array.isArray(body.attachments) ? body.attachments : undefined,
-			modelId: typeof body.modelId === 'string' ? body.modelId : undefined,
-			webSearch: body.webSearch !== false
-		});
+		const job = body.deepResearch
+			? startResearchTurn({ chatId: chat.id, userId: user.id, content })
+			: startChatTurn({
+					chatId: chat.id,
+					userId: user.id,
+					content,
+					attachments: Array.isArray(body.attachments) ? body.attachments : undefined,
+					modelId: typeof body.modelId === 'string' ? body.modelId : undefined,
+					webSearch: body.webSearch !== false
+				});
 		return json({ jobId: job.id }, { status: 202 });
 	} catch (err) {
 		if (err instanceof BudgetExceededError) error(402, err.message);

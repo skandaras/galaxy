@@ -32,14 +32,17 @@
 	let input = $state('');
 	let selectedModelId = $state<string>('');
 	let webSearch = $state(true);
+	let deepResearch = $state(false);
 	let pendingFiles = $state<File[]>([]);
 
 	let streaming = $state(false);
 	let streamText = $state('');
 	let streamModel = $state('');
 	let toolActivity = $state<string | null>(null);
+	let stages = $state<{ name: string; detail?: string }[]>([]);
 	let notices = $state<string[]>([]);
 	let errorBanner = $state<string | null>(null);
+	let savedDocId = $state<string | null>(null);
 	let source: EventSource | null = null;
 
 	onMount(async () => {
@@ -103,6 +106,7 @@
 				content,
 				modelId: selectedModelId || undefined,
 				webSearch,
+				deepResearch,
 				attachments: attachments.length ? attachments : undefined
 			})
 		});
@@ -133,12 +137,14 @@
 		streamText = '';
 		streamModel = '';
 		toolActivity = null;
+		stages = [];
 		notices = [];
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
 			const chunk = JSON.parse(ev.data);
 			if (chunk.type === 'meta') streamModel = chunk.model;
 			else if (chunk.type === 'delta') streamText += chunk.text;
+			else if (chunk.type === 'stage') stages = [...stages, { name: chunk.name, detail: chunk.detail }];
 			else if (chunk.type === 'tool') {
 				toolActivity =
 					chunk.status === 'running'
@@ -176,8 +182,24 @@
 		streaming = false;
 		streamText = '';
 		toolActivity = null;
+		stages = [];
 		closeStream();
 		void refreshChats();
+	}
+
+	async function saveToLibrary(msg: Msg) {
+		const res = await fetch('/api/library', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				title: (currentChat?.title ?? 'Chat output').replace(/^🔭 /, ''),
+				content: msg.content
+			})
+		});
+		if (res.ok) {
+			savedDocId = msg.id;
+			setTimeout(() => (savedDocId = null), 2000);
+		}
 	}
 
 	function closeStream() {
@@ -289,7 +311,12 @@
 					<div class="msg {msg.role}">
 						{#if msg.role === 'assistant'}
 							<Markdown text={msg.content} />
-							{#if msg.modelKey}<span class="msg-model">{msg.modelKey}</span>{/if}
+							<span class="msg-meta">
+								{#if msg.modelKey}<span class="msg-model">{msg.modelKey}</span>{/if}
+								<button class="save-doc" title="Save to Library" onclick={() => saveToLibrary(msg)}>
+									{savedDocId === msg.id ? '✓ saved' : '⌘ save to library'}
+								</button>
+							</span>
 						{:else}
 							<p class="user-text">{msg.content}</p>
 							{#each msg.attachments ?? [] as att (att.id)}
@@ -301,9 +328,19 @@
 			{/each}
 			{#if streaming}
 				<div class="msg assistant">
+					{#if stages.length}
+						<div class="stages">
+							{#each stages as s, i (i)}
+								<span class="stage" class:current={i === stages.length - 1}>
+									{s.name}{s.detail ? ` (${s.detail})` : ''}
+								</span>
+								{#if i < stages.length - 1}<span class="stage-sep">→</span>{/if}
+							{/each}
+						</div>
+					{/if}
 					{#if streamText}
 						<Markdown text={streamText} />
-					{:else}
+					{:else if !stages.length}
 						<span class="thinking">{streamModel || '…'} is thinking</span>
 					{/if}
 					{#if toolActivity}<span class="tool-activity">⚙ {toolActivity}</span>{/if}
@@ -344,7 +381,14 @@
 				<button class="chip" class:on={webSearch} onclick={() => (webSearch = !webSearch)}>
 					Web search
 				</button>
-				<button class="chip" disabled title="Deep research arrives in M6">Deep research</button>
+				<button
+					class="chip"
+					class:on={deepResearch}
+					title="Multi-step research with sources and citations"
+					onclick={() => (deepResearch = !deepResearch)}
+				>
+					🔭 Deep research
+				</button>
 				<select class="model-select" bind:value={selectedModelId}>
 					{#if !models.length}
 						<option value="">No models — add a provider in Admin</option>
@@ -507,11 +551,47 @@
 		margin: 0;
 		white-space: pre-wrap;
 	}
+	.msg-meta {
+		display: flex;
+		align-items: center;
+		gap: 0.7rem;
+		margin-top: 0.25rem;
+	}
 	.msg-model {
-		display: block;
 		color: var(--fg-dim);
 		font-size: 0.65rem;
-		margin-top: 0.25rem;
+	}
+	.save-doc {
+		background: none;
+		border: none;
+		color: var(--fg-dim);
+		font-family: inherit;
+		font-size: 0.62rem;
+		cursor: pointer;
+		opacity: 0;
+		transition: opacity 0.15s;
+	}
+	.msg.assistant:hover .save-doc {
+		opacity: 1;
+	}
+	.save-doc:hover {
+		color: var(--accent);
+	}
+	.stages {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		flex-wrap: wrap;
+		font-size: 0.7rem;
+		color: var(--fg-dim);
+		margin-bottom: 0.5rem;
+	}
+	.stage.current {
+		color: var(--accent);
+		animation: pulse 1.4s ease-in-out infinite;
+	}
+	.stage-sep {
+		opacity: 0.5;
 	}
 	.thinking {
 		color: var(--fg-dim);

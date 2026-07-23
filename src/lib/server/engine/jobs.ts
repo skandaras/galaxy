@@ -7,6 +7,7 @@ export type JobChunk =
 	| { type: 'meta'; model: string }
 	| { type: 'delta'; text: string }
 	| { type: 'tool'; name: string; status: 'running' | 'ok' | 'error'; detail?: string }
+	| { type: 'stage'; name: string; detail?: string }
 	| { type: 'notice'; text: string }
 	| { type: 'done'; messageId?: string }
 	| { type: 'error'; message: string };
