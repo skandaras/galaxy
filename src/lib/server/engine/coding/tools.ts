@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'n
 import { dirname, join, relative } from 'node:path';
 import type { LoopTool } from '../loop';
 import { getExecutor } from './executor';
-import { safeJoin, scrubSecrets, shellQuote, workspaceAbs } from './workspace';
+import { gitAuthArgs, safeJoin, scrubSecrets, shellQuote, workspaceAbs } from './workspace';
 
 const MAX_FILE_CHARS = 60_000;
 const MAX_LIST_ENTRIES = 500;
@@ -11,6 +11,7 @@ const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.svelte-kit
 export interface CodingToolContext {
 	workspaceRel: string;
 	mode: 'plan' | 'implement';
+	repoUrl: string;
 }
 
 /**
@@ -189,10 +190,13 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 				parameters: { type: 'object', properties: {} }
 			},
 			execute: async () => {
-				const res = await getExecutor().exec('git push -u origin HEAD', {
-					cwdRel: ctx.workspaceRel,
-					timeoutMs: 120_000
-				});
+				const res = await getExecutor().exec(
+					`git ${gitAuthArgs(ctx.repoUrl)} push -u origin HEAD`,
+					{
+						cwdRel: ctx.workspaceRel,
+						timeoutMs: 120_000
+					}
+				);
 				if (res.code !== 0) throw new Error(scrubSecrets(res.stderr || res.stdout));
 				return scrubSecrets(res.stdout + res.stderr) || 'Pushed';
 			}

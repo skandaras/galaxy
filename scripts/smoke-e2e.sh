@@ -12,7 +12,9 @@ FAIL=0
 
 node scripts/mock-provider.mjs $MOCK_PORT &
 MOCK_PID=$!
-AUTH_MODE=dev DEV_USER=smoke DATA_DIR=$DATA PORT=$APP_PORT CODING_EXECUTOR=local node build &
+# ALLOW_PRIVATE_RESEARCH_FETCH: the mock "web" lives on 127.0.0.1, which the
+# SSRF guard rightly blocks in production.
+AUTH_MODE=dev DEV_USER=smoke DATA_DIR=$DATA PORT=$APP_PORT CODING_EXECUTOR=local ALLOW_PRIVATE_RESEARCH_FETCH=1 node build &
 APP_PID=$!
 trap 'kill $MOCK_PID $APP_PID 2>/dev/null; rm -rf $DATA' EXIT
 sleep 3

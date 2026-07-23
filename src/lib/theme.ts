@@ -112,7 +112,11 @@ export function themeCss(t: Theme): string {
 	].join('');
 }
 
-/** Keep persisted themes shaped like a Theme even across future field changes. */
+/**
+ * Keep persisted themes shaped like a Theme even across future field changes.
+ * String values are emitted into a <style> tag, so anything that could break
+ * out of a CSS declaration is rejected (defence against stored self-XSS).
+ */
 export function normalizeTheme(raw: unknown): Theme {
 	const r = (raw ?? {}) as Record<string, unknown>;
 	const out = { ...DEFAULT_THEME };
@@ -120,7 +124,7 @@ export function normalizeTheme(raw: unknown): Theme {
 		const v = r[key];
 		if (key === 'galaxyBg') {
 			if (typeof v === 'boolean') out.galaxyBg = v;
-		} else if (typeof v === 'string' && v.length < 200) {
+		} else if (typeof v === 'string' && v.length < 200 && !/[<>{};\\]/.test(v)) {
 			(out as Record<string, unknown>)[key] = v;
 		}
 	}

@@ -50,7 +50,7 @@
 			fetch('/api/chats'),
 			fetch('/api/models')
 		]);
-		chats = await chatsRes.json();
+		chats = filterChatMode(await chatsRes.json());
 		const m = await modelsRes.json();
 		models = m.models;
 		selectedModelId = m.defaultModelId ?? models[0]?.id ?? '';
@@ -142,8 +142,12 @@
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
 			const chunk = JSON.parse(ev.data);
-			if (chunk.type === 'meta') streamModel = chunk.model;
-			else if (chunk.type === 'delta') streamText += chunk.text;
+			if (chunk.type === 'meta') {
+				// A meta chunk marks the start of a (re)attempt — discard any
+				// partial text from a failed attempt so it isn't duplicated.
+				streamModel = chunk.model;
+				streamText = '';
+			} else if (chunk.type === 'delta') streamText += chunk.text;
 			else if (chunk.type === 'stage') stages = [...stages, { name: chunk.name, detail: chunk.detail }];
 			else if (chunk.type === 'tool') {
 				toolActivity =
@@ -208,10 +212,15 @@
 		streaming = false;
 	}
 
+	// Coding sessions live on the Code page; this pane is chat-mode only.
+	function filterChatMode(list: (ChatMeta & { mode?: string })[]): ChatMeta[] {
+		return list.filter((c) => !c.mode || c.mode === 'chat');
+	}
+
 	async function refreshChats() {
 		const res = await fetch('/api/chats');
 		if (res.ok) {
-			chats = await res.json();
+			chats = filterChatMode(await res.json());
 			if (currentChat) {
 				const updated = chats.find((c) => c.id === currentChat!.id);
 				if (updated) currentChat = { ...updated };

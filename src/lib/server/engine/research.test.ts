@@ -1,5 +1,27 @@
 import { describe, it, expect } from 'vitest';
-import { htmlToText } from './research';
+import { assertPublicHttpUrl, htmlToText } from './research';
+
+describe('assertPublicHttpUrl', () => {
+	it('blocks loopback, private and link-local targets', () => {
+		for (const bad of [
+			'http://127.0.0.1/x',
+			'http://localhost/x',
+			'http://10.0.0.5/x',
+			'http://192.168.1.1/x',
+			'http://172.18.0.2/x',
+			'http://169.254.169.254/latest/meta-data',
+			'http://docker.internal/x',
+			'http://nas.local/x',
+			'file:///etc/passwd'
+		]) {
+			expect(() => assertPublicHttpUrl(bad), bad).toThrow(/Blocked/);
+		}
+	});
+	it('allows normal public urls', () => {
+		expect(() => assertPublicHttpUrl('https://example.com/page')).not.toThrow();
+		expect(() => assertPublicHttpUrl('http://93.184.216.34/x')).not.toThrow();
+	});
+});
 
 describe('htmlToText', () => {
 	it('strips scripts, styles and tags, keeps content', () => {

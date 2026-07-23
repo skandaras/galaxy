@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db';
 import { usageLog } from '$lib/server/db/schema';
 import { appendMessage, getChat, updateChat } from '$lib/server/chats';
@@ -311,8 +312,50 @@ async function reviewEvidence(
 	}
 }
 
+/**
+ * Server-side fetch of attacker-influenced URLs (search results) must not
+ * reach internal services. Blocks loopback/private/link-local hosts and IP
+ * literals; ALLOW_PRIVATE_RESEARCH_FETCH=1 disables the guard for tests.
+ * (DNS-rebinding is out of scope for this layer — see PLAN backlog.)
+ */
+export function assertPublicHttpUrl(rawUrl: string): void {
+	if (env.ALLOW_PRIVATE_RESEARCH_FETCH === '1') return;
+	const url = new URL(rawUrl);
+	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+		throw new Error(`Blocked non-http URL: ${url.protocol}`);
+	}
+	const h = url.hostname.toLowerCase();
+	if (
+		h === 'localhost' ||
+		h.endsWith('.local') ||
+		h.endsWith('.internal') ||
+		h.endsWith('.lan') ||
+		h === '::1' ||
+		h.startsWith('fc') ||
+		h.startsWith('fd') ||
+		h.startsWith('fe80')
+	) {
+		throw new Error(`Blocked private host: ${h}`);
+	}
+	const v4 = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+	if (v4) {
+		const [a, b] = [Number(v4[1]), Number(v4[2])];
+		if (
+			a === 0 ||
+			a === 10 ||
+			a === 127 ||
+			(a === 192 && b === 168) ||
+			(a === 172 && b >= 16 && b < 32) ||
+			(a === 169 && b === 254)
+		) {
+			throw new Error(`Blocked private address: ${h}`);
+		}
+	}
+}
+
 /** Fetch a page and reduce it to readable text (no external parser deps). */
 export async function fetchPageText(url: string, timeoutMs: number): Promise<string> {
+	assertPublicHttpUrl(url);
 	const res = await fetch(url, {
 		signal: AbortSignal.timeout(timeoutMs),
 		headers: { 'user-agent': 'galaxy-research/1.0', accept: 'text/html,text/plain' },

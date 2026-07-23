@@ -151,8 +151,11 @@
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
 			const chunk = JSON.parse(ev.data);
-			if (chunk.type === 'meta') streamModel = chunk.model;
-			else if (chunk.type === 'delta') streamText += chunk.text;
+			if (chunk.type === 'meta') {
+				// New (re)attempt: drop partial text from a failed attempt.
+				streamModel = chunk.model;
+				streamText = '';
+			} else if (chunk.type === 'delta') streamText += chunk.text;
 			else if (chunk.type === 'tool') {
 				if (chunk.status === 'running') {
 					trace = [...trace, { name: chunk.name, status: 'running', detail: chunk.detail }];

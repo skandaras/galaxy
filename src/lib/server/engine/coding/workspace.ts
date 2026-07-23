@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, rmSync } from 'node:fs';
-import { join, normalize, resolve, sep } from 'node:path';
+import { existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
+import { dirname, join, normalize, resolve, sep } from 'node:path';
 import { dataDir } from '$lib/server/db';
 import { decryptSecret } from '$lib/server/crypto';
 import { getSetting, type GithubSettings } from '$lib/server/settings';
@@ -20,13 +20,25 @@ export function workspaceAbs(workspaceRel: string): string {
 
 /**
  * Resolve a repo-relative path inside the workspace, rejecting escapes.
- * Used by every file tool.
+ * Used by every file tool. Beyond the lexical check, the deepest existing
+ * ancestor is realpath'd so a symlink planted inside the workspace (e.g. via
+ * the bash tool) cannot redirect reads/writes outside it.
  */
 export function safeJoin(workspaceRel: string, relPath: string): string {
-	const base = resolve(workspaceAbs(workspaceRel));
+	const base = realpathSync(resolve(workspaceAbs(workspaceRel)));
 	const target = resolve(base, normalize(relPath));
 	if (target !== base && !target.startsWith(base + sep)) {
 		throw new Error(`Path escapes the workspace: ${relPath}`);
+	}
+	let probe = target;
+	while (!existsSync(probe)) {
+		const parent = dirname(probe);
+		if (parent === probe) break;
+		probe = parent;
+	}
+	const real = realpathSync(probe);
+	if (real !== base && !real.startsWith(base + sep)) {
+		throw new Error(`Path escapes the workspace via symlink: ${relPath}`);
 	}
 	return target;
 }
@@ -38,9 +50,22 @@ export function authenticatedUrl(repoUrl: string, token: string | undefined): st
 	return m ? `https://x-access-token:${token}@github.com/${m[1]}` : repoUrl;
 }
 
+/**
+ * Per-invocation git auth: `-c http.extraheader=…` for github.com remotes.
+ * The token is never written to .git/config or any file in the workspace,
+ * so the agent's read_file / `git remote -v` cannot recover it.
+ */
+export function gitAuthArgs(repoUrl: string, token = githubToken()): string {
+	if (!token || !/^https:\/\/github\.com\//.test(repoUrl)) return '';
+	const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+	return `-c ${shellQuote(`http.extraheader=AUTHORIZATION: basic ${basic}`)}`;
+}
+
 /** Remove any credential that may appear in command output before storing/streaming. */
 export function scrubSecrets(text: string): string {
-	return text.replace(/x-access-token:[^@\s]+@/g, 'x-access-token:***@');
+	return text
+		.replace(/x-access-token:[^@\s]+@/g, 'x-access-token:***@')
+		.replace(/AUTHORIZATION: basic [A-Za-z0-9+/=]+/gi, 'AUTHORIZATION: basic ***');
 }
 
 export interface CreatedWorkspace {
@@ -54,10 +79,15 @@ export async function createWorkspace(repoUrl: string): Promise<CreatedWorkspace
 	const executor = getExecutor();
 	const id = randomUUID().slice(0, 8);
 	const workspaceRel = `${WORKSPACES_REL}/${id}`;
-	const url = authenticatedUrl(repoUrl, githubToken());
 	mkdirSync(join(dataDir, WORKSPACES_REL), { recursive: true });
 
-	const clone = await run(executor, WORKSPACES_REL, `mkdir -p ${id} && git clone ${shellQuote(url)} ${id}`, 300_000);
+	// Clean URL + per-invocation auth header: the token never lands on disk.
+	const clone = await run(
+		executor,
+		WORKSPACES_REL,
+		`mkdir -p ${id} && git ${gitAuthArgs(repoUrl)} clone ${shellQuote(repoUrl)} ${id}`,
+		300_000
+	);
 	if (clone.code !== 0) {
 		rmSync(workspaceAbs(workspaceRel), { recursive: true, force: true });
 		throw new Error(`Clone failed: ${scrubSecrets(clone.stderr || clone.stdout)}`);

@@ -98,7 +98,11 @@ export function startCodingTurn(opts: {
 		primary: choice,
 		backup,
 		tools: [
-			...codingTools({ workspaceRel: session.workspaceRel, mode: session.mode }),
+			...codingTools({
+				workspaceRel: session.workspaceRel,
+				mode: session.mode,
+				repoUrl: session.repoUrl
+			}),
 			...knowledgeTools()
 		],
 		maxIterations: MAX_CODING_ITERATIONS,

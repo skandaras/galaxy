@@ -23,7 +23,7 @@ services:
       RUNNER_NETWORK: galaxy_runners
     volumes:
       - galaxy-prod-data:/data
-    networks: [proxy, runners]
+    networks: [proxy, docker-api]
 
   galaxy-dev:
     image: ghcr.io/skandaras/galaxy:dev
@@ -41,7 +41,7 @@ services:
       RUNNER_NETWORK: galaxy_runners
     volumes:
       - galaxy-dev-data:/data
-    networks: [proxy, runners]
+    networks: [proxy, docker-api]
 
   # Restricted Docker API for spawning ephemeral coding runners (used from M3).
   # Grants container lifecycle only — no host filesystem, no exec into others.
@@ -58,7 +58,7 @@ services:
       INFO: 0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks: [runners]
+    networks: [docker-api]
 
 volumes:
   galaxy-prod-data:
@@ -67,4 +67,9 @@ volumes:
 networks:
   proxy:
     external: true # join your existing reverse-proxy network
+  # Only the galaxy app talks to the Docker API. Runner containers join
+  # `runners`, which has NO route to the socket proxy — agent commands inside
+  # a runner must never be able to spawn or control containers.
+  docker-api:
+    internal: true
   runners:
