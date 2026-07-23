@@ -3,10 +3,11 @@
 	import Models from '$lib/components/admin/Models.svelte';
 	import Tasks from '$lib/components/admin/Tasks.svelte';
 	import Skills from '$lib/components/admin/Skills.svelte';
+	import Memory from '$lib/components/admin/Memory.svelte';
 	import Settings from '$lib/components/admin/Settings.svelte';
 	import Usage from '$lib/components/admin/Usage.svelte';
 
-	const tabs = ['Providers', 'Models', 'Tasks', 'Skills', 'Settings', 'Usage'] as const;
+	const tabs = ['Providers', 'Models', 'Tasks', 'Skills', 'Memory', 'Settings', 'Usage'] as const;
 	let active = $state<(typeof tabs)[number]>('Providers');
 	let modelsRefreshKey = $state(0);
 </script>
@@ -27,6 +28,8 @@
 			<Tasks />
 		{:else if active === 'Skills'}
 			<Skills />
+		{:else if active === 'Memory'}
+			<Memory />
 		{:else if active === 'Settings'}
 			<Settings />
 		{:else}

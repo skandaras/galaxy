@@ -71,6 +71,53 @@ const server = createServer(async (req, res) => {
 			last?.role === 'user' &&
 			String(last.content).toLowerCase().includes('search');
 
+		// Non-streaming path (complete()): memory audit, skill optimiser,
+		// compaction summaries, etc.
+		if (!parsed.stream) {
+			const userText = String(last?.content ?? '');
+			let content = 'Mock completion.';
+			if (userText.includes('MEMORY-AUDIT')) {
+				content = JSON.stringify({
+					memories: [
+						{ kind: 'preference', content: 'User prefers concise replies' },
+						{ kind: 'fact', content: 'Prod restarts via systemctl restart galaxy' }
+					],
+					skill_candidates: [
+						{
+							name: 'release-checklist',
+							category: 'ops',
+							description: 'Steps to follow when releasing',
+							triggers: 'release, deploy',
+							body: '## Steps\n1. Back up the volume\n2. Promote dev to prod',
+							rationale: 'Deployment steps recurred in recent activity'
+						}
+					]
+				});
+			} else if (userText.includes('SKILL-OPTIMISE')) {
+				content = JSON.stringify({
+					skill_candidates: [
+						{
+							name: 'demo-skill',
+							category: 'general',
+							description: 'Demonstrates the skill system (clarified)',
+							triggers: 'demo, example',
+							body: '## When to use\n\nImproved by the optimiser.',
+							rationale: 'Description was vague'
+						}
+					]
+				});
+			}
+			res.writeHead(200, { 'content-type': 'application/json' });
+			res.end(
+				JSON.stringify({
+					id: 'mock',
+					choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+					usage: { prompt_tokens: 50, completion_tokens: 40 }
+				})
+			);
+			return;
+		}
+
 		res.writeHead(200, {
 			'content-type': 'text/event-stream',
 			'cache-control': 'no-cache'
@@ -123,7 +170,7 @@ const server = createServer(async (req, res) => {
 		// Bootstrap verification: report what the system prompt contained.
 		if (String(last?.content ?? '').includes('echo-system')) {
 			delta(res, {
-				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')}`
+				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} mem=${system.includes('[Memory')} pref=${system.includes('concise replies')}`
 			});
 			delta(res, {}, 'stop');
 			res.write('data: [DONE]\n\n');

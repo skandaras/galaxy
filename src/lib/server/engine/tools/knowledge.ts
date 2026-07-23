@@ -7,6 +7,7 @@ import {
 	saveDoc,
 	searchDocs
 } from '$lib/server/library';
+import { memoryDigest } from '../memory';
 
 /**
  * The context bootstrap: appended to every agent's system prompt so it knows
@@ -20,7 +21,8 @@ export function bootstrapContext(): string {
 		skillIndexText(),
 		'',
 		'[Library — shared knowledge docs; read with library_read, search with library_search, save durable knowledge with library_write]',
-		libraryDigest()
+		libraryDigest(),
+		memoryDigest()
 	].join('\n');
 }
 

@@ -172,6 +172,34 @@ export const skills = sqliteTable('skills', {
 	updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
 });
 
+// Durable observations the memory agent extracts from activity. Injected
+// into the context bootstrap while active.
+export const memoryItems = sqliteTable('memory_items', {
+	id: text('id').primaryKey(),
+	kind: text('kind', { enum: ['preference', 'pattern', 'fact'] }).notNull(),
+	content: text('content').notNull(),
+	source: text('source'),
+	status: text('status', { enum: ['active', 'archived'] }).notNull().default('active'),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+});
+
+// Skills proposed by the memory/optimiser agents. Never auto-activated:
+// a human approves (which writes the real skill) or rejects.
+export const skillCandidates = sqliteTable('skill_candidates', {
+	id: text('id').primaryKey(),
+	name: text('name').notNull(),
+	category: text('category').notNull().default('general'),
+	description: text('description').notNull().default(''),
+	triggers: text('triggers').notNull().default(''),
+	body: text('body').notNull().default(''),
+	rationale: text('rationale').notNull().default(''),
+	status: text('status', { enum: ['pending', 'approved', 'rejected'] })
+		.notNull()
+		.default('pending'),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+	decidedAt: integer('decided_at', { mode: 'timestamp_ms' })
+});
+
 export const usageLog = sqliteTable('usage_log', {
 	id: text('id').primaryKey(),
 	ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),

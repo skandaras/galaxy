@@ -5,18 +5,20 @@ import { encryptSecret } from '$lib/server/crypto';
 import {
 	DEFAULT_BUDGET,
 	DEFAULT_COMPACTION,
+	DEFAULT_MEMORY,
 	DEFAULT_WEB_SEARCH,
 	getSetting,
 	setSetting
 } from '$lib/server/settings';
 import { emitEvent } from '$lib/server/engine/events';
 
-const KNOWN_KEYS = ['websearch', 'compaction', 'budget', 'github'] as const;
+const KNOWN_KEYS = ['websearch', 'compaction', 'budget', 'github', 'memory'] as const;
 const DEFAULTS: Record<string, unknown> = {
 	websearch: DEFAULT_WEB_SEARCH,
 	compaction: DEFAULT_COMPACTION,
 	budget: DEFAULT_BUDGET,
-	github: {}
+	github: {},
+	memory: DEFAULT_MEMORY
 };
 
 // Fields the UI submits in plaintext that are stored encrypted. An empty

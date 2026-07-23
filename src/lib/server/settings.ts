@@ -52,6 +52,13 @@ export interface BudgetSettings {
 
 export const DEFAULT_BUDGET: BudgetSettings = { enabled: false, limitUsd: 25, period: 'month' };
 
+export interface MemorySettings {
+	enabled: boolean;
+	intervalHours: number;
+}
+
+export const DEFAULT_MEMORY: MemorySettings = { enabled: true, intervalHours: 12 };
+
 export interface CompactionSettings {
 	/** Compact when estimated context exceeds this share of the model's window. */
 	ratio: number;
