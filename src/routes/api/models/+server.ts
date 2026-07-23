@@ -6,9 +6,10 @@ import { db } from '$lib/server/db';
 import { taskConfigs } from '$lib/server/db/schema';
 import { listEnabledModels } from '$lib/server/providers/registry';
 
-export const GET: RequestHandler = ({ locals }) => {
+export const GET: RequestHandler = ({ locals, url }) => {
 	requireUser(locals);
-	const cfg = db.select().from(taskConfigs).where(eq(taskConfigs.task, 'chat')).get();
+	const task = url.searchParams.get('task') ?? 'chat';
+	const cfg = db.select().from(taskConfigs).where(eq(taskConfigs.task, task)).get();
 	return json({
 		models: listEnabledModels(),
 		defaultModelId: cfg?.primaryModelId ?? null

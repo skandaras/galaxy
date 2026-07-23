@@ -1,5 +1,6 @@
 import type { ToolDef } from '$lib/server/providers/types';
 import type { WebSearchSettings } from '$lib/server/settings';
+import { decryptSecret } from '$lib/server/crypto';
 
 export interface SearchResult {
 	title: string;
@@ -21,9 +22,13 @@ export const webSearchToolDef: ToolDef = {
 };
 
 export function webSearchConfigured(cfg: WebSearchSettings): boolean {
-	if (cfg.provider === 'brave' || cfg.provider === 'tavily') return Boolean(cfg.apiKey);
+	if (cfg.provider === 'brave' || cfg.provider === 'tavily') return Boolean(cfg.apiKeyEnc);
 	if (cfg.provider === 'searxng') return Boolean(cfg.baseUrl);
 	return false;
+}
+
+function apiKey(cfg: WebSearchSettings): string {
+	return cfg.apiKeyEnc ? decryptSecret(cfg.apiKeyEnc) : '';
 }
 
 export async function runWebSearch(
@@ -35,7 +40,7 @@ export async function runWebSearch(
 		case 'brave': {
 			const res = await fetch(
 				`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${cfg.maxResults}`,
-				{ headers: { 'X-Subscription-Token': cfg.apiKey ?? '' }, signal }
+				{ headers: { 'X-Subscription-Token': apiKey(cfg) }, signal }
 			);
 			if (!res.ok) throw new Error(`Brave search failed: ${res.status}`);
 			const data = await res.json();
@@ -50,7 +55,7 @@ export async function runWebSearch(
 			const res = await fetch('https://api.tavily.com/search', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ api_key: cfg.apiKey, query, max_results: cfg.maxResults }),
+				body: JSON.stringify({ api_key: apiKey(cfg), query, max_results: cfg.maxResults }),
 				signal
 			});
 			if (!res.ok) throw new Error(`Tavily search failed: ${res.status}`);

@@ -129,6 +129,21 @@ export const taskPromptVersions = sqliteTable('task_prompt_versions', {
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 });
 
+// One coding session per code-mode chat: a cloned workspace on the shared
+// data volume plus the branch the agent works on.
+export const codeSessions = sqliteTable('code_sessions', {
+	chatId: text('chat_id').primaryKey(),
+	userId: text('user_id').notNull(),
+	repoUrl: text('repo_url').notNull(),
+	repoName: text('repo_name').notNull(),
+	baseBranch: text('base_branch').notNull(),
+	workBranch: text('work_branch').notNull(),
+	/** Workspace path relative to DATA_DIR (shared with runner containers). */
+	workspaceRel: text('workspace_rel').notNull(),
+	mode: text('mode', { enum: ['plan', 'implement'] }).notNull().default('plan'),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+});
+
 export const usageLog = sqliteTable('usage_log', {
 	id: text('id').primaryKey(),
 	ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),

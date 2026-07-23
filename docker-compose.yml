@@ -16,9 +16,14 @@ services:
       AUTH_MODE: authelia
       TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:?set to your reverse proxy IP/CIDR}
       ADMIN_GROUP: galaxy-admins
+      CODING_EXECUTOR: docker
+      DOCKER_API_URL: http://docker-socket-proxy:2375
+      RUNNER_IMAGE: ghcr.io/skandaras/galaxy-runner:latest
+      DATA_VOLUME: galaxy_galaxy-prod-data
+      RUNNER_NETWORK: galaxy_runners
     volumes:
       - galaxy-prod-data:/data
-    networks: [proxy]
+    networks: [proxy, runners]
 
   galaxy-dev:
     image: ghcr.io/skandaras/galaxy:dev
@@ -28,9 +33,15 @@ services:
       AUTH_MODE: authelia
       TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:?set to your reverse proxy IP/CIDR}
       ADMIN_GROUP: galaxy-admins
+      # Coding sessions run each command in a throwaway runner container.
+      CODING_EXECUTOR: docker
+      DOCKER_API_URL: http://docker-socket-proxy:2375
+      RUNNER_IMAGE: ghcr.io/skandaras/galaxy-runner:latest
+      DATA_VOLUME: galaxy_galaxy-dev-data
+      RUNNER_NETWORK: galaxy_runners
     volumes:
       - galaxy-dev-data:/data
-    networks: [proxy]
+    networks: [proxy, runners]
 
   # Restricted Docker API for spawning ephemeral coding runners (used from M3).
   # Grants container lifecycle only — no host filesystem, no exec into others.

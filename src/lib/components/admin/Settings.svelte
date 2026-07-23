@@ -8,19 +8,23 @@
 	});
 	let compaction = $state({ ratio: 0.7, keepRecent: 8 });
 	let budget = $state({ enabled: false, limitUsd: 25, period: 'month' });
+	let github = $state({ token: '', hasToken: false });
+	let hasSearchKey = $state(false);
 	let saved = $state<string | null>(null);
 
 	async function load() {
 		const data = await (await fetch('/api/admin/settings')).json();
 		websearch = { apiKey: '', baseUrl: '', ...data.websearch };
+		hasSearchKey = Boolean(data.websearch?.hasApiKey);
 		compaction = { ...data.compaction };
 		budget = { ...data.budget };
+		github = { token: '', hasToken: Boolean(data.github?.hasToken) };
 	}
 	$effect(() => {
 		void load();
 	});
 
-	async function save(key: 'websearch' | 'compaction' | 'budget', value: unknown) {
+	async function save(key: 'websearch' | 'compaction' | 'budget' | 'github', value: unknown) {
 		await fetch('/api/admin/settings', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
@@ -47,7 +51,11 @@
 			{#if websearch.provider === 'brave' || websearch.provider === 'tavily'}
 				<label>
 					API key
-					<input type="password" bind:value={websearch.apiKey} placeholder="key" />
+					<input
+						type="password"
+						bind:value={websearch.apiKey}
+						placeholder={hasSearchKey ? '(saved — leave blank to keep)' : 'key'}
+					/>
 				</label>
 			{/if}
 			{#if websearch.provider === 'searxng'}
@@ -67,6 +75,27 @@
 		</div>
 		<button class="btn primary" onclick={() => save('websearch', websearch)}>
 			{saved === 'websearch' ? 'Saved ✓' : 'Save'}
+		</button>
+	</article>
+
+	<article class="card">
+		<h3>GitHub</h3>
+		<div class="grid">
+			<label>
+				personal access token
+				<input
+					type="password"
+					bind:value={github.token}
+					placeholder={github.hasToken ? '(saved — leave blank to keep)' : 'fine-grained PAT'}
+				/>
+			</label>
+		</div>
+		<p class="hint">
+			Used by the coding agent to list repositories, clone and push. A fine-grained token with
+			Contents read/write on the repos you work in is enough.
+		</p>
+		<button class="btn primary" onclick={() => save('github', { token: github.token })}>
+			{saved === 'github' ? 'Saved ✓' : 'Save'}
 		</button>
 	</article>
 

@@ -26,7 +26,8 @@ export function setSetting(key: string, value: unknown, scope = GLOBAL_SCOPE): v
 
 export interface WebSearchSettings {
 	provider: 'brave' | 'tavily' | 'searxng' | 'none';
-	apiKey?: string;
+	/** AES-encrypted API key (see $lib/server/crypto); set via admin settings. */
+	apiKeyEnc?: string;
 	baseUrl?: string; // searxng instance
 	maxResults: number;
 	timeoutMs: number;
@@ -37,6 +38,11 @@ export const DEFAULT_WEB_SEARCH: WebSearchSettings = {
 	maxResults: 5,
 	timeoutMs: 10_000
 };
+
+export interface GithubSettings {
+	/** AES-encrypted personal access token. */
+	tokenEnc?: string;
+}
 
 export interface BudgetSettings {
 	enabled: boolean;

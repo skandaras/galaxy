@@ -64,6 +64,7 @@ const server = createServer(async (req, res) => {
 		for await (const chunk of req) body += chunk;
 		const parsed = JSON.parse(body);
 		const last = parsed.messages.at(-1);
+		const system = String(parsed.messages[0]?.content ?? '');
 		const wantsTool =
 			Array.isArray(parsed.tools) &&
 			parsed.tools.length &&
@@ -74,6 +75,50 @@ const server = createServer(async (req, res) => {
 			'content-type': 'text/event-stream',
 			'cache-control': 'no-cache'
 		});
+
+		// Scripted coding agent: sequence driven by how many tool results have
+		// accumulated in this turn.
+		if (system.includes('PLAN mode') || system.includes('IMPLEMENT mode')) {
+			const toolResults = parsed.messages.filter((m) => m.role === 'tool').length;
+			const call = (name, args) => {
+				delta(res, {
+					tool_calls: [
+						{ index: 0, id: `call_${toolResults}`, function: { name, arguments: JSON.stringify(args) } }
+					]
+				});
+				delta(res, {}, 'tool_calls');
+			};
+			if (system.includes('PLAN mode')) {
+				if (toolResults === 0) call('list_files', {});
+				else {
+					delta(res, { content: 'Plan: 1. Add a description line to README.md 2. Commit and push.' });
+					delta(res, {}, 'stop');
+				}
+			} else {
+				if (toolResults === 0) call('read_file', { path: 'README.md' });
+				else if (toolResults === 1)
+					call('write_file', {
+						path: 'README.md',
+						content: '# origin\n\nA repo improved by the Galaxy coding agent.\n'
+					});
+				else if (toolResults === 2) call('bash', { command: 'ls && git status --short' });
+				else if (toolResults === 3) call('git_commit', { message: 'Add project description to README' });
+				else if (toolResults === 4) call('git_push', {});
+				else {
+					delta(res, { content: 'Done: README updated, committed and pushed.' });
+					delta(res, {}, 'stop');
+				}
+			}
+			sseChunk(res, {
+				id: 'mock',
+				object: 'chat.completion.chunk',
+				choices: [],
+				usage: { prompt_tokens: 30, completion_tokens: 10 }
+			});
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
 
 		if (wantsTool) {
 			// Tool-call arguments intentionally split across chunks to exercise accumulation.
