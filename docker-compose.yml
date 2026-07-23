@@ -1,0 +1,59 @@
+# Galaxy — prod + dev instances behind an existing reverse proxy + Authelia.
+# The proxy terminates auth and forwards Remote-User/Remote-Email/Remote-Groups;
+# each instance only trusts those headers from TRUSTED_PROXY_IPS.
+#
+#   ai.example.com      → galaxy-prod (image :stable)
+#   dev-ai.example.com  → galaxy-dev  (image :dev)
+#
+# Nothing is shared between the two instances — separate volumes, separate env.
+
+services:
+  galaxy-prod:
+    image: ghcr.io/skandaras/galaxy:stable
+    restart: unless-stopped
+    environment:
+      GALAXY_ENV: prod
+      AUTH_MODE: authelia
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:?set to your reverse proxy IP/CIDR}
+      ADMIN_GROUP: galaxy-admins
+    volumes:
+      - galaxy-prod-data:/data
+    networks: [proxy]
+
+  galaxy-dev:
+    image: ghcr.io/skandaras/galaxy:dev
+    restart: unless-stopped
+    environment:
+      GALAXY_ENV: dev
+      AUTH_MODE: authelia
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:?set to your reverse proxy IP/CIDR}
+      ADMIN_GROUP: galaxy-admins
+    volumes:
+      - galaxy-dev-data:/data
+    networks: [proxy]
+
+  # Restricted Docker API for spawning ephemeral coding runners (used from M3).
+  # Grants container lifecycle only — no host filesystem, no exec into others.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      POST: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 0
+      EXEC: 0
+      INFO: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [runners]
+
+volumes:
+  galaxy-prod-data:
+  galaxy-dev-data:
+
+networks:
+  proxy:
+    external: true # join your existing reverse-proxy network
+  runners:
