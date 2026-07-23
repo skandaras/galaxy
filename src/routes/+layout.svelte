@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import Observatory from '$lib/components/Observatory.svelte';
+	import GalaxyBackdrop from '$lib/components/GalaxyBackdrop.svelte';
+	import { themeCss } from '$lib/theme';
 
 	let { data, children } = $props();
 
@@ -8,9 +10,19 @@
 		{ href: '/chat', label: 'Chat' },
 		{ href: '/code', label: 'Code' },
 		{ href: '/library', label: 'Library' },
+		{ href: '/settings', label: 'Theme' },
 		...(data.user?.isAdmin ? [{ href: '/admin', label: 'Admin' }] : [])
 	]);
 </script>
+
+<svelte:head>
+	{@html `<style id="galaxy-theme">${themeCss(data.theme)}
+	button, input, select, textarea { border-radius: var(--radius); }</style>`}
+</svelte:head>
+
+{#if data.theme.galaxyBg}
+	<GalaxyBackdrop />
+{/if}
 
 <div class="shell">
 	<aside class="pane">
@@ -40,16 +52,6 @@
 </div>
 
 <style>
-	:global(:root) {
-		--bg: #05060f;
-		--bg-pane: #0a0c1a;
-		--fg: #c8d0e8;
-		--fg-dim: #5a627e;
-		--accent: #7f9cff;
-		--border: #171a2e;
-		--danger: #ff5d73;
-		--font-mono: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, monospace;
-	}
 	:global(body) {
 		margin: 0;
 		background: var(--bg);
@@ -59,6 +61,8 @@
 	.shell {
 		display: flex;
 		min-height: 100vh;
+		position: relative;
+		z-index: 1;
 	}
 	.pane {
 		width: 230px;

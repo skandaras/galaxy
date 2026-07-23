@@ -1,0 +1,42 @@
+name: Promote
+
+# Dispatched by the admin panel's Promote/Rollback buttons (or manually).
+# promote:  stable → stable-prev, then dev → stable
+# rollback: stable-prev → stable
+# Prod runs the :stable tag and picks the change up via watchtower (or a
+# manual `docker compose pull && up -d galaxy-prod`).
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: promote or rollback
+        required: true
+        default: promote
+        type: choice
+        options: [promote, rollback]
+
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote dev → stable (keeping stable-prev)
+        if: inputs.action == 'promote'
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:stable" > /dev/null 2>&1; then
+            docker buildx imagetools create -t "$IMAGE:stable-prev" "$IMAGE:stable"
+          fi
+          docker buildx imagetools create -t "$IMAGE:stable" "$IMAGE:dev"
+      - name: Rollback stable-prev → stable
+        if: inputs.action == 'rollback'
+        run: |
+          docker buildx imagetools create -t "$IMAGE:stable" "$IMAGE:stable-prev"

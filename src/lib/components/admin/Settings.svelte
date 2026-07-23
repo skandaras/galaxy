@@ -20,6 +20,25 @@
 		iterationCap: 1
 	});
 	let saved = $state<string | null>(null);
+	let deployBusy = $state<string | null>(null);
+	let deployMsg = $state<string | null>(null);
+
+	async function deploy(action: 'promote' | 'rollback') {
+		if (!confirm(action === 'promote' ? 'Promote the current dev build to prod?' : 'Roll prod back to the previous stable image?'))
+			return;
+		deployBusy = action;
+		deployMsg = null;
+		const res = await fetch('/api/admin/deploy', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ action })
+		});
+		const data = await res.json().catch(() => ({}));
+		deployMsg = res.ok
+			? `${action} dispatched — prod updates when the workflow finishes`
+			: (data.message ?? `${action} failed`);
+		deployBusy = null;
+	}
 
 	async function load() {
 		const data = await (await fetch('/api/admin/settings')).json();
@@ -155,6 +174,25 @@
 	</article>
 
 	<article class="card">
+		<h3>Deployment</h3>
+		<p class="hint">
+			Promote retags the current <code>:dev</code> image as <code>:stable</code> (keeping the
+			previous stable as <code>:stable-prev</code>) via the Promote workflow; prod follows
+			<code>:stable</code>. Rollback restores <code>:stable-prev</code>. Requires the GitHub
+			token below with workflow scope.
+		</p>
+		<div class="row-buttons">
+			<button class="btn primary" disabled={deployBusy !== null} onclick={() => deploy('promote')}>
+				{deployBusy === 'promote' ? 'Dispatching…' : '🚀 Promote dev → prod'}
+			</button>
+			<button class="btn danger" disabled={deployBusy !== null} onclick={() => deploy('rollback')}>
+				{deployBusy === 'rollback' ? 'Dispatching…' : 'Rollback'}
+			</button>
+			{#if deployMsg}<span class="deploy-msg">{deployMsg}</span>{/if}
+		</div>
+	</article>
+
+	<article class="card">
 		<h3>Budget cap</h3>
 		<div class="grid">
 			<label class="row">
@@ -260,5 +298,26 @@
 	.btn.primary {
 		background: var(--accent);
 		color: var(--bg);
+	}
+	.btn.danger {
+		background: transparent;
+		border: 1px solid var(--danger);
+		color: var(--danger);
+	}
+	.btn:disabled {
+		opacity: 0.5;
+	}
+	.row-buttons {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+	.deploy-msg {
+		font-size: 0.7rem;
+		color: var(--fg-dim);
+	}
+	code {
+		color: var(--accent);
 	}
 </style>
