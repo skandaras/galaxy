@@ -144,6 +144,34 @@ export const codeSessions = sqliteTable('code_sessions', {
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 });
 
+// Library metadata + cached snippet; the markdown body lives on disk at
+// DATA_DIR/library/<id>.md. Full-text search runs on the library_fts
+// virtual table created at boot (drizzle doesn't manage FTS5).
+export const libraryDocs = sqliteTable('library_docs', {
+	id: text('id').primaryKey(), // slug, doubles as the filename
+	title: text('title').notNull(),
+	snippet: text('snippet').notNull().default(''),
+	author: text('author', { enum: ['user', 'agent'] }).notNull().default('user'),
+	sizeBytes: integer('size_bytes').notNull().default(0),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+	updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+});
+
+// Skill index; the SKILL.md body lives on disk at
+// DATA_DIR/skills/<category>/<name>/SKILL.md (a git repo, committed on save).
+export const skills = sqliteTable('skills', {
+	id: text('id').primaryKey(),
+	name: text('name').notNull().unique(),
+	category: text('category').notNull().default('general'),
+	description: text('description').notNull().default(''),
+	triggers: text('triggers').notNull().default(''),
+	version: integer('version').notNull().default(1),
+	author: text('author', { enum: ['user', 'agent'] }).notNull().default('user'),
+	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+	updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+});
+
 export const usageLog = sqliteTable('usage_log', {
 	id: text('id').primaryKey(),
 	ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),

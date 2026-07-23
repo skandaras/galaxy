@@ -120,6 +120,40 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
+		// Bootstrap verification: report what the system prompt contained.
+		if (String(last?.content ?? '').includes('echo-system')) {
+			delta(res, {
+				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')}`
+			});
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
+		// Skill-loading scenario: call skill_load, then echo the loaded body.
+		if (String(last?.content ?? '').includes('load the skill')) {
+			delta(res, {
+				tool_calls: [
+					{ index: 0, id: 'call_s', function: { name: 'skill_load', arguments: '{"name":"demo-skill"}' } }
+				]
+			});
+			delta(res, {}, 'tool_calls');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+		const usedSkillLoad = parsed.messages.some(
+			(m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.function?.name === 'skill_load')
+		);
+		if (last?.role === 'tool' && usedSkillLoad) {
+			delta(res, { content: `SKILL:${String(last.content).slice(0, 60)}` });
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
 		if (wantsTool) {
 			// Tool-call arguments intentionally split across chunks to exercise accumulation.
 			delta(res, {

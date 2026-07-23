@@ -8,6 +8,7 @@ import { assertBudget } from '../budget';
 import { EngineError, getTaskConfig, pickModel } from '../engine';
 import { createJob, failJob, type LiveJob } from '../jobs';
 import { runAgentLoop } from '../loop';
+import { bootstrapContext, knowledgeTools } from '../tools/knowledge';
 import { getExecutor } from './executor';
 import { codingTools } from './tools';
 import { createWorkspace, destroyWorkspace, scrubSecrets } from './workspace';
@@ -96,7 +97,10 @@ export function startCodingTurn(opts: {
 		persist: true,
 		primary: choice,
 		backup,
-		tools: codingTools({ workspaceRel: session.workspaceRel, mode: session.mode }),
+		tools: [
+			...codingTools({ workspaceRel: session.workspaceRel, mode: session.mode }),
+			...knowledgeTools()
+		],
 		maxIterations: MAX_CODING_ITERATIONS,
 		buildMessages: (): ProviderMessage[] => [
 			{ role: 'system', content: systemPrompt },
@@ -128,6 +132,7 @@ function buildCodingSystemPrompt(base: string, session: CodeSession): string {
 		base,
 		'',
 		`Repository: ${session.repoName} (branch ${session.workBranch}, based on ${session.baseBranch}).`,
-		modeNote
+		modeNote,
+		bootstrapContext()
 	].join('\n');
 }

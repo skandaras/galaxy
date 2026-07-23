@@ -3,11 +3,13 @@ import { error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { runMigrations } from '$lib/server/db';
 import { seedTaskConfigs } from '$lib/server/bootstrap';
+import { ensureSkillsRepo } from '$lib/server/skills';
 import { isTrustedProxy, parseAuthHeaders, isAdminFromGroups } from '$lib/server/auth';
 import { provisionUser } from '$lib/server/users';
 
 runMigrations();
 seedTaskConfigs();
+ensureSkillsRepo();
 
 const PUBLIC_PATHS = new Set(['/healthz']);
 

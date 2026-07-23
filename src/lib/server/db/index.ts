@@ -19,4 +19,8 @@ export const db = drizzle(sqlite, { schema });
 // forward-compatible so a prod rollback never meets a broken schema.
 export function runMigrations() {
 	migrate(db, { migrationsFolder: 'drizzle' });
+	// FTS5 virtual tables sit outside drizzle's schema management.
+	sqlite.exec(
+		`CREATE VIRTUAL TABLE IF NOT EXISTS library_fts USING fts5(id UNINDEXED, title, body)`
+	);
 }

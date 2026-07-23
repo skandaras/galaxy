@@ -18,6 +18,7 @@ import { buildContext } from './context';
 import { maybeCompact } from './compaction';
 import { createJob, failJob, type LiveJob } from './jobs';
 import { runAgentLoop, type LoopTool } from './loop';
+import { bootstrapContext, knowledgeTools } from './tools/knowledge';
 import { runWebSearch, webSearchConfigured, webSearchToolDef } from './tools/web-search';
 
 const MAX_TOOL_ITERATIONS = 6;
@@ -77,7 +78,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'chat', persist });
 
 	const searchCfg = getSetting<WebSearchSettings>('websearch', DEFAULT_WEB_SEARCH);
-	const tools: LoopTool[] = [];
+	const tools: LoopTool[] = [...knowledgeTools()];
 	if (opts.webSearch && webSearchConfigured(searchCfg)) {
 		tools.push({
 			def: webSearchToolDef,
@@ -86,6 +87,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 				JSON.stringify(await runWebSearch(String(args.query ?? ''), searchCfg))
 		});
 	}
+	const fullSystemPrompt = systemPrompt + bootstrapContext();
 
 	void runAgentLoop({
 		job,
@@ -99,7 +101,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		maxIterations: MAX_TOOL_ITERATIONS,
 		buildMessages: () =>
 			buildContext({
-				systemPrompt,
+				systemPrompt: fullSystemPrompt,
 				chat: getChat(chat.id, opts.userId)!,
 				history: getMessages(chat.id),
 				supportsVision: choice.model.supportsVision

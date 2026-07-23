@@ -2,10 +2,11 @@
 	import Providers from '$lib/components/admin/Providers.svelte';
 	import Models from '$lib/components/admin/Models.svelte';
 	import Tasks from '$lib/components/admin/Tasks.svelte';
+	import Skills from '$lib/components/admin/Skills.svelte';
 	import Settings from '$lib/components/admin/Settings.svelte';
 	import Usage from '$lib/components/admin/Usage.svelte';
 
-	const tabs = ['Providers', 'Models', 'Tasks', 'Settings', 'Usage'] as const;
+	const tabs = ['Providers', 'Models', 'Tasks', 'Skills', 'Settings', 'Usage'] as const;
 	let active = $state<(typeof tabs)[number]>('Providers');
 	let modelsRefreshKey = $state(0);
 </script>
@@ -24,6 +25,8 @@
 			<Models refreshKey={modelsRefreshKey} />
 		{:else if active === 'Tasks'}
 			<Tasks />
+		{:else if active === 'Skills'}
+			<Skills />
 		{:else if active === 'Settings'}
 			<Settings />
 		{:else}
