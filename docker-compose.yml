@@ -56,6 +56,10 @@ services:
       VOLUMES: 0
       EXEC: 0
       INFO: 0
+      ALLOW_START: 1
+      ALLOW_STOP: 1
+      ALLOW_RESTARTS: 1
+      ALLOW_DELETE: 1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks: [docker-api]
