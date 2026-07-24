@@ -262,11 +262,7 @@
 		}
 	}
 
-	const galaxy = String.raw`
-        ·   . ·∙˚*˚∙· .          *
-   .      ·∙˚ ˚ ∙ ✦ ∙ ˚ ˚∙·    .
-        . ·∙ ˚ ∙ · · · ∙ ˚ ∙· .
-             ·   ' ·∙˚∙· '   ·    *`;
+	import { GALAXY_SMALL } from '$lib/galaxy-art';
 </script>
 
 <div class="chat-shell">
@@ -311,7 +307,7 @@
 		<div class="thread">
 			{#if !currentChat && !messages.length}
 				<div class="empty">
-					<pre class="galaxy-art" aria-hidden="true">{galaxy}</pre>
+					<pre class="galaxy-art" aria-hidden="true">{GALAXY_SMALL}</pre>
 					<p>Start a conversation — it will appear in the pane on the left.</p>
 				</div>
 			{/if}
@@ -536,9 +532,13 @@
 		font-size: 0.8rem;
 	}
 	.galaxy-art {
-		font-size: 0.7rem;
-		line-height: 1.2;
+		color: var(--accent);
+		opacity: 0.55;
+		font-size: 0.6rem;
+		line-height: 1.25;
 		user-select: none;
+		display: inline-block;
+		text-align: left;
 	}
 	.msg {
 		max-width: 46rem;

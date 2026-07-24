@@ -26,7 +26,10 @@
 		void load();
 	});
 
-	const visible = $derived(
+	const PAGE = 100;
+	let limit = $state(PAGE);
+
+	const matching = $derived(
 		models
 			.filter((m) => showDisabled || m.enabled || filter.length > 1)
 			.filter((m) =>
@@ -34,9 +37,18 @@
 					? (m.displayName + m.modelKey).toLowerCase().includes(filter.toLowerCase())
 					: true
 			)
-			.sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.displayName.localeCompare(b.displayName))
-			.slice(0, 200)
+			.sort(
+				(a, b) => Number(b.enabled) - Number(a.enabled) || a.displayName.localeCompare(b.displayName)
+			)
 	);
+	const visible = $derived(matching.slice(0, limit));
+
+	// Reset paging whenever the filter/toggle changes the result set.
+	$effect(() => {
+		void filter;
+		void showDisabled;
+		limit = PAGE;
+	});
 
 	async function toggle(m: Model) {
 		await fetch(`/api/admin/models/${m.id}`, {
@@ -84,6 +96,13 @@
 			{/each}
 		</tbody>
 	</table>
+	{#if matching.length > limit}
+		<div class="more">
+			<span>showing {visible.length} of {matching.length}</span>
+			<button class="more-btn" onclick={() => (limit += PAGE)}>Show more</button>
+			<button class="more-btn" onclick={() => (limit = matching.length)}>Show all</button>
+		</div>
+	{/if}
 </section>
 
 <style>
@@ -114,6 +133,24 @@
 		font-size: 0.72rem;
 		color: var(--fg-dim);
 		margin-left: auto;
+	}
+	.more {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		padding: 0.7rem 0.2rem;
+		font-size: 0.72rem;
+		color: var(--fg-dim);
+	}
+	.more-btn {
+		background: var(--border);
+		color: var(--fg);
+		border: none;
+		border-radius: 5px;
+		padding: 0.3rem 0.7rem;
+		font-family: inherit;
+		font-size: 0.72rem;
+		cursor: pointer;
 	}
 	table {
 		width: 100%;

@@ -60,7 +60,8 @@
 	}
 	.shell {
 		display: flex;
-		min-height: 100vh;
+		height: 100vh;
+		overflow: hidden;
 		position: relative;
 		z-index: 1;
 	}
@@ -73,6 +74,7 @@
 		flex-direction: column;
 		padding: 1rem;
 		box-sizing: border-box;
+		overflow-y: auto;
 	}
 	.brand {
 		color: var(--accent);
@@ -123,12 +125,19 @@
 	.main {
 		flex: 1;
 		display: flex;
-		min-height: 100vh;
 		min-width: 0;
+		min-height: 0;
+		overflow: hidden;
 	}
 	@media (max-width: 720px) {
 		.shell {
 			flex-direction: column;
+			height: auto;
+			min-height: 100vh;
+			overflow: visible;
+		}
+		.main {
+			overflow: visible;
 		}
 		.pane {
 			width: 100%;

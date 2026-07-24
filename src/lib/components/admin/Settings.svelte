@@ -75,6 +75,7 @@
 				provider
 				<select bind:value={websearch.provider}>
 					<option value="none">disabled</option>
+					<option value="duckduckgo">DuckDuckGo (no key)</option>
 					<option value="brave">Brave</option>
 					<option value="tavily">Tavily</option>
 					<option value="searxng">SearXNG (self-hosted)</option>
@@ -117,6 +118,7 @@
 				search engine
 				<select bind:value={research.provider}>
 					<option value="inherit">same as web search</option>
+					<option value="duckduckgo">DuckDuckGo (no key)</option>
 					<option value="searxng">dedicated SearXNG</option>
 				</select>
 			</label>

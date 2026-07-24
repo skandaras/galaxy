@@ -4,6 +4,8 @@
 
 	let draft = $state<Theme | null>(null);
 	let presets = $state<Record<string, Theme>>({});
+	let custom = $state<Record<string, Theme>>({});
+	let saveName = $state('');
 	let saved = $state(false);
 
 	$effect(() => {
@@ -11,6 +13,7 @@
 			const data = await (await fetch('/api/settings/theme')).json();
 			draft = data.theme;
 			presets = data.presets;
+			custom = data.custom ?? {};
 		})();
 	});
 
@@ -30,20 +33,34 @@
 		root.style.fontSize = draft.baseFont;
 	});
 
-	async function save() {
+	async function save(saveAs?: string) {
 		if (!draft) return;
-		await fetch('/api/settings/theme', {
+		const res = await fetch('/api/settings/theme', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ theme: draft })
+			body: JSON.stringify({ theme: draft, saveAs })
 		});
+		if (res.ok) {
+			const data = await res.json();
+			custom = data.custom ?? custom;
+			if (saveAs) saveName = '';
+		}
 		saved = true;
 		setTimeout(() => (saved = false), 1500);
 		await invalidateAll();
 	}
 
-	function applyPreset(name: string) {
-		draft = { ...presets[name] };
+	async function deleteCustom(name: string, ev: Event) {
+		ev.stopPropagation();
+		if (!confirm(`Delete saved theme "${name}"?`)) return;
+		const res = await fetch(`/api/settings/theme?name=${encodeURIComponent(name)}`, {
+			method: 'DELETE'
+		});
+		if (res.ok) custom = (await res.json()).custom ?? {};
+	}
+
+	function applyPreset(theme: Theme) {
+		draft = { ...theme };
 	}
 
 	function exportTheme() {
@@ -92,11 +109,40 @@
 					<button
 						class="preset"
 						style="background:{p.bg};color:{p.accent};border-color:{p.border}"
-						onclick={() => applyPreset(name)}
+						onclick={() => applyPreset(p)}
 					>
 						✦ {name}
 					</button>
 				{/each}
+			</div>
+
+			{#if Object.keys(custom).length}
+				<h3 class="sub">Your saved themes</h3>
+				<div class="preset-row">
+					{#each Object.entries(custom) as [name, p] (name)}
+						<span class="preset-wrap">
+							<button
+								class="preset"
+								style="background:{p.bg};color:{p.accent};border-color:{p.border}"
+								onclick={() => applyPreset(p)}
+							>
+								✦ {name}
+							</button>
+							<button class="del" title="Delete" onclick={(e) => deleteCustom(name, e)}>×</button>
+						</span>
+					{/each}
+				</div>
+			{/if}
+
+			<div class="save-as">
+				<input placeholder="Name this theme…" bind:value={saveName} maxlength="40" />
+				<button
+					class="btn"
+					disabled={!saveName.trim()}
+					onclick={() => save(saveName.trim())}
+				>
+					Save as preset
+				</button>
 			</div>
 		</section>
 
@@ -142,7 +188,7 @@
 		</section>
 
 		<div class="actions">
-			<button class="btn primary" onclick={save}>{saved ? 'Saved ✓' : 'Save theme'}</button>
+			<button class="btn primary" onclick={() => save()}>{saved ? 'Saved ✓' : 'Save theme'}</button>
 			<button class="btn" onclick={exportTheme}>Export</button>
 			<label class="btn">
 				Import
@@ -190,6 +236,48 @@
 		font-size: 0.78rem;
 		padding: 0.6rem 1rem;
 		cursor: pointer;
+	}
+	.preset-wrap {
+		position: relative;
+		display: inline-flex;
+	}
+	.del {
+		position: absolute;
+		top: -0.4rem;
+		right: -0.4rem;
+		width: 1.1rem;
+		height: 1.1rem;
+		border-radius: 50%;
+		border: 1px solid var(--border);
+		background: var(--bg);
+		color: var(--fg-dim);
+		font-size: 0.7rem;
+		line-height: 1;
+		cursor: pointer;
+	}
+	.del:hover {
+		color: var(--danger);
+		border-color: var(--danger);
+	}
+	.sub {
+		margin-top: 1rem;
+	}
+	.save-as {
+		display: flex;
+		gap: 0.5rem;
+		margin-top: 0.9rem;
+		padding-top: 0.8rem;
+		border-top: 1px solid var(--border);
+	}
+	.save-as input {
+		background: var(--bg-pane);
+		border: 1px solid var(--border);
+		color: var(--fg);
+		font-family: inherit;
+		font-size: 0.78rem;
+		padding: 0.35rem 0.5rem;
+		flex: 1;
+		max-width: 16rem;
 	}
 	.grid {
 		display: grid;
