@@ -63,6 +63,9 @@ function resolveSearchCfg(): WebSearchSettings {
 	if (research.provider === 'searxng' && research.baseUrl) {
 		return { ...base, provider: 'searxng', baseUrl: research.baseUrl };
 	}
+	if (research.provider === 'duckduckgo') {
+		return { ...base, provider: 'duckduckgo' };
+	}
 	return base;
 }
 

@@ -25,7 +25,7 @@ export function setSetting(key: string, value: unknown, scope = GLOBAL_SCOPE): v
 }
 
 export interface WebSearchSettings {
-	provider: 'brave' | 'tavily' | 'searxng' | 'none';
+	provider: 'duckduckgo' | 'brave' | 'tavily' | 'searxng' | 'none';
 	/** AES-encrypted API key (see $lib/server/crypto); set via admin settings. */
 	apiKeyEnc?: string;
 	baseUrl?: string; // searxng instance
@@ -45,8 +45,11 @@ export interface GithubSettings {
 }
 
 export interface ResearchSettings {
-	/** 'inherit' uses the web-search provider; 'searxng' can point elsewhere. */
-	provider: 'inherit' | 'searxng';
+	/**
+	 * 'inherit' uses the web-search provider; the others override it for
+	 * research only ('searxng' additionally needs baseUrl).
+	 */
+	provider: 'inherit' | 'duckduckgo' | 'searxng';
 	baseUrl?: string;
 	maxQueries: number;
 	maxPages: number;
