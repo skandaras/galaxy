@@ -95,37 +95,84 @@ Migrations run automatically on boot. Visit the **dev** subdomain first:
 
 ## 5. Coding runners (sandbox)
 
-Coding sessions execute every agent command in a throwaway container. The
-compose file already runs `docker-socket-proxy` and points both instances at
-it. Build/pull the runner image once:
+Coding sessions execute every agent command in a throwaway container on an
+isolated network. Three prerequisites must exist before the first session:
+
+**a) The runner image.** CI publishes `ghcr.io/<owner>/galaxy-runner:latest` on
+every green push to `main`. It is *not* a compose service (runners are created
+at runtime via the Docker API), so `docker compose pull` will **not** fetch it —
+pull it explicitly once:
 
 ```sh
-docker build -t ghcr.io/skandaras/galaxy-runner:latest \
-  https://github.com/skandaras/galaxy.git#main:runner
+docker pull ghcr.io/skandaras/galaxy-runner:latest
 ```
+
+If the GHCR package is private, `docker login ghcr.io` first. To build it
+locally instead of pulling:
+
+```sh
+docker build -t ghcr.io/skandaras/galaxy-runner:latest ./runner
+```
+
+The image must exist on the host before a session starts — the executor creates
+containers but never pulls.
+
+**b) The runners network.** The compose file declares `runners` but Compose does
+not create a network that no service joins — and no service should join this one,
+by design (runners are created at runtime through the Docker API). Create it
+once:
+
+```sh
+docker network create galaxy_runners
+```
+
+Confirm with `docker network ls | grep galaxy_runners`. The name must match
+`RUNNER_NETWORK` in the compose file.
+
+> **Why not `--internal`?** Runners need outbound access: `git clone`/`git push`
+> and dependency installs (`npm install`, `pip install`) all run *inside* the
+> runner. An internal network would break coding against GitHub. The sandbox
+> boundary is enforced separately — runners are not attached to the internal
+> `docker-api` network, so they can never reach the Docker socket proxy and
+> cannot spawn or control containers. Only use `--internal` if you exclusively
+> work with local repos and never install dependencies.
+
+**c) Socket-proxy lifecycle permissions** are already set in the compose file
+(`ALLOW_START/STOP/RESTARTS/DELETE` on `docker-socket-proxy`). No action needed
+unless you override the proxy environment.
 
 Check `DATA_VOLUME` matches reality: `docker volume ls | grep galaxy` — the
 compose project prefixes volume names (e.g. `galaxy_galaxy-dev-data`).
 
-If a coding session errors with "Runner create failed", inspect the
-socket-proxy logs; the proxy only permits container lifecycle calls.
+### Troubleshooting
+
+| Error | Cause |
+|---|---|
+| `Runner create failed (4xx)` | Socket proxy denying `/containers/create`, or `RUNNER_IMAGE` not present locally |
+| `Runner start failed (404)` | `galaxy_runners` network doesn't exist, or `ALLOW_START` unset on the proxy |
+| Dead runners accumulating (`docker ps -a`) | `ALLOW_DELETE` unset — cleanup is failing silently |
+| `Clone failed: could not resolve host` | The runners network was created with `--internal` (see above) |
 
 ## 6. CI, dev deploys, promotion
 
 - Every green push to `main` builds `ghcr.io/skandaras/galaxy:dev` (see
   `.github/workflows/ci.yml`; the end-to-end smoke suite is the gate).
-- The **dev** container follows `:dev`. Auto-update it with watchtower:
+- The **dev** container follows `:dev`. Pull updates manually:
 
 ```sh
-docker run -d --name watchtower --restart unless-stopped \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  containrrr/watchtower --interval 300 --cleanup galaxy-dev galaxy-prod
+docker compose pull galaxy-dev && docker compose up -d galaxy-dev
 ```
+
+  (Auto-updaters like watchtower are not recommended here: they reap the
+  ephemeral coding-runner containers mid-session, and must in any case be scoped
+  to `galaxy-dev` only — never `galaxy-prod`, which must only change via
+  Promote. `containrrr/watchtower` is also unmaintained and crash-loops against
+  current Docker Engine.)
 
 - **Promote** (Admin → Settings → Deployment) dispatches the Promote
   workflow: it retags `stable → stable-prev`, then `dev → stable`. Prod
-  follows `:stable`, so watchtower rolls it out. **Rollback** restores
-  `stable-prev`. Without watchtower: `docker compose pull && docker compose up -d`.
+  follows `:stable`. **Rollback** restores `stable-prev`. Apply either with
+  `docker compose pull galaxy-prod && docker compose up -d galaxy-prod`.
 - The promotion gate: with `DEV_HEALTH_URL` set, Promote refuses while dev
   is unhealthy.
 

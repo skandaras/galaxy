@@ -45,3 +45,27 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:dev
             ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+
+  docker-runner:
+    # The sandbox image agent commands run inside. Published so a fresh host
+    # pulls it instead of building locally. Independent of the app image.
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./runner
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}-runner:latest
+            ghcr.io/${{ github.repository }}-runner:sha-${{ github.sha }}
