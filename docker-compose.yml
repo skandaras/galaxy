@@ -56,10 +56,6 @@ services:
       VOLUMES: 0
       EXEC: 0
       INFO: 0
-      # Lifecycle: without these, a runner is created (201) but cannot be
-      # started (404), and DELETE cleanup fails silently, leaking containers.
-      # This does not widen the boundary — /containers/create was already
-      # permitted; these only make created containers usable.
       ALLOW_START: 1
       ALLOW_STOP: 1
       ALLOW_RESTARTS: 1
