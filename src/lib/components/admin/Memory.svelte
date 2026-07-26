@@ -1,11 +1,11 @@
 <script lang="ts">
-	interface MemoryItem {
-		id: string;
-		kind: string;
-		content: string;
-		source: string | null;
-		status: 'active' | 'archived';
-		createdAt: number;
+	interface UserStatus {
+		userId: string;
+		username: string;
+		lastRun: number;
+		nextDue: number;
+		enabled: boolean;
+		activeItems: number;
 	}
 	interface Candidate {
 		id: string;
@@ -16,23 +16,20 @@
 		body: string;
 		rationale: string;
 		status: 'pending' | 'approved' | 'rejected';
+		proposedBy: string;
 	}
 
 	let settings = $state({ enabled: true, intervalHours: 12 });
-	let lastRun = $state(0);
-	let nextDue = $state(0);
-	let items = $state<MemoryItem[]>([]);
+	let userStatus = $state<UserStatus[]>([]);
 	let candidates = $state<Candidate[]>([]);
 	let expandedCand = $state<string | null>(null);
-	let busy = $state<string | null>(null);
+	let busy = $state(false);
 	let notice = $state<string | null>(null);
 
 	async function load() {
 		const data = await (await fetch('/api/admin/memory')).json();
 		settings = { ...data.settings };
-		lastRun = data.lastRun;
-		nextDue = data.nextDue;
-		items = data.items;
+		userStatus = data.userStatus;
 		candidates = data.candidates;
 	}
 	$effect(() => {
@@ -45,26 +42,20 @@
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ key: 'memory', value: settings })
 		});
-		notice = 'Settings saved';
+		notice = 'Schedule saved';
 		await load();
 	}
 
-	async function run(kind: 'memory' | 'optimise') {
-		busy = kind;
+	async function runOptimiser() {
+		busy = true;
 		notice = null;
-		const res = await fetch(`/api/admin/memory/run${kind === 'optimise' ? '?kind=optimise' : ''}`, {
-			method: 'POST'
-		});
-		const result = await res.json();
-		busy = null;
+		const result = await (
+			await fetch('/api/admin/memory/run?kind=optimise', { method: 'POST' })
+		).json();
+		busy = false;
 		notice = result.ran
-			? `Run complete: ${result.memories ?? 0} memories, ${result.candidates ?? 0} skill candidates`
+			? `Optimiser proposed ${result.candidates ?? 0} candidate(s)`
 			: `Skipped: ${result.reason}`;
-		await load();
-	}
-
-	async function itemAction(item: MemoryItem, method: 'PATCH' | 'DELETE') {
-		await fetch(`/api/admin/memory/items/${item.id}`, { method });
 		await load();
 	}
 
@@ -88,29 +79,50 @@
 	<article class="card">
 		<h3>Schedule</h3>
 		<div class="grid">
-			<label class="row"><input type="checkbox" bind:checked={settings.enabled} /> run automatically</label>
+			<label class="row">
+				<input type="checkbox" bind:checked={settings.enabled} /> run audits automatically
+			</label>
 			<label>
 				every (hours)
 				<input type="number" min="1" max="168" bind:value={settings.intervalHours} />
 			</label>
-			<div class="status">
-				<div>last run: {when(lastRun)}</div>
-				<div>next due: {settings.enabled ? when(nextDue) : '—'}</div>
-			</div>
 		</div>
 		<div class="row-buttons">
 			<button class="btn primary" onclick={saveSettings}>Save</button>
-			<button class="btn" disabled={busy !== null} onclick={() => run('memory')}>
-				{busy === 'memory' ? 'Running…' : 'Run memory audit now'}
-			</button>
-			<button class="btn" disabled={busy !== null} onclick={() => run('optimise')}>
-				{busy === 'optimise' ? 'Running…' : 'Run skill optimiser'}
+			<button class="btn" disabled={busy} onclick={runOptimiser}>
+				{busy ? 'Running…' : 'Run skill optimiser'}
 			</button>
 		</div>
 		<p class="hint">
-			The audit only reads activity newer than the watermark and skips entirely when nothing
-			happened. Hidden chats are excluded by construction.
+			Applies to every user. Each person can opt their own audit out and run it on demand from
+			Settings → Memory; an audit only reads that user's own activity, and never hidden chats.
 		</p>
+	</article>
+
+	<article class="card">
+		<h3>Per-user status</h3>
+		<p class="hint">
+			Memories are private to each user and are not readable here — this is timing and counts
+			only, for troubleshooting.
+		</p>
+		<table>
+			<thead>
+				<tr><th>User</th><th>Auto</th><th>Memories</th><th>Last run</th><th>Next due</th></tr>
+			</thead>
+			<tbody>
+				{#each userStatus as s (s.userId)}
+					<tr class:off={!s.enabled}>
+						<td>{s.username}</td>
+						<td>{s.enabled ? 'on' : 'opted out'}</td>
+						<td>{s.activeItems}</td>
+						<td>{when(s.lastRun)}</td>
+						<td>{s.enabled && settings.enabled ? when(s.nextDue) : '—'}</td>
+					</tr>
+				{:else}
+					<tr><td colspan="5" class="hint">No users yet.</td></tr>
+				{/each}
+			</tbody>
+		</table>
 	</article>
 
 	<article class="card">
@@ -120,6 +132,7 @@
 				<div class="cand-head">
 					<span class="cand-name">{c.name}</span>
 					<span class="cand-cat">{c.category}</span>
+					<span class="cand-by">from {c.proposedBy}</span>
 					<span class="spacer"></span>
 					<button class="btn primary" onclick={() => decide(c, 'approve')}>Approve</button>
 					<button class="btn danger" onclick={() => decide(c, 'reject')}>Reject</button>
@@ -132,7 +145,10 @@
 				{#if expandedCand === c.id}<pre class="cand-body">{c.body}</pre>{/if}
 			</div>
 		{:else}
-			<p class="hint">No pending candidates. Approving a candidate creates the real skill (agent-authored, git-versioned); nothing activates without you.</p>
+			<p class="hint">
+				No pending candidates. Approving one creates the real skill (agent-authored,
+				git-versioned); nothing activates without you.
+			</p>
 		{/each}
 		{#if decided.length}
 			<details>
@@ -142,28 +158,6 @@
 				{/each}
 			</details>
 		{/if}
-	</article>
-
-	<article class="card">
-		<h3>Memory items</h3>
-		<table>
-			<tbody>
-				{#each items as item (item.id)}
-					<tr class:archived={item.status === 'archived'}>
-						<td class="kind">{item.kind}</td>
-						<td>{item.content}</td>
-						<td class="actions">
-							{#if item.status === 'active'}
-								<button class="btn" onclick={() => itemAction(item, 'PATCH')}>Archive</button>
-							{/if}
-							<button class="btn danger" onclick={() => itemAction(item, 'DELETE')}>Delete</button>
-						</td>
-					</tr>
-				{:else}
-					<tr><td class="hint">No memories yet — they appear after the first audit with activity.</td></tr>
-				{/each}
-			</tbody>
-		</table>
 	</article>
 </section>
 
@@ -209,10 +203,6 @@
 		padding: 0.3rem 0.5rem;
 		width: 5rem;
 	}
-	.status {
-		font-size: 0.7rem;
-		color: var(--fg-dim);
-	}
 	.row-buttons {
 		display: flex;
 		gap: 0.5rem;
@@ -221,6 +211,7 @@
 	.hint {
 		font-size: 0.68rem;
 		color: var(--fg-dim);
+		line-height: 1.5;
 		margin: 0.5rem 0 0;
 	}
 	.notice {
@@ -258,7 +249,24 @@
 		font-family: inherit;
 		padding: 0;
 	}
-
+	table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 0.78rem;
+	}
+	th,
+	td {
+		text-align: left;
+		padding: 0.4rem 0.5rem;
+		border-bottom: 1px solid var(--border);
+	}
+	th {
+		color: var(--fg-dim);
+		font-weight: normal;
+	}
+	tr.off td {
+		opacity: 0.5;
+	}
 	.cand {
 		border-top: 1px solid var(--border);
 		padding: 0.6rem 0;
@@ -267,12 +275,14 @@
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
+		flex-wrap: wrap;
 	}
 	.cand-name {
 		font-size: 0.82rem;
 		color: var(--fg);
 	}
-	.cand-cat {
+	.cand-cat,
+	.cand-by {
 		font-size: 0.62rem;
 		border: 1px solid var(--border);
 		border-radius: 3px;
@@ -309,29 +319,5 @@
 		color: var(--fg-dim);
 		cursor: pointer;
 		margin-top: 0.5rem;
-	}
-
-	table {
-		width: 100%;
-		border-collapse: collapse;
-		font-size: 0.78rem;
-	}
-	td {
-		padding: 0.4rem 0.5rem;
-		border-bottom: 1px solid var(--border);
-		vertical-align: top;
-	}
-	tr.archived td {
-		opacity: 0.45;
-	}
-	.kind {
-		color: var(--accent);
-		font-size: 0.68rem;
-		text-transform: uppercase;
-		white-space: nowrap;
-	}
-	.actions {
-		white-space: nowrap;
-		text-align: right;
 	}
 </style>

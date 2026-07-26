@@ -87,7 +87,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 				JSON.stringify(await runWebSearch(String(args.query ?? ''), searchCfg))
 		});
 	}
-	const fullSystemPrompt = systemPrompt + bootstrapContext();
+	const fullSystemPrompt = systemPrompt + bootstrapContext(opts.userId);
 
 	void runAgentLoop({
 		job,

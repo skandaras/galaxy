@@ -4,11 +4,11 @@ import { db } from '$lib/server/db';
 import {
 	chats,
 	codeSessions,
-	libraryDocs,
 	memoryItems,
 	messages,
 	skillCandidates,
-	usageLog
+	usageLog,
+	users
 } from '$lib/server/db/schema';
 import { listSkills, saveSkill } from '$lib/server/skills';
 import { getSetting, setSetting } from '$lib/server/settings';
@@ -18,32 +18,55 @@ import { emitEvent } from './events';
 
 const WATERMARK_KEY = 'memory.watermark';
 const LAST_RUN_KEY = 'memory.lastRun';
+const USER_ENABLED_KEY = 'memory.userEnabled';
 const MAX_ACTIVITY_CHARS = 40_000;
 
 export type MemoryItem = typeof memoryItems.$inferSelect;
 export type SkillCandidate = typeof skillCandidates.$inferSelect;
 
-export function getMemoryStatus() {
+/** Watermark and last-run are per user, stored at that user's settings scope. */
+export function getMemoryStatus(userId: string) {
 	return {
-		watermark: getSetting<number>(WATERMARK_KEY, 0),
-		lastRun: getSetting<number>(LAST_RUN_KEY, 0)
+		watermark: getSetting<number>(WATERMARK_KEY, 0, userId),
+		lastRun: getSetting<number>(LAST_RUN_KEY, 0, userId),
+		enabled: getSetting<boolean>(USER_ENABLED_KEY, true, userId)
 	};
 }
 
-export function listMemoryItems(): MemoryItem[] {
-	return db.select().from(memoryItems).orderBy(desc(memoryItems.createdAt)).all();
+export function setUserMemoryEnabled(userId: string, enabled: boolean): void {
+	setSetting(USER_ENABLED_KEY, enabled, userId);
+}
+
+/** A user's own memories. Never call this without an owner for user-facing output. */
+export function listMemoryItems(userId: string): MemoryItem[] {
+	return db
+		.select()
+		.from(memoryItems)
+		.where(eq(memoryItems.userId, userId))
+		.orderBy(desc(memoryItems.createdAt))
+		.all();
 }
 
 export function listCandidates(): SkillCandidate[] {
 	return db.select().from(skillCandidates).orderBy(desc(skillCandidates.createdAt)).all();
 }
 
-export function archiveMemoryItem(id: string): void {
-	db.update(memoryItems).set({ status: 'archived' }).where(eq(memoryItems.id, id)).run();
+/** Both mutations are owner-scoped: a non-owner's id simply matches no row. */
+export function archiveMemoryItem(id: string, userId: string): boolean {
+	const res = db
+		.update(memoryItems)
+		.set({ status: 'archived' })
+		.where(and(eq(memoryItems.id, id), eq(memoryItems.userId, userId)))
+		.run();
+	return res.changes > 0;
 }
 
-export function deleteMemoryItem(id: string): void {
-	db.delete(memoryItems).where(eq(memoryItems.id, id)).run();
+export function deleteMemoryItem(id: string, userId: string): boolean {
+	const res = db
+		.delete(memoryItems)
+		.where(and(eq(memoryItems.id, id), eq(memoryItems.userId, userId)))
+		.run();
+	return res.changes > 0;
 }
 
 /** Approving writes the real (agent-authored) skill; both paths close the candidate. */
@@ -67,12 +90,40 @@ export function decideCandidate(id: string, approve: boolean): SkillCandidate | 
 	return db.select().from(skillCandidates).where(eq(skillCandidates.id, id)).get() ?? null;
 }
 
-/** Active memory, formatted for the context bootstrap. */
-export function memoryDigest(maxItems = 20): string {
-	const items = listMemoryItems().filter((m) => m.status === 'active');
+/**
+ * Active memory for one user, formatted for the context bootstrap. Only ever
+ * that user's own items — this is what keeps one person's observations out of
+ * another person's system prompt.
+ */
+export function memoryDigest(userId: string, maxItems = 20): string {
+	const items = listMemoryItems(userId).filter((m) => m.status === 'active');
 	if (!items.length) return '';
 	const lines = items.slice(0, maxItems).map((m) => `- (${m.kind}) ${m.content}`);
 	return ['', '[Memory — durable observations from past activity]', ...lines].join('\n');
+}
+
+/** Content-free per-user status for the admin panel. Never returns memory text. */
+export function memoryStatusByUser(): {
+	userId: string;
+	username: string;
+	lastRun: number;
+	enabled: boolean;
+	activeItems: number;
+}[] {
+	return db
+		.select()
+		.from(users)
+		.all()
+		.map((u) => {
+			const status = getMemoryStatus(u.id);
+			return {
+				userId: u.id,
+				username: u.username,
+				lastRun: status.lastRun,
+				enabled: status.enabled,
+				activeItems: listMemoryItems(u.id).filter((m) => m.status === 'active').length
+			};
+		});
 }
 
 interface ActivityDigest {
@@ -80,11 +131,24 @@ interface ActivityDigest {
 	empty: boolean;
 }
 
-function gatherActivity(sinceMs: number): ActivityDigest {
+/**
+ * One user's activity since their watermark. Hidden chats never reach here —
+ * they are held in memory and never written to the chats table.
+ *
+ * The Library is deliberately not audited: it is shared and its rows carry no
+ * owner, so attributing changes to a user is impossible, and `libraryDigest()`
+ * already lists every document in the bootstrap — auditing it again only
+ * produced the same observation duplicated into every user's memory.
+ */
+function gatherActivity(userId: string, sinceMs: number): ActivityDigest {
 	const since = new Date(sinceMs);
 	const parts: string[] = [];
 
-	const newChats = db.select().from(chats).where(gt(chats.updatedAt, since)).all();
+	const newChats = db
+		.select()
+		.from(chats)
+		.where(and(eq(chats.userId, userId), gt(chats.updatedAt, since)))
+		.all();
 	for (const chat of newChats.slice(0, 20)) {
 		const msgs = db
 			.select()
@@ -101,14 +165,11 @@ function gatherActivity(sinceMs: number): ActivityDigest {
 		);
 	}
 
-	const docs = db.select().from(libraryDocs).where(gt(libraryDocs.updatedAt, since)).all();
-	if (docs.length) {
-		parts.push(
-			'## Library changes\n' + docs.map((d) => `- ${d.title}: ${d.snippet.slice(0, 200)}`).join('\n')
-		);
-	}
-
-	const sessions = db.select().from(codeSessions).where(gt(codeSessions.createdAt, since)).all();
+	const sessions = db
+		.select()
+		.from(codeSessions)
+		.where(and(eq(codeSessions.userId, userId), gt(codeSessions.createdAt, since)))
+		.all();
 	if (sessions.length) {
 		parts.push(
 			'## New coding sessions\n' +
@@ -124,19 +185,23 @@ function gatherActivity(sinceMs: number): ActivityDigest {
  * durable memories and skill candidates, advance the watermark. Skips
  * cleanly when there is no new activity or the budget cap is hit.
  */
-export async function runMemory(trigger: 'schedule' | 'manual'): Promise<{
+export async function runMemory(
+	trigger: 'schedule' | 'manual',
+	userId: string
+): Promise<{
 	ran: boolean;
 	reason?: string;
 	memories?: number;
 	candidates?: number;
 }> {
 	const startedAt = Date.now();
-	setSetting(LAST_RUN_KEY, startedAt);
-	const { watermark } = getMemoryStatus();
+	setSetting(LAST_RUN_KEY, startedAt, userId);
+	const { watermark } = getMemoryStatus(userId);
 
-	const activity = gatherActivity(watermark);
+	const activity = gatherActivity(userId, watermark);
 	if (activity.empty) {
 		emitEvent({
+			userId,
 			task: 'memory',
 			type: 'job',
 			name: 'memory.run',
@@ -147,6 +212,7 @@ export async function runMemory(trigger: 'schedule' | 'manual'): Promise<{
 	}
 	if (getBudgetStatus().blocked) {
 		emitEvent({
+			userId,
 			task: 'memory',
 			type: 'job',
 			name: 'memory.run',
@@ -160,6 +226,7 @@ export async function runMemory(trigger: 'schedule' | 'manual'): Promise<{
 	const choice = pickModel(cfg?.primaryModelId ?? null);
 	if (!choice) {
 		emitEvent({
+			userId,
 			task: 'memory',
 			type: 'job',
 			name: 'memory.run',
@@ -169,7 +236,7 @@ export async function runMemory(trigger: 'schedule' | 'manual'): Promise<{
 		return { ran: false, reason: 'no model configured' };
 	}
 
-	const existingMemories = listMemoryItems()
+	const existingMemories = listMemoryItems(userId)
 		.filter((m) => m.status === 'active')
 		.map((m) => m.content)
 		.join('\n');
@@ -210,6 +277,7 @@ export async function runMemory(trigger: 'schedule' | 'manual'): Promise<{
 			db.insert(memoryItems)
 				.values({
 					id: randomUUID(),
+					userId,
 					kind: ['preference', 'pattern', 'fact'].includes(m.kind) ? m.kind : 'fact',
 					content: m.content.trim().slice(0, 1000),
 					source,
@@ -232,6 +300,7 @@ export async function runMemory(trigger: 'schedule' | 'manual'): Promise<{
 			db.insert(skillCandidates)
 				.values({
 					id: randomUUID(),
+					userId,
 					name,
 					category: String(c.category ?? 'general'),
 					description: String(c.description ?? ''),
@@ -245,9 +314,12 @@ export async function runMemory(trigger: 'schedule' | 'manual'): Promise<{
 			added++;
 		}
 
-		setSetting(WATERMARK_KEY, startedAt);
-		logMemoryUsage(choice.model.modelKey, usage, 'ok');
+		// Only advance the watermark on a successful run, so a failure re-reads
+		// the same window next time instead of silently losing activity.
+		setSetting(WATERMARK_KEY, startedAt, userId);
+		logMemoryUsage(choice.model.modelKey, usage, 'ok', userId);
 		emitEvent({
+			userId,
 			task: 'memory',
 			type: 'job',
 			name: 'memory.run',
@@ -257,8 +329,9 @@ export async function runMemory(trigger: 'schedule' | 'manual'): Promise<{
 		});
 		return { ran: true, memories: memories.length, candidates: added };
 	} catch (err) {
-		logMemoryUsage(choice.model.modelKey, null, 'error');
+		logMemoryUsage(choice.model.modelKey, null, 'error', userId);
 		emitEvent({
+			userId,
 			task: 'memory',
 			type: 'job',
 			name: 'memory.run',
@@ -270,8 +343,14 @@ export async function runMemory(trigger: 'schedule' | 'manual'): Promise<{
 	}
 }
 
-/** Ask the skill-optimiser to review existing skills; proposals join the queue. */
-export async function runSkillOptimiser(): Promise<{ ran: boolean; reason?: string; candidates?: number }> {
+/**
+ * Ask the skill-optimiser to review existing skills; proposals join the queue.
+ * Global, not per user: skills are platform-wide. `adminUserId` is recorded as
+ * the candidate's origin so the queue shows where it came from.
+ */
+export async function runSkillOptimiser(
+	adminUserId?: string
+): Promise<{ ran: boolean; reason?: string; candidates?: number }> {
 	const enabled = listSkills().filter((s) => s.enabled);
 	if (!enabled.length) return { ran: false, reason: 'no skills to optimise' };
 	if (getBudgetStatus().blocked) return { ran: false, reason: 'budget cap reached' };
@@ -317,6 +396,7 @@ export async function runSkillOptimiser(): Promise<{ ran: boolean; reason?: stri
 			db.insert(skillCandidates)
 				.values({
 					id: randomUUID(),
+					userId: adminUserId ?? null,
 					name,
 					category: String(c.category ?? 'general'),
 					description: String(c.description ?? ''),
@@ -329,7 +409,7 @@ export async function runSkillOptimiser(): Promise<{ ran: boolean; reason?: stri
 				.run();
 			added++;
 		}
-		logOptimiserUsage(choice.model.modelKey, usage, 'ok');
+		logOptimiserUsage(choice.model.modelKey, usage, 'ok', adminUserId);
 		emitEvent({
 			task: 'skill-optimiser',
 			type: 'job',
@@ -366,28 +446,31 @@ function extractJson(text: string): Record<string, unknown> | null {
 function logMemoryUsage(
 	modelKey: string,
 	usage: { promptTokens: number; completionTokens: number } | null,
-	status: 'ok' | 'error'
+	status: 'ok' | 'error',
+	userId?: string
 ) {
-	insertUsage('memory', modelKey, usage, status);
+	insertUsage('memory', modelKey, usage, status, userId);
 }
 function logOptimiserUsage(
 	modelKey: string,
 	usage: { promptTokens: number; completionTokens: number } | null,
-	status: 'ok' | 'error'
+	status: 'ok' | 'error',
+	userId?: string
 ) {
-	insertUsage('skill-optimiser', modelKey, usage, status);
+	insertUsage('skill-optimiser', modelKey, usage, status, userId);
 }
 function insertUsage(
 	task: string,
 	modelKey: string,
 	usage: { promptTokens: number; completionTokens: number } | null,
-	status: 'ok' | 'error'
+	status: 'ok' | 'error',
+	userId?: string
 ) {
 	db.insert(usageLog)
 		.values({
 			id: randomUUID(),
 			ts: new Date(),
-			userId: null,
+			userId: userId ?? null,
 			chatId: null,
 			task,
 			modelKey,

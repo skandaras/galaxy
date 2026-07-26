@@ -14,7 +14,7 @@ import { memoryDigest } from '../memory';
  * what skills and Library knowledge exist. Bodies load on demand through the
  * knowledge tools (progressive disclosure — the index stays cheap).
  */
-export function bootstrapContext(): string {
+export function bootstrapContext(userId: string): string {
 	return [
 		'',
 		'[Available skills — load the full instructions with skill_load when one applies]',
@@ -22,7 +22,8 @@ export function bootstrapContext(): string {
 		'',
 		'[Library — shared knowledge docs; read with library_read, search with library_search, save durable knowledge with library_write]',
 		libraryDigest(),
-		memoryDigest()
+		// Only this user's memories — never another user's observations.
+		memoryDigest(userId)
 	].join('\n');
 }
 

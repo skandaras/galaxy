@@ -185,26 +185,85 @@ docker compose pull galaxy-dev && docker compose up -d galaxy-dev
 
 ## 7. Backups
 
-Everything lives in the two data volumes (SQLite DB, library, skills repo,
-uploads, encryption key). Nightly cron example:
+Everything persists in the two data volumes. A volume holds:
+
+| Path | Contents | Back up? |
+|---|---|---|
+| `galaxy.db` (+ `-wal`, `-shm`) | chats, messages, settings, skills index, usage, events | **yes** |
+| `galaxy.key` | master key encrypting every provider API key and the GitHub PAT | **yes — critical** |
+| `library/` | Library markdown documents | yes |
+| `skills/` | SKILL.md files (a git repo, with history) | yes |
+| `uploads/` | chat attachments | yes |
+| `workspaces/` | ephemeral coding-session clones | no — recreated per session |
+
+> **`galaxy.key` is the one that bites.** Lose it and every stored API key and
+> the GitHub token become permanently undecryptable — silently, until the next
+> model call fails. It is generated once on first boot if `SECRET_KEY` is unset.
+> Setting `SECRET_KEY` in the environment instead (and recording it in your
+> password manager) removes this failure mode entirely.
+
+Nightly cron:
 
 ```sh
 cat > /etc/cron.daily/galaxy-backup <<'EOF'
 #!/bin/sh
-set -e
+# Fail loudly: a silently-broken backup is worse than no backup.
+set -eu
 STAMP=$(date +%F)
+mkdir -p /backup/galaxy
 for VOL in galaxy_galaxy-prod-data galaxy_galaxy-dev-data; do
-  docker run --rm -v $VOL:/data:ro -v /backup/galaxy:/out alpine \
-    sh -c "sqlite3 /data/galaxy.db '.backup /tmp/galaxy.db' 2>/dev/null || cp /data/galaxy.db /tmp/galaxy.db; \
-           tar czf /out/$VOL-$STAMP.tgz -C / tmp/galaxy.db data/library data/skills data/themes 2>/dev/null || true"
+  docker run --rm -v "$VOL":/data:ro -v /backup/galaxy:/out alpine sh -eu -c "
+    apk add -q --no-cache sqlite
+    # .backup is WAL-safe on a live database; a bare cp of galaxy.db is not.
+    sqlite3 /data/galaxy.db \".backup '/tmp/galaxy.db'\"
+    sqlite3 /tmp/galaxy.db 'PRAGMA integrity_check' | grep -qx ok
+    cd /data
+    tar czf /out/$VOL-$STAMP.tgz -C /tmp galaxy.db -C /data galaxy.key library skills uploads
+  "
 done
-find /backup/galaxy -mtime +14 -delete
+find /backup/galaxy -name '*.tgz' -mtime +14 -delete
 EOF
 chmod +x /etc/cron.daily/galaxy-backup
 ```
 
-(Or point restic/borg at `/var/lib/docker/volumes/<vol>/_data`.) **Restore** =
-stop the container, untar into the volume, start.
+Why it looks like that: the old version piped errors to `/dev/null` and fell back
+to `cp`, which on a WAL-mode database can silently produce a corrupt or
+stale snapshot; `alpine` also ships without `sqlite3`, so the safe path never
+ran. This version installs sqlite, uses `.backup`, verifies the result with
+`integrity_check`, and aborts the whole run on any failure.
+
+Verify a backup restores before you need it:
+
+```sh
+# inspect
+tar tzf /backup/galaxy/galaxy_galaxy-prod-data-$(date +%F).tgz
+
+# restore into a stopped instance
+docker compose stop galaxy-prod
+docker run --rm -v galaxy_galaxy-prod-data:/data -v /backup/galaxy:/in alpine \
+  sh -c 'cd /data && tar xzf /in/galaxy_galaxy-prod-data-YYYY-MM-DD.tgz'
+docker compose start galaxy-prod
+```
+
+(Or point restic/borg at `/var/lib/docker/volumes/<vol>/_data` — same caveat:
+snapshot `galaxy.db` with `.backup`, not a raw file copy of a live database.)
+
+### Does deploying wipe data?
+
+No — and it is worth knowing exactly why, because it is easy to break later:
+
+- All state is in **named volumes** (`galaxy-prod-data:/data`), never in the
+  image. `docker compose pull && up -d` destroys and recreates the *container*;
+  the volume is untouched. `.dockerignore` excludes `data/`, so no stray copy is
+  baked into the image to shadow the mount.
+- **Never** run `docker compose down -v` — the `-v` deletes volumes. Plain
+  `down`/`up` is safe.
+- **Promote/Rollback only retag images.** They never touch volumes.
+- Migrations run on boot and are **additive**; a rollback to `:stable-prev` meets
+  a newer schema it can still read (added columns are nullable). The single
+  exception is documented in the release notes for per-user memory, which
+  intentionally clears `memory_items` (and nothing else) — memories regenerate
+  from each user's own activity.
 
 ## 7b. Phones and tablets
 
