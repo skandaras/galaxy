@@ -71,4 +71,27 @@
 	.body {
 		max-width: 60rem;
 	}
+
+	@media (max-width: 720px) {
+		.admin {
+			padding: 0.75rem 0.85rem;
+		}
+		.tabs button {
+			padding: 0.45rem 0.55rem;
+			font-size: 0.75rem;
+		}
+		/* Admin tab bodies are rendered by child components, so their tables
+		   need reaching into: let each section scroll horizontally rather than
+		   crushing columns or blowing out the page width. */
+		.body :global(section) {
+			overflow-x: auto;
+			-webkit-overflow-scrolling: touch;
+		}
+		.body :global(table) {
+			min-width: 32rem;
+		}
+		.body :global(.grid) {
+			grid-template-columns: 1fr;
+		}
+	}
 </style>

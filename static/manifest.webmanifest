@@ -3,7 +3,10 @@
 	"short_name": "Galaxy",
 	"description": "Self-hosted, model-agnostic AI workspace",
 	"start_url": "/chat",
+	"scope": "/",
 	"display": "standalone",
+	"orientation": "any",
+	"categories": ["productivity", "developer"],
 	"background_color": "#05060f",
 	"theme_color": "#05060f",
 	"icons": [

@@ -199,6 +199,13 @@ chmod +x /etc/cron.daily/galaxy-backup
 (Or point restic/borg at `/var/lib/docker/volumes/<vol>/_data`.) **Restore** =
 stop the container, untar into the volume, start.
 
+## 7b. Phones and tablets
+
+Galaxy is responsive and installs to a home screen as a PWA once served over
+HTTPS — no extra deployment steps. See [MOBILE.md](./MOBILE.md) for install
+instructions per platform, offline behaviour, the Authelia cookie caveat on iOS,
+and optional APK packaging.
+
 ## 8. Local development (no Docker)
 
 ```sh

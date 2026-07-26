@@ -184,6 +184,10 @@
 					<input type="checkbox" bind:checked={draft.galaxyBg} />
 					ambient ASCII galaxy backdrop
 				</label>
+				<label class="row" class:disabled={!draft.galaxyBg}>
+					<input type="checkbox" bind:checked={draft.galaxyAnimate} disabled={!draft.galaxyBg} />
+					slowly rotate the galaxy
+				</label>
 			</div>
 		</section>
 
@@ -299,6 +303,9 @@
 		align-items: center;
 		gap: 0.45rem;
 	}
+	label.row.disabled {
+		opacity: 0.45;
+	}
 	.color-pair {
 		display: flex;
 		gap: 0.4rem;
@@ -343,5 +350,16 @@
 	.btn.primary {
 		background: var(--accent);
 		color: var(--bg);
+	}
+	@media (max-width: 720px) {
+		.theme-page {
+			padding: 0.75rem 0.85rem;
+		}
+		.grid {
+			grid-template-columns: 1fr;
+		}
+		.save-as input {
+			max-width: none;
+		}
 	}
 </style>

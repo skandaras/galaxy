@@ -262,7 +262,6 @@
 		}
 	}
 
-	import { GALAXY_SMALL } from '$lib/galaxy-art';
 </script>
 
 <div class="chat-shell">
@@ -307,7 +306,6 @@
 		<div class="thread">
 			{#if !currentChat && !messages.length}
 				<div class="empty">
-					<pre class="galaxy-art" aria-hidden="true">{GALAXY_SMALL}</pre>
 					<p>Start a conversation — it will appear in the pane on the left.</p>
 				</div>
 			{/if}
@@ -531,15 +529,6 @@
 		color: var(--fg-dim);
 		font-size: 0.8rem;
 	}
-	.galaxy-art {
-		color: var(--accent);
-		opacity: 0.55;
-		font-size: 0.6rem;
-		line-height: 1.25;
-		user-select: none;
-		display: inline-block;
-		text-align: left;
-	}
 	.msg {
 		max-width: 46rem;
 		font-size: 0.88rem;
@@ -621,7 +610,7 @@
 
 	.composer {
 		border-top: 1px solid var(--border);
-		padding: 0.7rem 1rem 0.9rem;
+		padding: 0.7rem 1rem max(0.9rem, env(safe-area-inset-bottom));
 	}
 	.pending-files {
 		display: flex;

@@ -21,7 +21,7 @@
 </svelte:head>
 
 {#if data.theme.galaxyBg}
-	<GalaxyBackdrop />
+	<GalaxyBackdrop animate={data.theme.galaxyAnimate} />
 {/if}
 
 <div class="shell">
@@ -38,7 +38,7 @@
 		</nav>
 		<div class="pane-bottom">
 			{#if data.user}
-				<Observatory />
+				<div class="obs-dock"><Observatory /></div>
 			{/if}
 			<div class="pane-footer">
 				<span class="env-badge">{data.galaxyEnv}</span>
@@ -145,17 +145,42 @@
 			align-items: center;
 			border-right: none;
 			border-bottom: 1px solid var(--border);
+			/* Sits under the status bar when installed to a phone home screen. */
+			padding: max(0.5rem, env(safe-area-inset-top)) 0.75rem 0.5rem;
+			overflow-x: auto;
+			overflow-y: visible;
+			position: sticky;
+			top: 0;
+			z-index: 10;
 		}
 		.brand {
 			margin-bottom: 0;
-			margin-right: 1.5rem;
+			margin-right: 0.9rem;
+			font-size: 0.75rem;
+			letter-spacing: 0.2em;
+			flex-shrink: 0;
 		}
 		.nav {
 			flex-direction: row;
+			gap: 0.15rem;
+		}
+		.nav-item {
+			font-size: 0.75rem;
+			padding: 0.3rem 0.45rem;
+			white-space: nowrap;
+		}
+		/* The docked feed needs vertical room it doesn't have in a top bar;
+		   the full view at /observatory stays available. */
+		.obs-dock {
+			display: none;
+		}
+		.pane-bottom {
+			margin-top: 0;
+			margin-left: auto;
 		}
 		.pane-footer {
 			margin-top: 0;
-			margin-left: auto;
+			flex-shrink: 0;
 		}
 	}
 </style>
