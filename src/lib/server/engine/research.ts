@@ -242,9 +242,14 @@ async function runSearches(
 		queries.map(async (q) => {
 			const started = Date.now();
 			try {
-				const results = await runWebSearch(q, searchCfg);
-				event('web_search', 'ok', Date.now() - started, { query: q, results: results.length });
-				return results;
+				const outcome = await runWebSearch(q, searchCfg);
+				event('web_search', 'ok', Date.now() - started, {
+					query: q,
+					results: outcome.results.length,
+					provider: outcome.provider,
+					...(outcome.failedOver ? { failedOver: outcome.failedOver } : {})
+				});
+				return outcome.results;
 			} catch (err) {
 				event('web_search', 'error', Date.now() - started, { query: q, error: String(err) });
 				return [] as SearchResult[];

@@ -11,8 +11,15 @@ const REQUEST_TIMEOUT_MS = 180_000;
 
 export interface LoopTool {
 	def: ToolDef;
-	/** Execute a call and return the tool-result string handed back to the model. */
-	execute: (args: Record<string, unknown>) => Promise<string>;
+	/**
+	 * Execute a call and return the tool-result string handed back to the model.
+	 * `report` attaches structured detail (provider used, counts, failover) to
+	 * the Observatory event — the model never sees it.
+	 */
+	execute: (
+		args: Record<string, unknown>,
+		report?: (meta: Record<string, unknown>) => void
+	) => Promise<string>;
 	/** Short human-readable summary of a call for traces (e.g. the bash command). */
 	describe?: (args: Record<string, unknown>) => string;
 }
@@ -200,8 +207,11 @@ async function executeToolCall(
 		pushChunk(job, { type: 'tool', name: call.name, status: 'error', detail: 'unknown tool' });
 		return JSON.stringify({ error: `Unknown tool: ${call.name}` });
 	}
+	let meta: Record<string, unknown> = {};
 	try {
-		const result = await tool.execute(args);
+		const result = await tool.execute(args, (m) => {
+			meta = m;
+		});
 		emitEvent(
 			{
 				userId: opts.userId,
@@ -211,7 +221,7 @@ async function executeToolCall(
 				name: call.name,
 				status: 'ok',
 				durationMs: Date.now() - started,
-				detail: { summary, resultChars: result.length }
+				detail: { summary, resultChars: result.length, ...meta }
 			},
 			{ persist }
 		);

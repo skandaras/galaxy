@@ -42,6 +42,19 @@ STREAM=$(curl -sN --max-time 30 $B/api/jobs/$JOB/stream)
 check "chat stream tool call" "$STREAM" '"type":"tool","name":"web_search","status":"ok"'
 check "chat stream completes" "$STREAM" '"type":"done"'
 
+# A blocked provider must surface a visible error, never a silent empty list.
+api -X PUT $B/api/admin/settings -d "{\"key\":\"websearch\",\"value\":{\"provider\":\"searxng\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/searxng-blocked\",\"fallbackProvider\":\"none\"}}" > /dev/null
+BLOCKED=$(api -X POST $B/api/admin/settings/test-search)
+check "blocked provider reports failure" "$BLOCKED" '"ok":false'
+check "blocked provider gives a reason" "$BLOCKED" 'expected JSON, got HTML'
+
+# Restore a working provider and confirm the same probe reports success.
+# (Failover between two providers is covered by unit tests: both providers share
+# one baseUrl setting, so it can't be staged meaningfully against the mock.)
+api -X PUT $B/api/admin/settings -d "{\"key\":\"websearch\",\"value\":{\"provider\":\"searxng\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/searxng\",\"fallbackProvider\":\"none\"}}" > /dev/null
+WORKING=$(api -X POST $B/api/admin/settings/test-search)
+check "working provider reports results" "$WORKING" '"ok":true'
+
 # hidden chat leaves no trace
 HID=$(api -X POST $B/api/chats -d '{"hidden":true}' | jqn .id)
 HJOB=$(api -X POST $B/api/chats/$HID/messages -d '{"content":"secret smoke","webSearch":false}' | jqn .jobId)
@@ -118,25 +131,34 @@ check "alice cannot see bob's memory" "$(echo "$ALICE_MEM" | grep -c BETA-MEM)" 
 check "bob has his own memory" "$BOB_MEM" 'BETA-MEM'
 check "bob cannot see alice's memory" "$(echo "$BOB_MEM" | grep -c ALPHA-MEM)" "0"
 
-# Cross-user mutation must 404 exactly like a missing item.
-ALICE_ITEM=$(echo "$ALICE_MEM" | jqn '.items[0].id')
-BOB_DEL=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Remote-User: bob' $M/api/memory/items/$ALICE_ITEM)
-check "bob cannot delete alice's item" "$BOB_DEL" "404"
-ALICE_DEL=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Remote-User: alice' $M/api/memory/items/$ALICE_ITEM)
-check "alice can delete her own item" "$ALICE_DEL" "200"
-
 # The admin view must carry status only — no memory text at all.
 ADMIN_VIEW=$(asadmin $M/api/admin/memory)
 check "admin sees per-user status" "$ADMIN_VIEW" '"username":"alice"'
 check "admin cannot read alice's memory" "$(echo "$ADMIN_VIEW" | grep -c ALPHA-MEM)" "0"
 check "admin cannot read bob's memory" "$(echo "$ADMIN_VIEW" | grep -c BETA-MEM)" "0"
 
-# The bootstrap the model actually receives must be isolated too.
+# The bootstrap the model actually receives must be isolated too. This runs
+# BEFORE the delete checks below: deleting a memory changes what the prompt
+# contains, so the two must not overlap.
 AC=$(as alice -X POST $M/api/chats -d '{}' | jqn .id)
 AJ=$(as alice -X POST $M/api/chats/$AC/messages -d '{"content":"echo-system","webSearch":false}' | jqn .jobId)
 ASYS=$(curl -sN --max-time 20 -H 'Remote-User: alice' $M/api/jobs/$AJ/stream | grep -o 'SYSCHECK[^"]*' | head -1)
 check "alice's prompt carries her memory" "$ASYS" 'alpha=true'
 check "alice's prompt excludes bob's memory" "$ASYS" 'beta=false'
+
+# Cross-user mutation must 404 exactly like a missing item. Target an item
+# explicitly chosen NOT to be the marker, so this can never invalidate the
+# prompt checks above regardless of row ordering.
+ALICE_ITEM=$(echo "$ALICE_MEM" | node -pe '
+  const d = JSON.parse(require("fs").readFileSync(0));
+  const victim = d.items.find((i) => !i.content.includes("ALPHA-MEM"));
+  if (!victim) throw new Error("expected a non-marker memory item to delete");
+  victim.id')
+BOB_DEL=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Remote-User: bob' $M/api/memory/items/$ALICE_ITEM)
+check "bob cannot delete alice's item" "$BOB_DEL" "404"
+ALICE_DEL=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Remote-User: alice' $M/api/memory/items/$ALICE_ITEM)
+check "alice can delete her own item" "$ALICE_DEL" "200"
+check "alice's marker survived the delete" "$(as alice $M/api/memory)" 'ALPHA-MEM'
 
 # Opting out must stop the scheduler touching that user.
 as alice -X PUT $M/api/memory/settings -d '{"enabled":false}' > /dev/null

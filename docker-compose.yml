@@ -23,7 +23,7 @@ services:
       RUNNER_NETWORK: galaxy_runners
     volumes:
       - galaxy-prod-data:/data
-    networks: [proxy, docker-api]
+    networks: [proxy, docker-api, searxng]
 
   galaxy-dev:
     image: ghcr.io/skandaras/galaxy:dev
@@ -41,7 +41,22 @@ services:
       RUNNER_NETWORK: galaxy_runners
     volumes:
       - galaxy-dev-data:/data
-    networks: [proxy, docker-api]
+    networks: [proxy, docker-api, searxng]
+
+  # Self-hosted metasearch, the recommended web-search backend: no API key, no
+  # quota, and (unlike DuckDuckGo's endpoint) it will not block the droplet for
+  # being a datacenter IP. Not published through the reverse proxy — only the
+  # galaxy containers reach it, over an internal network.
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      # Generate once with: openssl rand -hex 32
+      SEARXNG_SECRET: "${SEARXNG_SECRET:?set SEARXNG_SECRET in .env}"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks: [searxng]
 
   # Restricted Docker API for spawning ephemeral coding runners (used from M3).
   # Grants container lifecycle only — no host filesystem, no exec into others.
@@ -87,5 +102,8 @@ networks:
   # Deliberately NOT `internal: true`: git clone/push and dependency installs
   # (npm/pip) run inside runners, so they need outbound access. Isolation from
   # the Docker API comes from docker-api above, not from cutting egress.
+  # Galaxy ↔ SearXNG only; no outbound publishing.
+  searxng:
+    internal: true
   runners:
     name: galaxy_runners

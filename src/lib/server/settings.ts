@@ -24,8 +24,15 @@ export function setSetting(key: string, value: unknown, scope = GLOBAL_SCOPE): v
 		.run();
 }
 
+export type SearchProvider = 'duckduckgo' | 'brave' | 'tavily' | 'searxng' | 'none';
+
 export interface WebSearchSettings {
-	provider: 'duckduckgo' | 'brave' | 'tavily' | 'searxng' | 'none';
+	provider: SearchProvider;
+	/**
+	 * Tried only when the primary *fails* (blocked/unreachable/unparseable) —
+	 * never when it legitimately returns zero results.
+	 */
+	fallbackProvider?: SearchProvider;
 	/** AES-encrypted API key (see $lib/server/crypto); set via admin settings. */
 	apiKeyEnc?: string;
 	baseUrl?: string; // searxng instance
@@ -35,6 +42,7 @@ export interface WebSearchSettings {
 
 export const DEFAULT_WEB_SEARCH: WebSearchSettings = {
 	provider: 'none',
+	fallbackProvider: 'none',
 	maxResults: 5,
 	timeoutMs: 10_000
 };

@@ -1,0 +1,41 @@
+# SearXNG configuration for Galaxy's web search.
+#
+# The one setting that matters: `formats` MUST include `json`. SearXNG serves
+# only HTML by default and answers the JSON API with 403 — the classic
+# first-run trap when wiring it to a program instead of a browser.
+
+use_default_settings: true
+
+general:
+  instance_name: 'Galaxy Search'
+  # No public UI here; this instance is reachable only from the galaxy
+  # containers on an internal Docker network.
+  donation_url: false
+  contact_url: false
+
+server:
+  # Override with SEARXNG_SECRET in the environment; never ship a real secret.
+  secret_key: 'change-me-see-docs-install-md'
+  limiter: false # no bot-limiting: the only client is our own backend
+  image_proxy: false
+
+search:
+  safe_search: 0
+  autocomplete: ''
+  formats:
+    - html
+    - json # required by Galaxy
+
+ui:
+  static_use_hash: true
+
+# Keep the engine set small and reliable; add more as needed.
+engines:
+  - name: wikipedia
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: startpage
+    disabled: false

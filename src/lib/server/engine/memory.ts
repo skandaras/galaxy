@@ -37,18 +37,28 @@ export function setUserMemoryEnabled(userId: string, enabled: boolean): void {
 	setSetting(USER_ENABLED_KEY, enabled, userId);
 }
 
-/** A user's own memories. Never call this without an owner for user-facing output. */
+/**
+ * A user's own memories. Never call this without an owner for user-facing output.
+ *
+ * Ordered by id as a tie-break: a single audit inserts several rows inside the
+ * same millisecond, so timestamp alone leaves their order to the engine and the
+ * list can reshuffle between identical queries.
+ */
 export function listMemoryItems(userId: string): MemoryItem[] {
 	return db
 		.select()
 		.from(memoryItems)
 		.where(eq(memoryItems.userId, userId))
-		.orderBy(desc(memoryItems.createdAt))
+		.orderBy(desc(memoryItems.createdAt), memoryItems.id)
 		.all();
 }
 
 export function listCandidates(): SkillCandidate[] {
-	return db.select().from(skillCandidates).orderBy(desc(skillCandidates.createdAt)).all();
+	return db
+		.select()
+		.from(skillCandidates)
+		.orderBy(desc(skillCandidates.createdAt), skillCandidates.id)
+		.all();
 }
 
 /** Both mutations are owner-scoped: a non-owner's id simply matches no row. */

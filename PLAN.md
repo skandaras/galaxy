@@ -134,7 +134,7 @@ Internet ─► Proxy ──┤
 
 - **PWA push notifications** (job finished, research complete) → then the APK wrapper (Capacitor/TWA).
 - **E2E promotion gate** — a Playwright smoke suite the dev instance must pass before the Promote button unlocks (self-hosting safety net).
-- **SearXNG self-hosted search** as default provider — removes the external search-API dependency.
+- ~~**SearXNG self-hosted search** as default provider~~ — **shipped**: runs in compose on an internal network, with primary/fallback providers and an admin "Test search" probe.
 - **Local model endpoints** (Ollama / llama.cpp) via the OpenAI-compatible adapter.
 - **Embeddings + RAG** over Library and past chats (semantic search) once FTS5 stops being enough.
 - **GitHub App + PR watching** — review agent, CI auto-fix via webhooks, replacing the PAT.
