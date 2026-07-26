@@ -94,8 +94,16 @@ const server = createServer(async (req, res) => {
 			} else if (userText.includes('RESEARCH-REVIEW')) {
 				content = JSON.stringify({ sufficient: true });
 			} else if (userText.includes('MEMORY-AUDIT')) {
+				// Echo a marker drawn from the audited activity so a test can prove
+				// each user's memory came from their own chats and nobody else's.
+				const marker = userText.includes('alpha-topic')
+					? 'ALPHA-MEM'
+					: userText.includes('beta-topic')
+						? 'BETA-MEM'
+						: null;
 				content = JSON.stringify({
 					memories: [
+						...(marker ? [{ kind: 'fact', content: `Observed marker ${marker}` }] : []),
 						{ kind: 'preference', content: 'User prefers concise replies' },
 						{ kind: 'fact', content: 'Prod restarts via systemctl restart galaxy' }
 					],
@@ -206,7 +214,9 @@ const server = createServer(async (req, res) => {
 		// Bootstrap verification: report what the system prompt contained.
 		if (String(last?.content ?? '').includes('echo-system')) {
 			delta(res, {
-				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} mem=${system.includes('[Memory')} pref=${system.includes('concise replies')}`
+				// ALPHA-MEM / BETA-MEM prove per-user memory isolation: a user's
+				// prompt must contain their own marker and never the other's.
+				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} mem=${system.includes('[Memory')} pref=${system.includes('concise replies')} alpha=${system.includes('ALPHA-MEM')} beta=${system.includes('BETA-MEM')}`
 			});
 			delta(res, {}, 'stop');
 			res.write('data: [DONE]\n\n');

@@ -137,6 +137,6 @@ function buildCodingSystemPrompt(base: string, session: CodeSession): string {
 		'',
 		`Repository: ${session.repoName} (branch ${session.workBranch}, based on ${session.baseBranch}).`,
 		modeNote,
-		bootstrapContext()
+		bootstrapContext(session.userId)
 	].join('\n');
 }

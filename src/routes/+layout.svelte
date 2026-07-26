@@ -10,7 +10,7 @@
 		{ href: '/chat', label: 'Chat' },
 		{ href: '/code', label: 'Code' },
 		{ href: '/library', label: 'Library' },
-		{ href: '/settings', label: 'Theme' },
+		{ href: '/settings', label: 'Settings' },
 		...(data.user?.isAdmin ? [{ href: '/admin', label: 'Admin' }] : [])
 	]);
 </script>

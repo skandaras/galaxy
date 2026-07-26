@@ -176,6 +176,10 @@ export const skills = sqliteTable('skills', {
 // into the context bootstrap while active.
 export const memoryItems = sqliteTable('memory_items', {
 	id: text('id').primaryKey(),
+	// Owner. Nullable so the column can be added without breaking a rollback to
+	// an image that inserts without it (expand-migrate-contract); every read
+	// filters by owner, so a null row is simply invisible.
+	userId: text('user_id'),
 	kind: text('kind', { enum: ['preference', 'pattern', 'fact'] }).notNull(),
 	content: text('content').notNull(),
 	source: text('source'),
@@ -187,6 +191,8 @@ export const memoryItems = sqliteTable('memory_items', {
 // a human approves (which writes the real skill) or rejects.
 export const skillCandidates = sqliteTable('skill_candidates', {
 	id: text('id').primaryKey(),
+	/** Whose activity proposed this, for attribution in the approval queue. */
+	userId: text('user_id'),
 	name: text('name').notNull(),
 	category: text('category').notNull().default('general'),
 	description: text('description').notNull().default(''),
