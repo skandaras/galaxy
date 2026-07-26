@@ -1,9 +1,36 @@
 <script lang="ts">
-	import { GALAXY_BACKDROP } from '$lib/galaxy-art';
+	import { BACKDROP_COLS, BACKDROP_ROWS, generateGalaxy } from '$lib/galaxy-art';
+
+	let { animate = true }: { animate?: boolean } = $props();
+
+	/** One full revolution. Deliberately slow — this is ambient, not a feature. */
+	const REVOLUTION_MS = 240_000;
+	/** Redraw cadence. The art is character-quantised, so ~5fps is plenty. */
+	const FRAME_MS = 200;
+
+	let art = $state(generateGalaxy(BACKDROP_COLS, BACKDROP_ROWS));
+
+	$effect(() => {
+		if (!animate) return;
+		if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+
+		let raf = 0;
+		let last = -Infinity;
+		// rAF (not setInterval) so the browser suspends this on a hidden tab.
+		const tick = (t: number) => {
+			raf = requestAnimationFrame(tick);
+			if (t - last < FRAME_MS) return;
+			last = t;
+			const rotation = ((t % REVOLUTION_MS) / REVOLUTION_MS) * Math.PI * 2;
+			art = generateGalaxy(BACKDROP_COLS, BACKDROP_ROWS, { rotation });
+		};
+		raf = requestAnimationFrame(tick);
+		return () => cancelAnimationFrame(raf);
+	});
 </script>
 
 <div class="backdrop" aria-hidden="true">
-	<pre>{GALAXY_BACKDROP}</pre>
+	<pre>{art}</pre>
 </div>
 
 <style>
@@ -25,20 +52,5 @@
 		font-size: clamp(8px, 1.1vw, 14px);
 		line-height: 1.25;
 		white-space: pre;
-		animation: breathe 11s ease-in-out infinite;
-	}
-	@keyframes breathe {
-		0%,
-		100% {
-			opacity: 0.16;
-		}
-		50% {
-			opacity: 0.09;
-		}
-	}
-	@media (prefers-reduced-motion: reduce) {
-		pre {
-			animation: none;
-		}
 	}
 </style>

@@ -216,4 +216,25 @@
 		color: var(--fg-dim);
 		padding: 1rem 0;
 	}
+
+	@media (max-width: 720px) {
+		.obs-page {
+			padding: 0.75rem 0.85rem;
+		}
+		.row {
+			flex-wrap: wrap;
+			gap: 0.35rem 0.6rem;
+			font-size: 0.72rem;
+		}
+		/* Event type is also conveyed by the name; drop the fixed column so
+		   the name and status stay readable on a phone. */
+		.type {
+			width: auto;
+			font-size: 0.65rem;
+		}
+		.name {
+			flex-basis: 100%;
+			order: 3;
+		}
+	}
 </style>

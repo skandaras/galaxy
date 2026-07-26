@@ -671,7 +671,7 @@
 
 	.composer {
 		border-top: 1px solid var(--border);
-		padding: 0.7rem 1rem 0.9rem;
+		padding: 0.7rem 1rem max(0.9rem, env(safe-area-inset-bottom));
 	}
 	.composer-row {
 		display: flex;

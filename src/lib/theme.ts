@@ -23,6 +23,8 @@ export interface Theme {
 	baseFont: string;
 	/** Ambient ASCII galaxy backdrop */
 	galaxyBg: boolean;
+	/** Slowly rotate the backdrop spiral (ignored when galaxyBg is off) */
+	galaxyAnimate: boolean;
 }
 
 export const PRESETS: Record<string, Theme> = {
@@ -37,7 +39,8 @@ export const PRESETS: Record<string, Theme> = {
 		font: "'SF Mono', ui-monospace, 'Cascadia Code', Menlo, monospace",
 		radius: '5px',
 		baseFont: '16px',
-		galaxyBg: true
+		galaxyBg: true,
+		galaxyAnimate: true
 	},
 	Nebula: {
 		bg: '#0a0512',
@@ -50,7 +53,8 @@ export const PRESETS: Record<string, Theme> = {
 		font: "'SF Mono', ui-monospace, 'Cascadia Code', Menlo, monospace",
 		radius: '8px',
 		baseFont: '16px',
-		galaxyBg: true
+		galaxyBg: true,
+		galaxyAnimate: true
 	},
 	Solar: {
 		bg: '#0d0a04',
@@ -63,7 +67,8 @@ export const PRESETS: Record<string, Theme> = {
 		font: "'SF Mono', ui-monospace, 'Cascadia Code', Menlo, monospace",
 		radius: '3px',
 		baseFont: '16px',
-		galaxyBg: true
+		galaxyBg: true,
+		galaxyAnimate: true
 	},
 	Void: {
 		bg: '#000000',
@@ -76,7 +81,8 @@ export const PRESETS: Record<string, Theme> = {
 		font: "ui-monospace, 'Cascadia Code', Menlo, monospace",
 		radius: '0px',
 		baseFont: '15px',
-		galaxyBg: false
+		galaxyBg: false,
+		galaxyAnimate: false
 	},
 	Paper: {
 		bg: '#f5f2ea',
@@ -89,7 +95,8 @@ export const PRESETS: Record<string, Theme> = {
 		font: "'SF Mono', ui-monospace, Menlo, monospace",
 		radius: '6px',
 		baseFont: '16px',
-		galaxyBg: false
+		galaxyBg: false,
+		galaxyAnimate: false
 	}
 };
 
@@ -122,8 +129,8 @@ export function normalizeTheme(raw: unknown): Theme {
 	const out = { ...DEFAULT_THEME };
 	for (const key of Object.keys(DEFAULT_THEME) as (keyof Theme)[]) {
 		const v = r[key];
-		if (key === 'galaxyBg') {
-			if (typeof v === 'boolean') out.galaxyBg = v;
+		if (typeof DEFAULT_THEME[key] === 'boolean') {
+			if (typeof v === 'boolean') (out as Record<string, unknown>)[key] = v;
 		} else if (typeof v === 'string' && v.length < 200 && !/[<>{};\\]/.test(v)) {
 			(out as Record<string, unknown>)[key] = v;
 		}

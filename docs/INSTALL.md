@@ -32,10 +32,17 @@ Create `/opt/galaxy/.env`:
 TRUSTED_PROXY_IPS=172.18.0.0/16
 ```
 
+**Also set `ORIGIN` per instance** to that instance's public URL (e.g.
+`ORIGIN=https://ai.example.com` for prod, `https://dev-ai.example.com` for dev).
+SvelteKit's CSRF protection compares the `Origin` header against the server's
+own idea of its address; behind a reverse proxy it can't infer that, and
+form posts — including **attachment uploads** — are rejected with a 403.
+
 Optional per-instance env you may add in `docker-compose.yml`:
 
 | Variable | Purpose |
 |---|---|
+| `ORIGIN` | Public URL of this instance. Required behind a proxy or multipart uploads 403 (see above) |
 | `SECRET_KEY` | 64 hex chars; master key for encrypting API keys. If unset, a key file is generated in the data volume (back it up!). `openssl rand -hex 32` |
 | `ADMIN_GROUP` | Authelia group granting admin (default `galaxy-admins`) |
 | `GITHUB_REPO` | `owner/repo` used by the Promote button (default `skandaras/galaxy`) |
@@ -199,6 +206,13 @@ chmod +x /etc/cron.daily/galaxy-backup
 (Or point restic/borg at `/var/lib/docker/volumes/<vol>/_data`.) **Restore** =
 stop the container, untar into the volume, start.
 
+## 7b. Phones and tablets
+
+Galaxy is responsive and installs to a home screen as a PWA once served over
+HTTPS — no extra deployment steps. See [MOBILE.md](./MOBILE.md) for install
+instructions per platform, offline behaviour, the Authelia cookie caveat on iOS,
+and optional APK packaging.
+
 ## 8. Local development (no Docker)
 
 ```sh
@@ -219,6 +233,7 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | Coding refuses model | The selected model lacks tool support — pick one with the `T` badge |
 | `Budget cap reached` | Raise/disable in Admin → Settings, or wait for the period to roll over |
 | Promote button errors | GitHub PAT missing workflow scope, or `GITHUB_REPO` wrong, or dev unhealthy (gate) |
+| Attachment upload fails / 403 on form posts | `ORIGIN` not set to this instance's public URL (SvelteKit CSRF check) |
 | Memory never runs | Admin → Memory: enabled? interval? It also skips when there's no new activity |
 
 The Observatory (left pane, or `/observatory`) shows every model call, tool

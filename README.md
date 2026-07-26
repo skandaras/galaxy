@@ -4,8 +4,11 @@ A lightweight, self-hosted, **model-agnostic** AI workspace: agentic chat with w
 search and deep research, plus a coding agent that works directly in GitHub repos —
 including this one, which it maintains itself (build on dev, promote to prod).
 
-See [PLAN.md](./PLAN.md) for the full architecture, feature map, and milestones. See [docs/INSTALL.md](./docs/INSTALL.md) for the Ubuntu server installation guide
-(Docker, reverse proxy + Authelia, runners, backups, promotion).
+See [PLAN.md](./PLAN.md) for the full architecture, feature map, and milestones.
+See [docs/INSTALL.md](./docs/INSTALL.md) for the Ubuntu server installation guide
+(Docker, reverse proxy + Authelia, runners, backups, promotion), and
+[docs/MOBILE.md](./docs/MOBILE.md) for installing it to a phone home screen and
+optional APK packaging.
 
 ## Development
 
