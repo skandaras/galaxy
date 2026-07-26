@@ -1,6 +1,7 @@
 <script lang="ts">
 	let websearch = $state({
 		provider: 'none',
+		fallbackProvider: 'none',
 		apiKey: '',
 		baseUrl: '',
 		maxResults: 5,
@@ -23,6 +24,49 @@
 	let deployBusy = $state<string | null>(null);
 	let deployMsg = $state<string | null>(null);
 
+	interface TestResult {
+		ok: boolean;
+		provider?: string;
+		results?: number;
+		reason?: string;
+		status?: number;
+		bytes?: number;
+		durationMs?: number;
+		warning?: string | null;
+		failedOver?: { from: string; reason: string } | null;
+		sample?: { title: string; url: string }[];
+	}
+	let testing = $state(false);
+	let testResult = $state<TestResult | null>(null);
+
+	async function testSearch() {
+		testing = true;
+		testResult = null;
+		// Test the saved settings, so save first if the form is dirty.
+		await save('websearch', websearch);
+		const res = await fetch('/api/admin/settings/test-search', { method: 'POST' });
+		testResult = await res.json().catch(() => ({ ok: false, reason: 'no response' }));
+		testing = false;
+	}
+
+	function formatTest(t: TestResult): string {
+		const lines: string[] = [];
+		if (t.ok) {
+			lines.push(`✓ ${t.provider} returned ${t.results} result(s) in ${t.durationMs}ms`);
+			if (t.failedOver) {
+				lines.push(`  ! fell back from ${t.failedOver.from}: ${t.failedOver.reason}`);
+			}
+			if (t.warning) lines.push(`  ! ${t.warning}`);
+			for (const s of t.sample ?? []) lines.push(`  · ${s.title} — ${s.url}`);
+		} else {
+			lines.push(`✗ ${t.provider ?? 'search'} failed`);
+			if (t.reason) lines.push(`  reason: ${t.reason}`);
+			if (t.status !== undefined) lines.push(`  http status: ${t.status}`);
+			if (t.bytes !== undefined) lines.push(`  response bytes: ${t.bytes}`);
+		}
+		return lines.join('\n');
+	}
+
 	async function deploy(action: 'promote' | 'rollback') {
 		if (!confirm(action === 'promote' ? 'Promote the current dev build to prod?' : 'Roll prod back to the previous stable image?'))
 			return;
@@ -42,7 +86,7 @@
 
 	async function load() {
 		const data = await (await fetch('/api/admin/settings')).json();
-		websearch = { apiKey: '', baseUrl: '', ...data.websearch };
+		websearch = { apiKey: '', baseUrl: '', fallbackProvider: 'none', ...data.websearch };
 		hasSearchKey = Boolean(data.websearch?.hasApiKey);
 		compaction = { ...data.compaction };
 		budget = { ...data.budget };
@@ -98,6 +142,16 @@
 				</label>
 			{/if}
 			<label>
+				fallback
+				<select bind:value={websearch.fallbackProvider}>
+					<option value="none">none</option>
+					<option value="duckduckgo">DuckDuckGo (no key)</option>
+					<option value="brave">Brave</option>
+					<option value="tavily">Tavily</option>
+					<option value="searxng">SearXNG (self-hosted)</option>
+				</select>
+			</label>
+			<label>
 				max results
 				<input type="number" min="1" max="20" bind:value={websearch.maxResults} />
 			</label>
@@ -106,9 +160,23 @@
 				<input type="number" min="1000" step="1000" bind:value={websearch.timeoutMs} />
 			</label>
 		</div>
-		<button class="btn primary" onclick={() => save('websearch', websearch)}>
-			{saved === 'websearch' ? 'Saved ✓' : 'Save'}
-		</button>
+		<p class="hint">
+			The fallback is used only when the primary <em>fails</em> — blocked, unreachable or
+			unparseable — never when it legitimately finds nothing. SearXNG is the most reliable
+			choice when self-hosted: no key, no quota, and unlike DuckDuckGo it won't block your
+			server for being in a datacenter.
+		</p>
+		<div class="row-buttons">
+			<button class="btn primary" onclick={() => save('websearch', websearch)}>
+				{saved === 'websearch' ? 'Saved ✓' : 'Save'}
+			</button>
+			<button class="btn" disabled={testing} onclick={testSearch}>
+				{testing ? 'Testing…' : 'Test search'}
+			</button>
+		</div>
+		{#if testResult}
+			<pre class="test-result" class:bad={!testResult.ok}>{formatTest(testResult)}</pre>
+		{/if}
 	</article>
 
 	<article class="card">
@@ -318,6 +386,22 @@
 	.deploy-msg {
 		font-size: 0.7rem;
 		color: var(--fg-dim);
+	}
+	.test-result {
+		background: var(--bg-pane);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		color: var(--fg-dim);
+		font-size: 0.7rem;
+		line-height: 1.5;
+		padding: 0.6rem;
+		margin: 0.6rem 0 0;
+		white-space: pre-wrap;
+		overflow-x: auto;
+	}
+	.test-result.bad {
+		border-color: var(--danger);
+		color: var(--danger);
 	}
 	code {
 		color: var(--accent);

@@ -83,8 +83,17 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		tools.push({
 			def: webSearchToolDef,
 			describe: (args) => String(args.query ?? ''),
-			execute: async (args) =>
-				JSON.stringify(await runWebSearch(String(args.query ?? ''), searchCfg))
+			execute: async (args, report) => {
+				const outcome = await runWebSearch(String(args.query ?? ''), searchCfg);
+				report?.({
+					provider: outcome.provider,
+					results: outcome.results.length,
+					...(outcome.failedOver ? { failedOver: outcome.failedOver } : {})
+				});
+				// An empty list is a real answer; a provider failure throws and is
+				// surfaced to the model as an error rather than as "no results".
+				return JSON.stringify(outcome.results);
+			}
 		});
 	}
 	const fullSystemPrompt = systemPrompt + bootstrapContext(opts.userId);

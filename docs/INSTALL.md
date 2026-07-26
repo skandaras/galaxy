@@ -265,6 +265,36 @@ No — and it is worth knowing exactly why, because it is easy to break later:
   intentionally clears `memory_items` (and nothing else) — memories regenerate
   from each user's own activity.
 
+## 7c. Web search
+
+The compose file runs a **SearXNG** container as the recommended backend. It is
+not published through the reverse proxy — only the galaxy containers reach it,
+on an internal network. Set a secret once in `/opt/galaxy/.env`:
+
+```sh
+echo "SEARXNG_SECRET=$(openssl rand -hex 32)" >> /opt/galaxy/.env
+```
+
+Then in **Admin → Settings → Web search** choose `SearXNG (self-hosted)` with
+instance URL `http://searxng:8080`, save, and press **Test search**. It reports
+the provider, result count and — when something is wrong — the HTTP status,
+response size and reason.
+
+Why not DuckDuckGo: its keyless HTML endpoint blocks datacenter IPs (which is
+what your droplet is) and answers a blocked request with **HTTP 200** plus a
+bot-check page. That is exactly how search appeared to "work" while returning
+nothing. It remains available and is fine as a *fallback*, but SearXNG is the
+dependable primary.
+
+Two things worth knowing:
+
+- `searxng/settings.yml` sets `search.formats: [html, json]`. SearXNG serves
+  only HTML by default and answers the JSON API with **403** — the usual reason
+  a fresh instance appears broken.
+- The **fallback** provider is used only when the primary *fails* (blocked,
+  unreachable, unparseable), never when it legitimately returns zero results, so
+  an empty answer never silently costs a second query.
+
 ## 7b. Phones and tablets
 
 Galaxy is responsive and installs to a home screen as a PWA once served over

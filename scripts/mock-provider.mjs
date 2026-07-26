@@ -64,6 +64,14 @@ const server = createServer(async (req, res) => {
 		return;
 	}
 
+	// A "blocked" search backend: HTTP 200 with a bot-check body and no results
+	// markup — exactly how DuckDuckGo refuses a datacenter IP.
+	if (req.method === 'GET' && url.pathname === '/searxng-blocked/search') {
+		res.writeHead(200, { 'content-type': 'text/html' });
+		res.end('<html><body><h1>Unusual traffic detected</h1><p>anomaly</p></body></html>');
+		return;
+	}
+
 	if (req.method === 'GET' && url.pathname.startsWith('/page/')) {
 		res.writeHead(200, { 'content-type': 'text/html' });
 		res.end(
