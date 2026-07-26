@@ -162,7 +162,7 @@ compose project prefixes volume names (e.g. `galaxy_galaxy-dev-data`).
 ```sh
 docker compose pull galaxy-dev && docker compose up -d galaxy-dev
 ```
-
+- A cron job is the easiest way to implement an autodeploy on dev.
   (Auto-updaters like watchtower are not recommended here: they reap the
   ephemeral coding-runner containers mid-session, and must in any case be scoped
   to `galaxy-dev` only — never `galaxy-prod`, which must only change via
