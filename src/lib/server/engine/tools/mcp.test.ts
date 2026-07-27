@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 import { eq } from 'drizzle-orm';
+import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { db, runMigrations } from '$lib/server/db';
 import { mcpServers, mcpTools } from '$lib/server/db/schema';
 import {
 	createServer,
 	deleteServer,
 	disconnect,
+	explainAuthFailure,
 	listServerTools,
 	mcpDescriptors,
 	mcpLoopTools,
@@ -92,6 +94,37 @@ describe('qualifiedName', () => {
 
 	it('derives a default prefix from the server name', () => {
 		expect(addFixtureServer({ name: 'My Weather API' }).toolPrefix).toBe('my_weather_api');
+	});
+});
+
+describe('explainAuthFailure', () => {
+	it('explains the 401 a hosted server returns when it wants OAuth', () => {
+		// This is what mcp.figma.com produced: a transport string that says
+		// nothing about what the server actually wants.
+		const err = new StreamableHTTPError(401, 'Error POSTing to endpoint: Unauthorized');
+		const out = explainAuthFailure(err)!;
+		expect(out).toContain('rejected');
+		expect(out).toContain('HTTP 401');
+		expect(out).toContain('OAuth');
+		expect(out).toContain('docs/MCP.md');
+	});
+
+	it('also catches a 403 and a bare message without a code', () => {
+		expect(explainAuthFailure(new StreamableHTTPError(403, 'Forbidden'))).toContain('HTTP 403');
+		expect(explainAuthFailure(new Error('HTTP 401 Unauthorized'))).toContain('HTTP 401');
+	});
+
+	it('recovers the status from the message when the transport drops the code', () => {
+		// What actually happens in practice: code is undefined and only the text
+		// carries the status.
+		const err = new StreamableHTTPError(undefined, 'Error POSTing to endpoint (HTTP 401): Unauthorized');
+		expect(explainAuthFailure(err)).toContain('HTTP 401');
+	});
+
+	it('leaves unrelated failures alone', () => {
+		expect(explainAuthFailure(new Error('fetch failed'))).toBeNull();
+		expect(explainAuthFailure(new StreamableHTTPError(500, 'Server error'))).toBeNull();
+		expect(explainAuthFailure(new Error('Connection closed'))).toBeNull();
 	});
 });
 

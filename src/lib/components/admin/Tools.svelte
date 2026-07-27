@@ -286,7 +286,9 @@
 	<h3>MCP servers</h3>
 	<p class="hint">
 		Connect an external MCP server and its tools join the list above. HTTP servers work anywhere;
-		stdio servers need their command installed inside the Galaxy container.
+		stdio servers need their command installed inside the Galaxy container. Credentials are
+		static only — servers requiring an OAuth sign-in can't be connected. <code>docs/MCP.md</code>
+		lists which known servers work.
 	</p>
 	{#if syncNote}<p class="hint note-line">{syncNote}</p>{/if}
 

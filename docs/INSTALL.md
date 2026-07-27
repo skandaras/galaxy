@@ -19,9 +19,17 @@ Already in place on your side (not covered here): a reverse proxy
 ## 2. Get the deployment files
 
 ```sh
-mkdir -p /opt/galaxy && cd /opt/galaxy
+mkdir -p /opt/galaxy/searxng && cd /opt/galaxy
 curl -fsSLO https://raw.githubusercontent.com/skandaras/galaxy/main/docker-compose.yml
+# The compose file bind-mounts this; without it the searxng container won't start.
+curl -fsSL -o searxng/settings.yml \
+  https://raw.githubusercontent.com/skandaras/galaxy/main/searxng/settings.yml
 ```
+
+> **Upgrading an existing install?** The `searxng` service and its settings file
+> were added after the first release. If your `/opt/galaxy/docker-compose.yml`
+> predates it, re-download both files above (keeping your `.env`) rather than
+> hand-editing — and see §7c for the setup it needs.
 
 Create `/opt/galaxy/.env`:
 
@@ -270,7 +278,13 @@ No — and it is worth knowing exactly why, because it is easy to break later:
 
 The compose file runs a **SearXNG** container as the recommended backend. It is
 not published through the reverse proxy — only the galaxy containers reach it,
-on an internal network. Set a secret once in `/opt/galaxy/.env`:
+on an internal network.
+
+Two files are required and both come from the repo (see §2): the `searxng`
+service in `docker-compose.yml`, and `searxng/settings.yml`, which the service
+bind-mounts read-only. A missing settings file stops the container from starting.
+
+Set a secret once in `/opt/galaxy/.env`:
 
 ```sh
 echo "SEARXNG_SECRET=$(openssl rand -hex 32)" >> /opt/galaxy/.env
@@ -295,6 +309,13 @@ Two things worth knowing:
 - The **fallback** provider is used only when the primary *fails* (blocked,
   unreachable, unparseable), never when it legitimately returns zero results, so
   an empty answer never silently costs a second query.
+
+## 7d. MCP servers
+
+Galaxy can pull tools from external MCP servers, registered in
+**Admin → Tools → MCP servers**. Which servers work (and which can't, because
+they require an OAuth sign-in Galaxy doesn't support) is covered in
+[MCP.md](MCP.md), along with the transports and their credential handling.
 
 ## 7b. Phones and tablets
 
@@ -323,6 +344,8 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | Coding refuses model | The selected model lacks tool support — pick one with the `T` badge |
 | `Budget cap reached` | Raise/disable in Admin → Settings, or wait for the period to roll over |
 | Promote button errors | GitHub PAT missing workflow scope, or `GITHUB_REPO` wrong, or dev unhealthy (gate) |
+| `searxng` container won't start | `searxng/settings.yml` missing next to `docker-compose.yml` (§2) — the service bind-mounts it |
+| MCP server won't connect | See [MCP.md](MCP.md#troubleshooting); the common cases are a wrong header and a server that requires OAuth |
 | Attachment upload fails / 403 on form posts | `ORIGIN` not set to this instance's public URL (SvelteKit CSRF check) |
 | Small attachments upload but larger ones fail with `413` / `exceeds the server's request limit` | `BODY_SIZE_LIMIT` too low (or missing, so adapter-node's 512K default applies). Set it to `32M`. A reverse proxy can impose its own cap too — nginx's `client_max_body_size` defaults to 1 MB |
 | Memory never runs | Admin → Memory: enabled? interval? It also skips when there's no new activity |
