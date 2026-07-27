@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { runMigrations } from '$lib/server/db';
 import { createChat } from '$lib/server/chats';
 import { POST } from './+server';
 
@@ -7,6 +8,13 @@ import { POST } from './+server';
  * migrated database.
  */
 const USER = { id: 'u1', username: 'u1', email: null, displayName: null, isAdmin: false };
+
+// Hidden chats never touch the database, but looking up a chat that doesn't
+// exist does — so this suite needs its own schema rather than relying on
+// whichever parallel suite happened to migrate first.
+beforeAll(() => {
+	runMigrations();
+});
 
 let chatId: string;
 beforeEach(() => {
