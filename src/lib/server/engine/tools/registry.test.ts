@@ -6,9 +6,11 @@ import {
 	applyToolPolicy,
 	builtinDescriptors,
 	loadToolSettings,
+	normaliseTaskScope,
 	resetToolSetting,
 	saveToolSetting,
-	toCatalog
+	toCatalog,
+	TOOL_TASKS
 } from './registry';
 
 /**
@@ -74,6 +76,46 @@ describe('builtinDescriptors', () => {
 			expect(d.parameters, d.name).toHaveProperty('type', 'object');
 		}
 	});
+
+	it('never scopes a tool to a task that cannot gate tools', () => {
+		// applyToolPolicy is only reached from startChatTurn and startCodingTurn.
+		// A descriptor naming any other task would render a control in admin that
+		// silently does nothing.
+		for (const d of builtinDescriptors()) {
+			for (const task of d.tasks) {
+				expect(TOOL_TASKS, `${d.name} scopes to "${task}"`).toContain(task);
+			}
+		}
+	});
+});
+
+describe('normaliseTaskScope', () => {
+	const natural = ['chat', 'coding'];
+
+	it('treats no override as no restriction', () => {
+		expect(normaliseTaskScope(natural, null)).toBeNull();
+		expect(normaliseTaskScope(natural, undefined)).toBeNull();
+	});
+
+	it('drops an override that covers every task the tool serves', () => {
+		// Otherwise the "scoped" badge appears while nothing is restricted.
+		expect(normaliseTaskScope(natural, ['chat', 'coding'])).toBeNull();
+	});
+
+	it('keeps a genuine narrowing', () => {
+		expect(normaliseTaskScope(natural, ['coding'])).toEqual(['coding']);
+	});
+
+	it('discards tasks the tool never serves, since scoping cannot widen', () => {
+		// This is the shape of a row written by the old UI, which offered all six
+		// core tasks: git_status scoped to chat + coding + deep-research.
+		expect(normaliseTaskScope(['coding'], ['chat', 'coding', 'deep-research'])).toBeNull();
+		expect(normaliseTaskScope(natural, ['chat', 'visual'])).toEqual(['chat']);
+	});
+
+	it('reads an empty selection as no restriction, not as "nowhere"', () => {
+		expect(normaliseTaskScope(natural, [])).toBeNull();
+	});
 });
 
 const tool = (name: string, description = 'original'): LoopTool => ({
@@ -128,13 +170,23 @@ describe('tool settings', () => {
 	});
 
 	it('reports effective values in the catalogue', () => {
-		saveToolSetting('web_search', { descriptionOverride: 'Custom', tasks: ['chat'] });
+		saveToolSetting('library_write', { descriptionOverride: 'Custom', tasks: ['chat'] });
 		const entry = toCatalog(builtinDescriptors(), loadToolSettings()).find(
-			(t) => t.name === 'web_search'
+			(t) => t.name === 'library_write'
 		)!;
 		expect(entry.effectiveDescription).toBe('Custom');
 		expect(entry.description).not.toBe('Custom');
 		expect(entry.taskOverride).toEqual(['chat']);
 		expect(entry.enabled).toBe(true);
+	});
+
+	it('normalises a stale override on read', () => {
+		// web_search only ever applies to chat, so an override naming chat is not
+		// a restriction and must not show as one.
+		saveToolSetting('web_search', { tasks: ['chat', 'deep-research'] });
+		const entry = toCatalog(builtinDescriptors(), loadToolSettings()).find(
+			(t) => t.name === 'web_search'
+		)!;
+		expect(entry.taskOverride).toBeNull();
 	});
 });

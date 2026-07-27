@@ -37,9 +37,10 @@ function oversizedRequest(bytes: number): unknown {
 	};
 }
 
-async function statusOf(promise: Promise<unknown>) {
+/** `error()` throws an HttpError; unwrap it to a plain status + message. */
+async function statusOf(result: unknown) {
 	try {
-		await promise;
+		await result;
 		return { status: 200, message: '' };
 	} catch (thrown) {
 		const e = thrown as { status?: number; body?: { message?: string } };

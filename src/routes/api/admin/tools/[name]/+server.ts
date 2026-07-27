@@ -4,6 +4,7 @@ import { requireAdmin } from '$lib/server/api';
 import {
 	builtinDescriptors,
 	loadToolSettings,
+	normaliseTaskScope,
 	resetToolSetting,
 	saveToolSetting,
 	toCatalog,
@@ -27,10 +28,12 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 		patch.descriptionOverride = body.descriptionOverride.trim();
 	}
 	if (body.tasks === null || Array.isArray(body.tasks)) {
-		// An empty selection would silently remove the tool everywhere; treat it
-		// as "no restriction" instead.
-		const tasks = Array.isArray(body.tasks) ? body.tasks.filter((t: unknown) => typeof t === 'string') : null;
-		patch.tasks = tasks && tasks.length ? tasks : null;
+		// Scoping only narrows, so store the intersection with the tool's own
+		// tasks — and nothing at all when that covers all of them.
+		const tasks = Array.isArray(body.tasks)
+			? body.tasks.filter((t: unknown): t is string => typeof t === 'string')
+			: null;
+		patch.tasks = normaliseTaskScope(descriptor.tasks, tasks);
 	}
 	if (!Object.keys(patch).length) error(400, 'Nothing to update');
 

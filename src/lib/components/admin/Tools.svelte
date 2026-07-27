@@ -31,7 +31,6 @@
 	}
 
 	let tools = $state<CatalogEntry[]>([]);
-	let tasks = $state<string[]>([]);
 	let servers = $state<Server[]>([]);
 	let expanded = $state<string | null>(null);
 	let errorMsg = $state<string | null>(null);
@@ -56,9 +55,9 @@
 			fetch('/api/admin/tools'),
 			fetch('/api/admin/mcp-servers')
 		]);
-		const data = await toolsRes.json();
-		tools = data.tools;
-		tasks = data.tasks;
+		// Scope chips come from each tool's own tasks, so the global task list in
+		// the response is not needed here.
+		tools = (await toolsRes.json()).tools;
 		servers = await serversRes.json();
 	}
 	$effect(() => {
@@ -92,11 +91,21 @@
 		await load();
 	}
 
+	/**
+	 * Scoping can only narrow — a tool is never offered to a task it doesn't
+	 * serve — so the chips are the tool's own tasks and unticking one removes it.
+	 * Clearing the last would mean "nowhere", which is what the enable checkbox
+	 * is for, so it's refused rather than silently reverting to unrestricted.
+	 */
 	function toggleTask(tool: CatalogEntry, task: string) {
 		const current = tool.taskOverride ?? tool.tasks;
 		const next = current.includes(task)
 			? current.filter((t) => t !== task)
 			: [...current, task];
+		if (!next.length) {
+			errorMsg = `Use the checkbox to turn ${tool.name} off — a tool needs at least one task.`;
+			return;
+		}
 		void patch(tool, { tasks: next });
 	}
 
@@ -244,13 +253,16 @@
 									</label>
 									<div class="scope">
 										<span class="scope-label">available in</span>
-										{#each tasks as task (task)}
+										{#each tool.tasks as task (task)}
 											<button
 												class="chip"
 												class:on={(tool.taskOverride ?? tool.tasks).includes(task)}
 												onclick={() => toggleTask(tool, task)}>{task}</button
 											>
 										{/each}
+										{#if tool.tasks.length === 1}
+											<span class="scope-label">— this tool only applies to {tool.tasks[0]}</span>
+										{/if}
 									</div>
 									{#if paramList(tool.parameters).length}
 										<div class="params">
@@ -407,6 +419,11 @@
 	.on {
 		width: 2rem;
 	}
+	/* Cells are top-aligned because rows grow; nudge the checkbox onto the
+	   baseline of the tool name rather than the top edge of the cell. */
+	.on input {
+		margin: 0.2rem 0 0;
+	}
 	.name {
 		display: flex;
 		align-items: center;
@@ -464,6 +481,10 @@
 		gap: 0.35rem;
 		flex-wrap: wrap;
 	}
+	/* .detail is a flex column, so a bare button would stretch edge to edge. */
+	.detail .btn {
+		align-self: flex-start;
+	}
 	.scope-label {
 		color: var(--fg-dim);
 		font-size: 0.68rem;
@@ -477,6 +498,10 @@
 		font-size: 0.68rem;
 		padding: 0.15rem 0.55rem;
 		cursor: pointer;
+		/* Without these a hyphenated label like "deep-research" wraps mid-word
+		   inside the pill, turning it into a circle that overlaps its neighbours. */
+		white-space: nowrap;
+		flex-shrink: 0;
 	}
 	.chip.on {
 		border-color: var(--accent);
