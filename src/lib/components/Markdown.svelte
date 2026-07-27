@@ -25,9 +25,11 @@
 </div>
 
 <style>
-	/* Fenced blocks are rendered by CodeBlock now; this still covers the
-	   indented code blocks marked emits on its own. */
-	.md :global(pre) {
+	/* Fenced blocks are rendered by CodeBlock, which styles its own <pre>; this
+	   covers the indented code blocks marked still emits. The :not() keeps it
+	   off CodeBlock's markup — without it the two rules tie on specificity and
+	   this one wins on source order, flattening CodeBlock's layout. */
+	.md :global(pre:not(.code-block *)) {
 		background: var(--bg-pane);
 		border: 1px solid var(--border);
 		border-radius: 6px;

@@ -38,8 +38,8 @@
 	}
 	.controls {
 		position: absolute;
-		top: 0.35rem;
-		right: 0.4rem;
+		top: 0.3rem;
+		right: 0.45rem;
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
@@ -63,7 +63,8 @@
 		font-size: 0.72rem;
 		line-height: 1;
 		padding: 0.25rem 0.4rem;
-		opacity: 0;
+		/* Dimmed rather than hidden: the point is that it's discoverable. */
+		opacity: 0.5;
 		transition: opacity 0.15s, color 0.15s;
 	}
 	.code-block:hover .copy,
@@ -83,20 +84,24 @@
 		color: var(--danger);
 		border-color: var(--danger);
 	}
-	pre {
+	.code-block pre {
 		background: var(--bg-pane);
 		border: 1px solid var(--border);
 		border-radius: 6px;
-		padding: 0.75rem;
+		/* Top padding reserves a strip for the language label and copy button. */
+		padding: 1.85rem 0.75rem 0.75rem;
 		overflow-x: auto;
 		font-size: 0.8rem;
 		margin: 0.4rem 0;
+		/* Short snippets still read as a block rather than a tiny sliver. */
+		min-width: min(20rem, 100%);
+		box-sizing: border-box;
 	}
-	code {
+	.code-block code {
 		font-family: var(--font-mono);
 	}
 
-	/* No hover on touch, so the button stays visible there. */
+	/* No hover on touch, so the button stays at full strength there. */
 	@media (hover: none) {
 		.copy {
 			opacity: 1;
