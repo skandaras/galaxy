@@ -9,9 +9,13 @@ RUN npm run build && npm prune --omit=dev
 
 FROM node:22-alpine
 WORKDIR /app
+# BODY_SIZE_LIMIT: adapter-node caps request bodies at 512K by default, far
+# below the attachment limits the app advertises (5 MB images, 25 MB documents).
+# 32M leaves headroom for multipart overhead.
 ENV NODE_ENV=production \
     DATA_DIR=/data \
-    PORT=3000
+    PORT=3000 \
+    BODY_SIZE_LIMIT=32M
 COPY --from=build /app/build ./build
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/drizzle ./drizzle

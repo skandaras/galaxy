@@ -125,6 +125,43 @@ export function attachmentIcon(kind: AttachmentKind | undefined): string {
 	return kind === 'document' ? '📄' : '🖼';
 }
 
+export interface ScreenedFiles {
+	accepted: File[];
+	/** One user-facing sentence per rejected file. */
+	rejected: string[];
+}
+
+/**
+ * Check picked files before uploading. Catching an unsupported type or an
+ * oversized file here saves a round trip and gives an immediate reason — the
+ * server enforces the same rules, this is not a substitute for it.
+ */
+export function screenFiles(files: File[]): ScreenedFiles {
+	const accepted: File[] = [];
+	const rejected: string[] = [];
+	for (const file of files) {
+		try {
+			const spec = classifyAttachment(file.name, file.type);
+			if (file.size > spec.maxBytes) {
+				rejected.push(
+					`${file.name} is ${formatBytes(file.size)} — the limit for ${spec.kind === 'image' ? 'images' : 'documents'} is ${formatBytes(spec.maxBytes)}.`
+				);
+				continue;
+			}
+			if (file.size === 0) {
+				rejected.push(`${file.name} is empty.`);
+				continue;
+			}
+			accepted.push(file);
+		} catch (err) {
+			rejected.push(
+				err instanceof UnsupportedAttachmentError ? err.message : `${file.name} could not be read.`
+			);
+		}
+	}
+	return { accepted, rejected };
+}
+
 export function formatBytes(n: number): string {
 	if (n < 1024) return `${n} B`;
 	if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;

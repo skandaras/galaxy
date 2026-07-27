@@ -43,6 +43,7 @@ Optional per-instance env you may add in `docker-compose.yml`:
 | Variable | Purpose |
 |---|---|
 | `ORIGIN` | Public URL of this instance. Required behind a proxy or multipart uploads 403 (see above) |
+| `BODY_SIZE_LIMIT` | Largest request body accepted. **Already set to `32M` in the compose file and image** — adapter-node's own default is 512K, which rejects attachment uploads well below the app's 5 MB image / 25 MB document limits. Lower it only if you want to cap uploads more tightly |
 | `SECRET_KEY` | 64 hex chars; master key for encrypting API keys. If unset, a key file is generated in the data volume (back it up!). `openssl rand -hex 32` |
 | `ADMIN_GROUP` | Authelia group granting admin (default `galaxy-admins`) |
 | `GITHUB_REPO` | `owner/repo` used by the Promote button (default `skandaras/galaxy`) |
@@ -323,6 +324,7 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | `Budget cap reached` | Raise/disable in Admin → Settings, or wait for the period to roll over |
 | Promote button errors | GitHub PAT missing workflow scope, or `GITHUB_REPO` wrong, or dev unhealthy (gate) |
 | Attachment upload fails / 403 on form posts | `ORIGIN` not set to this instance's public URL (SvelteKit CSRF check) |
+| Small attachments upload but larger ones fail with `413` / `exceeds the server's request limit` | `BODY_SIZE_LIMIT` too low (or missing, so adapter-node's 512K default applies). Set it to `32M`. A reverse proxy can impose its own cap too — nginx's `client_max_body_size` defaults to 1 MB |
 | Memory never runs | Admin → Memory: enabled? interval? It also skips when there's no new activity |
 
 The Observatory (left pane, or `/observatory`) shows every model call, tool

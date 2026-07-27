@@ -16,6 +16,9 @@ services:
       AUTH_MODE: authelia
       TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:?set to your reverse proxy IP/CIDR}
       ADMIN_GROUP: galaxy-admins
+      # Without this, adapter-node's 512K default rejects attachment uploads
+      # long before the app's own 5 MB / 25 MB limits apply.
+      BODY_SIZE_LIMIT: 32M
       CODING_EXECUTOR: docker
       DOCKER_API_URL: http://docker-socket-proxy:2375
       RUNNER_IMAGE: ghcr.io/skandaras/galaxy-runner:latest
@@ -33,6 +36,7 @@ services:
       AUTH_MODE: authelia
       TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:?set to your reverse proxy IP/CIDR}
       ADMIN_GROUP: galaxy-admins
+      BODY_SIZE_LIMIT: 32M
       # Coding sessions run each command in a throwaway runner container.
       CODING_EXECUTOR: docker
       DOCKER_API_URL: http://docker-socket-proxy:2375
