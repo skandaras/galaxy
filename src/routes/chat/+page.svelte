@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
-	import { ATTACHMENT_ACCEPT, attachmentIcon } from '$lib/attachment-types';
+	import { ATTACHMENT_ACCEPT, attachmentIcon, screenFiles } from '$lib/attachment-types';
 	import { clearDraft, draftKey, getDraft, setDraft } from '$lib/composer-drafts.svelte';
 	import { createAutoscroll } from '$lib/autoscroll.svelte';
 
@@ -324,7 +324,9 @@
 
 	function onFilesPicked(ev: Event) {
 		const target = ev.target as HTMLInputElement;
-		if (target.files) pendingFiles = [...pendingFiles, ...target.files];
+		const { accepted, rejected } = screenFiles([...(target.files ?? [])]);
+		if (accepted.length) pendingFiles = [...pendingFiles, ...accepted];
+		errorBanner = rejected.length ? rejected.join(' ') : null;
 		target.value = '';
 	}
 

@@ -214,7 +214,13 @@ async function connect(server: McpServer): Promise<Client> {
 	} catch (err) {
 		await transport.close().catch(() => {});
 		const detail = summariseStderr(stderrTail);
-		throw new Error(detail ? `${messageOf(err)} — ${detail}` : messageOf(err));
+		// Rethrow as-is when there's nothing to add, so callers keep the
+		// transport's HTTP status — flattening this to a plain Error is what hid
+		// the 401 from explainAuthFailure.
+		if (!detail) throw err;
+		const wrapped = new Error(`${messageOf(err)} — ${detail}`, { cause: err });
+		(wrapped as { code?: unknown }).code = (err as { code?: unknown })?.code;
+		throw wrapped;
 	}
 
 	pool.set(server.id, {
@@ -226,6 +232,31 @@ async function connect(server: McpServer): Promise<Client> {
 
 function messageOf(err: unknown): string {
 	return String(err instanceof Error ? err.message : err);
+}
+
+/**
+ * Turn an auth rejection into something an admin can act on. The raw transport
+ * string ("Error POSTing to endpoint: Unauthorized") says nothing about what the
+ * server actually wants, and the most common cause — a server that requires an
+ * OAuth login rather than a token — isn't something Galaxy supports at all.
+ */
+export function explainAuthFailure(err: unknown): string | null {
+	const message = messageOf(err);
+	// Read `code` structurally rather than via `instanceof StreamableHTTPError`:
+	// the bundler can end up with two copies of the SDK's class, so the identity
+	// check fails at runtime even though the field is there. Node system errors
+	// use string codes ('ENOTFOUND'), hence the typeof guard.
+	const raw = (err as { code?: unknown })?.code;
+	const code =
+		typeof raw === 'number' ? raw : Number(/\b(401|403)\b/.exec(message)?.[1]) || undefined;
+	const unauthorized = code === 401 || code === 403 || /unauthorized|forbidden/i.test(message);
+	if (!unauthorized) return null;
+	return [
+		`The server rejected Galaxy's credentials (HTTP ${code ?? '401/403'}).`,
+		'Usually the Authorization header is missing or wrong — check the headers field.',
+		'Servers that require an OAuth sign-in instead of a token are not supported;',
+		'see docs/MCP.md for which servers work with a static token.'
+	].join(' ');
 }
 
 /**
@@ -323,7 +354,7 @@ export async function syncServer(id: string): Promise<SyncResult> {
 			.run();
 		return { ok: true, toolCount: listed.tools.length };
 	} catch (err) {
-		const message = messageOf(err);
+		const message = explainAuthFailure(err) ?? messageOf(err);
 		disconnect(id);
 		db.update(mcpServers)
 			.set({ status: 'error', lastError: message, lastSyncAt: new Date() })
@@ -392,7 +423,7 @@ async function callRemote(
 		if (result.isError) throw new Error(renderContent(result.content) || 'Tool reported an error');
 		return renderContent(result.content) || '(no output)';
 	} catch (err) {
-		const message = messageOf(err);
+		const message = explainAuthFailure(err) ?? messageOf(err);
 		// A dead socket must not be reused on the next call.
 		disconnect(serverId);
 		recordServerError(serverId, message);

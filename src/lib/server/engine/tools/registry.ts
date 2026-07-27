@@ -9,6 +9,16 @@ import { webSearchToolDef } from './web-search';
 
 export type ToolSource = 'builtin' | 'mcp';
 
+/**
+ * The only tasks that assemble a toolset and therefore consult applyToolPolicy:
+ * `startChatTurn` (engine.ts) and `startCodingTurn` (coding/session.ts). Deep
+ * research runs a hardcoded pipeline, and the visual/memory/skill-optimiser
+ * tasks never build a LoopTool array — offering those as scope options would be
+ * a control that does nothing. Keep in step with the applyToolPolicy call sites.
+ */
+export const TOOL_TASKS = ['chat', 'coding'] as const;
+export type ToolTask = (typeof TOOL_TASKS)[number];
+
 export interface ToolDescriptor {
 	name: string;
 	source: ToolSource;
@@ -120,6 +130,26 @@ export function resetToolSetting(name: string): void {
 	db.delete(toolSettings).where(eq(toolSettings.name, name)).run();
 }
 
+/**
+ * Task scoping can only ever *narrow*: a tool is never offered to a task it
+ * doesn't serve in the first place, so ticking `chat` on a coding-only tool
+ * cannot add it there. An override is therefore stored as the intersection with
+ * the tool's natural tasks, and dropped entirely once it covers all of them, so
+ * the "scoped" badge only shows when something is genuinely restricted.
+ *
+ * An empty selection means "no restriction", not "nowhere" — disabling a tool
+ * everywhere is what the enabled flag is for.
+ */
+export function normaliseTaskScope(
+	natural: readonly string[],
+	incoming: readonly string[] | null | undefined
+): string[] | null {
+	if (!incoming) return null;
+	const kept = natural.filter((t) => incoming.includes(t));
+	if (!kept.length || kept.length === natural.length) return null;
+	return kept;
+}
+
 export function toCatalog(
 	descriptors: ToolDescriptor[],
 	settings: Map<string, ToolSetting>
@@ -131,7 +161,9 @@ export function toCatalog(
 			effectiveDescription: s?.descriptionOverride || d.description,
 			enabled: s?.enabled ?? true,
 			descriptionOverride: s?.descriptionOverride ?? null,
-			taskOverride: s?.tasks ?? null
+			// Normalised on read too, so rows written before this existed (or by
+			// hand) display as the restriction they actually impose.
+			taskOverride: normaliseTaskScope(d.tasks, s?.tasks)
 		};
 	});
 }
