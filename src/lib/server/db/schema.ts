@@ -215,6 +215,55 @@ export const skillCandidates = sqliteTable('skill_candidates', {
 	decidedAt: integer('decided_at', { mode: 'timestamp_ms' })
 });
 
+// Admin overrides for tools. Behaviour always lives in code (or on an MCP
+// server) — these rows only gate and relabel what the agents are offered, so
+// a row naming a tool that no longer exists is simply ignored.
+export const toolSettings = sqliteTable('tool_settings', {
+	name: text('name').primaryKey(),
+	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+	descriptionOverride: text('description_override'),
+	/** Restrict to these tasks; null means "wherever the tool normally applies". */
+	tasks: text('tasks', { mode: 'json' }).$type<string[] | null>(),
+	updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+});
+
+// External MCP servers. Their tools are discovered on sync and cached in
+// mcp_tools so assembling a turn never waits on a network round trip.
+export const mcpServers = sqliteTable('mcp_servers', {
+	id: text('id').primaryKey(),
+	name: text('name').notNull().unique(),
+	transport: text('transport', { enum: ['http', 'stdio'] }).notNull().default('http'),
+	/** http transport */
+	url: text('url'),
+	/** Headers as an encrypted JSON object — they usually carry a bearer token. */
+	headersEnc: text('headers_enc'),
+	/** stdio transport; the command must exist inside the container. */
+	command: text('command'),
+	args: text('args', { mode: 'json' }).$type<string[] | null>(),
+	/** Prepended to every tool name as `<prefix>__<tool>` to avoid collisions. */
+	toolPrefix: text('tool_prefix').notNull().default(''),
+	tasks: text('tasks', { mode: 'json' }).$type<string[] | null>(),
+	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+	status: text('status', { enum: ['unknown', 'ok', 'error'] }).notNull().default('unknown'),
+	lastError: text('last_error'),
+	lastSyncAt: integer('last_sync_at', { mode: 'timestamp_ms' }),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+});
+
+export const mcpTools = sqliteTable('mcp_tools', {
+	/** `<serverId>:<remoteName>` */
+	id: text('id').primaryKey(),
+	serverId: text('server_id').notNull(),
+	/** Qualified name the model sees. */
+	name: text('name').notNull(),
+	/** Name on the server, which is what gets called. */
+	remoteName: text('remote_name').notNull(),
+	description: text('description').notNull().default(''),
+	parameters: text('parameters', { mode: 'json' }).$type<Record<string, unknown>>()
+	// Enable/disable lives in tool_settings, so builtin and MCP tools are
+	// governed by exactly one mechanism.
+});
+
 export const usageLog = sqliteTable('usage_log', {
 	id: text('id').primaryKey(),
 	ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),

@@ -11,6 +11,8 @@ import { messageContent } from '../context';
 import { runAgentLoop } from '../loop';
 import { attachmentTools } from '../tools/attachments';
 import { bootstrapContext, knowledgeTools } from '../tools/knowledge';
+import { mcpLoopTools } from '../tools/mcp';
+import { applyToolPolicy } from '../tools/registry';
 import { getExecutor } from './executor';
 import { codingTools } from './tools';
 import { createWorkspace, destroyWorkspace, scrubSecrets } from './workspace';
@@ -104,15 +106,19 @@ export function startCodingTurn(opts: {
 		persist: true,
 		primary: choice,
 		backup,
-		tools: [
-			...codingTools({
-				workspaceRel: session.workspaceRel,
-				mode: session.mode,
-				repoUrl: session.repoUrl
-			}),
-			...knowledgeTools(),
-			...attachmentTools(chat.id)
-		],
+		tools: applyToolPolicy(
+			[
+				...codingTools({
+					workspaceRel: session.workspaceRel,
+					mode: session.mode,
+					repoUrl: session.repoUrl
+				}),
+				...knowledgeTools(),
+				...attachmentTools(chat.id),
+				...mcpLoopTools('coding')
+			],
+			'coding'
+		),
 		maxIterations: MAX_CODING_ITERATIONS,
 		buildMessages: (): ProviderMessage[] => [
 			{ role: 'system', content: systemPrompt },

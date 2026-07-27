@@ -57,6 +57,13 @@
       "when": 1785119118919,
       "tag": "0007_first_cardiac",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1785120089269,
+      "tag": "0008_omniscient_vance_astro",
+      "breakpoints": true
     }
   ]
 }
