@@ -17,14 +17,16 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	const content = typeof body.content === 'string' ? body.content.trim() : '';
 	if (!content && !body.attachments?.length) error(400, 'Empty message');
 
+	const attachments = Array.isArray(body.attachments) ? body.attachments : undefined;
+
 	try {
 		const job = body.deepResearch
-			? startResearchTurn({ chatId: chat.id, userId: user.id, content })
+			? startResearchTurn({ chatId: chat.id, userId: user.id, content, attachments })
 			: startChatTurn({
 					chatId: chat.id,
 					userId: user.id,
 					content,
-					attachments: Array.isArray(body.attachments) ? body.attachments : undefined,
+					attachments,
 					modelId: typeof body.modelId === 'string' ? body.modelId : undefined,
 					webSearch: body.webSearch !== false
 				});

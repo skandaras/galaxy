@@ -66,6 +66,10 @@ export interface AttachmentRef {
 	id: string;
 	name: string;
 	mime: string;
+	/** Absent on refs written before document support — treat as an image. */
+	kind?: 'image' | 'document';
+	/** Length of the extracted text, so the UI can hint at document size. */
+	textChars?: number;
 }
 
 export const attachments = sqliteTable('attachments', {
@@ -75,6 +79,11 @@ export const attachments = sqliteTable('attachments', {
 	mime: text('mime').notNull(),
 	size: integer('size').notNull(),
 	path: text('path').notNull(),
+	// Documents are text-extracted once at upload; images go to the model as
+	// data URLs instead and leave these two columns empty.
+	kind: text('kind', { enum: ['image', 'document'] }).notNull().default('image'),
+	extractedText: text('extracted_text'),
+	textChars: integer('text_chars').notNull().default(0),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 });
 

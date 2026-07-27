@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db';
-import { usageLog } from '$lib/server/db/schema';
+import { usageLog, type AttachmentRef } from '$lib/server/db/schema';
 import { appendMessage, getChat, updateChat } from '$lib/server/chats';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import type { Usage } from '$lib/server/providers/types';
@@ -13,6 +13,7 @@ import {
 	type WebSearchSettings
 } from '$lib/server/settings';
 import { assertBudget } from './budget';
+import { withDocumentText } from './context';
 import { EngineError, getTaskConfig, pickModel } from './engine';
 import { emitEvent } from './events';
 import { completeJob, createJob, failJob, pushChunk, type LiveJob } from './jobs';
@@ -30,6 +31,7 @@ export function startResearchTurn(opts: {
 	chatId: string;
 	userId: string;
 	content: string;
+	attachments?: AttachmentRef[];
 }): LiveJob {
 	const chat = getChat(opts.chatId, opts.userId);
 	if (!chat) throw new EngineError('Chat not found');
@@ -44,14 +46,29 @@ export function startResearchTurn(opts: {
 		throw new EngineError('Deep research needs web search configured in admin settings');
 	}
 
-	appendMessage(chat.id, { role: 'user', content: opts.content });
+	appendMessage(chat.id, {
+		role: 'user',
+		content: opts.content,
+		attachments: opts.attachments
+	});
 	if (chat.title === 'New chat') {
 		updateChat(chat.id, { title: `🔭 ${opts.content.slice(0, 44)}` });
 	}
 	const persist = !chat.hidden;
 	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'deep-research', persist });
 
-	void runResearch(job, opts, choice, cfg?.systemPrompt ?? '', searchCfg, persist).catch((err) => {
+	// The research pipeline builds its own prompts from the question text, so
+	// any attached documents have to be folded into it here.
+	const question = withDocumentText(chat.id, opts.content, opts.attachments);
+
+	void runResearch(
+		job,
+		{ ...opts, content: question },
+		choice,
+		cfg?.systemPrompt ?? '',
+		searchCfg,
+		persist
+	).catch((err) => {
 		if (job.status === 'running') failJob(job, String(err));
 	});
 	return job;

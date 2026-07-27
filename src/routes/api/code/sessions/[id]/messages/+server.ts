@@ -14,13 +14,15 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 
 	const body = await request.json().catch(() => ({}));
 	const content = typeof body.content === 'string' ? body.content.trim() : '';
-	if (!content) error(400, 'Empty message');
+	const attachments = Array.isArray(body.attachments) ? body.attachments : undefined;
+	if (!content && !attachments?.length) error(400, 'Empty message');
 
 	try {
 		const job = startCodingTurn({
 			session,
 			userId: user.id,
 			content,
+			attachments,
 			modelId: typeof body.modelId === 'string' ? body.modelId : undefined
 		});
 		return json({ jobId: job.id }, { status: 202 });

@@ -18,6 +18,7 @@ import { buildContext } from './context';
 import { maybeCompact } from './compaction';
 import { createJob, failJob, type LiveJob } from './jobs';
 import { runAgentLoop, type LoopTool } from './loop';
+import { attachmentTools } from './tools/attachments';
 import { bootstrapContext, knowledgeTools } from './tools/knowledge';
 import { runWebSearch, webSearchConfigured, webSearchToolDef } from './tools/web-search';
 
@@ -78,7 +79,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'chat', persist });
 
 	const searchCfg = getSetting<WebSearchSettings>('websearch', DEFAULT_WEB_SEARCH);
-	const tools: LoopTool[] = [...knowledgeTools()];
+	const tools: LoopTool[] = [...knowledgeTools(), ...attachmentTools(chat.id)];
 	if (opts.webSearch && webSearchConfigured(searchCfg)) {
 		tools.push({
 			def: webSearchToolDef,
