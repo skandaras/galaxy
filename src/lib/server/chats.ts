@@ -32,6 +32,8 @@ interface HiddenAttachment {
 	name: string;
 	mime: string;
 	dataUrl: string;
+	kind: 'image' | 'document';
+	text: string;
 }
 
 interface HiddenChat {
@@ -189,7 +191,13 @@ export function setHidden(chatId: string, userId: string, hidden: boolean): Chat
 		for (const att of db.select().from(attachments).where(eq(attachments.chatId, chatId)).all()) {
 			if (existsSync(att.path)) {
 				const b64 = readFileSync(att.path).toString('base64');
-				files.set(att.id, { name: att.name, mime: att.mime, dataUrl: `data:${att.mime};base64,${b64}` });
+				files.set(att.id, {
+					name: att.name,
+					mime: att.mime,
+					dataUrl: `data:${att.mime};base64,${b64}`,
+					kind: att.kind,
+					text: att.extractedText ?? ''
+				});
 			}
 		}
 		const newMeta: ChatMeta = { ...meta, hidden: true, updatedAt: Date.now() };
@@ -222,7 +230,15 @@ export function setHidden(chatId: string, userId: string, hidden: boolean): Chat
 			.run();
 	}
 	for (const [attId, file] of record.attachments) {
-		const saved = saveAttachmentFile(chatId, attId, file.name, file.mime, dataUrlToBuffer(file.dataUrl));
+		const saved = saveAttachmentFile(
+			chatId,
+			attId,
+			file.name,
+			file.mime,
+			dataUrlToBuffer(file.dataUrl),
+			file.kind,
+			file.text
+		);
 		db.insert(attachments).values(saved).run();
 	}
 	hiddenChats.delete(chatId);
@@ -247,21 +263,32 @@ export function deleteChat(chatId: string, userId: string): boolean {
 
 export function addAttachment(
 	chatId: string,
-	file: { name: string; mime: string; data: Buffer }
+	file: {
+		name: string;
+		mime: string;
+		data: Buffer;
+		kind?: 'image' | 'document';
+		text?: string;
+	}
 ): AttachmentRef {
 	const id = randomUUID();
+	const kind = file.kind ?? 'image';
+	const text = file.text ?? '';
+	const ref: AttachmentRef = { id, name: file.name, mime: file.mime, kind, textChars: text.length };
 	const hidden = hiddenChats.get(chatId);
 	if (hidden) {
 		hidden.attachments.set(id, {
 			name: file.name,
 			mime: file.mime,
-			dataUrl: `data:${file.mime};base64,${file.data.toString('base64')}`
+			dataUrl: `data:${file.mime};base64,${file.data.toString('base64')}`,
+			kind,
+			text
 		});
-		return { id, name: file.name, mime: file.mime };
+		return ref;
 	}
-	const saved = saveAttachmentFile(chatId, id, file.name, file.mime, file.data);
+	const saved = saveAttachmentFile(chatId, id, file.name, file.mime, file.data, kind, text);
 	db.insert(attachments).values(saved).run();
-	return { id, name: file.name, mime: file.mime };
+	return ref;
 }
 
 /** Resolve an attachment to a data URL for vision model input. */
@@ -273,13 +300,75 @@ export function attachmentDataUrl(chatId: string, attId: string): string | null 
 	return `data:${row.mime};base64,${readFileSync(row.path).toString('base64')}`;
 }
 
-function saveAttachmentFile(chatId: string, id: string, name: string, mime: string, data: Buffer) {
+/** The text extracted from a document attachment at upload time. */
+export function attachmentText(chatId: string, attId: string): string | null {
+	const hidden = hiddenChats.get(chatId);
+	if (hidden) return hidden.attachments.get(attId)?.text ?? null;
+	const row = db.select().from(attachments).where(eq(attachments.id, attId)).get();
+	if (!row || row.chatId !== chatId) return null;
+	return row.extractedText ?? null;
+}
+
+export interface AttachmentSummary {
+	id: string;
+	name: string;
+	mime: string;
+	kind: 'image' | 'document';
+	textChars: number;
+}
+
+/** Every attachment on a chat, for the list_attachments tool. */
+export function listAttachments(chatId: string): AttachmentSummary[] {
+	const hidden = hiddenChats.get(chatId);
+	if (hidden) {
+		return [...hidden.attachments].map(([id, a]) => ({
+			id,
+			name: a.name,
+			mime: a.mime,
+			kind: a.kind,
+			textChars: a.text.length
+		}));
+	}
+	return db
+		.select()
+		.from(attachments)
+		.where(eq(attachments.chatId, chatId))
+		.all()
+		.map((r) => ({
+			id: r.id,
+			name: r.name,
+			mime: r.mime,
+			kind: r.kind,
+			textChars: r.textChars
+		}));
+}
+
+function saveAttachmentFile(
+	chatId: string,
+	id: string,
+	name: string,
+	mime: string,
+	data: Buffer,
+	kind: 'image' | 'document' = 'image',
+	text = ''
+) {
 	const dir = uploadsDir(chatId);
 	mkdirSync(dir, { recursive: true });
 	const safeName = name.replace(/[^\w.-]/g, '_').slice(0, 80);
 	const path = join(dir, `${id}-${safeName}`);
 	writeFileSync(path, data);
-	return { id, chatId, name, mime, size: data.length, path, createdAt: new Date() };
+	return {
+		id,
+		chatId,
+		name,
+		mime,
+		size: data.length,
+		path,
+		kind,
+		extractedText: text || null,
+		textChars: text.length,
+		createdAt: new Date()
+	};
 }
 
 function dataUrlToBuffer(dataUrl: string): Buffer {

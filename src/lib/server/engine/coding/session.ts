@@ -1,14 +1,18 @@
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { codeSessions } from '$lib/server/db/schema';
+import { codeSessions, type AttachmentRef } from '$lib/server/db/schema';
 import { appendMessage, createChat, deleteChat, getChat, getMessages, updateChat } from '$lib/server/chats';
 import { resolveModel } from '$lib/server/providers/registry';
 import type { ProviderMessage } from '$lib/server/providers/types';
 import { assertBudget } from '../budget';
 import { EngineError, getTaskConfig, pickModel } from '../engine';
 import { createJob, failJob, type LiveJob } from '../jobs';
+import { messageContent } from '../context';
 import { runAgentLoop } from '../loop';
+import { attachmentTools } from '../tools/attachments';
 import { bootstrapContext, knowledgeTools } from '../tools/knowledge';
+import { mcpLoopTools } from '../tools/mcp';
+import { applyToolPolicy } from '../tools/registry';
 import { getExecutor } from './executor';
 import { codingTools } from './tools';
 import { createWorkspace, destroyWorkspace, scrubSecrets } from './workspace';
@@ -68,6 +72,7 @@ export function startCodingTurn(opts: {
 	session: CodeSession;
 	userId: string;
 	content: string;
+	attachments?: AttachmentRef[];
 	modelId?: string;
 }): LiveJob {
 	const { session } = opts;
@@ -85,7 +90,11 @@ export function startCodingTurn(opts: {
 	}
 	const backup = cfg?.backupModelId ? resolveModel(cfg.backupModelId) : null;
 
-	appendMessage(chat.id, { role: 'user', content: opts.content });
+	appendMessage(chat.id, {
+		role: 'user',
+		content: opts.content,
+		attachments: opts.attachments
+	});
 	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'coding', persist: true });
 
 	const systemPrompt = buildCodingSystemPrompt(cfg?.systemPrompt ?? '', session);
@@ -97,20 +106,31 @@ export function startCodingTurn(opts: {
 		persist: true,
 		primary: choice,
 		backup,
-		tools: [
-			...codingTools({
-				workspaceRel: session.workspaceRel,
-				mode: session.mode,
-				repoUrl: session.repoUrl
-			}),
-			...knowledgeTools()
-		],
+		tools: applyToolPolicy(
+			[
+				...codingTools({
+					workspaceRel: session.workspaceRel,
+					mode: session.mode,
+					repoUrl: session.repoUrl
+				}),
+				...knowledgeTools(),
+				...attachmentTools(chat.id),
+				...mcpLoopTools('coding')
+			],
+			'coding'
+		),
 		maxIterations: MAX_CODING_ITERATIONS,
 		buildMessages: (): ProviderMessage[] => [
 			{ role: 'system', content: systemPrompt },
 			...getMessages(chat.id)
 				.filter((m) => m.role !== 'tool')
-				.map((m) => ({ role: m.role, content: m.content }) as ProviderMessage)
+				.map(
+					(m) =>
+						({
+							role: m.role,
+							content: messageContent(m, choice.model.supportsVision)
+						}) as ProviderMessage
+				)
 		],
 		onDone: (text, _usage, usedChoice) => {
 			const saved = appendMessage(chat.id, {

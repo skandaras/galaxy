@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
+	import { ATTACHMENT_ACCEPT, attachmentIcon } from '$lib/attachment-types';
+	import { clearDraft, draftKey, getDraft, setDraft } from '$lib/composer-drafts.svelte';
+	import { createAutoscroll } from '$lib/autoscroll.svelte';
 
 	interface ChatMeta {
 		id: string;
@@ -8,12 +11,19 @@
 		hidden: boolean;
 		updatedAt: number;
 	}
+	interface AttachmentRef {
+		id: string;
+		name: string;
+		mime: string;
+		kind?: 'image' | 'document';
+		textChars?: number;
+	}
 	interface Msg {
 		id: string;
 		role: 'user' | 'assistant' | 'tool';
 		content: string;
 		modelKey: string | null;
-		attachments: { id: string; name: string; mime: string }[] | null;
+		attachments: AttachmentRef[] | null;
 	}
 	interface ModelOption {
 		id: string;
@@ -29,11 +39,33 @@
 	let messages = $state<Msg[]>([]);
 	let listOpen = $state(false);
 
-	let input = $state('');
+	const NEW_KEY = draftKey('chat', null);
+	let activeKey = $state(NEW_KEY);
+	let input = $state(getDraft(NEW_KEY));
+
 	let selectedModelId = $state<string>('');
 	let webSearch = $state(true);
 	let deepResearch = $state(false);
 	let pendingFiles = $state<File[]>([]);
+	/**
+	 * Attachments already uploaded for the pending message. Kept so a failed
+	 * send (e.g. 409 while a reply is still running) can be retried without
+	 * uploading — and orphaning — the same files again.
+	 */
+	let uploadedRefs = $state<AttachmentRef[]>([]);
+	let fileInput: HTMLInputElement | null = $state(null);
+
+	const scroll = createAutoscroll();
+	let threadEl = $state<HTMLElement | null>(null);
+
+	const selectedModel = $derived(models.find((m) => m.id === selectedModelId) ?? null);
+	const pendingImages = $derived(pendingFiles.filter((f) => f.type.startsWith('image/')).length);
+	/** Images are dropped by non-vision models; warn instead of failing quietly. */
+	const visionWarning = $derived(
+		pendingImages > 0 && selectedModel && !selectedModel.supportsVision
+			? `${selectedModel.displayName} can't read images — attached image${pendingImages > 1 ? 's' : ''} will be ignored.`
+			: null
+	);
 
 	let streaming = $state(false);
 	let streamText = $state('');
@@ -56,7 +88,27 @@
 		selectedModelId = m.defaultModelId ?? models[0]?.id ?? '';
 	});
 
+	$effect(() => (threadEl ? scroll.attach(threadEl) : undefined));
+
+	// Follow the reply as it streams, unless the user has scrolled up to read.
+	$effect(() => {
+		streamText;
+		messages.length;
+		if (scroll.pinned) void scroll.toBottom('auto');
+	});
+
+	/** Park the current composer text against the chat it was written for. */
+	function stashDraft() {
+		setDraft(activeKey, input, { ephemeral: currentChat?.hidden === true });
+	}
+
+	function loadDraft(key: string) {
+		activeKey = key;
+		input = getDraft(key);
+	}
+
 	async function selectChat(id: string) {
+		stashDraft();
 		closeStream();
 		errorBanner = null;
 		const res = await fetch(`/api/chats/${id}`);
@@ -65,6 +117,9 @@
 		currentChat = { ...data.chat };
 		messages = data.messages;
 		listOpen = false;
+		loadDraft(draftKey('chat', id));
+		// Open on the newest message rather than the top of the history.
+		void scroll.toBottom('auto');
 		if (data.runningJobId) attachStream(data.runningJobId);
 	}
 
@@ -81,13 +136,15 @@
 
 	async function send() {
 		const content = input.trim();
-		if ((!content && !pendingFiles.length) || streaming) return;
+		if ((!content && !pendingFiles.length && !uploadedRefs.length) || streaming) return;
 		errorBanner = null;
 
 		if (!currentChat) await newChat(false);
 		if (!currentChat) return;
 
-		const attachments: { id: string; name: string; mime: string }[] = [];
+		// Files already uploaded on a previous attempt are reused rather than
+		// sent again, so a retry doesn't leave duplicates behind.
+		const failed: File[] = [];
 		for (const file of pendingFiles) {
 			const form = new FormData();
 			form.append('file', file);
@@ -95,10 +152,18 @@
 				method: 'POST',
 				body: form
 			});
-			if (res.ok) attachments.push(await res.json());
-			else errorBanner = `Upload failed for ${file.name}`;
+			if (res.ok) {
+				uploadedRefs = [...uploadedRefs, await res.json()];
+			} else {
+				const err = await res.json().catch(() => ({ message: res.statusText }));
+				errorBanner = `${file.name}: ${err.message ?? 'upload failed'}`;
+				failed.push(file);
+			}
 		}
+		pendingFiles = failed;
+		if (failed.length) return;
 
+		const attachments = uploadedRefs;
 		const res = await fetch(`/api/chats/${currentChat.id}/messages`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
@@ -113,6 +178,7 @@
 		if (!res.ok) {
 			const err = await res.json().catch(() => ({ message: res.statusText }));
 			errorBanner = err.message ?? 'Failed to send';
+			// uploadedRefs deliberately survives so a retry reuses the uploads.
 			return;
 		}
 		messages = [
@@ -126,7 +192,10 @@
 			}
 		];
 		input = '';
-		pendingFiles = [];
+		uploadedRefs = [];
+		clearDraft(activeKey);
+		clearDraft(NEW_KEY);
+		void scroll.toBottom('auto');
 		const { jobId } = await res.json();
 		attachStream(jobId);
 	}
@@ -241,18 +310,22 @@
 	async function removeChat(chat: ChatMeta, ev?: Event) {
 		ev?.stopPropagation();
 		await fetch(`/api/chats/${chat.id}`, { method: 'DELETE' });
+		clearDraft(draftKey('chat', chat.id));
 		if (currentChat?.id === chat.id) {
 			currentChat = null;
 			messages = [];
+			uploadedRefs = [];
+			pendingFiles = [];
+			loadDraft(NEW_KEY);
 			closeStream();
 		}
 		await refreshChats();
 	}
 
 	function onFilesPicked(ev: Event) {
-		const files = (ev.target as HTMLInputElement).files;
-		if (files) pendingFiles = [...pendingFiles, ...files];
-		(ev.target as HTMLInputElement).value = '';
+		const target = ev.target as HTMLInputElement;
+		if (target.files) pendingFiles = [...pendingFiles, ...target.files];
+		target.value = '';
 	}
 
 	function onKeydown(ev: KeyboardEvent) {
@@ -303,7 +376,7 @@
 			<div class="banner">{notice}</div>
 		{/each}
 
-		<div class="thread">
+		<div class="thread" bind:this={threadEl}>
 			{#if !currentChat && !messages.length}
 				<div class="empty">
 					<p>Start a conversation — it will appear in the pane on the left.</p>
@@ -323,7 +396,7 @@
 						{:else}
 							<p class="user-text">{msg.content}</p>
 							{#each msg.attachments ?? [] as att (att.id)}
-								<span class="att-chip">🖼 {att.name}</span>
+								<span class="att-chip">{attachmentIcon(att.kind)} {att.name}</span>
 							{/each}
 						{/if}
 					</div>
@@ -352,18 +425,38 @@
 		</div>
 
 		<footer class="composer">
-			{#if pendingFiles.length}
+			{#if !scroll.pinned}
+				<button class="jump" onclick={() => scroll.toBottom('smooth')}>↓ Jump to latest</button>
+			{/if}
+			{#if pendingFiles.length || uploadedRefs.length}
 				<div class="pending-files">
-					{#each pendingFiles as file, i (file.name + i)}
-						<span class="att-chip">
-							🖼 {file.name}
+					{#each uploadedRefs as ref (ref.id)}
+						<span class="att-chip uploaded" title="Uploaded — will be sent with your message">
+							{attachmentIcon(ref.kind)}
+							{ref.name}
 							<button
 								class="icon"
+								aria-label="Remove {ref.name}"
+								onclick={() => (uploadedRefs = uploadedRefs.filter((r) => r.id !== ref.id))}
+								>×</button
+							>
+						</span>
+					{/each}
+					{#each pendingFiles as file, i (file.name + i)}
+						<span class="att-chip">
+							{file.type.startsWith('image/') ? '🖼' : '📄'}
+							{file.name}
+							<button
+								class="icon"
+								aria-label="Remove {file.name}"
 								onclick={() => (pendingFiles = pendingFiles.filter((_, j) => j !== i))}>×</button
 							>
 						</span>
 					{/each}
 				</div>
+			{/if}
+			{#if visionWarning}
+				<div class="composer-hint">⚠ {visionWarning}</div>
 			{/if}
 			<div class="composer-row">
 				<textarea
@@ -372,15 +465,26 @@
 						? 'Hidden chat — nothing here is stored'
 						: 'Message Galaxy…'}
 					bind:value={input}
+					oninput={stashDraft}
 					onkeydown={onKeydown}
 				></textarea>
 				<button class="btn send" onclick={send} disabled={streaming}>➤</button>
 			</div>
 			<div class="composer-opts">
-				<label class="opt">
-					<input type="file" accept="image/*" multiple hidden onchange={onFilesPicked} />
-					<span class="chip" role="button" tabindex="0" onclick={(e) => (e.currentTarget.parentElement?.querySelector('input') as HTMLInputElement)?.click()} onkeydown={(e) => e.key === 'Enter' && (e.currentTarget.parentElement?.querySelector('input') as HTMLInputElement)?.click()}>📎</span>
-				</label>
+				<input
+					type="file"
+					accept={ATTACHMENT_ACCEPT}
+					multiple
+					hidden
+					bind:this={fileInput}
+					onchange={onFilesPicked}
+				/>
+				<button
+					class="chip"
+					title="Attach images, PDFs, Word docs, markdown or text files"
+					aria-label="Attach files"
+					onclick={() => fileInput?.click()}>📎</button
+				>
 				<button class="chip" class:on={webSearch} onclick={() => (webSearch = !webSearch)}>
 					Web search
 				</button>
@@ -612,10 +716,34 @@
 		border-top: 1px solid var(--border);
 		padding: 0.7rem 1rem max(0.9rem, env(safe-area-inset-bottom));
 	}
+	.jump {
+		display: block;
+		margin: 0 auto 0.5rem;
+		background: var(--bg-pane);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		color: var(--fg-dim);
+		font-family: inherit;
+		font-size: 0.7rem;
+		padding: 0.25rem 0.7rem;
+		cursor: pointer;
+	}
+	.jump:hover {
+		color: var(--fg);
+		border-color: var(--accent);
+	}
 	.pending-files {
 		display: flex;
 		gap: 0.4rem;
 		flex-wrap: wrap;
+		margin-bottom: 0.4rem;
+	}
+	.att-chip.uploaded {
+		border-color: var(--accent);
+	}
+	.composer-hint {
+		color: var(--fg-dim);
+		font-size: 0.7rem;
 		margin-bottom: 0.4rem;
 	}
 	.att-chip {

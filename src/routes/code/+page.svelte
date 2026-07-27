@@ -1,12 +1,23 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
+	import { ATTACHMENT_ACCEPT, attachmentIcon } from '$lib/attachment-types';
+	import { clearDraft, draftKey, getDraft, setDraft } from '$lib/composer-drafts.svelte';
+	import { createAutoscroll } from '$lib/autoscroll.svelte';
+	import { copyText } from '$lib/clipboard';
 
 	interface ChatMeta {
 		id: string;
 		title: string;
 		mode: string;
 		updatedAt: number;
+	}
+	interface AttachmentRef {
+		id: string;
+		name: string;
+		mime: string;
+		kind?: 'image' | 'document';
+		textChars?: number;
 	}
 	interface Session {
 		chatId: string;
@@ -20,12 +31,14 @@
 		role: string;
 		content: string;
 		modelKey: string | null;
+		attachments?: AttachmentRef[] | null;
 	}
 	interface ModelOption {
 		id: string;
 		displayName: string;
 		providerName: string;
 		supportsTools: boolean;
+		supportsVision: boolean;
 	}
 	interface Repo {
 		fullName: string;
@@ -54,7 +67,19 @@
 	let manualUrl = $state('');
 	let newMode = $state<'plan' | 'implement'>('plan');
 
-	let input = $state('');
+	const NEW_KEY = draftKey('code', null);
+	let activeKey = $state(NEW_KEY);
+	let input = $state(getDraft(NEW_KEY));
+
+	let pendingFiles = $state<File[]>([]);
+	/** Uploads that already succeeded, so a failed send can retry cheaply. */
+	let uploadedRefs = $state<AttachmentRef[]>([]);
+	let fileInput: HTMLInputElement | null = $state(null);
+
+	const scroll = createAutoscroll();
+	let threadEl = $state<HTMLElement | null>(null);
+	let diffCopied = $state(false);
+
 	let selectedModelId = $state('');
 	let streaming = $state(false);
 	let streamText = $state('');
@@ -80,7 +105,28 @@
 		repos = g.repos;
 	});
 
+	$effect(() => (threadEl ? scroll.attach(threadEl) : undefined));
+
+	// Follow the run as it streams, unless the user has scrolled up to read.
+	$effect(() => {
+		streamText;
+		messages.length;
+		trace.length;
+		if (scroll.pinned) void scroll.toBottom('auto');
+	});
+
+	/** Park the current composer text against the session it was written for. */
+	function stashDraft() {
+		setDraft(activeKey, input);
+	}
+
+	function loadDraft(key: string) {
+		activeKey = key;
+		input = getDraft(key);
+	}
+
 	async function select(chatId: string) {
+		stashDraft();
 		closeStream();
 		errorBanner = null;
 		diffText = null;
@@ -91,6 +137,11 @@
 		messages = data.messages.filter((m: Msg) => m.role !== 'tool');
 		listOpen = false;
 		creating = false;
+		pendingFiles = [];
+		uploadedRefs = [];
+		loadDraft(draftKey('code', chatId));
+		// Open on the newest message rather than the top of the history.
+		void scroll.toBottom('auto');
 		if (data.runningJobId) attach(data.runningJobId);
 	}
 
@@ -120,14 +171,47 @@
 		await select(session.chatId);
 	}
 
+	/**
+	 * `text` is an override used by the approve-plan button; it must not touch
+	 * the user's draft, which may hold a half-written follow-up.
+	 */
 	async function send(text?: string) {
+		const override = text !== undefined;
 		const content = (text ?? input).trim();
-		if (!content || !current || streaming) return;
+		if (!current || streaming) return;
+		if (!content && !pendingFiles.length && !uploadedRefs.length) return;
 		errorBanner = null;
+
+		const failed: File[] = [];
+		for (const file of pendingFiles) {
+			const form = new FormData();
+			form.append('file', file);
+			// A code session is a chat row, so the chat attachment endpoint serves
+			// both modes.
+			const res = await fetch(`/api/chats/${current.chatId}/attachments`, {
+				method: 'POST',
+				body: form
+			});
+			if (res.ok) {
+				uploadedRefs = [...uploadedRefs, await res.json()];
+			} else {
+				const err = await res.json().catch(() => ({ message: res.statusText }));
+				errorBanner = `${file.name}: ${err.message ?? 'upload failed'}`;
+				failed.push(file);
+			}
+		}
+		pendingFiles = failed;
+		if (failed.length) return;
+
+		const attachments = uploadedRefs;
 		const res = await fetch(`/api/code/sessions/${current.chatId}/messages`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ content, modelId: selectedModelId || undefined })
+			body: JSON.stringify({
+				content,
+				modelId: selectedModelId || undefined,
+				attachments: attachments.length ? attachments : undefined
+			})
 		});
 		if (!res.ok) {
 			errorBanner = (await res.json().catch(() => ({})))?.message ?? 'Failed to send';
@@ -135,9 +219,20 @@
 		}
 		messages = [
 			...messages,
-			{ id: `local-${Date.now()}`, role: 'user', content, modelKey: null }
+			{
+				id: `local-${Date.now()}`,
+				role: 'user',
+				content,
+				modelKey: null,
+				attachments: attachments.length ? attachments : null
+			}
 		];
-		input = '';
+		uploadedRefs = [];
+		if (!override) {
+			input = '';
+			clearDraft(activeKey);
+		}
+		void scroll.toBottom('auto');
 		attach((await res.json()).jobId);
 	}
 
@@ -230,10 +325,26 @@
 		if (!confirm('Delete this session and its workspace?')) return;
 		await fetch(`/api/code/sessions/${chatId}`, { method: 'DELETE' });
 		sessions = sessions.filter((s) => s.id !== chatId);
+		clearDraft(draftKey('code', chatId));
 		if (current?.chatId === chatId) {
 			current = null;
 			messages = [];
+			pendingFiles = [];
+			uploadedRefs = [];
+			loadDraft(NEW_KEY);
 		}
+	}
+
+	function onFilesPicked(ev: Event) {
+		const target = ev.target as HTMLInputElement;
+		if (target.files) pendingFiles = [...pendingFiles, ...target.files];
+		target.value = '';
+	}
+
+	async function copyDiff() {
+		if (diffText === null) return;
+		diffCopied = await copyText(diffText);
+		setTimeout(() => (diffCopied = false), 2000);
 	}
 
 	function onKeydown(ev: KeyboardEvent) {
@@ -244,6 +355,15 @@
 	}
 
 	const lastAssistantExists = $derived(messages.some((m) => m.role === 'assistant'));
+
+	const selectedModel = $derived(models.find((m) => m.id === selectedModelId) ?? null);
+	const pendingImages = $derived(pendingFiles.filter((f) => f.type.startsWith('image/')).length);
+	/** Images are dropped by non-vision models; warn instead of failing quietly. */
+	const visionWarning = $derived(
+		pendingImages > 0 && selectedModel && !selectedModel.supportsVision
+			? `${selectedModel.displayName} can't read images — attached image${pendingImages > 1 ? 's' : ''} will be ignored.`
+			: null
+	);
 </script>
 
 <div class="code-shell">
@@ -319,10 +439,19 @@
 			</header>
 
 			{#if diffText !== null}
-				<pre class="diff">{@html renderDiff(diffText)}</pre>
+				<div class="diff-wrap">
+					<button
+						class="diff-copy"
+						class:ok={diffCopied}
+						onclick={copyDiff}
+						title="Copy diff to clipboard"
+						aria-label="Copy diff to clipboard">{diffCopied ? '✓' : '⧉'}</button
+					>
+					<pre class="diff">{@html renderDiff(diffText)}</pre>
+				</div>
 			{/if}
 
-			<div class="thread">
+			<div class="thread" bind:this={threadEl}>
 				{#if !messages.length && !streaming}
 					<div class="empty">
 						{current.mode === 'plan'
@@ -337,6 +466,9 @@
 							{#if msg.modelKey}<span class="msg-model">{msg.modelKey}</span>{/if}
 						{:else}
 							<p class="user-text">{msg.content}</p>
+							{#each msg.attachments ?? [] as att (att.id)}
+								<span class="att-chip">{attachmentIcon(att.kind)} {att.name}</span>
+							{/each}
 						{/if}
 					</div>
 				{/each}
@@ -368,16 +500,64 @@
 			</div>
 
 			<footer class="composer">
+				{#if !scroll.pinned}
+					<button class="jump" onclick={() => scroll.toBottom('smooth')}>↓ Jump to latest</button>
+				{/if}
+				{#if pendingFiles.length || uploadedRefs.length}
+					<div class="pending-files">
+						{#each uploadedRefs as ref (ref.id)}
+							<span class="att-chip uploaded" title="Uploaded — will be sent with your message">
+								{attachmentIcon(ref.kind)}
+								{ref.name}
+								<button
+									class="icon"
+									aria-label="Remove {ref.name}"
+									onclick={() => (uploadedRefs = uploadedRefs.filter((r) => r.id !== ref.id))}
+									>×</button
+								>
+							</span>
+						{/each}
+						{#each pendingFiles as file, i (file.name + i)}
+							<span class="att-chip">
+								{file.type.startsWith('image/') ? '🖼' : '📄'}
+								{file.name}
+								<button
+									class="icon"
+									aria-label="Remove {file.name}"
+									onclick={() => (pendingFiles = pendingFiles.filter((_, j) => j !== i))}>×</button
+								>
+							</span>
+						{/each}
+					</div>
+				{/if}
+				{#if visionWarning}
+					<div class="composer-hint">⚠ {visionWarning}</div>
+				{/if}
 				<div class="composer-row">
 					<textarea
 						rows="2"
 						placeholder={current.mode === 'plan' ? 'What should we build?' : 'What should we do?'}
 						bind:value={input}
+						oninput={stashDraft}
 						onkeydown={onKeydown}
 					></textarea>
 					<button class="btn send" onclick={() => send()} disabled={streaming}>➤</button>
 				</div>
 				<div class="composer-opts">
+					<input
+						type="file"
+						accept={ATTACHMENT_ACCEPT}
+						multiple
+						hidden
+						bind:this={fileInput}
+						onchange={onFilesPicked}
+					/>
+					<button
+						class="chip"
+						title="Attach images, PDFs, Word docs, markdown or text files"
+						aria-label="Attach files"
+						onclick={() => fileInput?.click()}>📎</button
+					>
 					<select class="model-select" bind:value={selectedModelId}>
 						{#if !models.length}
 							<option value="">No tool-capable models enabled</option>
@@ -559,6 +739,31 @@
 		background: var(--accent);
 		color: var(--bg);
 	}
+	.diff-wrap {
+		position: relative;
+	}
+	.diff-copy {
+		position: absolute;
+		top: 0.4rem;
+		right: 0.6rem;
+		z-index: 1;
+		background: var(--bg);
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		color: var(--fg-dim);
+		cursor: pointer;
+		font-family: inherit;
+		font-size: 0.72rem;
+		line-height: 1;
+		padding: 0.25rem 0.4rem;
+	}
+	.diff-copy:hover {
+		color: var(--fg);
+	}
+	.diff-copy.ok {
+		color: var(--accent);
+		border-color: var(--accent);
+	}
 	.diff {
 		max-height: 40vh;
 		overflow: auto;
@@ -673,6 +878,47 @@
 		border-top: 1px solid var(--border);
 		padding: 0.7rem 1rem max(0.9rem, env(safe-area-inset-bottom));
 	}
+	.jump {
+		display: block;
+		margin: 0 auto 0.5rem;
+		background: var(--bg-pane);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		color: var(--fg-dim);
+		font-family: inherit;
+		font-size: 0.7rem;
+		padding: 0.25rem 0.7rem;
+		cursor: pointer;
+	}
+	.jump:hover {
+		color: var(--fg);
+		border-color: var(--accent);
+	}
+	.pending-files {
+		display: flex;
+		gap: 0.4rem;
+		flex-wrap: wrap;
+		margin-bottom: 0.4rem;
+	}
+	.att-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.2rem;
+		background: var(--bg-pane);
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		font-size: 0.7rem;
+		padding: 0.15rem 0.4rem;
+		margin-top: 0.3rem;
+	}
+	.att-chip.uploaded {
+		border-color: var(--accent);
+	}
+	.composer-hint {
+		color: var(--fg-dim);
+		font-size: 0.7rem;
+		margin-bottom: 0.4rem;
+	}
 	.composer-row {
 		display: flex;
 		gap: 0.5rem;
@@ -695,6 +941,8 @@
 	}
 	.composer-opts {
 		display: flex;
+		align-items: center;
+		gap: 0.45rem;
 		margin-top: 0.5rem;
 	}
 	.model-select {
