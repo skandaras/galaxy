@@ -418,12 +418,15 @@
 	tr.disabled td {
 		opacity: 0.45;
 	}
-	.on {
+	/* Must stay tag-qualified: the scope chips below carry .on for their
+	   active state, and a bare .on clamped them to 2rem so the label spilled
+	   out of the pill. */
+	td.on {
 		width: 2rem;
 	}
 	/* Cells are top-aligned because rows grow; nudge the checkbox onto the
 	   baseline of the tool name rather than the top edge of the cell. */
-	.on input {
+	td.on input {
 		margin: 0.2rem 0 0;
 	}
 	.name {
