@@ -86,3 +86,43 @@ describe('parseChatCompletionStream', () => {
 		expect(events).toContainEqual({ type: 'text', delta: 'ok' });
 	});
 });
+
+describe('reasoning models', () => {
+	it('surfaces reasoning deltas instead of dropping them', async () => {
+		// Dropping these made a model that thinks until its cap look like a run
+		// that returned nothing at all.
+		const events = await collect(
+			streamOf(
+				chunk({ choices: [{ delta: { reasoning_content: 'let me think' } }] }),
+				chunk({ choices: [{ delta: { content: 'Answer.' }, finish_reason: 'stop' }] }),
+				'data: [DONE]\n\n'
+			)
+		);
+		expect(events).toEqual([
+			{ type: 'reasoning', delta: 'let me think' },
+			{ type: 'text', delta: 'Answer.' },
+			{ type: 'done', finishReason: 'stop' }
+		]);
+	});
+
+	it('accepts the OpenRouter spelling too', async () => {
+		const events = await collect(
+			streamOf(chunk({ choices: [{ delta: { reasoning: 'hmm' } }] }), 'data: [DONE]\n\n')
+		);
+		expect(events[0]).toEqual({ type: 'reasoning', delta: 'hmm' });
+	});
+
+	it('reports a budget spent entirely on reasoning', async () => {
+		const events = await collect(
+			streamOf(
+				chunk({ choices: [{ delta: { reasoning_content: 'thinking' } }] }),
+				chunk({ choices: [{ delta: {}, finish_reason: 'length' }] }),
+				'data: [DONE]\n\n'
+			)
+		);
+		// No text at all, and the stop reason says why — enough for the caller to
+		// distinguish "spent it thinking" from "had nothing to say".
+		expect(events.some((e) => e.type === 'text')).toBe(false);
+		expect(events.at(-1)).toEqual({ type: 'done', finishReason: 'length' });
+	});
+});

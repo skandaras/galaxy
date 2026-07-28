@@ -81,8 +81,15 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
 			const res = await post(req, false, signal);
 			const data = await res.json();
 			const choice = data.choices?.[0];
+			const text = choice?.message?.content ?? '';
+			// Reasoning models put chain-of-thought on its own field and leave
+			// content empty when the budget runs out mid-thought.
+			const reasoning =
+				choice?.message?.reasoning_content ?? choice?.message?.reasoning ?? '';
 			return {
-				text: choice?.message?.content ?? '',
+				text,
+				finishReason: choice?.finish_reason ?? null,
+				reasonedOnly: !text && Boolean(reasoning),
 				usage: data.usage
 					? {
 							promptTokens: data.usage.prompt_tokens ?? 0,
@@ -153,6 +160,14 @@ export async function* parseChatCompletionStream(
 
 		if (typeof delta.content === 'string' && delta.content) {
 			yield { type: 'text', delta: delta.content };
+		}
+		// Reasoning arrives on its own field — `reasoning_content` on
+		// DeepSeek/vLLM/Ollama, `reasoning` on OpenRouter — and spends the same
+		// token budget as the answer. Dropping it entirely (the old behaviour)
+		// made a model that thought until its cap look like it returned nothing.
+		const reasoning = delta.reasoning_content ?? delta.reasoning;
+		if (typeof reasoning === 'string' && reasoning) {
+			yield { type: 'reasoning', delta: reasoning };
 		}
 		const toolCalls = delta.tool_calls as
 			| { index?: number; id?: string; function?: { name?: string; arguments?: string } }[]

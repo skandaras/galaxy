@@ -101,6 +101,21 @@ RSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$RJOB/stream)
 check "research stages" "$RSTREAM" '"type":"stage","name":"synthesising"'
 check "research cites evidence" "$RSTREAM" 'FACT-42 confirmed'
 
+# Deep research against a reasoning model, which spends its token budget
+# thinking and returns nothing on the first attempt. It used to plan one query
+# (the raw question), retrieve nothing, and save an empty reply as a success.
+REASON_ID=$(api $B/api/admin/models | node -pe "JSON.parse(require('fs').readFileSync(0)).find(m=>m.modelKey.includes('ponder')).id")
+api -X PATCH $B/api/admin/models/$REASON_ID -d '{"enabled":true}' > /dev/null
+api -X PUT $B/api/admin/task-configs -d "{\"task\":\"deep-research\",\"primaryModelId\":\"$REASON_ID\"}" > /dev/null
+PCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+PJOB=$(api -X POST $B/api/chats/$PCHAT/messages -d '{"content":"How do nebulae form?","deepResearch":true}' | jqn .jobId)
+PSTREAM=$(curl -sN --max-time 90 $B/api/jobs/$PJOB/stream)
+check "reasoning model still gets a real plan" "$PSTREAM" '"name":"searching","detail":"2 queries"'
+check "reasoning model retries synthesis" "$PSTREAM" 'retrying with more room'
+check "reasoning model produces an answer" "$PSTREAM" 'Thought it through first'
+check "reasoning research is not left empty" "$(api $B/api/chats/$PCHAT | jqn '.messages.at(-1).content')" 'Nebulae form'
+api -X PUT $B/api/admin/task-configs -d "{\"task\":\"deep-research\",\"primaryModelId\":\"$MODEL_ID\"}" > /dev/null
+
 # coding session against a local repo
 ORIGIN=$DATA/origin
 git init -q -b main "$ORIGIN" && echo "# origin" > "$ORIGIN/README.md"
