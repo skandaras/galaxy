@@ -6,11 +6,17 @@ import { resolveModel } from '$lib/server/providers/registry';
 import type { ProviderMessage } from '$lib/server/providers/types';
 import { assertBudget } from '../budget';
 import { EngineError, getTaskConfig, pickModel } from '../engine';
-import { DEFAULT_COMPACTION, getSetting } from '$lib/server/settings';
+import {
+	DEFAULT_COMPACTION,
+	DEFAULT_WEB_SEARCH,
+	getSetting,
+	type WebSearchSettings
+} from '$lib/server/settings';
 import { createJob, failJob, type LiveJob } from '../jobs';
 import { maybeCompact } from '../compaction';
 import { buildContext } from '../context';
-import { runAgentLoop } from '../loop';
+import { runAgentLoop, type LoopTool } from '../loop';
+import { webSearchConfigured, webSearchTool } from '../tools/web-search';
 import { attachmentTools } from '../tools/attachments';
 import { bootstrapContext, knowledgeTools } from '../tools/knowledge';
 import { mcpLoopTools } from '../tools/mcp';
@@ -76,6 +82,7 @@ export function startCodingTurn(opts: {
 	content: string;
 	attachments?: AttachmentRef[];
 	modelId?: string;
+	webSearch?: boolean;
 }): LiveJob {
 	const { session } = opts;
 	const chat = getChat(session.chatId, opts.userId);
@@ -102,6 +109,11 @@ export function startCodingTurn(opts: {
 	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'coding', persist: true });
 
 	const systemPrompt = buildCodingSystemPrompt(cfg?.systemPrompt ?? '', session);
+	const searchCfg = getSetting<WebSearchSettings>('websearch', DEFAULT_WEB_SEARCH);
+	// Built per turn, exactly as chat does it: the tool keeps a per-turn memo
+	// and search budget in its closure.
+	const searchTools: LoopTool[] =
+		opts.webSearch && webSearchConfigured(searchCfg) ? [webSearchTool(searchCfg)] : [];
 	void runAgentLoop({
 		job,
 		task: 'coding',
@@ -119,6 +131,7 @@ export function startCodingTurn(opts: {
 				}),
 				...knowledgeTools(),
 				...attachmentTools(chat.id),
+				...searchTools,
 				...mcpLoopTools('coding')
 			],
 			'coding'

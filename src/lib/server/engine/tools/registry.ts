@@ -72,7 +72,7 @@ export function builtinDescriptors(): ToolDescriptor[] {
 	add(knowledgeTools(), 'knowledge', ['chat', 'coding']);
 	// The chat id only affects execution, never the declaration.
 	add(attachmentTools('*'), 'attachments', ['chat', 'coding']);
-	add([{ def: webSearchToolDef, execute: async () => '' }], 'web', ['chat']);
+	add([{ def: webSearchToolDef, execute: async () => '' }], 'web', ['chat', 'coding']);
 
 	// Constructing both modes is how we know which tools plan mode withholds.
 	const ctx = { workspaceRel: '', mode: 'plan' as const, repoUrl: '' };

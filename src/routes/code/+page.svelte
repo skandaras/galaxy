@@ -82,6 +82,7 @@
 	let diffCopied = $state(false);
 
 	let selectedModelId = $state('');
+	let webSearch = $state(true);
 	/** Task default, used when a session has no remembered model. */
 	let defaultModelId = $state('');
 	let streaming = $state(false);
@@ -234,6 +235,7 @@
 			body: JSON.stringify({
 				content,
 				modelId: selectedModelId || undefined,
+				webSearch,
 				attachments: attachments.length ? attachments : undefined
 			})
 		});
@@ -605,6 +607,9 @@
 						aria-label="Attach files"
 						onclick={() => fileInput?.click()}>📎</button
 					>
+					<button class="chip" class:on={webSearch} onclick={() => (webSearch = !webSearch)}>
+						Web search
+					</button>
 					<select class="model-select" bind:value={selectedModelId}>
 						{#if !models.length}
 							<option value="">No tool-capable models enabled</option>

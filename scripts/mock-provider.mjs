@@ -168,6 +168,26 @@ const server = createServer(async (req, res) => {
 				});
 				delta(res, {}, 'tool_calls');
 			};
+
+			// A coding turn that asks to search takes a separate path, so the smoke
+			// can prove web_search is offered here — and genuinely withheld when the
+			// toggle is off, which surfaces as the loop rejecting an unknown tool.
+			const triedSearch = parsed.messages.some(
+				(m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.function?.name === 'web_search')
+			);
+			if (triedSearch) {
+				delta(res, { content: 'Mock coding answer after searching.' });
+				delta(res, {}, 'stop');
+				res.write('data: [DONE]\n\n');
+				res.end();
+				return;
+			}
+			if (last?.role === 'user' && String(last.content).toLowerCase().includes('search')) {
+				call('web_search', { query: 'galaxy news' });
+				res.write('data: [DONE]\n\n');
+				res.end();
+				return;
+			}
 			if (system.includes('PLAN mode')) {
 				if (toolResults === 0) call('list_files', {});
 				else {

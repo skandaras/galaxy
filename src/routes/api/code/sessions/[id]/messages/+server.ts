@@ -23,7 +23,9 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 			userId: user.id,
 			content,
 			attachments,
-			modelId: typeof body.modelId === 'string' ? body.modelId : undefined
+			modelId: typeof body.modelId === 'string' ? body.modelId : undefined,
+			// Default on, matching chat: absent means the client didn't say.
+			webSearch: body.webSearch !== false
 		});
 		return json({ jobId: job.id }, { status: 202 });
 	} catch (err) {
