@@ -10,6 +10,12 @@ export interface BudgetStatus {
 	spentUsd: number;
 	periodStart: number;
 	blocked: boolean;
+	/**
+	 * Calls this period that burned tokens but contributed nothing to `spentUsd`,
+	 * because their model has no per-token pricing configured. Without this a
+	 * spend of $0.00 is indistinguishable from "nothing has run yet".
+	 */
+	unpricedCalls: number;
 }
 
 /** Calendar-period start in server-local time: today / this ISO week (Mon) / this month. */
@@ -27,8 +33,12 @@ export function periodStart(period: BudgetSettings['period'], now = new Date()):
 export function getBudgetStatus(now = new Date()): BudgetStatus {
 	const cfg = getSetting<BudgetSettings>('budget', DEFAULT_BUDGET);
 	const start = periodStart(cfg.period, now).getTime();
-	const row = db.get<{ spent: number }>(
-		sql`SELECT COALESCE(SUM(cost_usd),0) AS spent FROM usage_log WHERE ts >= ${start}`
+	const row = db.get<{ spent: number; unpriced: number }>(
+		sql`SELECT COALESCE(SUM(cost_usd),0) AS spent,
+		           COUNT(CASE WHEN cost_usd IS NULL
+		                       AND (prompt_tokens > 0 OR completion_tokens > 0)
+		                      THEN 1 END) AS unpriced
+		    FROM usage_log WHERE ts >= ${start}`
 	);
 	const spent = row?.spent ?? 0;
 	return {
@@ -37,7 +47,8 @@ export function getBudgetStatus(now = new Date()): BudgetStatus {
 		period: cfg.period,
 		spentUsd: spent,
 		periodStart: start,
-		blocked: cfg.enabled && spent >= cfg.limitUsd
+		blocked: cfg.enabled && spent >= cfg.limitUsd,
+		unpricedCalls: row?.unpriced ?? 0
 	};
 }
 

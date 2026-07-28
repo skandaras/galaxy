@@ -124,6 +124,12 @@ OSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$OJOB/stream)
 # reporting it as unknown is what proves the tool was genuinely withheld.
 check "coding honours the web search toggle" "$OSTREAM" 'unknown tool'
 
+# The nav cost bar reads this; it must be available to a non-admin user, since
+# the cap blocks everyone's turns.
+BUD=$(api $B/api/usage/budget)
+check "budget status readable" "$BUD" '"spentUsd"'
+check "budget status reports pricing gaps" "$BUD" '"unpricedCalls"'
+
 # library + skills + memory
 api -X POST $B/api/library -d '{"title":"Smoke Doc","content":"The smoke marker is LANTERN-9"}' > /dev/null
 check "library search" "$(api "$B/api/library?q=LANTERN")" 'Smoke Doc'
