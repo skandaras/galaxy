@@ -95,6 +95,8 @@ export function startCodingTurn(opts: {
 		content: opts.content,
 		attachments: opts.attachments
 	});
+	// Remember the model for this session (see startChatTurn).
+	updateChat(chat.id, { modelId: choice.model.id });
 	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'coding', persist: true });
 
 	const systemPrompt = buildCodingSystemPrompt(cfg?.systemPrompt ?? '', session);

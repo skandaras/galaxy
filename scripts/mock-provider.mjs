@@ -200,6 +200,24 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
+		// Deliberately slow stream, so a test can cancel mid-reply. Emits a word
+		// every 250ms and stops early if the client drops the connection, which
+		// is how the abort is observed from this side.
+		if (String(last?.content ?? '').includes('SLOW-STREAM')) {
+			let closed = false;
+			res.on('close', () => (closed = true));
+			for (let i = 1; i <= 40 && !closed; i++) {
+				delta(res, { content: `word${i} ` });
+				await new Promise((r) => setTimeout(r, 250));
+			}
+			if (!closed) {
+				delta(res, {}, 'stop');
+				res.write('data: [DONE]\n\n');
+				res.end();
+			}
+			return;
+		}
+
 		// Research synthesis: streamed answer citing the provided sources.
 		if (String(last?.content ?? '').includes('RESEARCH-SYNTHESIS')) {
 			const hasEvidence = String(last.content).includes('FACT-42');

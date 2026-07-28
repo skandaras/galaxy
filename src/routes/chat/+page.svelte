@@ -9,6 +9,7 @@
 		id: string;
 		title: string;
 		hidden: boolean;
+		modelId?: string | null;
 		updatedAt: number;
 	}
 	interface AttachmentRef {
@@ -44,6 +45,8 @@
 	let input = $state(getDraft(NEW_KEY));
 
 	let selectedModelId = $state<string>('');
+	/** Task default, used when a chat has no remembered model. */
+	let defaultModelId = $state<string>('');
 	let webSearch = $state(true);
 	let deepResearch = $state(false);
 	let pendingFiles = $state<File[]>([]);
@@ -68,6 +71,9 @@
 	);
 
 	let streaming = $state(false);
+	/** Job currently streaming, so it can be stopped. */
+	let activeJobId = $state<string | null>(null);
+	let stopping = $state(false);
 	let streamText = $state('');
 	let streamModel = $state('');
 	let toolActivity = $state<string | null>(null);
@@ -85,8 +91,21 @@
 		chats = filterChatMode(await chatsRes.json());
 		const m = await modelsRes.json();
 		models = m.models;
-		selectedModelId = m.defaultModelId ?? models[0]?.id ?? '';
+		defaultModelId = m.defaultModelId ?? models[0]?.id ?? '';
+		selectedModelId = defaultModelId;
 	});
+
+	/**
+	 * Restore the model a chat last used. Falls back to the task default when
+	 * the chat has none (older chats) or names one that has since been deleted
+	 * or disabled — `models` only contains enabled ones, so membership is the
+	 * check.
+	 */
+	function applyChatModel(chat: ChatMeta | null) {
+		const remembered = chat?.modelId;
+		selectedModelId =
+			remembered && models.some((m) => m.id === remembered) ? remembered : defaultModelId;
+	}
 
 	$effect(() => (threadEl ? scroll.attach(threadEl) : undefined));
 
@@ -117,6 +136,7 @@
 		currentChat = { ...data.chat };
 		messages = data.messages;
 		listOpen = false;
+		applyChatModel(currentChat);
 		loadDraft(draftKey('chat', id));
 		// Open on the newest message rather than the top of the history.
 		void scroll.toBottom('auto');
@@ -200,8 +220,20 @@
 		attachStream(jobId);
 	}
 
+	/**
+	 * Ask the server to stop the run. The reply already streamed is kept, so we
+	 * don't tear down the EventSource here — the server sends a final chunk.
+	 */
+	async function stopRun() {
+		if (!activeJobId || stopping) return;
+		stopping = true;
+		await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST' }).catch(() => {});
+	}
+
 	function attachStream(jobId: string) {
 		closeStream();
+		activeJobId = jobId;
+		stopping = false;
 		streaming = true;
 		streamText = '';
 		streamModel = '';
@@ -253,6 +285,8 @@
 			];
 		}
 		streaming = false;
+		activeJobId = null;
+		stopping = false;
 		streamText = '';
 		toolActivity = null;
 		stages = [];
@@ -470,7 +504,17 @@
 					oninput={stashDraft}
 					onkeydown={onKeydown}
 				></textarea>
-				<button class="btn send" onclick={send} disabled={streaming}>➤</button>
+				{#if streaming}
+					<button
+						class="btn stop"
+						onclick={stopRun}
+						disabled={stopping}
+						title="Stop generating"
+						aria-label="Stop generating">{stopping ? '…' : '■'}</button
+					>
+				{:else}
+					<button class="btn send" onclick={send} aria-label="Send message">➤</button>
+				{/if}
 			</div>
 			<div class="composer-opts">
 				<input
@@ -550,6 +594,10 @@
 	}
 	.btn.send {
 		background: var(--accent);
+		color: var(--bg);
+	}
+	.btn.stop {
+		background: var(--danger);
 		color: var(--bg);
 	}
 	.btn:disabled {

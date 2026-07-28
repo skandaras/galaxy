@@ -45,6 +45,13 @@ export const chats = sqliteTable('chats', {
 	userId: text('user_id').notNull(),
 	mode: text('mode', { enum: ['chat', 'code'] }).notNull().default('chat'),
 	title: text('title').notNull().default('New chat'),
+	/**
+	 * Model this chat last used, so reopening it restores that choice instead of
+	 * inheriting whatever the composer happened to be set to. Nullable for chats
+	 * that predate this, and may name a model that has since been deleted or
+	 * disabled — callers fall back to the task default.
+	 */
+	modelId: text('model_id'),
 	compactSummary: text('compact_summary'),
 	compactedUpTo: integer('compacted_up_to').notNull().default(0),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
@@ -284,7 +291,10 @@ export const jobs = sqliteTable('jobs', {
 	chatId: text('chat_id'),
 	userId: text('user_id').notNull(),
 	task: text('task').notNull(),
-	status: text('status', { enum: ['running', 'done', 'error'] }).notNull(),
+	// 'cancelled' = stopped by the user; the partial reply is still saved.
+	// SQLite stores this as plain TEXT with no CHECK, so adding a value here is
+	// a type-level change only and needs no migration.
+	status: text('status', { enum: ['running', 'done', 'error', 'cancelled'] }).notNull(),
 	error: text('error'),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 	finishedAt: integer('finished_at', { mode: 'timestamp_ms' })

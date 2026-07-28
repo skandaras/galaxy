@@ -9,7 +9,7 @@ export type JobChunk =
 	| { type: 'tool'; name: string; status: 'running' | 'ok' | 'error'; detail?: string }
 	| { type: 'stage'; name: string; detail?: string }
 	| { type: 'notice'; text: string }
-	| { type: 'done'; messageId?: string }
+	| { type: 'done'; messageId?: string; stopped?: boolean }
 	| { type: 'error'; message: string };
 
 export interface LiveJob {
@@ -17,7 +17,11 @@ export interface LiveJob {
 	chatId: string;
 	userId: string;
 	task: string;
-	status: 'running' | 'done' | 'error';
+	// The status column is plain TEXT with no CHECK constraint, so adding
+	// 'cancelled' needs no migration.
+	status: 'running' | 'done' | 'error' | 'cancelled';
+	/** Aborted by cancelJob; threaded into model calls and checked between steps. */
+	controller: AbortController;
 	/** Full chunk history — replayed to late/reconnecting subscribers. */
 	chunks: JobChunk[];
 	subscribers: Set<(chunk: JobChunk) => void>;
@@ -42,6 +46,7 @@ export function createJob(opts: {
 		userId: opts.userId,
 		task: opts.task,
 		status: 'running',
+		controller: new AbortController(),
 		chunks: [],
 		subscribers: new Set(),
 		persist: opts.persist,
@@ -69,9 +74,40 @@ export function pushChunk(job: LiveJob, chunk: JobChunk): void {
 }
 
 export function completeJob(job: LiveJob, messageId?: string): void {
-	job.status = 'done';
-	pushChunk(job, { type: 'done', messageId });
-	persistFinal(job, null);
+	// A run the user stopped still finishes normally — the partial reply is kept
+	// — but it is recorded as cancelled rather than done.
+	const stopped = job.controller.signal.aborted;
+	job.status = stopped ? 'cancelled' : 'done';
+	pushChunk(job, { type: 'done', messageId, ...(stopped ? { stopped: true } : {}) });
+	persistFinal(job, stopped ? 'Stopped by user' : null);
+}
+
+/**
+ * Ask a running job to stop. Aborts the model call in flight and leaves the
+ * loop to wind down at its next check, which is what saves the partial reply —
+ * so this does not mark the job finished itself.
+ */
+export function cancelJob(job: LiveJob): boolean {
+	if (job.status !== 'running' || job.controller.signal.aborted) return false;
+	job.controller.abort(new JobCancelledError());
+	pushChunk(job, { type: 'notice', text: 'Stopping…' });
+	return true;
+}
+
+/** Abort reason, so a cancel can be told apart from a network failure. */
+export class JobCancelledError extends Error {
+	constructor() {
+		super('Stopped by user');
+		this.name = 'JobCancelledError';
+	}
+}
+
+/** True when this error is a cancellation rather than a genuine failure. */
+export function isCancellation(err: unknown, signal?: AbortSignal): boolean {
+	if (signal?.aborted) return true;
+	if (err instanceof JobCancelledError) return true;
+	const name = (err as { name?: unknown })?.name;
+	return name === 'JobCancelledError' || name === 'AbortError';
 }
 
 export function failJob(job: LiveJob, error: string): void {

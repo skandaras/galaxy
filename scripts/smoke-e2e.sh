@@ -55,6 +55,35 @@ api -X PUT $B/api/admin/settings -d "{\"key\":\"websearch\",\"value\":{\"provide
 WORKING=$(api -X POST $B/api/admin/settings/test-search)
 check "working provider reports results" "$WORKING" '"ok":true'
 
+# Stopping a run: cancel mid-stream, keep the partial reply, and — the part
+# worth guarding — do NOT treat the abort as a retryable failure and fail over.
+CCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+CJOB=$(api -X POST $B/api/chats/$CCHAT/messages -d '{"content":"SLOW-STREAM please","webSearch":false}' | jqn .jobId)
+# Note: wait on this PID specifically — a bare `wait` would also wait on the
+# mock provider and the app, which run for the whole script.
+( sleep 1.5; curl -sf -X POST $B/api/jobs/$CJOB/cancel > /dev/null ) &
+CANCEL_PID=$!
+CSTREAM=$(curl -sN --max-time 30 $B/api/jobs/$CJOB/stream)
+wait $CANCEL_PID
+check "cancelled run ends with done" "$CSTREAM" '"type":"done"'
+check "cancelled run is flagged stopped" "$CSTREAM" '"stopped":true'
+check "cancelled run kept its partial text" "$CSTREAM" '"text":"word1 "'
+CMETA=$(printf '%s' "$CSTREAM" | grep -c '"type":"meta"' || true)
+check "cancelled run did not fail over" "$CMETA" '1'
+CAFTER=$(api $B/api/chats/$CCHAT)
+check "partial reply was saved" "$CAFTER" '"role":"assistant"'
+check "no job left running" "$CAFTER" '"runningJobId":null'
+check "cancelling again is a no-op" "$(api -X POST $B/api/jobs/$CJOB/cancel)" '"cancelled":false'
+check "cancelling an unknown job 404s" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/jobs/nope/cancel)" '404'
+
+# A chat remembers the model it was last used with, so reopening it doesn't
+# inherit whatever the composer happened to be set to.
+MCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+check "new chat has no model yet" "$(api $B/api/chats/$MCHAT | jqn .chat.modelId)" 'null'
+MJOB=$(api -X POST $B/api/chats/$MCHAT/messages -d "{\"content\":\"hello\",\"modelId\":\"$MODEL_ID\",\"webSearch\":false}" | jqn .jobId)
+curl -sN --max-time 30 $B/api/jobs/$MJOB/stream > /dev/null
+check "chat remembered the model it used" "$(api $B/api/chats/$MCHAT | jqn .chat.modelId)" "$MODEL_ID"
+
 # hidden chat leaves no trace
 HID=$(api -X POST $B/api/chats -d '{"hidden":true}' | jqn .id)
 HJOB=$(api -X POST $B/api/chats/$HID/messages -d '{"content":"secret smoke","webSearch":false}' | jqn .jobId)

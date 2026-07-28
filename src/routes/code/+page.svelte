@@ -21,6 +21,7 @@
 	}
 	interface Session {
 		chatId: string;
+		modelId?: string | null;
 		repoName: string;
 		baseBranch: string;
 		workBranch: string;
@@ -81,7 +82,12 @@
 	let diffCopied = $state(false);
 
 	let selectedModelId = $state('');
+	/** Task default, used when a session has no remembered model. */
+	let defaultModelId = $state('');
 	let streaming = $state(false);
+	/** Job currently streaming, so it can be stopped. */
+	let activeJobId = $state<string | null>(null);
+	let stopping = $state(false);
 	let streamText = $state('');
 	let streamModel = $state('');
 	let trace = $state<TraceRow[]>([]);
@@ -99,7 +105,13 @@
 		sessions = ((await chatsRes.json()) as ChatMeta[]).filter((c) => c.mode === 'code');
 		const m = await modelsRes.json();
 		models = m.models.filter((x: ModelOption) => x.supportsTools);
-		selectedModelId = m.defaultModelId ?? models[0]?.id ?? '';
+		// The default must itself be tool-capable, or coding refuses the turn.
+		const preferred = m.defaultModelId;
+		defaultModelId =
+			preferred && models.some((x: ModelOption) => x.id === preferred)
+				? preferred
+				: (models[0]?.id ?? '');
+		selectedModelId = defaultModelId;
 		const g = await reposRes.json().catch(() => ({ configured: false, repos: [] }));
 		githubConfigured = g.configured;
 		repos = g.repos;
@@ -125,6 +137,17 @@
 		input = getDraft(key);
 	}
 
+	/**
+	 * Restore the model this session last used, falling back to the default when
+	 * it has none or names a model that is gone, disabled, or no longer
+	 * tool-capable — `models` is already filtered to usable ones.
+	 */
+	function applySessionModel(session: Session | null) {
+		const remembered = session?.modelId;
+		selectedModelId =
+			remembered && models.some((m) => m.id === remembered) ? remembered : defaultModelId;
+	}
+
 	async function select(chatId: string) {
 		stashDraft();
 		closeStream();
@@ -134,6 +157,7 @@
 		if (!res.ok) return;
 		const data = await res.json();
 		current = data.session;
+		applySessionModel(current);
 		messages = data.messages.filter((m: Msg) => m.role !== 'tool');
 		listOpen = false;
 		creating = false;
@@ -236,8 +260,17 @@
 		attach((await res.json()).jobId);
 	}
 
+	/** Stop the run; the work already done is kept and the server closes out. */
+	async function stopRun() {
+		if (!activeJobId || stopping) return;
+		stopping = true;
+		await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST' }).catch(() => {});
+	}
+
 	function attach(jobId: string) {
 		closeStream();
+		activeJobId = jobId;
+		stopping = false;
 		streaming = true;
 		streamText = '';
 		streamModel = '';
@@ -280,6 +313,8 @@
 			];
 		}
 		streaming = false;
+		activeJobId = null;
+		stopping = false;
 		streamText = '';
 		closeStream();
 	}
@@ -543,7 +578,17 @@
 						oninput={stashDraft}
 						onkeydown={onKeydown}
 					></textarea>
-					<button class="btn send" onclick={() => send()} disabled={streaming}>➤</button>
+					{#if streaming}
+						<button
+							class="btn stop"
+							onclick={stopRun}
+							disabled={stopping}
+							title="Stop the run"
+							aria-label="Stop the run">{stopping ? '…' : '■'}</button
+						>
+					{:else}
+						<button class="btn send" onclick={() => send()} aria-label="Send message">➤</button>
+					{/if}
 				</div>
 				<div class="composer-opts">
 					<input
@@ -975,6 +1020,10 @@
 	}
 	.btn.send {
 		background: var(--accent);
+		color: var(--bg);
+	}
+	.btn.stop {
+		background: var(--danger);
 		color: var(--bg);
 	}
 	.btn.wide {

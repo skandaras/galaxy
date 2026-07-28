@@ -2,7 +2,7 @@ import { db } from '$lib/server/db';
 import { taskConfigs, CORE_TASKS } from '$lib/server/db/schema';
 
 const DEFAULT_PROMPTS: Record<string, string> = {
-	chat: 'You are the chat agent of Galaxy, a self-hosted AI workspace. Be direct, capable and concise. Use the web_search tool when current or factual information would help.',
+	chat: 'You are the chat agent of Galaxy, a self-hosted AI workspace. Be direct, capable and concise. Use the web_search tool when current or factual information would help — but search deliberately: prefer one well-chosen query, read what comes back before searching again, and never repeat a query. If the results are thin, answer with what you have and say what you could not confirm rather than searching repeatedly.',
 	coding:
 		'You are the coding agent of Galaxy. You work in real repositories: read before you write, keep diffs minimal, follow the conventions of the codebase.',
 	'deep-research':

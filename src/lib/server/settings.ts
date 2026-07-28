@@ -38,13 +38,20 @@ export interface WebSearchSettings {
 	baseUrl?: string; // searxng instance
 	maxResults: number;
 	timeoutMs: number;
+	/**
+	 * Live searches one chat turn may make. Repeats of a query already run in
+	 * the same turn are served from memory and don't count. Without a cap a
+	 * model that isn't finding what it wants will keep rephrasing.
+	 */
+	maxSearchesPerTurn: number;
 }
 
 export const DEFAULT_WEB_SEARCH: WebSearchSettings = {
 	provider: 'none',
 	fallbackProvider: 'none',
 	maxResults: 5,
-	timeoutMs: 10_000
+	timeoutMs: 10_000,
+	maxSearchesPerTurn: 4
 };
 
 export interface GithubSettings {

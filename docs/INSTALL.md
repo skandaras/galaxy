@@ -18,6 +18,12 @@ Already in place on your side (not covered here): a reverse proxy
 
 ## 2. Get the deployment files
 
+Everything below happens in your **project directory** — the one holding
+`docker-compose.yml`. Compose reads `.env` from there and resolves the
+`./searxng/settings.yml` bind mount relative to it, so the location is yours to
+choose; it just has to be consistent. This guide uses `/opt/galaxy` as an
+example.
+
 ```sh
 mkdir -p /opt/galaxy/searxng && cd /opt/galaxy
 curl -fsSLO https://raw.githubusercontent.com/skandaras/galaxy/main/docker-compose.yml
@@ -26,12 +32,26 @@ curl -fsSL -o searxng/settings.yml \
   https://raw.githubusercontent.com/skandaras/galaxy/main/searxng/settings.yml
 ```
 
-> **Upgrading an existing install?** The `searxng` service and its settings file
-> were added after the first release. If your `/opt/galaxy/docker-compose.yml`
-> predates it, re-download both files above (keeping your `.env`) rather than
-> hand-editing — and see §7c for the setup it needs.
+> **Already installed and not sure where that is?** Ask Docker rather than
+> guessing — the `CONFIG FILES` column gives the compose file actually in use,
+> and its directory is your project directory:
+>
+> ```sh
+> docker compose ls
+> # or, from a running container:
+> docker inspect galaxy-prod --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}'
+> ```
 
-Create `/opt/galaxy/.env`:
+> **Upgrading an existing install?** The `searxng` service and its settings file
+> were added after the first release. If your `docker-compose.yml` predates it,
+> re-download both files above (keeping your `.env`) rather than hand-editing —
+> and see §7c for the setup it needs.
+>
+> If your project directory is also a git clone of this repo, prefer `git pull`
+> to `curl`. `.env` is gitignored and safe, but local edits to
+> `docker-compose.yml` will conflict.
+
+Create `.env` in that same directory:
 
 ```sh
 # IP or CIDR of your reverse proxy as the galaxy containers see it —
@@ -91,7 +111,7 @@ The compose file expects your proxy's docker network to exist as `proxy`
 ## 4. First start
 
 ```sh
-cd /opt/galaxy
+cd /opt/galaxy   # your project directory
 docker compose pull
 docker compose up -d
 curl -s http://<container-ip>:3000/healthz   # or open the dev subdomain
@@ -284,10 +304,15 @@ Two files are required and both come from the repo (see §2): the `searxng`
 service in `docker-compose.yml`, and `searxng/settings.yml`, which the service
 bind-mounts read-only. A missing settings file stops the container from starting.
 
-Set a secret once in `/opt/galaxy/.env`:
+A secret is required once. The compose file declares
+`SEARXNG_SECRET: "${SEARXNG_SECRET:?…}"`, so the service refuses to start
+without it — meaning **if search already works, yours is already set**. Check
+before adding a second one:
 
 ```sh
-echo "SEARXNG_SECRET=$(openssl rand -hex 32)" >> /opt/galaxy/.env
+cd /opt/galaxy                 # your project directory (see §2)
+grep SEARXNG_SECRET .env || echo "SEARXNG_SECRET=$(openssl rand -hex 32)" >> .env
+docker compose up -d searxng
 ```
 
 Then in **Admin → Settings → Web search** choose `SearXNG (self-hosted)` with
@@ -345,6 +370,7 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | `Budget cap reached` | Raise/disable in Admin → Settings, or wait for the period to roll over |
 | Promote button errors | GitHub PAT missing workflow scope, or `GITHUB_REPO` wrong, or dev unhealthy (gate) |
 | `searxng` container won't start | `searxng/settings.yml` missing next to `docker-compose.yml` (§2) — the service bind-mounts it |
+| `No such file or directory` writing `.env` | You're not in the project directory. `docker compose ls` shows where the compose file actually is (§2); `/opt/galaxy` in this guide is only an example |
 | MCP server won't connect | See [MCP.md](MCP.md#troubleshooting); the common cases are a wrong header and a server that requires OAuth |
 | Attachment upload fails / 403 on form posts | `ORIGIN` not set to this instance's public URL (SvelteKit CSRF check) |
 | Small attachments upload but larger ones fail with `413` / `exceeds the server's request limit` | `BODY_SIZE_LIMIT` too low (or missing, so adapter-node's 512K default applies). Set it to `32M`. A reverse proxy can impose its own cap too — nginx's `client_max_body_size` defaults to 1 MB |
