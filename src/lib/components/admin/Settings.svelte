@@ -5,7 +5,8 @@
 		apiKey: '',
 		baseUrl: '',
 		maxResults: 5,
-		timeoutMs: 10000
+		timeoutMs: 10000,
+		maxSearchesPerTurn: 4
 	});
 	let compaction = $state({ ratio: 0.7, keepRecent: 8 });
 	let budget = $state({ enabled: false, limitUsd: 25, period: 'month' });
@@ -159,7 +160,15 @@
 				timeout (ms)
 				<input type="number" min="1000" step="1000" bind:value={websearch.timeoutMs} />
 			</label>
+			<label>
+				searches per turn
+				<input type="number" min="1" max="20" bind:value={websearch.maxSearchesPerTurn} />
+			</label>
 		</div>
+		<p class="hint">
+			<strong>Searches per turn</strong> caps how many live searches one reply may make. Repeats of
+			a query already run in the same turn are answered from memory and don't count against it.
+		</p>
 		<p class="hint">
 			The fallback is used only when the primary <em>fails</em> — blocked, unreachable or
 			unparseable — never when it legitimately finds nothing. SearXNG is the most reliable

@@ -22,7 +22,7 @@ import { attachmentTools } from './tools/attachments';
 import { bootstrapContext, knowledgeTools } from './tools/knowledge';
 import { mcpLoopTools } from './tools/mcp';
 import { applyToolPolicy } from './tools/registry';
-import { runWebSearch, webSearchConfigured, webSearchToolDef } from './tools/web-search';
+import { webSearchConfigured, webSearchTool } from './tools/web-search';
 
 const MAX_TOOL_ITERATIONS = 6;
 
@@ -86,21 +86,10 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	const searchCfg = getSetting<WebSearchSettings>('websearch', DEFAULT_WEB_SEARCH);
 	const tools: LoopTool[] = [...knowledgeTools(), ...attachmentTools(chat.id)];
 	if (opts.webSearch && webSearchConfigured(searchCfg)) {
-		tools.push({
-			def: webSearchToolDef,
-			describe: (args) => String(args.query ?? ''),
-			execute: async (args, report) => {
-				const outcome = await runWebSearch(String(args.query ?? ''), searchCfg);
-				report?.({
-					provider: outcome.provider,
-					results: outcome.results.length,
-					...(outcome.failedOver ? { failedOver: outcome.failedOver } : {})
-				});
-				// An empty list is a real answer; a provider failure throws and is
-				// surfaced to the model as an error rather than as "no results".
-				return JSON.stringify(outcome.results);
-			}
-		});
+		// Built per turn: the tool carries a per-turn memo and search budget in
+		// its closure. A provider failure still throws and reaches the model as
+		// an error, rather than being flattened into "no results".
+		tools.push(webSearchTool(searchCfg));
 	}
 	const fullSystemPrompt = systemPrompt + bootstrapContext(opts.userId);
 	const activeTools = applyToolPolicy([...tools, ...mcpLoopTools('chat')], 'chat');

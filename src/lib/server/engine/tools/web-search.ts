@@ -1,6 +1,7 @@
 import type { ToolDef } from '$lib/server/providers/types';
 import type { SearchProvider, WebSearchSettings } from '$lib/server/settings';
 import { decryptSecret } from '$lib/server/crypto';
+import type { LoopTool } from '../loop';
 
 export interface SearchResult {
 	title: string;
@@ -40,7 +41,9 @@ export class SearchProviderError extends Error {
 export const webSearchToolDef: ToolDef = {
 	name: 'web_search',
 	description:
-		'Search the web for current information. Returns a JSON list of results with title, url and snippet.',
+		'Search the web for current information. Returns ranked results with title, URL and snippet. ' +
+		'Searches per turn are limited, so prefer one well-chosen query over several narrow ones, and ' +
+		'do not repeat a query you have already run — it returns the same results.',
 	parameters: {
 		type: 'object',
 		properties: {
@@ -49,6 +52,87 @@ export const webSearchToolDef: ToolDef = {
 		required: ['query']
 	}
 };
+
+/** Snippets are provider-controlled and occasionally enormous. */
+const MAX_SNIPPET_CHARS = 240;
+
+/**
+ * Render results for the model. A compact numbered list rather than raw JSON:
+ * fewer tokens, easier to skim, and the same shape as library_search.
+ */
+export function formatSearchResults(results: SearchResult[], query: string): string {
+	if (!results.length) {
+		// `[]` told the model nothing, so its next move was always to rephrase
+		// and search again. Say what happened instead.
+		return `No results for "${query}". The search worked — there is simply nothing indexed for these terms. Try broader or different wording, or answer from what you already know and say the search found nothing. Do not repeat this query.`;
+	}
+	return results
+		.map((r, i) => {
+			const snippet = r.snippet.replace(/\s+/g, ' ').trim();
+			const trimmed =
+				snippet.length > MAX_SNIPPET_CHARS ? `${snippet.slice(0, MAX_SNIPPET_CHARS)}…` : snippet;
+			return `${i + 1}. ${r.title.trim() || '(untitled)'}\n   ${r.url}\n   ${trimmed}`;
+		})
+		.join('\n');
+}
+
+/** Same question asked twice shouldn't cost two searches. */
+export function normaliseQuery(query: string): string {
+	return query.toLowerCase().replace(/["']/g, '').replace(/\s+/g, ' ').trim();
+}
+
+export interface SearchToolDeps {
+	/** Injectable for tests; defaults to the real provider call. */
+	search?: (query: string, cfg: WebSearchSettings) => Promise<SearchOutcome>;
+}
+
+/**
+ * Build the per-turn web_search tool. State lives in the closure, so the memo
+ * and the budget are scoped to a single turn and can't leak between chats.
+ */
+export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {}): LoopTool {
+	const search = deps.search ?? runWebSearch;
+	const budget = Math.max(1, cfg.maxSearchesPerTurn ?? DEFAULT_MAX_SEARCHES);
+	const memo = new Map<string, string>();
+	let used = 0;
+
+	return {
+		def: webSearchToolDef,
+		describe: (args) => String(args.query ?? ''),
+		execute: async (args, report) => {
+			const query = String(args.query ?? '').trim();
+			if (!query) throw new Error('query is required');
+
+			const key = normaliseQuery(query);
+			const cached = memo.get(key);
+			if (cached !== undefined) {
+				report?.({ cached: true, searchesUsed: used });
+				return `(already searched "${query}" this turn — unchanged results below)\n${cached}`;
+			}
+
+			if (used >= budget) {
+				report?.({ budgetExhausted: true, searchesUsed: used });
+				return `Search budget for this turn is spent (${budget} searches). Answer with what you have and be explicit about anything you could not confirm.`;
+			}
+
+			used++;
+			const outcome = await search(query, cfg);
+			report?.({
+				provider: outcome.provider,
+				results: outcome.results.length,
+				searchesUsed: used,
+				...(outcome.failedOver ? { failedOver: outcome.failedOver } : {})
+			});
+			const text = formatSearchResults(outcome.results, query);
+			// Cached either way: a query that found nothing is exactly the one
+			// worth not running twice.
+			memo.set(key, text);
+			return text;
+		}
+	};
+}
+
+const DEFAULT_MAX_SEARCHES = 4;
 
 /** Some browsers' UA. A bot-shaped UA is itself a reason to get blocked. */
 const BROWSER_UA =
