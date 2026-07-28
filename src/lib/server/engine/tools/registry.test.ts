@@ -66,7 +66,7 @@ describe('builtinDescriptors', () => {
 
 	it('scopes tools to the tasks that offer them', () => {
 		const byName = new Map(builtinDescriptors().map((d) => [d.name, d]));
-		expect(byName.get('web_search')?.tasks).toEqual(['chat']);
+		expect(byName.get('web_search')?.tasks).toEqual(['chat', 'coding']);
 		expect(byName.get('list_files')?.tasks).toEqual(['coding']);
 		expect(byName.get('library_read')?.tasks).toEqual(['chat', 'coding']);
 	});
@@ -181,11 +181,11 @@ describe('tool settings', () => {
 	});
 
 	it('normalises a stale override on read', () => {
-		// web_search only ever applies to chat, so an override naming chat is not
-		// a restriction and must not show as one.
-		saveToolSetting('web_search', { tasks: ['chat', 'deep-research'] });
+		// list_files only ever applies to coding, so an override naming coding is
+		// not a restriction and must not show as one.
+		saveToolSetting('list_files', { tasks: ['coding', 'deep-research'] });
 		const entry = toCatalog(builtinDescriptors(), loadToolSettings()).find(
-			(t) => t.name === 'web_search'
+			(t) => t.name === 'list_files'
 		)!;
 		expect(entry.taskOverride).toBeNull();
 	});

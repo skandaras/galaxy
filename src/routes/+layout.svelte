@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import Observatory from '$lib/components/Observatory.svelte';
+	import BudgetBar from '$lib/components/BudgetBar.svelte';
 	import GalaxyBackdrop from '$lib/components/GalaxyBackdrop.svelte';
 	import { themeCss } from '$lib/theme';
 
@@ -39,6 +40,7 @@
 		<div class="pane-bottom">
 			{#if data.user}
 				<div class="obs-dock"><Observatory /></div>
+				<div class="budget-dock"><BudgetBar /></div>
 			{/if}
 			<div class="pane-footer">
 				<span class="env-badge">{data.galaxyEnv}</span>
@@ -103,6 +105,9 @@
 	}
 	.pane-bottom {
 		margin-top: auto;
+	}
+	.budget-dock {
+		margin-top: 0.5rem;
 	}
 	.pane-footer {
 		display: flex;
@@ -174,9 +179,20 @@
 		.obs-dock {
 			display: none;
 		}
+		/* Same reasoning as the feed above: the top bar has no vertical room, so
+		   the bar drops and only the figure stays. */
+		.budget-dock {
+			margin-top: 0;
+		}
+		.budget-dock :global(.track) {
+			display: none;
+		}
 		.pane-bottom {
 			margin-top: 0;
 			margin-left: auto;
+			display: flex;
+			align-items: center;
+			gap: 0.6rem;
 		}
 		.pane-footer {
 			margin-top: 0;

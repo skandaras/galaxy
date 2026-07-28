@@ -2,12 +2,21 @@ import { randomUUID } from 'node:crypto';
 import { db } from '$lib/server/db';
 import { usageLog } from '$lib/server/db/schema';
 import type { ModelChoice } from '$lib/server/providers/registry';
-import type { ProviderMessage, ToolCall, ToolDef, Usage } from '$lib/server/providers/types';
-import { isRetryable } from '$lib/server/providers/types';
+import type {
+	ChatRequest,
+	ProviderAdapter,
+	ProviderMessage,
+	StreamEvent,
+	ToolCall,
+	ToolDef,
+	Usage
+} from '$lib/server/providers/types';
+import { isRetryable, StreamTimeoutError } from '$lib/server/providers/types';
 import { emitEvent } from './events';
 import { completeJob, failJob, isCancellation, pushChunk, type LiveJob } from './jobs';
+import { streamIdleTimeoutMs, streamTotalTimeoutMs, toolOutputBudgetChars } from './limits';
 
-const REQUEST_TIMEOUT_MS = 180_000;
+const ELIDED = '[earlier tool output dropped to stay within the context budget]';
 
 export interface LoopTool {
 	def: ToolDef;
@@ -132,6 +141,75 @@ function finishCancelled(opts: LoopOptions): void {
 	completeJob(opts.job);
 }
 
+/**
+ * Stream from the provider under an *idle* deadline: the clock restarts on
+ * every event, so a long-but-healthy turn runs to completion and only a
+ * genuinely silent connection is dropped. A separate absolute ceiling covers
+ * a provider that trickles forever without finishing.
+ *
+ * Aborting with a StreamTimeoutError as the reason matters — fetch rejects
+ * with the abort reason, so the loop sees a timeout it can fail over on
+ * rather than an AbortError it would mistake for the user pressing stop.
+ */
+export async function* streamWithIdleTimeout(
+	adapter: ProviderAdapter,
+	req: ChatRequest,
+	jobSignal: AbortSignal
+): AsyncGenerator<StreamEvent> {
+	const idleMs = streamIdleTimeoutMs();
+	const watchdog = new AbortController();
+	let idleTimer: ReturnType<typeof setTimeout> | undefined;
+	const arm = () => {
+		clearTimeout(idleTimer);
+		idleTimer = setTimeout(
+			() =>
+				watchdog.abort(
+					new StreamTimeoutError(`the model sent nothing for ${Math.round(idleMs / 1000)}s`)
+				),
+			idleMs
+		);
+	};
+	const totalTimer = setTimeout(
+		() => watchdog.abort(new StreamTimeoutError('the model call exceeded its total time limit')),
+		streamTotalTimeoutMs()
+	);
+
+	arm();
+	try {
+		for await (const ev of adapter.stream(req, AbortSignal.any([watchdog.signal, jobSignal]))) {
+			arm();
+			yield ev;
+		}
+	} finally {
+		clearTimeout(idleTimer);
+		clearTimeout(totalTimer);
+	}
+}
+
+/**
+ * Keep the tool output carried in this turn under the budget by dropping the
+ * oldest results first — they are the ones the model has already acted on.
+ *
+ * Eliding beats failing: the run continues with the context that still
+ * matters, where previously an unbounded transcript grew every request until
+ * the call stalled. Returns how many results were dropped.
+ */
+export function elideOldToolOutput(messages: ProviderMessage[], budget: number): number {
+	let total = 0;
+	for (const m of messages) if (m.role === 'tool') total += m.content.length;
+	if (total <= budget) return 0;
+
+	let dropped = 0;
+	for (const m of messages) {
+		if (total <= budget) break;
+		if (m.role !== 'tool' || m.content === ELIDED) continue;
+		total -= m.content.length - ELIDED.length;
+		m.content = ELIDED;
+		dropped++;
+	}
+	return dropped;
+}
+
 async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise<void> {
 	const { job, persist } = opts;
 	pushChunk(job, { type: 'meta', model: choice.model.displayName });
@@ -149,11 +227,12 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		let toolCalls: ToolCall[] = [];
 
 		try {
-			const stream = choice.adapter.stream(
+			const stream = streamWithIdleTimeout(
+				choice.adapter,
 				{ modelKey: choice.model.modelKey, messages, tools: toolDefs },
-				// Either the request timing out or the user pressing stop drops
-				// the provider connection immediately.
-				AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT_MS), job.controller.signal])
+				// The user pressing stop drops the provider connection immediately;
+				// the idle watchdog inside handles a connection that goes quiet.
+				job.controller.signal
 			);
 			for await (const ev of stream) {
 				if (ev.type === 'text') {
@@ -230,6 +309,28 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			messages.push({ role: 'tool', content: result, tool_call_id: call.id });
 		}
 		if (job.controller.signal.aborted) break;
+
+		// Tool results are re-sent on every later iteration, so a long run has to
+		// shed the oldest ones or its own request eventually stalls the call.
+		const dropped = elideOldToolOutput(messages, toolOutputBudgetChars());
+		if (dropped) {
+			pushChunk(job, {
+				type: 'notice',
+				text: `Dropped ${dropped} earlier tool result${dropped === 1 ? '' : 's'} to stay within the context budget.`
+			});
+			emitEvent(
+				{
+					userId: opts.userId,
+					chatId: opts.chatId,
+					task: opts.task,
+					type: 'job',
+					name: `${opts.task}.context.elided`,
+					status: 'ok',
+					detail: { dropped, iteration }
+				},
+				{ persist }
+			);
+		}
 	}
 
 	const messageId = opts.onDone(assistantText, usage, choice);

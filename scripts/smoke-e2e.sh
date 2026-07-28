@@ -112,6 +112,24 @@ CJOB=$(api -X POST $B/api/code/sessions/$SID/messages -d '{"content":"Update the
 curl -sN --max-time 90 $B/api/jobs/$CJOB/stream > /dev/null
 check "coding pushed to origin" "$(git -C $ORIGIN.git log --all --oneline)" "Add project description"
 
+# Web search inside a coding session: on by default, and actually withheld when
+# the composer toggle is off.
+WJOB=$(api -X POST $B/api/code/sessions/$SID/messages -d '{"content":"Please search for galaxy news"}' | jqn .jobId)
+WSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$WJOB/stream)
+check "coding can web search" "$WSTREAM" '"name":"web_search","status":"ok"'
+
+OJOB=$(api -X POST $B/api/code/sessions/$SID/messages -d '{"content":"Please search for galaxy news","webSearch":false}' | jqn .jobId)
+OSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$OJOB/stream)
+# The mock calls web_search whenever any tools are offered, so the loop
+# reporting it as unknown is what proves the tool was genuinely withheld.
+check "coding honours the web search toggle" "$OSTREAM" 'unknown tool'
+
+# The nav cost bar reads this; it must be available to a non-admin user, since
+# the cap blocks everyone's turns.
+BUD=$(api $B/api/usage/budget)
+check "budget status readable" "$BUD" '"spentUsd"'
+check "budget status reports pricing gaps" "$BUD" '"unpricedCalls"'
+
 # library + skills + memory
 api -X POST $B/api/library -d '{"title":"Smoke Doc","content":"The smoke marker is LANTERN-9"}' > /dev/null
 check "library search" "$(api "$B/api/library?q=LANTERN")" 'Smoke Doc'

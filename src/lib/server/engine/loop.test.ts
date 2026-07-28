@@ -1,0 +1,147 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import type {
+	ChatRequest,
+	ProviderAdapter,
+	ProviderMessage,
+	StreamEvent
+} from '$lib/server/providers/types';
+import { isRetryable, StreamTimeoutError } from '$lib/server/providers/types';
+import { isCancellation } from './jobs';
+import { elideOldToolOutput, streamWithIdleTimeout } from './loop';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Adapter that emits `count` deltas `gap`ms apart, then optionally hangs. */
+function fakeAdapter(opts: { count: number; gap: number; hangAfter?: boolean }): ProviderAdapter {
+	return {
+		async *stream(_req: ChatRequest, signal?: AbortSignal): AsyncGenerator<StreamEvent> {
+			for (let i = 0; i < opts.count; i++) {
+				await sleep(opts.gap);
+				if (signal?.aborted) throw signal.reason;
+				yield { type: 'text', delta: `chunk${i}` };
+			}
+			if (opts.hangAfter) {
+				// Stall exactly the way a wedged provider connection does: nothing
+				// arrives, and only the abort ends the wait.
+				await new Promise((_, reject) => {
+					signal?.addEventListener('abort', () => reject(signal.reason));
+				});
+			}
+		},
+		complete: async () => ({ text: '', usage: null }),
+		listModels: async () => []
+	};
+}
+
+const collect = async (gen: AsyncGenerator<StreamEvent>) => {
+	const out: StreamEvent[] = [];
+	for await (const ev of gen) out.push(ev);
+	return out;
+};
+
+const req: ChatRequest = { modelKey: 'm', messages: [], tools: [] };
+
+afterEach(() => {
+	delete process.env.STREAM_IDLE_TIMEOUT_MS;
+	delete process.env.STREAM_TOTAL_TIMEOUT_MS;
+});
+
+describe('streamWithIdleTimeout', () => {
+	it('lets a slow but active stream run well past the idle window', async () => {
+		process.env.STREAM_IDLE_TIMEOUT_MS = '80';
+		// Total run is ~200ms — more than double the idle timeout. Under the old
+		// total deadline this is exactly the shape that died mid-answer.
+		const events = await collect(
+			streamWithIdleTimeout(fakeAdapter({ count: 10, gap: 20 }), req, new AbortController().signal)
+		);
+		expect(events).toHaveLength(10);
+	});
+
+	it('aborts once the stream actually goes quiet', async () => {
+		process.env.STREAM_IDLE_TIMEOUT_MS = '60';
+		const gen = streamWithIdleTimeout(
+			fakeAdapter({ count: 2, gap: 10, hangAfter: true }),
+			req,
+			new AbortController().signal
+		);
+		await expect(collect(gen)).rejects.toThrow(StreamTimeoutError);
+	});
+
+	it('enforces the absolute ceiling even while output keeps arriving', async () => {
+		process.env.STREAM_IDLE_TIMEOUT_MS = '1000';
+		process.env.STREAM_TOTAL_TIMEOUT_MS = '60';
+		const gen = streamWithIdleTimeout(
+			fakeAdapter({ count: 100, gap: 10 }),
+			req,
+			new AbortController().signal
+		);
+		await expect(collect(gen)).rejects.toThrow(StreamTimeoutError);
+	});
+
+	it('still surfaces a user stop as a cancellation, not a timeout', async () => {
+		process.env.STREAM_IDLE_TIMEOUT_MS = '5000';
+		const job = new AbortController();
+		const gen = streamWithIdleTimeout(fakeAdapter({ count: 100, gap: 10 }), req, job.signal);
+		setTimeout(() => job.abort(), 30);
+		await expect(collect(gen)).rejects.toBeDefined();
+		expect(job.signal.aborted).toBe(true);
+	});
+});
+
+describe('timeout classification', () => {
+	it('is retryable, so a stalled call fails over instead of ending the run', () => {
+		expect(isRetryable(new StreamTimeoutError('quiet'))).toBe(true);
+	});
+
+	it('is not mistaken for the user pressing stop', () => {
+		// The distinction matters: a cancellation keeps the partial reply and
+		// finishes normally, which would silently truncate a stalled answer.
+		expect(isCancellation(new StreamTimeoutError('quiet'))).toBe(false);
+	});
+});
+
+describe('elideOldToolOutput', () => {
+	const toolMsg = (content: string): ProviderMessage => ({
+		role: 'tool',
+		content,
+		tool_call_id: 't'
+	});
+
+	it('leaves a transcript under budget untouched', () => {
+		const messages: ProviderMessage[] = [toolMsg('a'.repeat(50)), toolMsg('b'.repeat(50))];
+		expect(elideOldToolOutput(messages, 1000)).toBe(0);
+		expect(messages[0].content).toBe('a'.repeat(50));
+	});
+
+	it('drops the oldest results first and keeps the newest intact', () => {
+		const messages: ProviderMessage[] = [
+			toolMsg('a'.repeat(500)),
+			toolMsg('b'.repeat(500)),
+			toolMsg('c'.repeat(500))
+		];
+		const dropped = elideOldToolOutput(messages, 700);
+		expect(dropped).toBeGreaterThan(0);
+		expect(messages[0].content).not.toContain('aaa');
+		expect(messages[2].content).toBe('c'.repeat(500));
+	});
+
+	it('does not touch non-tool messages', () => {
+		const messages: ProviderMessage[] = [
+			{ role: 'system', content: 's'.repeat(900) },
+			{ role: 'user', content: 'u'.repeat(900) },
+			toolMsg('t'.repeat(900))
+		];
+		elideOldToolOutput(messages, 10);
+		expect(messages[0].content).toBe('s'.repeat(900));
+		expect(messages[1].content).toBe('u'.repeat(900));
+	});
+
+	it('is stable when called again with nothing left to shed', () => {
+		const messages: ProviderMessage[] = [toolMsg('a'.repeat(500)), toolMsg('b'.repeat(500))];
+		elideOldToolOutput(messages, 200);
+		const after = messages.map((m) => m.content);
+		// A second pass must not spin: everything droppable is already dropped.
+		elideOldToolOutput(messages, 200);
+		expect(messages.map((m) => m.content)).toEqual(after);
+	});
+});
