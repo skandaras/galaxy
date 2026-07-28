@@ -16,7 +16,14 @@ import { assertBudget } from './budget';
 import { withDocumentText } from './context';
 import { EngineError, getTaskConfig, pickModel } from './engine';
 import { emitEvent } from './events';
-import { completeJob, createJob, failJob, pushChunk, type LiveJob } from './jobs';
+import {
+	completeJob,
+	createJob,
+	failJob,
+	isCancellation,
+	pushChunk,
+	type LiveJob
+} from './jobs';
 import { runWebSearch, type SearchResult } from './tools/web-search';
 
 interface Evidence {
@@ -120,6 +127,10 @@ async function runResearch(
 	let round = 0;
 	let pendingQueries = queries;
 	for (;;) {
+		// Research runs its own pipeline rather than runAgentLoop, so it checks
+		// for a stop between stages — the gaps here are whole rounds of searching
+		// and page fetching, which is exactly what a user wants to cut short.
+		if (job.controller.signal.aborted) break;
 		const results = await runSearches(pendingQueries, searchCfg, event);
 		const fresh = await readPages(results, evidence, cfg, event);
 		pushChunk(job, {
@@ -130,6 +141,7 @@ async function runResearch(
 		evidence = [...evidence, ...fresh];
 
 		if (round >= cfg.iterationCap || !evidence.length) break;
+		if (job.controller.signal.aborted) break;
 		round++;
 		pushChunk(job, { type: 'stage', name: 'reviewing' });
 		const more = await reviewEvidence(choice, opts.content, evidence, cfg, track);
@@ -162,7 +174,7 @@ async function runResearch(
 				],
 				maxTokens: cfg.maxTokens
 			},
-			AbortSignal.timeout(180_000)
+			AbortSignal.any([AbortSignal.timeout(180_000), job.controller.signal])
 		);
 		for await (const ev of stream) {
 			if (ev.type === 'text') {
@@ -171,22 +183,26 @@ async function runResearch(
 			} else if (ev.type === 'usage') track(ev.usage);
 		}
 	} catch (err) {
-		emitEvent(
-			{
-				userId: opts.userId,
-				chatId: opts.chatId,
-				task: 'deep-research',
-				type: 'model.call',
-				name: choice.model.modelKey,
-				status: 'error',
-				durationMs: Date.now() - started,
-				detail: { error: String(err) }
-			},
-			{ persist }
-		);
-		logUsage(opts, choice, totalUsage, 'error');
-		failJob(job, `Synthesis failed: ${String(err)}`);
-		return;
+		// Stopping mid-synthesis is not a failure — fall through and keep
+		// whatever `answer` holds, same as chat does.
+		if (!isCancellation(err, job.controller.signal)) {
+			emitEvent(
+				{
+					userId: opts.userId,
+					chatId: opts.chatId,
+					task: 'deep-research',
+					type: 'model.call',
+					name: choice.model.modelKey,
+					status: 'error',
+					durationMs: Date.now() - started,
+					detail: { error: String(err) }
+				},
+				{ persist }
+			);
+			logUsage(opts, choice, totalUsage, 'error');
+			failJob(job, `Synthesis failed: ${String(err)}`);
+			return;
+		}
 	}
 
 	if (evidence.length) {

@@ -5,7 +5,7 @@ import type { ModelChoice } from '$lib/server/providers/registry';
 import type { ProviderMessage, ToolCall, ToolDef, Usage } from '$lib/server/providers/types';
 import { isRetryable } from '$lib/server/providers/types';
 import { emitEvent } from './events';
-import { completeJob, failJob, pushChunk, type LiveJob } from './jobs';
+import { completeJob, failJob, isCancellation, pushChunk, type LiveJob } from './jobs';
 
 const REQUEST_TIMEOUT_MS = 180_000;
 
@@ -66,6 +66,10 @@ export async function runAgentLoop(opts: LoopOptions): Promise<void> {
 
 	for (let attempt = 0; attempt < attempts.length; attempt++) {
 		const choice = attempts[attempt];
+		if (job.controller.signal.aborted) {
+			finishCancelled(opts);
+			return;
+		}
 		if (attempt > 0) {
 			const switching = choice !== opts.primary;
 			pushChunk(job, {
@@ -94,12 +98,38 @@ export async function runAgentLoop(opts: LoopOptions): Promise<void> {
 			return;
 		} catch (err) {
 			lastError = err;
+			// A stop is not a failure: retrying, or worse failing over to the
+			// backup model, would start fresh work the user just asked to end.
+			if (isCancellation(err, job.controller.signal)) {
+				finishCancelled(opts);
+				return;
+			}
 			if (!isRetryable(err)) break;
 		}
 	}
 
 	logUsage(opts, opts.primary.model.modelKey, null, 'error');
 	failJob(job, `Model call failed: ${String(lastError)}`);
+}
+
+/**
+ * Wind down a run stopped before it produced anything. The mid-stream case is
+ * handled inside executeWithModel, which keeps the partial reply instead.
+ */
+function finishCancelled(opts: LoopOptions): void {
+	emitEvent(
+		{
+			userId: opts.userId,
+			chatId: opts.chatId,
+			task: opts.task,
+			type: 'job',
+			name: `${opts.task}.turn`,
+			status: 'ok',
+			detail: { jobId: opts.job.id, cancelled: true }
+		},
+		{ persist: opts.persist }
+	);
+	completeJob(opts.job);
 }
 
 async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise<void> {
@@ -121,7 +151,9 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		try {
 			const stream = choice.adapter.stream(
 				{ modelKey: choice.model.modelKey, messages, tools: toolDefs },
-				AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+				// Either the request timing out or the user pressing stop drops
+				// the provider connection immediately.
+				AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT_MS), job.controller.signal])
 			);
 			for await (const ev of stream) {
 				if (ev.type === 'text') {
@@ -134,6 +166,26 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 				}
 			}
 		} catch (err) {
+			// A stop lands here mid-stream. Keep whatever was generated and fall
+			// through to the normal finish, so the partial reply is saved rather
+			// than thrown away by the failure path.
+			if (isCancellation(err, job.controller.signal)) {
+				assistantText += iterationText;
+				emitEvent(
+					{
+						userId: opts.userId,
+						chatId: opts.chatId,
+						task: opts.task,
+						type: 'model.call',
+						name: choice.model.modelKey,
+						status: 'ok',
+						durationMs: Date.now() - started,
+						detail: { cancelled: true }
+					},
+					{ persist }
+				);
+				break;
+			}
 			emitEvent(
 				{
 					userId: opts.userId,
@@ -166,13 +218,18 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 
 		assistantText += iterationText;
 		if (!toolCalls.length) break;
+		// Stop before spending money on a toolchain the user has abandoned.
+		if (job.controller.signal.aborted) break;
 
 		messages.push({ role: 'assistant', content: iterationText, tool_calls: toolCalls });
 		for (const call of toolCalls) {
+			// Checked per call, so a long chain doesn't have to drain first.
+			if (job.controller.signal.aborted) break;
 			const tool = toolByName.get(call.name);
 			const result = await executeToolCall(opts, call, tool);
 			messages.push({ role: 'tool', content: result, tool_call_id: call.id });
 		}
+		if (job.controller.signal.aborted) break;
 	}
 
 	const messageId = opts.onDone(assistantText, usage, choice);

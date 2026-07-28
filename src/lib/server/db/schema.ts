@@ -284,7 +284,10 @@ export const jobs = sqliteTable('jobs', {
 	chatId: text('chat_id'),
 	userId: text('user_id').notNull(),
 	task: text('task').notNull(),
-	status: text('status', { enum: ['running', 'done', 'error'] }).notNull(),
+	// 'cancelled' = stopped by the user; the partial reply is still saved.
+	// SQLite stores this as plain TEXT with no CHECK, so adding a value here is
+	// a type-level change only and needs no migration.
+	status: text('status', { enum: ['running', 'done', 'error', 'cancelled'] }).notNull(),
 	error: text('error'),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 	finishedAt: integer('finished_at', { mode: 'timestamp_ms' })

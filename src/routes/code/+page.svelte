@@ -82,6 +82,9 @@
 
 	let selectedModelId = $state('');
 	let streaming = $state(false);
+	/** Job currently streaming, so it can be stopped. */
+	let activeJobId = $state<string | null>(null);
+	let stopping = $state(false);
 	let streamText = $state('');
 	let streamModel = $state('');
 	let trace = $state<TraceRow[]>([]);
@@ -236,8 +239,17 @@
 		attach((await res.json()).jobId);
 	}
 
+	/** Stop the run; the work already done is kept and the server closes out. */
+	async function stopRun() {
+		if (!activeJobId || stopping) return;
+		stopping = true;
+		await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST' }).catch(() => {});
+	}
+
 	function attach(jobId: string) {
 		closeStream();
+		activeJobId = jobId;
+		stopping = false;
 		streaming = true;
 		streamText = '';
 		streamModel = '';
@@ -280,6 +292,8 @@
 			];
 		}
 		streaming = false;
+		activeJobId = null;
+		stopping = false;
 		streamText = '';
 		closeStream();
 	}
@@ -543,7 +557,17 @@
 						oninput={stashDraft}
 						onkeydown={onKeydown}
 					></textarea>
-					<button class="btn send" onclick={() => send()} disabled={streaming}>➤</button>
+					{#if streaming}
+						<button
+							class="btn stop"
+							onclick={stopRun}
+							disabled={stopping}
+							title="Stop the run"
+							aria-label="Stop the run">{stopping ? '…' : '■'}</button
+						>
+					{:else}
+						<button class="btn send" onclick={() => send()} aria-label="Send message">➤</button>
+					{/if}
 				</div>
 				<div class="composer-opts">
 					<input
@@ -975,6 +999,10 @@
 	}
 	.btn.send {
 		background: var(--accent);
+		color: var(--bg);
+	}
+	.btn.stop {
+		background: var(--danger);
 		color: var(--bg);
 	}
 	.btn.wide {
