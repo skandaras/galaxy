@@ -24,6 +24,7 @@ import {
 	pushChunk,
 	type LiveJob
 } from './jobs';
+import { streamWithIdleTimeout } from './loop';
 import { runWebSearch, type SearchResult } from './tools/web-search';
 
 interface Evidence {
@@ -119,7 +120,25 @@ async function runResearch(
 
 	// 1. Plan search queries
 	pushChunk(job, { type: 'stage', name: 'planning' });
-	const queries = await planQueries(choice, systemPrompt, opts.content, cfg, track);
+	const plan = await planQueries(choice, systemPrompt, opts.content, cfg, track);
+	const queries = plan.queries;
+	if (plan.fellBack) {
+		// Searching the raw question is a poor substitute for a real plan, and it
+		// used to be indistinguishable from working normally.
+		const why =
+			plan.fellBack === 'empty'
+				? plan.reasonedOnly
+					? 'the model spent its whole token budget reasoning and returned no plan'
+					: 'the model returned an empty plan'
+				: plan.fellBack === 'unparseable'
+					? 'the model did not return usable JSON'
+					: 'the planning call failed';
+		pushChunk(job, {
+			type: 'notice',
+			text: `Planning fell back to searching the question as written — ${why}.`
+		});
+		event('research.plan', 'error', 0, { fellBack: plan.fellBack, reasonedOnly: plan.reasonedOnly });
+	}
 	pushChunk(job, { type: 'stage', name: 'searching', detail: `${queries.length} queries` });
 
 	// 2 + 3. Search then read, optionally iterating once more
@@ -151,11 +170,26 @@ async function runResearch(
 	}
 
 	// 4. Synthesis (streamed)
+	if (!evidence.length) {
+		// The answer that follows is general knowledge, not research. Say so
+		// before it streams rather than letting it pass as a sourced result.
+		pushChunk(job, {
+			type: 'notice',
+			text: 'No sources could be retrieved — answering from general knowledge. Check the search provider in Admin → Settings.'
+		});
+	}
 	pushChunk(job, { type: 'stage', name: 'synthesising' });
 	const started = Date.now();
 	let answer = '';
-	try {
-		const stream = choice.adapter.stream(
+	let reasoningChars = 0;
+	let finishReason: string | null = null;
+
+	const synthesise = async (maxTokens: number) => {
+		// Idle-bounded, not total-bounded: synthesis over many sources is slow but
+		// healthy, and a flat deadline killed it mid-answer (same defect the chat
+		// and coding loops had).
+		const stream = streamWithIdleTimeout(
+			choice.adapter,
 			{
 				modelKey: choice.model.modelKey,
 				messages: [
@@ -172,15 +206,37 @@ async function runResearch(
 						].join('\n\n')
 					}
 				],
-				maxTokens: cfg.maxTokens
+				maxTokens
 			},
-			AbortSignal.any([AbortSignal.timeout(180_000), job.controller.signal])
+			job.controller.signal
 		);
 		for await (const ev of stream) {
 			if (ev.type === 'text') {
 				answer += ev.delta;
 				pushChunk(job, { type: 'delta', text: ev.delta });
-			} else if (ev.type === 'usage') track(ev.usage);
+			} else if (ev.type === 'reasoning') {
+				reasoningChars += ev.delta.length;
+			} else if (ev.type === 'usage') {
+				track(ev.usage);
+			} else if (ev.type === 'done') {
+				finishReason = ev.finishReason;
+			}
+		}
+	};
+
+	try {
+		await synthesise(cfg.maxTokens);
+		// A reasoning model can consume the entire budget thinking and stream no
+		// answer at all. Nothing was shown yet, so one retry with real headroom is
+		// clean — and it is the difference between a usable result and a failure.
+		if (!answer.trim() && (reasoningChars > 0 || finishReason === 'length')) {
+			pushChunk(job, {
+				type: 'notice',
+				text: 'The model used its whole token budget reasoning; retrying with more room.'
+			});
+			reasoningChars = 0;
+			finishReason = null;
+			await synthesise(Math.max(cfg.maxTokens * 4, SYNTHESIS_RETRY_TOKENS));
 		}
 	} catch (err) {
 		// Stopping mid-synthesis is not a failure — fall through and keep
@@ -203,6 +259,33 @@ async function runResearch(
 			failJob(job, `Synthesis failed: ${String(err)}`);
 			return;
 		}
+	}
+
+	// An empty synthesis must not be saved as a successful, blank reply — that
+	// is precisely how a reasoning model that spent its budget thinking looked
+	// like a run that "finished" with nothing to show.
+	if (!answer.trim() && !job.controller.signal.aborted) {
+		const why = reasoningChars
+			? `The model spent its entire ${cfg.maxTokens}-token budget reasoning and produced no answer. Raise Max tokens in Admin → Research, or choose a model that is not reasoning-only.`
+			: finishReason === 'length'
+				? `The model hit its ${cfg.maxTokens}-token limit before writing anything. Raise Max tokens in Admin → Research.`
+				: 'The model returned an empty answer.';
+		emitEvent(
+			{
+				userId: opts.userId,
+				chatId: opts.chatId,
+				task: 'deep-research',
+				type: 'model.call',
+				name: choice.model.modelKey,
+				status: 'error',
+				durationMs: Date.now() - started,
+				detail: { emptyAnswer: true, reasoningChars, finishReason, sources: evidence.length }
+			},
+			{ persist }
+		);
+		logUsage(opts, choice, totalUsage, 'error');
+		failJob(job, `Deep research produced no answer. ${why}`);
+		return;
 	}
 
 	if (evidence.length) {
@@ -233,15 +316,39 @@ async function runResearch(
 	completeJob(job, saved.id);
 }
 
-async function planQueries(
+/** Planner budget. The retry is for reasoning models, which spend the first
+ *  allowance thinking and return an empty answer stopped on length. */
+const PLAN_TOKENS = 400;
+const PLAN_TOKENS_RETRY = 4000;
+/** Floor for the synthesis retry, so a small configured cap still gets room. */
+const SYNTHESIS_RETRY_TOKENS = 8000;
+
+export interface PlanOutcome {
+	queries: string[];
+	/** Set when the model produced no usable plan and the question is standing in. */
+	fellBack: 'empty' | 'unparseable' | 'error' | null;
+	reasonedOnly: boolean;
+}
+
+function parseQueries(text: string, max: number): string[] {
+	const start = text.indexOf('{');
+	const end = text.lastIndexOf('}');
+	if (start === -1 || end <= start) return [];
+	const parsed = JSON.parse(text.slice(start, end + 1));
+	return Array.isArray(parsed.queries)
+		? parsed.queries.filter((q: unknown) => typeof q === 'string' && q).slice(0, max)
+		: [];
+}
+
+export async function planQueries(
 	choice: ModelChoice,
 	systemPrompt: string,
 	question: string,
 	cfg: ResearchSettings,
 	track: (u: Usage | null) => void
-): Promise<string[]> {
-	try {
-		const { text, usage } = await choice.adapter.complete(
+): Promise<PlanOutcome> {
+	const ask = (maxTokens: number) =>
+		choice.adapter.complete(
 			{
 				modelKey: choice.model.modelKey,
 				messages: [
@@ -251,18 +358,29 @@ async function planQueries(
 						content: `RESEARCH-PLAN: Produce up to ${cfg.maxQueries} focused web-search queries for researching this question. Reply ONLY with JSON: {"queries":["…"]}\n\nQuestion: ${question}`
 					}
 				],
-				maxTokens: 300
+				maxTokens
 			},
 			AbortSignal.timeout(60_000)
 		);
-		track(usage);
-		const parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
-		const queries = Array.isArray(parsed.queries)
-			? parsed.queries.filter((q: unknown) => typeof q === 'string' && q).slice(0, cfg.maxQueries)
-			: [];
-		return queries.length ? queries : [question];
+
+	try {
+		let res = await ask(PLAN_TOKENS);
+		track(res.usage);
+		// A reasoning model can burn the whole allowance thinking and hand back
+		// nothing. One retry with real headroom is the difference between a
+		// planned search and silently googling the raw question.
+		if (!res.text.trim() && (res.reasonedOnly || res.finishReason === 'length')) {
+			res = await ask(PLAN_TOKENS_RETRY);
+			track(res.usage);
+		}
+		const reasonedOnly = Boolean(res.reasonedOnly);
+		if (!res.text.trim()) return { queries: [question], fellBack: 'empty', reasonedOnly };
+		const queries = parseQueries(res.text, cfg.maxQueries);
+		return queries.length
+			? { queries, fellBack: null, reasonedOnly }
+			: { queries: [question], fellBack: 'unparseable', reasonedOnly };
 	} catch {
-		return [question];
+		return { queries: [question], fellBack: 'error', reasonedOnly: false };
 	}
 }
 

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { assertPublicHttpUrl, htmlToText } from './research';
+import type { ModelChoice } from '$lib/server/providers/registry';
+import type { CompletionResult } from '$lib/server/providers/types';
+import { DEFAULT_RESEARCH } from '$lib/server/settings';
+import { assertPublicHttpUrl, htmlToText, planQueries } from './research';
 
 describe('assertPublicHttpUrl', () => {
 	it('blocks loopback, private and link-local targets', () => {
@@ -41,5 +44,84 @@ describe('htmlToText', () => {
 			.split('\n')
 			.map((l) => l.trim());
 		expect(lines).toEqual(['a', 'b']);
+	});
+});
+
+describe('planQueries', () => {
+	const cfg = { ...DEFAULT_RESEARCH, maxQueries: 4 };
+
+	/** Adapter whose complete() is scripted per call. */
+	function choiceOf(...replies: CompletionResult[]): ModelChoice {
+		let i = 0;
+		return {
+			model: { modelKey: 'm' },
+			provider: {},
+			adapter: {
+				complete: async () => replies[Math.min(i++, replies.length - 1)],
+				stream: async function* () {},
+				listModels: async () => []
+			}
+		} as unknown as ModelChoice;
+	}
+
+	const ok = (text: string): CompletionResult => ({ text, usage: null, finishReason: 'stop' });
+	const reasonedOut: CompletionResult = {
+		text: '',
+		usage: null,
+		finishReason: 'length',
+		reasonedOnly: true
+	};
+
+	it('uses the planned queries when the model returns JSON', async () => {
+		const out = await planQueries(
+			choiceOf(ok('{"queries":["a","b"]}')),
+			'',
+			'question?',
+			cfg,
+			() => {}
+		);
+		expect(out).toEqual({ queries: ['a', 'b'], fellBack: null, reasonedOnly: false });
+	});
+
+	it('retries with more room when the model spent its budget reasoning', async () => {
+		// The first call comes back empty and stopped on length; the retry is what
+		// turns "1 query — the raw question" back into a real plan.
+		const out = await planQueries(
+			choiceOf(reasonedOut, ok('{"queries":["x","y","z"]}')),
+			'',
+			'question?',
+			cfg,
+			() => {}
+		);
+		expect(out.queries).toEqual(['x', 'y', 'z']);
+		expect(out.fellBack).toBeNull();
+	});
+
+	it('reports the fallback rather than silently searching the question', async () => {
+		const out = await planQueries(choiceOf(reasonedOut), '', 'question?', cfg, () => {});
+		expect(out.queries).toEqual(['question?']);
+		expect(out.fellBack).toBe('empty');
+		expect(out.reasonedOnly).toBe(true);
+	});
+
+	it('flags unparseable output separately from an empty one', async () => {
+		const out = await planQueries(choiceOf(ok('sure! here you go')), '', 'question?', cfg, () => {});
+		expect(out.queries).toEqual(['question?']);
+		expect(out.fellBack).toBe('unparseable');
+	});
+
+	it('counts tokens from both attempts', async () => {
+		const usage = { promptTokens: 5, completionTokens: 7 };
+		let total = 0;
+		await planQueries(
+			choiceOf({ ...reasonedOut, usage }, { ...ok('{"queries":["a"]}'), usage }),
+			'',
+			'q?',
+			cfg,
+			(u) => {
+				total += u?.completionTokens ?? 0;
+			}
+		);
+		expect(total).toBe(14);
 	});
 });

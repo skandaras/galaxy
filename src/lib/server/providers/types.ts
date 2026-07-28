@@ -35,6 +35,13 @@ export interface Usage {
 
 export type StreamEvent =
 	| { type: 'text'; delta: string }
+	/**
+	 * Chain-of-thought from a reasoning model, which arrives on a separate
+	 * channel from the answer and counts against the same token budget. Emitted
+	 * so a caller can tell "spent everything thinking" apart from "said nothing"
+	 * — silently dropping it made an empty answer look like a successful run.
+	 */
+	| { type: 'reasoning'; delta: string }
 	| { type: 'tool_calls'; calls: ToolCall[] }
 	| { type: 'usage'; usage: Usage }
 	| { type: 'done'; finishReason: string | null };
@@ -57,9 +64,21 @@ export interface RemoteModel {
 	completionCostPerMTok: number | null;
 }
 
+export interface CompletionResult {
+	text: string;
+	usage: Usage | null;
+	/**
+	 * Why generation stopped. 'length' with empty `text` is the reasoning-model
+	 * failure: the whole budget went on thinking and no answer was produced.
+	 */
+	finishReason?: string | null;
+	/** True when the model emitted chain-of-thought but no answer text. */
+	reasonedOnly?: boolean;
+}
+
 export interface ProviderAdapter {
 	stream(req: ChatRequest, signal?: AbortSignal): AsyncGenerator<StreamEvent>;
-	complete(req: ChatRequest, signal?: AbortSignal): Promise<{ text: string; usage: Usage | null }>;
+	complete(req: ChatRequest, signal?: AbortSignal): Promise<CompletionResult>;
 	listModels(signal?: AbortSignal): Promise<RemoteModel[]>;
 }
 

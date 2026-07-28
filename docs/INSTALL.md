@@ -379,6 +379,8 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | Attachment upload fails / 403 on form posts | `ORIGIN` not set to this instance's public URL (SvelteKit CSRF check) |
 | Small attachments upload but larger ones fail with `413` / `exceeds the server's request limit` | `BODY_SIZE_LIMIT` too low (or missing, so adapter-node's 512K default applies). Set it to `32M`. A reverse proxy can impose its own cap too — nginx's `client_max_body_size` defaults to 1 MB |
 | Memory never runs | Admin → Memory: enabled? interval? It also skips when there's no new activity |
+| Deep research returns nothing, or always searches "1 queries" | A reasoning model spending its whole token budget thinking. Both the planner and the synthesis now retry with more room automatically; if it persists, raise Max tokens in Admin → Research or pick a non-reasoning model |
+| Deep research reports "no sources could be retrieved" | Search returned nothing — check the provider in Admin → Settings with the Test button. The answer that follows is general knowledge, not research |
 | Coding agent fails with `TimeoutError` on a big repo | Fixed in this version — calls are now bounded by silence rather than total duration. If it recurs against a genuinely slow provider, raise `STREAM_IDLE_TIMEOUT_MS` |
 | Coding run reports dropping earlier tool results | Working as intended: the turn exceeded `TOOL_OUTPUT_BUDGET_CHARS` and shed its oldest tool output to keep the request sane. Raise it if the model needs more history at once |
 

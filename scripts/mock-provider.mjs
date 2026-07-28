@@ -21,6 +21,19 @@ const MODEL = {
 	architecture: { input_modalities: ['text', 'image'] }
 };
 
+// A reasoning model that emits only `reasoning_content` and spends its whole
+// token budget doing so — the shape that made deep research return nothing.
+const REASONING_MODEL = {
+	id: 'mock/ponder-1',
+	name: 'Ponder 1 (mock reasoning)',
+	context_length: 8192,
+	pricing: { prompt: '0.000001', completion: '0.000002' },
+	supported_parameters: ['tools', 'reasoning'],
+	architecture: { input_modalities: ['text'] }
+};
+
+const isReasoning = (modelKey) => String(modelKey ?? '').includes('ponder');
+
 function sseChunk(res, obj) {
 	res.write(`data: ${JSON.stringify(obj)}\n\n`);
 }
@@ -38,7 +51,7 @@ const server = createServer(async (req, res) => {
 
 	if (req.method === 'GET' && url.pathname === '/v1/models') {
 		res.writeHead(200, { 'content-type': 'application/json' });
-		res.end(JSON.stringify({ data: [MODEL] }));
+		res.end(JSON.stringify({ data: [MODEL, REASONING_MODEL] }));
 		return;
 	}
 
@@ -141,6 +154,32 @@ const server = createServer(async (req, res) => {
 				});
 			}
 			res.writeHead(200, { 'content-type': 'application/json' });
+			if (isReasoning(parsed.model)) {
+				// Thinks first, answers second. With a small cap the whole budget
+				// goes on thinking and content comes back empty, stopped on length —
+				// which is what broke the research planner. Given real headroom the
+				// same model answers normally.
+				const cap = parsed.max_tokens ?? 300;
+				const room = cap >= 1000;
+				res.end(
+					JSON.stringify({
+						id: 'mock',
+						choices: [
+							{
+								index: 0,
+								message: {
+									role: 'assistant',
+									content: room ? content : '',
+									reasoning_content: 'thinking '.repeat(20)
+								},
+								finish_reason: room ? 'stop' : 'length'
+							}
+						],
+						usage: { prompt_tokens: 50, completion_tokens: room ? 120 : cap }
+					})
+				);
+				return;
+			}
 			res.end(
 				JSON.stringify({
 					id: 'mock',
@@ -155,6 +194,34 @@ const server = createServer(async (req, res) => {
 			'content-type': 'text/event-stream',
 			'cache-control': 'no-cache'
 		});
+
+		// Reasoning model: streams `reasoning_content` only, never `content`, and
+		// stops on length. Reproduces a run that burns its whole budget thinking
+		// and hands back nothing to show.
+		if (isReasoning(parsed.model)) {
+			const cap = parsed.max_tokens ?? 2048;
+			const room = cap >= 8000;
+			for (let i = 0; i < 5; i++) {
+				delta(res, { reasoning_content: `step ${i} of thinking… ` });
+				await new Promise((r) => setTimeout(r, 10));
+			}
+			if (room) {
+				for (const p of ['Nebulae form from collapsing gas clouds [1]. ', 'Thought it through first.']) {
+					delta(res, { content: p });
+					await new Promise((r) => setTimeout(r, 10));
+				}
+			}
+			delta(res, {}, room ? 'stop' : 'length');
+			sseChunk(res, {
+				id: 'mock',
+				object: 'chat.completion.chunk',
+				choices: [],
+				usage: { prompt_tokens: 50, completion_tokens: room ? 300 : cap }
+			});
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
 
 		// Scripted coding agent: sequence driven by how many tool results have
 		// accumulated in this turn.
