@@ -6,8 +6,10 @@ import { resolveModel } from '$lib/server/providers/registry';
 import type { ProviderMessage } from '$lib/server/providers/types';
 import { assertBudget } from '../budget';
 import { EngineError, getTaskConfig, pickModel } from '../engine';
+import { DEFAULT_COMPACTION, getSetting } from '$lib/server/settings';
 import { createJob, failJob, type LiveJob } from '../jobs';
-import { messageContent } from '../context';
+import { maybeCompact } from '../compaction';
+import { buildContext } from '../context';
 import { runAgentLoop } from '../loop';
 import { attachmentTools } from '../tools/attachments';
 import { bootstrapContext, knowledgeTools } from '../tools/knowledge';
@@ -122,18 +124,16 @@ export function startCodingTurn(opts: {
 			'coding'
 		),
 		maxIterations: MAX_CODING_ITERATIONS,
-		buildMessages: (): ProviderMessage[] => [
-			{ role: 'system', content: systemPrompt },
-			...getMessages(chat.id)
-				.filter((m) => m.role !== 'tool')
-				.map(
-					(m) =>
-						({
-							role: m.role,
-							content: messageContent(m, choice.model.supportsVision)
-						}) as ProviderMessage
-				)
-		],
+		// Re-read the chat each time: compaction updates compactedUpTo after a
+		// turn, and replaying the whole history regardless is what let a long
+		// coding session grow its context without bound.
+		buildMessages: (): ProviderMessage[] =>
+			buildContext({
+				systemPrompt,
+				chat: getChat(chat.id, opts.userId) ?? chat,
+				history: getMessages(chat.id),
+				supportsVision: choice.model.supportsVision
+			}),
 		onDone: (text, _usage, usedChoice) => {
 			const saved = appendMessage(chat.id, {
 				role: 'assistant',
@@ -141,6 +141,19 @@ export function startCodingTurn(opts: {
 				modelKey: usedChoice.model.modelKey
 			});
 			updateChat(chat.id, {});
+			// Same deal as chat: compact after the reply so it never delays
+			// streaming, and so the next turn starts from a bounded transcript.
+			void (async () => {
+				const fresh = getChat(chat.id, opts.userId);
+				if (fresh) {
+					await maybeCompact({
+						chat: fresh,
+						systemPrompt,
+						choice: usedChoice,
+						settings: getSetting('compaction', DEFAULT_COMPACTION)
+					});
+				}
+			})();
 			return saved.id;
 		}
 	}).catch((err) => {

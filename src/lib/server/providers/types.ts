@@ -73,9 +73,24 @@ export class ProviderHttpError extends Error {
 	}
 }
 
+/**
+ * A model call that went quiet, or ran past the absolute ceiling.
+ *
+ * Deliberately not an AbortError: `isCancellation` treats those as the user
+ * pressing stop and keeps the partial reply as if the run had finished
+ * normally, which would silently truncate an answer that actually stalled.
+ */
+export class StreamTimeoutError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'StreamTimeoutError';
+	}
+}
+
 /** Errors worth retrying / failing over on: network, timeouts, 429, 5xx. */
 export function isRetryable(err: unknown): boolean {
 	if (err instanceof ProviderHttpError) return err.status === 429 || err.status >= 500;
+	if (err instanceof StreamTimeoutError) return true;
 	if (err instanceof Error && err.name === 'AbortError') return true;
 	if (err instanceof TypeError) return true; // fetch network failure
 	return false;

@@ -1,12 +1,22 @@
 import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import type { LoopTool } from '../loop';
+import { toolResultMaxChars } from '../limits';
 import { getExecutor } from './executor';
 import { gitAuthArgs, safeJoin, scrubSecrets, shellQuote, workspaceAbs } from './workspace';
 
+/** Hard ceiling on one tool result; `maxFileChars()` is the softer default. */
 const MAX_FILE_CHARS = 60_000;
+/** Default slice size, kept below the hard cap so paging is the normal path. */
+const maxFileChars = () => Math.min(MAX_FILE_CHARS, toolResultMaxChars());
 const MAX_LIST_ENTRIES = 500;
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.svelte-kit', '__pycache__']);
+
+function clampInt(raw: unknown, fallback: number, min: number, max: number): number {
+	const n = typeof raw === 'number' ? raw : Number(raw);
+	if (!Number.isFinite(n)) return fallback;
+	return Math.min(max, Math.max(min, Math.floor(n)));
+}
 
 export interface CodingToolContext {
 	workspaceRel: string;
@@ -40,19 +50,31 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 		{
 			def: {
 				name: 'read_file',
-				description: 'Read a file from the repository.',
+				description:
+					'Read a file from the repository. Use offset/limit to page through a long file rather than pulling all of it into context.',
 				parameters: {
 					type: 'object',
-					properties: { path: { type: 'string' } },
+					properties: {
+						path: { type: 'string' },
+						offset: { type: 'number', description: 'Character offset to start at (default 0)' },
+						limit: { type: 'number', description: 'Maximum characters to return' }
+					},
 					required: ['path']
 				}
 			},
 			describe: (a) => String(a.path ?? ''),
 			execute: async (a) => {
 				const content = readFileSync(safeJoin(ctx.workspaceRel, String(a.path)), 'utf8');
-				return content.length > MAX_FILE_CHARS
-					? content.slice(0, MAX_FILE_CHARS) + `\n…(truncated, ${content.length} chars total)`
-					: content;
+				const offset = clampInt(a.offset, 0, 0, Math.max(0, content.length));
+				const limit = clampInt(a.limit, maxFileChars(), 1, MAX_FILE_CHARS);
+				const slice = content.slice(offset, offset + limit);
+				const end = offset + slice.length;
+				const remaining = content.length - end;
+				// Say how to get the rest rather than just truncating: without the
+				// offset hint the model re-reads from 0 and burns the budget twice.
+				return remaining > 0
+					? `${slice}\n…(${remaining} characters remain — call again with offset=${end})`
+					: slice;
 			}
 		},
 		{
@@ -71,7 +93,7 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 					`git grep -n -E ${shellQuote(String(a.pattern))} || true`,
 					{ cwdRel: ctx.workspaceRel, timeoutMs: 30_000 }
 				);
-				return scrubSecrets(res.stdout).slice(0, MAX_FILE_CHARS) || '(no matches)';
+				return scrubSecrets(res.stdout).slice(0, maxFileChars()) || '(no matches)';
 			}
 		},
 		{
@@ -85,7 +107,7 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 					cwdRel: ctx.workspaceRel,
 					timeoutMs: 30_000
 				});
-				return scrubSecrets(res.stdout + res.stderr).slice(0, MAX_FILE_CHARS) || '(clean)';
+				return scrubSecrets(res.stdout + res.stderr).slice(0, maxFileChars()) || '(clean)';
 			}
 		}
 	];
@@ -160,7 +182,7 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 				const out = scrubSecrets(
 					`exit ${res.code}\n${res.stdout}${res.stderr ? `\n--- stderr ---\n${res.stderr}` : ''}`
 				);
-				return out.slice(0, MAX_FILE_CHARS);
+				return out.slice(0, maxFileChars());
 			}
 		},
 		{

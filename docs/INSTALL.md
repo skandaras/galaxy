@@ -77,6 +77,10 @@ Optional per-instance env you may add in `docker-compose.yml`:
 | `GITHUB_REPO` | `owner/repo` used by the Promote button (default `skandaras/galaxy`) |
 | `DEV_HEALTH_URL` | e.g. `http://galaxy-dev:3000/healthz` — promotion gate: Promote refuses if dev is unhealthy |
 | `RUNNER_IMAGE`, `DATA_VOLUME`, `RUNNER_NETWORK`, `DOCKER_API_URL`, `CODING_EXECUTOR` | Coding sandbox wiring — defaults are already in the compose file; `DATA_VOLUME` must match the compose project's real volume name (`docker volume ls`) |
+| `STREAM_IDLE_TIMEOUT_MS` | How long a model call may send *nothing* before it's treated as stalled (default 90000). This is an idle timeout, not a total one — a long coding turn is fine as long as output keeps arriving |
+| `STREAM_TOTAL_TIMEOUT_MS` | Absolute ceiling on one model call, for a provider that trickles forever without finishing (default 1800000) |
+| `TOOL_OUTPUT_BUDGET_CHARS` | Tool output carried in one turn before the oldest results are dropped (default 240000). Every result is re-sent on each later step, so this bounds how large a turn's request can grow |
+| `TOOL_RESULT_MAX_CHARS` | Per-call cap on a single tool result (default 30000, hard ceiling 60000) |
 
 ## 3. Reverse proxy + Authelia
 
@@ -375,6 +379,8 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | Attachment upload fails / 403 on form posts | `ORIGIN` not set to this instance's public URL (SvelteKit CSRF check) |
 | Small attachments upload but larger ones fail with `413` / `exceeds the server's request limit` | `BODY_SIZE_LIMIT` too low (or missing, so adapter-node's 512K default applies). Set it to `32M`. A reverse proxy can impose its own cap too — nginx's `client_max_body_size` defaults to 1 MB |
 | Memory never runs | Admin → Memory: enabled? interval? It also skips when there's no new activity |
+| Coding agent fails with `TimeoutError` on a big repo | Fixed in this version — calls are now bounded by silence rather than total duration. If it recurs against a genuinely slow provider, raise `STREAM_IDLE_TIMEOUT_MS` |
+| Coding run reports dropping earlier tool results | Working as intended: the turn exceeded `TOOL_OUTPUT_BUDGET_CHARS` and shed its oldest tool output to keep the request sane. Raise it if the model needs more history at once |
 
 The Observatory (left pane, or `/observatory`) shows every model call, tool
 use and failure — it's the first place to look when behaviour is puzzling.
