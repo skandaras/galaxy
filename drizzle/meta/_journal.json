@@ -64,6 +64,13 @@
       "when": 1785120089269,
       "tag": "0008_omniscient_vance_astro",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1785208653446,
+      "tag": "0009_conscious_bastion",
+      "breakpoints": true
     }
   ]
 }

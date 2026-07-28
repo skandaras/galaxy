@@ -45,6 +45,13 @@ export const chats = sqliteTable('chats', {
 	userId: text('user_id').notNull(),
 	mode: text('mode', { enum: ['chat', 'code'] }).notNull().default('chat'),
 	title: text('title').notNull().default('New chat'),
+	/**
+	 * Model this chat last used, so reopening it restores that choice instead of
+	 * inheriting whatever the composer happened to be set to. Nullable for chats
+	 * that predate this, and may name a model that has since been deleted or
+	 * disabled — callers fall back to the task default.
+	 */
+	modelId: text('model_id'),
 	compactSummary: text('compact_summary'),
 	compactedUpTo: integer('compacted_up_to').notNull().default(0),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),

@@ -76,6 +76,9 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	if (chat.title === 'New chat') {
 		updateChat(chat.id, { title: opts.content.slice(0, 48) || 'New chat' });
 	}
+	// Remember the model actually used, so reopening this chat restores it
+	// rather than inheriting whatever the composer was last set to.
+	updateChat(chat.id, { modelId: choice.model.id });
 
 	const persist = !chat.hidden;
 	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'chat', persist });

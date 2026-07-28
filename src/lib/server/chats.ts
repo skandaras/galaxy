@@ -11,6 +11,8 @@ export interface ChatMeta {
 	mode: 'chat' | 'code';
 	title: string;
 	hidden: boolean;
+	/** Model last used in this chat; null until a turn runs. */
+	modelId: string | null;
 	compactSummary: string | null;
 	compactedUpTo: number;
 	createdAt: number;
@@ -89,6 +91,7 @@ export function createChat(opts: {
 		mode: opts.mode ?? 'chat',
 		title: opts.title ?? 'New chat',
 		hidden: opts.hidden ?? false,
+		modelId: null,
 		compactSummary: null,
 		compactedUpTo: 0,
 		createdAt: now,
@@ -164,7 +167,7 @@ function countMessages(chatId: string): number {
 
 export function updateChat(
 	chatId: string,
-	patch: Partial<Pick<ChatMeta, 'title' | 'compactSummary' | 'compactedUpTo'>>
+	patch: Partial<Pick<ChatMeta, 'title' | 'modelId' | 'compactSummary' | 'compactedUpTo'>>
 ): void {
 	const hidden = hiddenChats.get(chatId);
 	if (hidden) {
@@ -218,6 +221,7 @@ export function setHidden(chatId: string, userId: string, hidden: boolean): Chat
 			userId: record.meta.userId,
 			mode: record.meta.mode,
 			title: record.meta.title,
+			modelId: record.meta.modelId,
 			compactSummary: record.meta.compactSummary,
 			compactedUpTo: record.meta.compactedUpTo,
 			createdAt: new Date(record.meta.createdAt),
@@ -382,6 +386,7 @@ function rowToMeta(row: typeof chats.$inferSelect): ChatMeta {
 		mode: row.mode,
 		title: row.title,
 		hidden: false,
+		modelId: row.modelId,
 		compactSummary: row.compactSummary,
 		compactedUpTo: row.compactedUpTo,
 		createdAt: row.createdAt.getTime(),

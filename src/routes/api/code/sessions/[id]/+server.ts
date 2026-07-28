@@ -1,7 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
-import { getMessages } from '$lib/server/chats';
+import { getChat, getMessages } from '$lib/server/chats';
 import { destroySession, getSession, setSessionMode } from '$lib/server/engine/coding/session';
 import { findRunningJobForChat } from '$lib/server/engine/jobs';
 
@@ -10,7 +10,9 @@ export const GET: RequestHandler = ({ locals, params }) => {
 	const session = getSession(params.id, user.id);
 	if (!session) error(404, 'Session not found');
 	return json({
-		session,
+		// modelId lives on the chat row, not the code session, but the client
+		// wants it alongside the rest of the session state.
+		session: { ...session, modelId: getChat(session.chatId, user.id)?.modelId ?? null },
 		messages: getMessages(session.chatId),
 		runningJobId: findRunningJobForChat(session.chatId)?.id ?? null
 	});
