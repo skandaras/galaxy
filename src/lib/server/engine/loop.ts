@@ -33,6 +33,28 @@ export interface LoopTool {
 	describe?: (args: Record<string, unknown>) => string;
 }
 
+/**
+ * Why the loop stopped.
+ *
+ * The distinction is the whole point: `exhausted` and `budget` are turns cut
+ * short with work possibly unfinished, and used to be indistinguishable from
+ * `complete` — the run just ended, status ok, mid-task.
+ */
+export type StopReason = 'complete' | 'exhausted' | 'cancelled' | 'budget';
+
+export interface ToolCallRecord {
+	name: string;
+	/** Whatever `describe` yielded — a path for file tools, the command for bash. */
+	summary?: string;
+}
+
+export interface TurnSummary {
+	stopReason: StopReason;
+	/** Model round-trips used, which is what `maxIterations` actually counts. */
+	steps: number;
+	toolCalls: ToolCallRecord[];
+}
+
 export interface LoopOptions {
 	job: LiveJob;
 	task: string;
@@ -44,9 +66,28 @@ export interface LoopOptions {
 	buildMessages: () => ProviderMessage[];
 	tools: LoopTool[];
 	maxIterations: number;
+	/**
+	 * Re-checked every few steps on a long run. `assertBudget` only guards the
+	 * start of a turn, which is not enough once turns can run for dozens of
+	 * steps and continue automatically.
+	 */
+	budgetBlocked?: () => boolean;
+	/**
+	 * Leave the job open when the turn ends, so a caller running several legs
+	 * finishes it once at the end rather than completing it per leg.
+	 */
+	autoComplete?: boolean;
 	/** Called once with the final assistant text after a successful run. */
-	onDone: (text: string, usage: Usage | null, choice: ModelChoice) => string | void;
+	onDone: (
+		text: string,
+		usage: Usage | null,
+		choice: ModelChoice,
+		summary: TurnSummary
+	) => string | void;
 }
+
+/** How often the budget is re-checked mid-run, in model round-trips. */
+const BUDGET_CHECK_EVERY = 4;
 
 /**
  * The shared agentic loop: stream from the model, execute tool calls, feed
@@ -220,8 +261,19 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 
 	let assistantText = '';
 	let usage: Usage | null = null;
+	// Assume the step cap wins; every other exit path below sets its own reason.
+	let stopReason: StopReason = 'exhausted';
+	let steps = 0;
+	const toolCallRecords: ToolCallRecord[] = [];
 
 	for (let iteration = 0; iteration < opts.maxIterations; iteration++) {
+		// A long run has to keep asking, or it can sail well past the cap that
+		// was only checked when the turn started.
+		if (iteration > 0 && iteration % BUDGET_CHECK_EVERY === 0 && opts.budgetBlocked?.()) {
+			stopReason = 'budget';
+			break;
+		}
+		steps++;
 		const started = Date.now();
 		let iterationText = '';
 		let toolCalls: ToolCall[] = [];
@@ -250,6 +302,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			// than thrown away by the failure path.
 			if (isCancellation(err, job.controller.signal)) {
 				assistantText += iterationText;
+				stopReason = 'cancelled';
 				emitEvent(
 					{
 						userId: opts.userId,
@@ -296,19 +349,32 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		);
 
 		assistantText += iterationText;
-		if (!toolCalls.length) break;
+		if (!toolCalls.length) {
+			// The model answered instead of calling anything, so it considers the
+			// task done — even if it only narrated an edit it never made.
+			stopReason = 'complete';
+			break;
+		}
 		// Stop before spending money on a toolchain the user has abandoned.
-		if (job.controller.signal.aborted) break;
+		if (job.controller.signal.aborted) {
+			stopReason = 'cancelled';
+			break;
+		}
 
 		messages.push({ role: 'assistant', content: iterationText, tool_calls: toolCalls });
 		for (const call of toolCalls) {
 			// Checked per call, so a long chain doesn't have to drain first.
 			if (job.controller.signal.aborted) break;
 			const tool = toolByName.get(call.name);
+			const args = safeParseArgs(call.arguments);
+			toolCallRecords.push({ name: call.name, summary: tool?.describe?.(args) });
 			const result = await executeToolCall(opts, call, tool);
 			messages.push({ role: 'tool', content: result, tool_call_id: call.id });
 		}
-		if (job.controller.signal.aborted) break;
+		if (job.controller.signal.aborted) {
+			stopReason = 'cancelled';
+			break;
+		}
 
 		// Tool results are re-sent on every later iteration, so a long run has to
 		// shed the oldest ones or its own request eventually stalls the call.
@@ -333,7 +399,14 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		}
 	}
 
-	const messageId = opts.onDone(assistantText, usage, choice);
+	const summary: TurnSummary = { stopReason, steps, toolCalls: toolCallRecords };
+	if (stopReason === 'budget') {
+		pushChunk(job, {
+			type: 'notice',
+			text: 'Stopped: the spend cap was reached partway through this run.'
+		});
+	}
+	const messageId = opts.onDone(assistantText, usage, choice, summary);
 	logUsage(opts, choice.model.modelKey, usage, 'ok', choice);
 	emitEvent(
 		{
@@ -343,11 +416,11 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			type: 'job',
 			name: `${opts.task}.turn`,
 			status: 'ok',
-			detail: { jobId: job.id }
+			detail: { jobId: job.id, stopReason, steps }
 		},
 		{ persist }
 	);
-	completeJob(job, messageId || undefined);
+	if (opts.autoComplete !== false) completeJob(job, messageId || undefined);
 }
 
 async function executeToolCall(

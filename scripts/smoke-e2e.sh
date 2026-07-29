@@ -226,5 +226,38 @@ check "alice's marker survived the delete" "$(as alice $M/api/memory)" 'ALPHA-ME
 as alice -X PUT $M/api/memory/settings -d '{"enabled":false}' > /dev/null
 check "opt-out persists" "$(as alice $M/api/memory)" '"enabled":false'
 
+# ---------------------------------------------------------------------------
+# A coding turn that runs out of steps must not just stop mid-task. Needs a
+# tiny step budget, which is process-wide, so this runs as its own instance on
+# its own data dir rather than disturbing the one above.
+# ---------------------------------------------------------------------------
+LEG_PORT=39903
+LEG_DATA=$(mktemp -d)
+AUTH_MODE=dev DEV_USER=smoke DATA_DIR=$LEG_DATA PORT=$LEG_PORT CODING_EXECUTOR=local CODING_MAX_STEPS=3 node build &
+LEG_PID=$!
+trap 'kill $MOCK_PID $APP_PID $MU_PID $LEG_PID 2>/dev/null; rm -rf $DATA $LEG_DATA' EXIT
+sleep 3
+L=http://127.0.0.1:$LEG_PORT
+
+LPROV=$(api -X POST $L/api/admin/providers -d "{\"kind\":\"openai-compatible\",\"name\":\"mock\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/v1\"}" | jqn .id)
+api -X POST $L/api/admin/providers/$LPROV/sync > /dev/null
+LMODEL=$(api $L/api/admin/models | jqn '[0].id')
+api -X PATCH $L/api/admin/models/$LMODEL -d '{"enabled":true}' > /dev/null
+api -X PUT $L/api/admin/task-configs -d "{\"task\":\"coding\",\"primaryModelId\":\"$LMODEL\"}" > /dev/null
+
+ORIGIN2=$LEG_DATA/origin2
+git init -q -b main "$ORIGIN2" && echo "# origin2" > "$ORIGIN2/README.md"
+git -C "$ORIGIN2" add -A && git -C "$ORIGIN2" -c user.email=t@t -c user.name=t commit -qm init
+git clone -q --bare "$ORIGIN2" "$ORIGIN2.git"
+SID2=$(api -X POST $L/api/code/sessions -d "{\"repoUrl\":\"$ORIGIN2.git\",\"repoName\":\"local/origin2\",\"mode\":\"implement\"}" | jqn .chatId)
+LJOB=$(api -X POST $L/api/code/sessions/$SID2/messages -d '{"content":"Update the README","webSearch":false}' | jqn .jobId)
+LSTREAM=$(curl -sN --max-time 90 $L/api/jobs/$LJOB/stream)
+check "step limit checkpoints the work" "$LSTREAM" 'Checkpointed uncommitted work'
+check "step limit continues automatically" "$LSTREAM" 'continuing automatically (leg 2'
+check "continuation finishes the job" "$LSTREAM" 'picked up after the step limit'
+check "checkpointed work reaches the remote" "$(git -C $ORIGIN2.git log --all --oneline)" 'WIP checkpoint'
+# The second leg is told to carry on from state rather than start over.
+check "continuation is visible in the transcript" "$(api $L/api/chats/$SID2)" 'Continue from where you left off'
+
 if [ "$FAIL" -ne 0 ]; then echo "SMOKE FAILED"; exit 1; fi
 echo "SMOKE PASSED"
