@@ -4,6 +4,7 @@ import { requireAdmin } from '$lib/server/api';
 import { encryptSecret } from '$lib/server/crypto';
 import {
 	DEFAULT_BUDGET,
+	DEFAULT_CODING,
 	DEFAULT_COMPACTION,
 	DEFAULT_MEMORY,
 	DEFAULT_RESEARCH,
@@ -13,14 +14,23 @@ import {
 } from '$lib/server/settings';
 import { emitEvent } from '$lib/server/engine/events';
 
-const KNOWN_KEYS = ['websearch', 'compaction', 'budget', 'github', 'memory', 'research'] as const;
+const KNOWN_KEYS = [
+	'websearch',
+	'compaction',
+	'budget',
+	'github',
+	'memory',
+	'research',
+	'coding'
+] as const;
 const DEFAULTS: Record<string, unknown> = {
 	websearch: DEFAULT_WEB_SEARCH,
 	compaction: DEFAULT_COMPACTION,
 	budget: DEFAULT_BUDGET,
 	github: {},
 	memory: DEFAULT_MEMORY,
-	research: DEFAULT_RESEARCH
+	research: DEFAULT_RESEARCH,
+	coding: DEFAULT_CODING
 };
 
 // Fields the UI submits in plaintext that are stored encrypted. An empty

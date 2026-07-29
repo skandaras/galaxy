@@ -24,6 +24,13 @@ export function setSetting(key: string, value: unknown, scope = GLOBAL_SCOPE): v
 		.run();
 }
 
+/** Remove a setting entirely. `value` is NOT NULL, so writing null is not an option. */
+export function deleteSetting(key: string, scope = GLOBAL_SCOPE): void {
+	db.delete(settings)
+		.where(and(eq(settings.scope, scope), eq(settings.key, key)))
+		.run();
+}
+
 export type SearchProvider = 'duckduckgo' | 'brave' | 'tavily' | 'searxng' | 'none';
 
 export interface WebSearchSettings {
@@ -80,6 +87,28 @@ export const DEFAULT_RESEARCH: ResearchSettings = {
 	maxTokens: 2048,
 	timeoutMs: 20_000,
 	iterationCap: 1
+};
+
+export interface CodingSettings {
+	/**
+	 * Commit uncommitted work locally when a turn ends, so a turn cut short
+	 * leaves something in the diff view and in `git log` instead of a workspace
+	 * that only looks untouched. Never pushes.
+	 */
+	autoCheckpoint: boolean;
+	/**
+	 * Start another leg automatically when a turn runs out of steps with work
+	 * still outstanding, rather than waiting to be told to continue.
+	 */
+	autoContinue: boolean;
+	/** Hard ceiling on legs per request, including the first. */
+	maxLegs: number;
+}
+
+export const DEFAULT_CODING: CodingSettings = {
+	autoCheckpoint: true,
+	autoContinue: true,
+	maxLegs: 3
 };
 
 export interface BudgetSettings {

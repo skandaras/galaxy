@@ -35,3 +35,11 @@ export const toolOutputBudgetChars = () => num('TOOL_OUTPUT_BUDGET_CHARS', 240_0
 
 /** Per-call cap on a single tool result, before the cumulative budget applies. */
 export const toolResultMaxChars = () => num('TOOL_RESULT_MAX_CHARS', 30_000);
+
+/**
+ * Model round-trips one coding turn may take — *not* tool calls, since a round
+ * can carry several. A model that calls one tool at a time spends these fast:
+ * a dozen file reads, a few edits and a test run left the old cap of 24 with
+ * nothing in hand at the point it should have been committing.
+ */
+export const codingMaxSteps = () => num('CODING_MAX_STEPS', 50);

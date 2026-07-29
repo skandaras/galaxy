@@ -81,6 +81,7 @@ Optional per-instance env you may add in `docker-compose.yml`:
 | `STREAM_TOTAL_TIMEOUT_MS` | Absolute ceiling on one model call, for a provider that trickles forever without finishing (default 1800000) |
 | `TOOL_OUTPUT_BUDGET_CHARS` | Tool output carried in one turn before the oldest results are dropped (default 240000). Every result is re-sent on each later step, so this bounds how large a turn's request can grow |
 | `TOOL_RESULT_MAX_CHARS` | Per-call cap on a single tool result (default 30000, hard ceiling 60000) |
+| `CODING_MAX_STEPS` | Model round-trips one coding turn may take (default 50). Counts round-trips, not tool calls — a model that calls one tool at a time spends one per file read. Raise it for large tasks; the agent continues automatically rather than stopping dead when it runs out |
 
 ## 3. Reverse proxy + Authelia
 
@@ -381,6 +382,9 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | Memory never runs | Admin → Memory: enabled? interval? It also skips when there's no new activity |
 | Deep research returns nothing, or always searches "1 queries" | A reasoning model spending its whole token budget thinking. Both the planner and the synthesis now retry with more room automatically; if it persists, raise Max tokens in Admin → Research or pick a non-reasoning model |
 | Deep research reports "no sources could be retrieved" | Search returned nothing — check the provider in Admin → Settings with the Test button. The answer that follows is general knowledge, not research |
+| Coding agent stops mid-task with nothing committed | It ran out of steps. It now says so, checkpoints the work and carries on by itself (Admin → Settings → Coding agent). Raise `CODING_MAX_STEPS` if it still needs more room per leg |
+| Coding session has `WIP checkpoint (auto)` commits | Work a turn left uncommitted, committed locally so it is not invisible. Nothing is pushed. Turn it off under Admin → Settings → Coding agent |
+| Resuming a coding session re-reads the whole repo | Should no longer happen: each turn carries a session-state block listing files already read and changed plus current git status. Check the Observatory shows the turn ending with a `stopReason` |
 | Coding agent fails with `TimeoutError` on a big repo | Fixed in this version — calls are now bounded by silence rather than total duration. If it recurs against a genuinely slow provider, raise `STREAM_IDLE_TIMEOUT_MS` |
 | Coding run reports dropping earlier tool results | Working as intended: the turn exceeded `TOOL_OUTPUT_BUDGET_CHARS` and shed its oldest tool output to keep the request sane. Raise it if the model needs more history at once |
 

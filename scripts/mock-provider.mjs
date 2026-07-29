@@ -262,7 +262,20 @@ const server = createServer(async (req, res) => {
 					delta(res, {}, 'stop');
 				}
 			} else {
-				if (toolResults === 0) call('read_file', { path: 'README.md' });
+				// Prior assistant replies in the history mean this is a continuation
+				// leg. The first leg's edits were checkpointed for us, so pick up at
+				// the push rather than starting the sequence again — which is the
+				// behaviour a resumed run is supposed to have.
+				const priorLegs = parsed.messages.filter(
+					(m) => m.role === 'assistant' && !m.tool_calls
+				).length;
+				if (priorLegs > 0) {
+					if (toolResults === 0) call('git_push', {});
+					else {
+						delta(res, { content: 'Done: picked up after the step limit and pushed.' });
+						delta(res, {}, 'stop');
+					}
+				} else if (toolResults === 0) call('read_file', { path: 'README.md' });
 				else if (toolResults === 1)
 					call('write_file', {
 						path: 'README.md',

@@ -21,6 +21,7 @@
 		timeoutMs: 20000,
 		iterationCap: 1
 	});
+	let coding = $state({ autoCheckpoint: true, autoContinue: true, maxLegs: 3 });
 	let saved = $state<string | null>(null);
 	let deployBusy = $state<string | null>(null);
 	let deployMsg = $state<string | null>(null);
@@ -93,13 +94,14 @@
 		budget = { ...data.budget };
 		github = { token: '', hasToken: Boolean(data.github?.hasToken) };
 		research = { baseUrl: '', ...data.research };
+		coding = { ...data.coding };
 	}
 	$effect(() => {
 		void load();
 	});
 
 	async function save(
-		key: 'websearch' | 'compaction' | 'budget' | 'github' | 'research',
+		key: 'websearch' | 'compaction' | 'budget' | 'github' | 'research' | 'coding',
 		value: unknown
 	) {
 		await fetch('/api/admin/settings', {
@@ -228,6 +230,31 @@
 		</div>
 		<button class="btn primary" onclick={() => save('research', research)}>
 			{saved === 'research' ? 'Saved ✓' : 'Save'}
+		</button>
+	</article>
+
+	<article class="card">
+		<h3>Coding agent</h3>
+		<div class="grid">
+			<label class="row">
+				<input type="checkbox" bind:checked={coding.autoCheckpoint} />
+				commit unfinished work at the end of a turn
+			</label>
+			<label class="row">
+				<input type="checkbox" bind:checked={coding.autoContinue} />
+				carry on automatically when a turn runs out of steps
+			</label>
+			<label>
+				max legs per request
+				<input type="number" min="1" max="10" bind:value={coding.maxLegs} />
+			</label>
+		</div>
+		<p class="hint">
+			A checkpoint commit is local only — nothing is pushed. Steps per leg are set with
+			<code>CODING_MAX_STEPS</code>.
+		</p>
+		<button class="btn primary" onclick={() => save('coding', coding)}>
+			{saved === 'coding' ? 'Saved ✓' : 'Save'}
 		</button>
 	</article>
 
