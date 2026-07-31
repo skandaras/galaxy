@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { desc, eq, gt, and } from 'drizzle-orm';
+import { desc, eq, gt, and, count } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import {
 	chats,
@@ -7,7 +7,6 @@ import {
 	memoryItems,
 	messages,
 	skillCandidates,
-	usageLog,
 	users
 } from '$lib/server/db/schema';
 import { listSkills, saveSkill } from '$lib/server/skills';
@@ -15,6 +14,8 @@ import { getSetting, setSetting } from '$lib/server/settings';
 import { getBudgetStatus } from './budget';
 import { getTaskConfig, pickModel } from './engine';
 import { emitEvent } from './events';
+import { extractJson } from './json';
+import { logUsage } from './usage';
 
 const WATERMARK_KEY = 'memory.watermark';
 const LAST_RUN_KEY = 'memory.lastRun';
@@ -112,7 +113,15 @@ export function memoryDigest(userId: string, maxItems = 20): string {
 	return ['', '[Memory — durable observations from past activity]', ...lines].join('\n');
 }
 
-/** Content-free per-user status for the admin panel. Never returns memory text. */
+/**
+ * Content-free per-user status for the admin panel. Never returns memory text.
+ *
+ * Counts come from one grouped query rather than fetching every user's items
+ * and calling `.length` on them — this runs on every Admin → Memory load, and
+ * reading the full text of every memory in the platform to produce a handful of
+ * integers was both slow and needlessly close to content this endpoint must
+ * never expose.
+ */
 export function memoryStatusByUser(): {
 	userId: string;
 	username: string;
@@ -120,6 +129,15 @@ export function memoryStatusByUser(): {
 	enabled: boolean;
 	activeItems: number;
 }[] {
+	const activeCounts = new Map(
+		db
+			.select({ userId: memoryItems.userId, n: count() })
+			.from(memoryItems)
+			.where(eq(memoryItems.status, 'active'))
+			.groupBy(memoryItems.userId)
+			.all()
+			.map((r) => [r.userId, r.n])
+	);
 	return db
 		.select()
 		.from(users)
@@ -131,7 +149,7 @@ export function memoryStatusByUser(): {
 				username: u.username,
 				lastRun: status.lastRun,
 				enabled: status.enabled,
-				activeItems: listMemoryItems(u.id).filter((m) => m.status === 'active').length
+				activeItems: activeCounts.get(u.id) ?? 0
 			};
 		});
 }
@@ -442,52 +460,16 @@ export async function runSkillOptimiser(
 	}
 }
 
-function extractJson(text: string): Record<string, unknown> | null {
-	const start = text.indexOf('{');
-	const end = text.lastIndexOf('}');
-	if (start === -1 || end <= start) return null;
-	try {
-		return JSON.parse(text.slice(start, end + 1));
-	} catch {
-		return null;
-	}
-}
+const logMemoryUsage = (
+	modelKey: string,
+	usage: { promptTokens: number; completionTokens: number } | null,
+	status: 'ok' | 'error',
+	userId?: string
+) => logUsage('memory', modelKey, usage, status, userId);
 
-function logMemoryUsage(
+const logOptimiserUsage = (
 	modelKey: string,
 	usage: { promptTokens: number; completionTokens: number } | null,
 	status: 'ok' | 'error',
 	userId?: string
-) {
-	insertUsage('memory', modelKey, usage, status, userId);
-}
-function logOptimiserUsage(
-	modelKey: string,
-	usage: { promptTokens: number; completionTokens: number } | null,
-	status: 'ok' | 'error',
-	userId?: string
-) {
-	insertUsage('skill-optimiser', modelKey, usage, status, userId);
-}
-function insertUsage(
-	task: string,
-	modelKey: string,
-	usage: { promptTokens: number; completionTokens: number } | null,
-	status: 'ok' | 'error',
-	userId?: string
-) {
-	db.insert(usageLog)
-		.values({
-			id: randomUUID(),
-			ts: new Date(),
-			userId: userId ?? null,
-			chatId: null,
-			task,
-			modelKey,
-			promptTokens: usage?.promptTokens ?? 0,
-			completionTokens: usage?.completionTokens ?? 0,
-			costUsd: null,
-			status
-		})
-		.run();
-}
+) => logUsage('skill-optimiser', modelKey, usage, status, userId);

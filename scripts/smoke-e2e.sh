@@ -152,6 +152,43 @@ api -X POST $B/api/skills -d '{"name":"smoke-skill","description":"smoke","body"
 MEM=$(api -X POST $B/api/memory/run)
 check "memory run" "$MEM" '"ran":true'
 
+# ---------------------------------------------------------------------------
+# UX audit → backlog. The interesting parts are that the agent is handed live
+# telemetry and the real interface source (which is NOT on disk in the built
+# image — it is inlined at build time), and that an idea already decided is
+# never proposed again.
+# ---------------------------------------------------------------------------
+api -X PUT $B/api/admin/task-configs -d "{\"task\":\"ux-audit\",\"primaryModelId\":\"$MODEL_ID\"}" > /dev/null
+UX=$(api -X POST $B/api/admin/ux/run)
+check "ux audit runs" "$UX" '"ran":true'
+check "ux audit files ideas" "$UX" '"ideas":2'
+BACKLOG=$(api $B/api/admin/ux)
+check "backlog lists the idea" "$BACKLOG" 'Explain why a run stopped'
+check "backlog ideas start open" "$BACKLOG" '"status":"open"'
+# The mock echoes what it could see, so this proves both inputs really arrived.
+check "audit saw live telemetry" "$BACKLOG" 'telemetry:true'
+check "audit saw the interface source" "$BACKLOG" 'composer-source:true'
+# ...and never conversation content: LANTERN-9 is in the Library and the smoke
+# chats above are full of text, none of which may reach a platform-wide surface.
+check "audit carries no chat content" "$(echo "$BACKLOG" | grep -c 'galaxy news')" "0"
+
+UX_A=$(echo "$BACKLOG" | jqn '.ideas[0].id')
+UX_B=$(echo "$BACKLOG" | jqn '.ideas[1].id')
+api -X PATCH $B/api/admin/ux/ideas/$UX_A -d '{"action":"actioned"}' > /dev/null
+api -X PATCH $B/api/admin/ux/ideas/$UX_B -d '{"action":"discard"}' > /dev/null
+DECIDED=$(api $B/api/admin/ux)
+check "actioned idea leaves the open list" "$DECIDED" '"status":"actioned"'
+check "discarded idea leaves the open list" "$DECIDED" '"status":"discarded"'
+check "no ideas left open" "$(echo "$DECIDED" | grep -c '"status":"open"')" "0"
+check "deciding twice 404s" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H 'content-type: application/json' -d '{"action":"discard"}' $B/api/admin/ux/ideas/$UX_A)" \
+  "404"
+
+# The whole point of keeping decided rows: the same proposals must not return.
+UX2=$(api -X POST $B/api/admin/ux/run)
+check "audit does not re-propose decided ideas" "$UX2" '"ideas":0'
+check "audit recognises them as already proposed" "$UX2" '"duplicates":2'
+
 # pages render
 for p in /chat /code /library /settings /admin /observatory; do
   code=$(curl -s -o /dev/null -w '%{http_code}' $B$p)

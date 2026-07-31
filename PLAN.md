@@ -70,7 +70,7 @@ Internet ─► Proxy ──┤
 
 ## Feature map (spec → implementation)
 
-1. **Per-task agents** — six core tasks: `coding`, `chat`, `deep-research`, `visual`, `memory`, `skill-optimiser`. Each is a `task_configs` row: editable system prompt, primary model + **one** backup model (any tool-capable model for coding — vendor-agnostic), tool allowlist, task-specific options.
+1. **Per-task agents** — seven core tasks: `coding`, `chat`, `deep-research`, `visual`, `memory`, `skill-optimiser`, `ux-audit`. Each is a `task_configs` row: editable system prompt, primary model + **one** backup model (any tool-capable model for coding — vendor-agnostic), tool allowlist, task-specific options.
 
 2. **Chat mode** — SSE streaming; model dropdown defaulting to the task config; web search toggle (default **on**) and deep research toggle beside the input; image/PDF attachments (images resized before vision calls, PDFs text-extracted); left pane of past chats; **Hidden toggle** — a hidden chat lives in memory only: never written to the DB, excluded from the memory job, scrubbed from logs.
 
@@ -147,7 +147,7 @@ Internet ─► Proxy ──┤
 - **Skill eval harness** — A/B test skill versions; pairs naturally with the skill-optimiser agent.
 - **Chat export** (markdown/JSON) and full data portability.
 - **Chat sharing / collaboration** between Authelia users.
-- **Observatory retention controls** — event pruning policies, export, anomaly summaries.
+- **Observatory retention controls** — ~~event pruning policies~~ **shipped**: admin-set retention windows for events and usage, trimmed by the scheduler (Admin → Settings → History retention). Export and anomaly summaries still outstanding.
 - **Postgres migration path** if it ever outgrows SQLite.
 
 ---
@@ -164,6 +164,7 @@ Each milestone ends **deployed on the dev subdomain**; promote to prod when stab
 - **M5 — Memory & optimisation:** memory cron with watermark + editable frequency, memory items, skill candidate approval queue, skill-optimiser task.
 - **M6 — Deep research + visual:** research pipeline with progress UI and citations, save-to-Library, Mermaid/HTML artifact rendering.
 - **M7 — Theme + mobile polish + promotion + docs:** ASCII-galaxy aesthetic, Theme settings with live preview + presets, PWA install, responsive audit, Promote/Rollback admin buttons, promotion-gate smoke suite, and **`docs/INSTALL.md`** — a start-to-finish Ubuntu server guide (Docker + compose deployment, reverse proxy + Authelia wiring, env vars, backups, dev→prod promotion) written last so it documents the platform as it actually landed.
+- **M8 — Self-review & housekeeping:** `ux-audit` task — a weekly agent that reviews aggregated usage telemetry plus the interface source (never conversation content) and files ideas into a **UX backlog** in Admin, where each is Actioned or Discarded and both decisions are replayed to future runs so nothing is proposed twice. Alongside it: the schema's first indexes, admin-set retention windows for events and usage, and a composer that grows with the text it holds.
 
 ## Verification
 

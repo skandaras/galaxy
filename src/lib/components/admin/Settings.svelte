@@ -22,6 +22,7 @@
 		iterationCap: 1
 	});
 	let coding = $state({ autoCheckpoint: true, autoContinue: true, maxLegs: 3 });
+	let retention = $state({ eventDays: 60, usageDays: 400 });
 	let saved = $state<string | null>(null);
 	let deployBusy = $state<string | null>(null);
 	let deployMsg = $state<string | null>(null);
@@ -95,13 +96,14 @@
 		github = { token: '', hasToken: Boolean(data.github?.hasToken) };
 		research = { baseUrl: '', ...data.research };
 		coding = { ...data.coding };
+		retention = { ...data.retention };
 	}
 	$effect(() => {
 		void load();
 	});
 
 	async function save(
-		key: 'websearch' | 'compaction' | 'budget' | 'github' | 'research' | 'coding',
+		key: 'websearch' | 'compaction' | 'budget' | 'github' | 'research' | 'coding' | 'retention',
 		value: unknown
 	) {
 		await fetch('/api/admin/settings', {
@@ -340,6 +342,29 @@
 		</div>
 		<button class="btn primary" onclick={() => save('compaction', compaction)}>
 			{saved === 'compaction' ? 'Saved ✓' : 'Save'}
+		</button>
+	</article>
+
+	<article class="card">
+		<h3>History retention</h3>
+		<div class="grid">
+			<label>
+				keep Observatory events (days)
+				<input type="number" min="0" max="3650" bind:value={retention.eventDays} />
+			</label>
+			<label>
+				keep usage history (days)
+				<input type="number" min="0" max="3650" bind:value={retention.usageDays} />
+			</label>
+		</div>
+		<p class="hint">
+			Older rows are trimmed by the background scheduler; 0 keeps everything. Events are the
+			fastest-growing table — one row per model call, tool call and job. Keep usage history at
+			least as long as the longest window you look at in Usage (up to 365 days), since the budget
+			cap and those charts read the same rows.
+		</p>
+		<button class="btn primary" onclick={() => save('retention', retention)}>
+			{saved === 'retention' ? 'Saved ✓' : 'Save'}
 		</button>
 	</article>
 </section>

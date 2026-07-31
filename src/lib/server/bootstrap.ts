@@ -12,7 +12,9 @@ const DEFAULT_PROMPTS: Record<string, string> = {
 	memory:
 		'You are the memory agent of Galaxy. Audit recent activity for durable patterns, preferences and candidate skills. Extract only what is clearly supported.',
 	'skill-optimiser':
-		'You are the skill optimiser of Galaxy. Review existing skills for clarity, overlap and effectiveness, and propose focused improvements.'
+		'You are the skill optimiser of Galaxy. Review existing skills for clarity, overlap and effectiveness, and propose focused improvements.',
+	'ux-audit':
+		'You are the UX reviewer of Galaxy, a self-hosted AI workspace used mainly by one owner on both desktop and phone. You are given aggregated usage telemetry and the actual interface source — never the content of anyone\'s conversations. Find friction the owner is living with but may have stopped noticing: dead ends, silent failures, states with no feedback, controls that are hard to reach on a small screen, and anything the telemetry shows people repeatedly retry, cancel or abandon. Prefer a few specific, well-evidenced ideas over many generic ones, and ground each in something you can actually point to — a numbers pattern or a named file and control. Never propose work that has already been proposed, whatever became of it.'
 };
 
 /** Idempotent boot seeding: make sure every core task has a config row. */

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real, primaryKey } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, primaryKey, index } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
 	id: text('id').primaryKey(),
@@ -25,49 +25,72 @@ export const settings = sqliteTable(
 
 // Observatory feed. Written by the engine from M1 on; events belonging to
 // hidden chats are streamed live but never inserted here.
-export const events = sqliteTable('events', {
-	id: text('id').primaryKey(),
-	ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),
-	userId: text('user_id'),
-	chatId: text('chat_id'),
-	task: text('task'),
-	type: text('type').notNull(),
-	name: text('name').notNull(),
-	status: text('status', { enum: ['ok', 'error', 'running'] }).notNull(),
-	durationMs: integer('duration_ms'),
-	detail: text('detail', { mode: 'json' })
-});
+//
+// Every read is "newest first, optionally narrowed" (see /api/events), and the
+// table is the fastest-growing one in the schema — so the indexes are on ts and
+// on the two columns the feed filters by, each paired with ts so the sort is
+// served by the index rather than a temp b-tree.
+export const events = sqliteTable(
+	'events',
+	{
+		id: text('id').primaryKey(),
+		ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),
+		userId: text('user_id'),
+		chatId: text('chat_id'),
+		task: text('task'),
+		type: text('type').notNull(),
+		name: text('name').notNull(),
+		status: text('status', { enum: ['ok', 'error', 'running'] }).notNull(),
+		durationMs: integer('duration_ms'),
+		detail: text('detail', { mode: 'json' })
+	},
+	(t) => [
+		index('events_ts_idx').on(t.ts),
+		index('events_user_ts_idx').on(t.userId, t.ts),
+		index('events_chat_ts_idx').on(t.chatId, t.ts)
+	]
+);
 
 // Hidden chats never appear here — they live only in the in-memory store
 // (see $lib/server/chats.ts) and vanish on restart.
-export const chats = sqliteTable('chats', {
-	id: text('id').primaryKey(),
-	userId: text('user_id').notNull(),
-	mode: text('mode', { enum: ['chat', 'code'] }).notNull().default('chat'),
-	title: text('title').notNull().default('New chat'),
-	/**
-	 * Model this chat last used, so reopening it restores that choice instead of
-	 * inheriting whatever the composer happened to be set to. Nullable for chats
-	 * that predate this, and may name a model that has since been deleted or
-	 * disabled — callers fall back to the task default.
-	 */
-	modelId: text('model_id'),
-	compactSummary: text('compact_summary'),
-	compactedUpTo: integer('compacted_up_to').notNull().default(0),
-	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-	updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
-});
+export const chats = sqliteTable(
+	'chats',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id').notNull(),
+		mode: text('mode', { enum: ['chat', 'code'] }).notNull().default('chat'),
+		title: text('title').notNull().default('New chat'),
+		/**
+		 * Model this chat last used, so reopening it restores that choice instead of
+		 * inheriting whatever the composer happened to be set to. Nullable for chats
+		 * that predate this, and may name a model that has since been deleted or
+		 * disabled — callers fall back to the task default.
+		 */
+		modelId: text('model_id'),
+		compactSummary: text('compact_summary'),
+		compactedUpTo: integer('compacted_up_to').notNull().default(0),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	// listChats() is per-user, newest first — the history pane's only query.
+	(t) => [index('chats_user_updated_idx').on(t.userId, t.updatedAt)]
+);
 
-export const messages = sqliteTable('messages', {
-	id: text('id').primaryKey(),
-	chatId: text('chat_id').notNull(),
-	seq: integer('seq').notNull(),
-	role: text('role', { enum: ['user', 'assistant', 'tool'] }).notNull(),
-	content: text('content').notNull(),
-	attachments: text('attachments', { mode: 'json' }).$type<AttachmentRef[] | null>(),
-	modelKey: text('model_key'),
-	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
-});
+export const messages = sqliteTable(
+	'messages',
+	{
+		id: text('id').primaryKey(),
+		chatId: text('chat_id').notNull(),
+		seq: integer('seq').notNull(),
+		role: text('role', { enum: ['user', 'assistant', 'tool'] }).notNull(),
+		content: text('content').notNull(),
+		attachments: text('attachments', { mode: 'json' }).$type<AttachmentRef[] | null>(),
+		modelKey: text('model_key'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	// Every turn reads a whole chat in seq order, so the sort rides the index.
+	(t) => [index('messages_chat_seq_idx').on(t.chatId, t.seq)]
+);
 
 export interface AttachmentRef {
 	id: string;
@@ -79,20 +102,24 @@ export interface AttachmentRef {
 	textChars?: number;
 }
 
-export const attachments = sqliteTable('attachments', {
-	id: text('id').primaryKey(),
-	chatId: text('chat_id').notNull(),
-	name: text('name').notNull(),
-	mime: text('mime').notNull(),
-	size: integer('size').notNull(),
-	path: text('path').notNull(),
-	// Documents are text-extracted once at upload; images go to the model as
-	// data URLs instead and leave these two columns empty.
-	kind: text('kind', { enum: ['image', 'document'] }).notNull().default('image'),
-	extractedText: text('extracted_text'),
-	textChars: integer('text_chars').notNull().default(0),
-	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
-});
+export const attachments = sqliteTable(
+	'attachments',
+	{
+		id: text('id').primaryKey(),
+		chatId: text('chat_id').notNull(),
+		name: text('name').notNull(),
+		mime: text('mime').notNull(),
+		size: integer('size').notNull(),
+		path: text('path').notNull(),
+		// Documents are text-extracted once at upload; images go to the model as
+		// data URLs instead and leave these two columns empty.
+		kind: text('kind', { enum: ['image', 'document'] }).notNull().default('image'),
+		extractedText: text('extracted_text'),
+		textChars: integer('text_chars').notNull().default(0),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [index('attachments_chat_idx').on(t.chatId)]
+);
 
 export const providers = sqliteTable('providers', {
 	id: text('id').primaryKey(),
@@ -123,7 +150,8 @@ export const CORE_TASKS = [
 	'deep-research',
 	'visual',
 	'memory',
-	'skill-optimiser'
+	'skill-optimiser',
+	'ux-audit'
 ] as const;
 export type CoreTask = (typeof CORE_TASKS)[number];
 
@@ -137,13 +165,17 @@ export const taskConfigs = sqliteTable('task_configs', {
 
 // Every save of a task's system prompt lands here, newest first, so edits
 // are always recoverable (restore = save an old version as the new current).
-export const taskPromptVersions = sqliteTable('task_prompt_versions', {
-	id: text('id').primaryKey(),
-	task: text('task').notNull(),
-	systemPrompt: text('system_prompt').notNull(),
-	author: text('author').notNull(),
-	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
-});
+export const taskPromptVersions = sqliteTable(
+	'task_prompt_versions',
+	{
+		id: text('id').primaryKey(),
+		task: text('task').notNull(),
+		systemPrompt: text('system_prompt').notNull(),
+		author: text('author').notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [index('task_prompt_versions_task_created_idx').on(t.task, t.createdAt)]
+);
 
 // One coding session per code-mode chat: a cloned workspace on the shared
 // data volume plus the branch the agent works on.
@@ -190,18 +222,23 @@ export const skills = sqliteTable('skills', {
 
 // Durable observations the memory agent extracts from activity. Injected
 // into the context bootstrap while active.
-export const memoryItems = sqliteTable('memory_items', {
-	id: text('id').primaryKey(),
-	// Owner. Nullable so the column can be added without breaking a rollback to
-	// an image that inserts without it (expand-migrate-contract); every read
-	// filters by owner, so a null row is simply invisible.
-	userId: text('user_id'),
-	kind: text('kind', { enum: ['preference', 'pattern', 'fact'] }).notNull(),
-	content: text('content').notNull(),
-	source: text('source'),
-	status: text('status', { enum: ['active', 'archived'] }).notNull().default('active'),
-	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
-});
+export const memoryItems = sqliteTable(
+	'memory_items',
+	{
+		id: text('id').primaryKey(),
+		// Owner. Nullable so the column can be added without breaking a rollback to
+		// an image that inserts without it (expand-migrate-contract); every read
+		// filters by owner, so a null row is simply invisible.
+		userId: text('user_id'),
+		kind: text('kind', { enum: ['preference', 'pattern', 'fact'] }).notNull(),
+		content: text('content').notNull(),
+		source: text('source'),
+		status: text('status', { enum: ['active', 'archived'] }).notNull().default('active'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	// Reads are always "this user's items, usually the active ones".
+	(t) => [index('memory_items_user_status_idx').on(t.userId, t.status)]
+);
 
 // Skills proposed by the memory/optimiser agents. Never auto-activated:
 // a human approves (which writes the real skill) or rejects.
@@ -271,31 +308,82 @@ export const mcpTools = sqliteTable('mcp_tools', {
 	// governed by exactly one mechanism.
 });
 
-export const usageLog = sqliteTable('usage_log', {
-	id: text('id').primaryKey(),
-	ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),
-	userId: text('user_id'),
-	chatId: text('chat_id'),
-	task: text('task').notNull(),
-	modelKey: text('model_key').notNull(),
-	promptTokens: integer('prompt_tokens').notNull().default(0),
-	completionTokens: integer('completion_tokens').notNull().default(0),
-	costUsd: real('cost_usd'),
-	status: text('status', { enum: ['ok', 'error'] }).notNull()
-});
+// Indexed on ts because getBudgetStatus() sums this period's rows before every
+// single turn, and the usage dashboard groups over the same window.
+export const usageLog = sqliteTable(
+	'usage_log',
+	{
+		id: text('id').primaryKey(),
+		ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),
+		userId: text('user_id'),
+		chatId: text('chat_id'),
+		task: text('task').notNull(),
+		modelKey: text('model_key').notNull(),
+		promptTokens: integer('prompt_tokens').notNull().default(0),
+		completionTokens: integer('completion_tokens').notNull().default(0),
+		costUsd: real('cost_usd'),
+		status: text('status', { enum: ['ok', 'error'] }).notNull()
+	},
+	(t) => [index('usage_log_ts_idx').on(t.ts), index('usage_log_user_ts_idx').on(t.userId, t.ts)]
+);
 
 // Job history for non-hidden chats; the live stream state is in-memory
 // (see $lib/server/engine/jobs.ts).
-export const jobs = sqliteTable('jobs', {
-	id: text('id').primaryKey(),
-	chatId: text('chat_id'),
-	userId: text('user_id').notNull(),
-	task: text('task').notNull(),
-	// 'cancelled' = stopped by the user; the partial reply is still saved.
-	// SQLite stores this as plain TEXT with no CHECK, so adding a value here is
-	// a type-level change only and needs no migration.
-	status: text('status', { enum: ['running', 'done', 'error', 'cancelled'] }).notNull(),
-	error: text('error'),
-	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-	finishedAt: integer('finished_at', { mode: 'timestamp_ms' })
-});
+export const jobs = sqliteTable(
+	'jobs',
+	{
+		id: text('id').primaryKey(),
+		chatId: text('chat_id'),
+		userId: text('user_id').notNull(),
+		task: text('task').notNull(),
+		// 'cancelled' = stopped by the user; the partial reply is still saved.
+		// SQLite stores this as plain TEXT with no CHECK, so adding a value here is
+		// a type-level change only and needs no migration.
+		status: text('status', { enum: ['running', 'done', 'error', 'cancelled'] }).notNull(),
+		error: text('error'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		finishedAt: integer('finished_at', { mode: 'timestamp_ms' })
+	},
+	(t) => [index('jobs_created_idx').on(t.createdAt), index('jobs_chat_idx').on(t.chatId)]
+);
+
+/**
+ * The UX backlog: ideas the weekly ux-audit agent proposes for the owner to
+ * skim. Nothing here is ever actioned automatically — a human marks each one
+ * `actioned` or `discarded`, and both simply dismiss it from the open list.
+ *
+ * Rows are never deleted. Decided ideas are the agent's institutional memory:
+ * every run is shown what it has already proposed, and what became of it, so it
+ * stops re-raising the same thing. `fingerprint` is a normalised form of the
+ * title and enforces that in code as well as in the prompt.
+ */
+export const uxIdeas = sqliteTable(
+	'ux_ideas',
+	{
+		id: text('id').primaryKey(),
+		title: text('title').notNull(),
+		/** Free text, but the prompt asks for one of the known surfaces. */
+		area: text('area').notNull().default('general'),
+		severity: text('severity', { enum: ['low', 'medium', 'high'] })
+			.notNull()
+			.default('medium'),
+		/** Rough size: s/m/l. Advisory only — nothing schedules off it. */
+		effort: text('effort', { enum: ['s', 'm', 'l'] })
+			.notNull()
+			.default('m'),
+		problem: text('problem').notNull().default(''),
+		proposal: text('proposal').notNull().default(''),
+		/** What in the telemetry or the UI source prompted this. */
+		evidence: text('evidence').notNull().default(''),
+		fingerprint: text('fingerprint').notNull(),
+		status: text('status', { enum: ['open', 'actioned', 'discarded'] })
+			.notNull()
+			.default('open'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		decidedAt: integer('decided_at', { mode: 'timestamp_ms' })
+	},
+	(t) => [
+		index('ux_ideas_status_created_idx').on(t.status, t.createdAt),
+		index('ux_ideas_fingerprint_idx').on(t.fingerprint)
+	]
+);
