@@ -71,6 +71,13 @@
       "when": 1785208653446,
       "tag": "0009_conscious_bastion",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1785501723341,
+      "tag": "0010_friendly_shaman",
+      "breakpoints": true
     }
   ]
 }

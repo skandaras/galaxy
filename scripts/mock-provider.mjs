@@ -139,6 +139,36 @@ const server = createServer(async (req, res) => {
 						}
 					]
 				});
+			} else if (userText.includes('UX-AUDIT')) {
+				// Echo back something only a reader of the real prompt could know,
+				// so the smoke test can prove the audit was handed live telemetry
+				// and the actual interface source. The titles are fixed on purpose:
+				// running the audit twice must file these once and then recognise
+				// them as already proposed.
+				const sawComposer = userText.includes('class="composer"');
+				const sawTelemetry = userText.includes('USAGE TELEMETRY');
+				content = JSON.stringify({
+					ideas: [
+						{
+							title: 'Explain why a run stopped',
+							area: 'chat',
+							severity: 'high',
+							effort: 'm',
+							problem: 'A cancelled run leaves no explanation behind.',
+							proposal: 'Show the stop reason inline in the thread.',
+							evidence: `telemetry:${sawTelemetry} composer-source:${sawComposer}`
+						},
+						{
+							title: 'Make the model picker reachable on a phone',
+							area: 'mobile',
+							severity: 'medium',
+							effort: 's',
+							problem: 'The picker sits below the fold on a small screen.',
+							proposal: 'Move it into the composer options row.',
+							evidence: 'mock'
+						}
+					]
+				});
 			} else if (userText.includes('SKILL-OPTIMISE')) {
 				content = JSON.stringify({
 					skill_candidates: [

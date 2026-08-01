@@ -126,6 +126,41 @@ export interface MemorySettings {
 
 export const DEFAULT_MEMORY: MemorySettings = { enabled: true, intervalHours: 12 };
 
+export interface UxAuditSettings {
+	enabled: boolean;
+	/** 168 = weekly. Global, not per user: the audit reviews the platform. */
+	intervalHours: number;
+	/**
+	 * Ideas one run may file. A cap matters more here than elsewhere: an
+	 * enthusiastic model can bury a genuinely good idea under a dozen
+	 * restatements of the same one, and nobody skims a list of thirty.
+	 */
+	maxIdeasPerRun: number;
+}
+
+export const DEFAULT_UX_AUDIT: UxAuditSettings = {
+	enabled: true,
+	intervalHours: 168,
+	maxIdeasPerRun: 8
+};
+
+export interface RetentionSettings {
+	/**
+	 * Days of Observatory history to keep. Events are the fastest-growing table
+	 * (one row per model call, tool call and job) and are diagnostic, not
+	 * financial — 0 disables pruning entirely.
+	 */
+	eventDays: number;
+	/**
+	 * Days of usage history to keep. Longer by default because this is what the
+	 * budget cap and the usage dashboard read; the dashboard allows a 365-day
+	 * window, so anything below that silently truncates its own charts.
+	 */
+	usageDays: number;
+}
+
+export const DEFAULT_RETENTION: RetentionSettings = { eventDays: 60, usageDays: 400 };
+
 export interface CompactionSettings {
 	/** Compact when estimated context exceeds this share of the model's window. */
 	ratio: number;

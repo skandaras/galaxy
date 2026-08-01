@@ -8,6 +8,8 @@ import {
 	DEFAULT_COMPACTION,
 	DEFAULT_MEMORY,
 	DEFAULT_RESEARCH,
+	DEFAULT_RETENTION,
+	DEFAULT_UX_AUDIT,
 	DEFAULT_WEB_SEARCH,
 	getSetting,
 	setSetting
@@ -21,7 +23,9 @@ const KNOWN_KEYS = [
 	'github',
 	'memory',
 	'research',
-	'coding'
+	'coding',
+	'uxaudit',
+	'retention'
 ] as const;
 const DEFAULTS: Record<string, unknown> = {
 	websearch: DEFAULT_WEB_SEARCH,
@@ -30,7 +34,9 @@ const DEFAULTS: Record<string, unknown> = {
 	github: {},
 	memory: DEFAULT_MEMORY,
 	research: DEFAULT_RESEARCH,
-	coding: DEFAULT_CODING
+	coding: DEFAULT_CODING,
+	uxaudit: DEFAULT_UX_AUDIT,
+	retention: DEFAULT_RETENTION
 };
 
 // Fields the UI submits in plaintext that are stored encrypted. An empty

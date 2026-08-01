@@ -4,6 +4,7 @@
 	import { ATTACHMENT_ACCEPT, attachmentIcon, screenFiles } from '$lib/attachment-types';
 	import { clearDraft, draftKey, getDraft, setDraft } from '$lib/composer-drafts.svelte';
 	import { createAutoscroll } from '$lib/autoscroll.svelte';
+	import { autoresize } from '$lib/autoresize';
 
 	interface ChatMeta {
 		id: string;
@@ -501,6 +502,7 @@
 						? 'Hidden chat — nothing here is stored'
 						: 'Message Galaxy…'}
 					bind:value={input}
+					use:autoresize={input}
 					oninput={stashDraft}
 					onkeydown={onKeydown}
 				></textarea>
@@ -814,15 +816,23 @@
 	}
 	textarea {
 		flex: 1;
+		box-sizing: border-box;
 		background: var(--bg-pane);
 		border: 1px solid var(--border);
 		border-radius: 8px;
 		color: var(--fg);
 		font-family: inherit;
 		font-size: 0.88rem;
+		line-height: 1.45;
 		padding: 0.6rem 0.8rem;
+		/* Grows with the text (see $lib/autoresize) from the two rows it starts
+		   at up to roughly eight, then scrolls — so pasting a long brief doesn't
+		   leave you typing through a letterbox, and doesn't swallow the thread
+		   either. The cap is here rather than in JS so it holds before hydration. */
+		max-height: 12rem;
 		resize: none;
 		outline: none;
+		overflow-y: auto;
 	}
 	textarea:focus {
 		border-color: var(--accent);
