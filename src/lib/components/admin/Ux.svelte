@@ -15,6 +15,9 @@
 
 	let settings = $state({ enabled: true, intervalHours: 168, maxIdeasPerRun: 8 });
 	let ideas = $state<Idea[]>([]);
+	let environment = $state('dev');
+	/** 0 on prod, where the decision history is kept permanently. */
+	let pruneDays = $state(0);
 	let lastRun = $state(0);
 	let nextDue = $state(0);
 	let expanded = $state<string | null>(null);
@@ -25,6 +28,8 @@
 		const data = await (await fetch('/api/admin/ux')).json();
 		settings = { ...data.settings };
 		ideas = data.ideas;
+		environment = data.environment;
+		pruneDays = data.pruneDays;
 		lastRun = data.lastRun;
 		nextDue = data.nextDue;
 	}
@@ -105,11 +110,22 @@
 	</article>
 
 	<article class="card">
-		<h3>Backlog {open.length ? `(${open.length} open)` : ''}</h3>
+		<h3>
+			Backlog {open.length ? `(${open.length} open)` : ''}
+			<span class="env" class:prod={environment === 'prod'}>{environment}</span>
+		</h3>
 		<p class="hint">
 			Ideas only — nothing here is ever built automatically. <strong>Actioned</strong> and
 			<strong>Discard</strong> both dismiss an idea; the difference is only what it tells the next
 			audit, which sees every past decision and won't raise the same thing twice.
+		</p>
+		<p class="hint">
+			This backlog belongs to the <strong>{environment}</strong> instance alone — dev and prod keep
+			separate databases, so an idea decided on one is invisible to the other.
+			{#if pruneDays > 0}
+				Ideas here are dropped after {pruneDays} days, since this instance exists to prove the
+				audit still runs rather than to hold a backlog worth keeping.
+			{/if}
 		</p>
 		{#each open as idea (idea.id)}
 			<div class="idea">
@@ -285,6 +301,19 @@
 	.decide {
 		display: flex;
 		gap: 0.4rem;
+	}
+	.env {
+		font-size: 0.6rem;
+		letter-spacing: 0.1em;
+		border: 1px solid var(--border);
+		border-radius: 3px;
+		padding: 0 0.3rem;
+		margin-left: 0.4rem;
+		color: var(--fg-dim);
+	}
+	.env.prod {
+		border-color: var(--accent);
+		color: var(--accent);
 	}
 	.idea-problem {
 		font-size: 0.75rem;

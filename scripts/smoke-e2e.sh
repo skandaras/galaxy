@@ -84,15 +84,45 @@ MJOB=$(api -X POST $B/api/chats/$MCHAT/messages -d "{\"content\":\"hello\",\"mod
 curl -sN --max-time 30 $B/api/jobs/$MJOB/stream > /dev/null
 check "chat remembered the model it used" "$(api $B/api/chats/$MCHAT | jqn .chat.modelId)" "$MODEL_ID"
 
-# hidden chat leaves no trace
+# Hidden chat leaves no trace. The content check is not enough on its own: the
+# chat id used to reach usage_log unconditionally, which made a hidden
+# conversation reconstructable by id, timing and cost without a word of it
+# being stored. Every table that carries a chat_id is checked.
 HID=$(api -X POST $B/api/chats -d '{"hidden":true}' | jqn .id)
 HJOB=$(api -X POST $B/api/chats/$HID/messages -d '{"content":"secret smoke","webSearch":false}' | jqn .jobId)
 curl -sN --max-time 20 $B/api/jobs/$HJOB/stream > /dev/null
 LEAK=$(node --input-type=module -e "
 import Database from 'better-sqlite3';
 const db = new Database('$DATA/galaxy.db');
-console.log(db.prepare(\"SELECT COUNT(*) c FROM messages WHERE content LIKE '%secret smoke%'\").get().c);")
-check "hidden chat not persisted" "leak=$LEAK" "leak=0"
+const one = (sql) => db.prepare(sql).get().c;
+console.log([
+  one(\"SELECT COUNT(*) c FROM messages WHERE content LIKE '%secret smoke%'\"),
+  one(\"SELECT COUNT(*) c FROM chats WHERE id = '$HID'\"),
+  one(\"SELECT COUNT(*) c FROM usage_log WHERE chat_id = '$HID'\"),
+  one(\"SELECT COUNT(*) c FROM events WHERE chat_id = '$HID'\"),
+  one(\"SELECT COUNT(*) c FROM jobs WHERE chat_id = '$HID'\")
+].join(','));")
+check "hidden chat not persisted" "leak=$LEAK" "0,0,0,0,0"
+
+# A turn that cannot reach its provider must say so in the Observatory, in a
+# hidden chat as much as a visible one — that record is the only way to find out
+# why a run produced nothing. For the hidden one it carries a reason and no id.
+for VIS in visible hidden; do
+  [ "$VIS" = hidden ] && HFLAG='{"hidden":true}' || HFLAG='{}'
+  FCHAT=$(api -X POST $B/api/chats -d "$HFLAG" | jqn .id)
+  FJOB=$(api -X POST $B/api/chats/$FCHAT/messages -d '{"content":"DEAD-PROVIDER","webSearch":false}' | jqn .jobId)
+  FSTREAM=$(curl -sN --max-time 40 $B/api/jobs/$FJOB/stream)
+  check "$VIS failed turn reports an error" "$FSTREAM" '"type":"error"'
+  FEV=$(node --input-type=module -e "
+import Database from 'better-sqlite3';
+const db = new Database('$DATA/galaxy.db');
+const r = db.prepare(\"SELECT chat_id, detail FROM events WHERE name='chat.turn' AND status='error' ORDER BY ts DESC LIMIT 1\").get();
+console.log(JSON.stringify(r ?? {}));")
+  check "$VIS failed turn is in the Observatory" "$FEV" 'reason'
+  if [ "$VIS" = hidden ]; then
+    check "hidden failure names no chat" "$(echo "$FEV" | grep -c "$FCHAT")" "0"
+  fi
+done
 
 # deep research pipeline
 RCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
@@ -188,6 +218,11 @@ check "deciding twice 404s" \
 UX2=$(api -X POST $B/api/admin/ux/run)
 check "audit does not re-propose decided ideas" "$UX2" '"ideas":0'
 check "audit recognises them as already proposed" "$UX2" '"duplicates":2'
+
+# The backlog names its instance, because dev and prod each keep their own and
+# a decision made on one is invisible to the other.
+check "backlog names its environment" "$BACKLOG" '"environment":"dev"'
+check "dev backlog advertises a prune window" "$BACKLOG" '"pruneDays":14'
 
 # pages render
 for p in /chat /code /library /settings /admin /observatory; do

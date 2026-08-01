@@ -157,9 +157,23 @@ export interface RetentionSettings {
 	 * window, so anything below that silently truncates its own charts.
 	 */
 	usageDays: number;
+	/**
+	 * Days to keep UX backlog ideas — **non-production instances only**.
+	 *
+	 * Prod never prunes: its record of what has been actioned or discarded is the
+	 * entire mechanism that stops the audit re-proposing the same thing. A dev
+	 * instance runs the audit to prove each release still works, so its list is
+	 * throwaway, and letting it accumulate would suppress ideas on dev that
+	 * nobody ever actually read. 0 disables pruning there too.
+	 */
+	uxIdeaDays: number;
 }
 
-export const DEFAULT_RETENTION: RetentionSettings = { eventDays: 60, usageDays: 400 };
+export const DEFAULT_RETENTION: RetentionSettings = {
+	eventDays: 60,
+	usageDays: 400,
+	uxIdeaDays: 14
+};
 
 export interface CompactionSettings {
 	/** Compact when estimated context exceeds this share of the model's window. */

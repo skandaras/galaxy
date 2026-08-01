@@ -22,7 +22,7 @@
 		iterationCap: 1
 	});
 	let coding = $state({ autoCheckpoint: true, autoContinue: true, maxLegs: 3 });
-	let retention = $state({ eventDays: 60, usageDays: 400 });
+	let retention = $state({ eventDays: 60, usageDays: 400, uxIdeaDays: 14 });
 	let saved = $state<string | null>(null);
 	let deployBusy = $state<string | null>(null);
 	let deployMsg = $state<string | null>(null);
@@ -356,12 +356,18 @@
 				keep usage history (days)
 				<input type="number" min="0" max="3650" bind:value={retention.usageDays} />
 			</label>
+			<label>
+				keep UX ideas on dev (days)
+				<input type="number" min="0" max="3650" bind:value={retention.uxIdeaDays} />
+			</label>
 		</div>
 		<p class="hint">
 			Older rows are trimmed by the background scheduler; 0 keeps everything. Events are the
 			fastest-growing table — one row per model call, tool call and job. Keep usage history at
 			least as long as the longest window you look at in Usage (up to 365 days), since the budget
-			cap and those charts read the same rows.
+			cap and those charts read the same rows. The UX window applies to
+			<strong>non-production instances only</strong> — on prod the backlog's decision history is
+			kept permanently, because it is what stops the audit re-proposing what you already dismissed.
 		</p>
 		<button class="btn primary" onclick={() => save('retention', retention)}>
 			{saved === 'retention' ? 'Saved ✓' : 'Save'}

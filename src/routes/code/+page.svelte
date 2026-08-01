@@ -5,6 +5,7 @@
 	import { clearDraft, draftKey, getDraft, setDraft } from '$lib/composer-drafts.svelte';
 	import { createAutoscroll } from '$lib/autoscroll.svelte';
 	import { autoresize } from '$lib/autoresize';
+	import { hasFinePointer } from '$lib/pointer';
 	import { copyText } from '$lib/clipboard';
 
 	interface ChatMeta {
@@ -97,6 +98,13 @@
 	let errorBanner = $state<string | null>(null);
 	let diffText = $state<string | null>(null);
 	let source: EventSource | null = null;
+	/**
+	 * Reconnects spent on the current run. Recovery reattaches to a run that is
+	 * still going, so a stream endpoint that is broken rather than merely
+	 * interrupted would otherwise reattach, fail, and reattach forever.
+	 */
+	let recoveries = 0;
+	const MAX_RECOVERIES = 3;
 
 	onMount(async () => {
 		const [chatsRes, modelsRes, reposRes] = await Promise.all([
@@ -270,8 +278,10 @@
 		await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST' }).catch(() => {});
 	}
 
-	function attach(jobId: string) {
+	/** `carriedRecoveries` keeps the reconnect budget across a reattach. */
+	function attach(jobId: string, carriedRecoveries = 0) {
 		closeStream();
+		recoveries = carriedRecoveries;
 		activeJobId = jobId;
 		stopping = false;
 		streaming = true;
@@ -304,8 +314,56 @@
 			}
 		};
 		source.onerror = () => {
-			if (streaming) finalize(false);
+			// The connection dropped mid-run. The turn usually finished
+			// server-side, so reconcile rather than leaving the view blank.
+			if (streaming) void recoverStream();
 		};
+	}
+
+	/**
+	 * Reconcile with the server after an interrupted stream: re-read the session
+	 * so a reply that did complete shows up, reattach if the run is still going,
+	 * and only fall back to the partial text when the server has nothing.
+	 */
+	async function recoverStream() {
+		const chatId = current?.chatId;
+		const partial = streamText;
+		const partialModel = streamModel;
+		finalize(false);
+		if (!chatId) return;
+
+		const res = await fetch(`/api/code/sessions/${chatId}`).catch(() => null);
+		if (!res?.ok) {
+			if (partial) appendLocalAssistant(partial, partialModel);
+			errorBanner = 'Lost the connection to this run — reopen the session to see how it ended.';
+			return;
+		}
+
+		const data = await res.json();
+		messages = data.messages.filter((m: Msg) => m.role !== 'tool');
+		if (data.runningJobId && recoveries < MAX_RECOVERIES) {
+			recoveries++;
+			attach(data.runningJobId, recoveries);
+			return;
+		}
+		if (data.runningJobId) {
+			errorBanner = 'Kept losing the connection to this run — reopen the session to catch up.';
+			return;
+		}
+		const answered = messages.at(-1)?.role === 'assistant';
+		if (!answered && partial) {
+			appendLocalAssistant(partial, partialModel);
+			errorBanner = 'The connection dropped mid-run — this reply is incomplete.';
+		} else if (!answered) {
+			errorBanner = 'That run ended without a reply. Check the Observatory for the reason.';
+		}
+	}
+
+	function appendLocalAssistant(content: string, modelKey: string) {
+		messages = [
+			...messages,
+			{ id: `local-a-${Date.now()}`, role: 'assistant', content, modelKey }
+		];
 	}
 
 	function finalize(commit = true) {
@@ -387,14 +445,25 @@
 		setTimeout(() => (diffCopied = false), 2000);
 	}
 
+	/**
+	 * Enter sends on a keyboard, and inserts a newline on a touch screen — where
+	 * there is no Shift-Enter, so Enter-to-send left no way to write a second
+	 * line at all. Coding briefs are the longest thing anyone types here, which
+	 * makes it the worse place to lose multi-line input.
+	 */
 	function onKeydown(ev: KeyboardEvent) {
-		if (ev.key === 'Enter' && !ev.shiftKey) {
-			ev.preventDefault();
-			void send();
-		}
+		// Mid-composition Enter commits the IME candidate; it must never send.
+		if (ev.key !== 'Enter' || ev.isComposing) return;
+		if (ev.shiftKey || !hasFinePointer()) return;
+		ev.preventDefault();
+		void send();
 	}
 
 	const lastAssistantExists = $derived(messages.some((m) => m.role === 'assistant'));
+	/** Mirrors the guard at the top of send(), so the button can't look live and do nothing. */
+	const canSend = $derived(
+		Boolean(input.trim() || pendingFiles.length || uploadedRefs.length) && !streaming && !!current
+	);
 
 	const selectedModel = $derived(models.find((m) => m.id === selectedModelId) ?? null);
 	const pendingImages = $derived(pendingFiles.filter((f) => f.type.startsWith('image/')).length);
@@ -591,7 +660,13 @@
 							aria-label="Stop the run">{stopping ? '…' : '■'}</button
 						>
 					{:else}
-						<button class="btn send" onclick={() => send()} aria-label="Send message">➤</button>
+						<button
+							class="btn send"
+							onclick={() => send()}
+							disabled={!canSend}
+							title={canSend ? 'Send message' : 'Type a message or attach a file first'}
+							aria-label="Send message">➤</button
+						>
 					{/if}
 				</div>
 				<div class="composer-opts">
@@ -1085,6 +1160,15 @@
 		}
 		.session-list.open {
 			transform: translateX(0);
+		}
+	}
+
+	/* Reveal-on-hover hides these controls permanently on a touch screen, where
+	   there is no hover to reveal them with — same treatment as the chat list
+	   and CodeBlock's copy button. Deleting a session already confirms. */
+	@media (hover: none) {
+		.session-list .icon {
+			display: inline;
 		}
 	}
 </style>

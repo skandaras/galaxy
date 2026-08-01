@@ -255,7 +255,7 @@ async function runResearch(
 				},
 				{ persist }
 			);
-			logUsage(opts, choice, totalUsage, 'error');
+			logUsage({ ...opts, persist }, choice, totalUsage, 'error');
 			failJob(job, `Synthesis failed: ${String(err)}`);
 			return;
 		}
@@ -283,7 +283,7 @@ async function runResearch(
 			},
 			{ persist }
 		);
-		logUsage(opts, choice, totalUsage, 'error');
+		logUsage({ ...opts, persist }, choice, totalUsage, 'error');
 		failJob(job, `Deep research produced no answer. ${why}`);
 		return;
 	}
@@ -299,7 +299,7 @@ async function runResearch(
 		content: answer,
 		modelKey: choice.model.modelKey
 	});
-	logUsage(opts, choice, totalUsage, 'ok');
+	logUsage({ ...opts, persist }, choice, totalUsage, 'ok');
 	emitEvent(
 		{
 			userId: opts.userId,
@@ -545,7 +545,7 @@ export function htmlToText(html: string): string {
 }
 
 function logUsage(
-	opts: { userId: string; chatId: string },
+	opts: { userId: string; chatId: string; persist: boolean },
 	choice: ModelChoice,
 	usage: Usage,
 	status: 'ok' | 'error'
@@ -561,7 +561,9 @@ function logUsage(
 			id: randomUUID(),
 			ts: new Date(),
 			userId: opts.userId,
-			chatId: opts.chatId,
+			// Same rule as the agent loop: the spend counts, the hidden chat's id
+			// does not get to survive here.
+			chatId: opts.persist ? opts.chatId : null,
 			task: 'deep-research',
 			modelKey: choice.model.modelKey,
 			promptTokens: usage.promptTokens,

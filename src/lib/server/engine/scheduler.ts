@@ -1,6 +1,7 @@
 import { lt } from 'drizzle-orm';
+import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db';
-import { events, usageLog, users } from '$lib/server/db/schema';
+import { events, usageLog, users, uxIdeas } from '$lib/server/db/schema';
 import {
 	DEFAULT_MEMORY,
 	DEFAULT_RETENTION,
@@ -81,13 +82,28 @@ async function sweepUxAudit(): Promise<void> {
 }
 
 /**
- * Trim the two tables that grow without bound — one row per model call, tool
- * call and job, forever. Deliberately conservative on usage_log: it is what the
- * budget cap and the usage dashboard read, so its window is much longer than
- * the Observatory's. Either can be set to 0 to keep everything.
+ * Production keeps its UX decision history forever; see RetentionSettings.
+ *
+ * The process.env fallback is for tests, for the same reason db/index.ts has
+ * one: SvelteKit snapshots the dynamic env when Vite loads its config, so it
+ * cannot be varied per test.
  */
-export function prune(now = Date.now(), force = false): { events: number; usage: number } {
-	if (!force && now < lastPrune + PRUNE_INTERVAL_MS) return { events: 0, usage: 0 };
+export function isProd(): boolean {
+	return (env.GALAXY_ENV || process.env.GALAXY_ENV || 'dev') === 'prod';
+}
+
+/**
+ * Trim the tables that grow without bound — one row per model call, tool call
+ * and job, forever. Deliberately conservative on usage_log: it is what the
+ * budget cap and the usage dashboard read, so its window is much longer than
+ * the Observatory's. Any window can be set to 0 to keep everything.
+ */
+export function prune(
+	now = Date.now(),
+	force = false
+): { events: number; usage: number; uxIdeas: number } {
+	const nothing = { events: 0, usage: 0, uxIdeas: 0 };
+	if (!force && now < lastPrune + PRUNE_INTERVAL_MS) return nothing;
 	lastPrune = now;
 	const cfg = getSetting<RetentionSettings>('retention', DEFAULT_RETENTION);
 
@@ -107,8 +123,19 @@ export function prune(now = Date.now(), force = false): { events: number; usage:
 			.run().changes;
 	}
 
+	// Dev instances only. On prod this would throw away the record of what has
+	// already been actioned or discarded, which is the only thing stopping the
+	// audit proposing it all over again next week.
+	let prunedIdeas = 0;
+	if (!isProd() && cfg.uxIdeaDays > 0) {
+		prunedIdeas = db
+			.delete(uxIdeas)
+			.where(lt(uxIdeas.createdAt, new Date(now - cfg.uxIdeaDays * 86_400_000)))
+			.run().changes;
+	}
+
 	// No VACUUM: the file does not shrink, but SQLite reuses the freed pages for
 	// subsequent inserts, so the database plateaus instead of growing forever —
 	// and a full VACUUM takes an exclusive lock this process cannot afford.
-	return { events: prunedEvents, usage: prunedUsage };
+	return { events: prunedEvents, usage: prunedUsage, uxIdeas: prunedIdeas };
 }
