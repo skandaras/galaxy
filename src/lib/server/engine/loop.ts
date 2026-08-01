@@ -159,6 +159,29 @@ export async function runAgentLoop(opts: LoopOptions): Promise<void> {
 	}
 
 	logUsage(opts, opts.primary.model.modelKey, null, 'error');
+	// This event is why a dead turn is diagnosable at all. Without it the run
+	// emitted `${task}.turn` as `running` on the way in and nothing on the way
+	// out, leaving a row in the Observatory that never resolved and no record of
+	// what went wrong.
+	//
+	// It persists even for a hidden chat, where nothing else does — but stripped
+	// to a reason: no chat id, no title, no message text. Knowing *that* a turn
+	// failed and *why* is what makes the failure fixable; knowing which
+	// conversation it was is exactly what hidden mode promises not to keep.
+	emitEvent(
+		{
+			userId: opts.userId,
+			chatId: persist ? opts.chatId : undefined,
+			task: opts.task,
+			type: 'job',
+			name: `${opts.task}.turn`,
+			status: 'error',
+			detail: persist
+				? { jobId: job.id, reason: String(lastError) }
+				: { hidden: true, reason: String(lastError) }
+		},
+		{ persist: true }
+	);
 	failJob(job, `Model call failed: ${String(lastError)}`);
 }
 
@@ -510,7 +533,11 @@ function logUsage(
 			id: randomUUID(),
 			ts: new Date(),
 			userId: opts.userId,
-			chatId: opts.chatId,
+			// Spend has to be counted whatever the chat was — the budget cap is
+			// platform-wide — but a hidden chat's id must not survive here. It was
+			// being written unconditionally, which left hidden conversations
+			// reconstructable from usage_log by id, timing and cost.
+			chatId: opts.persist ? opts.chatId : null,
 			task: opts.task,
 			modelKey,
 			promptTokens: usage?.promptTokens ?? 0,

@@ -5,6 +5,7 @@
 	import { clearDraft, draftKey, getDraft, setDraft } from '$lib/composer-drafts.svelte';
 	import { createAutoscroll } from '$lib/autoscroll.svelte';
 	import { autoresize } from '$lib/autoresize';
+	import { hasFinePointer } from '$lib/pointer';
 
 	interface ChatMeta {
 		id: string;
@@ -83,6 +84,18 @@
 	let errorBanner = $state<string | null>(null);
 	let savedDocId = $state<string | null>(null);
 	let source: EventSource | null = null;
+	/**
+	 * Reconnects spent on the current turn. Recovery reattaches to a run that is
+	 * still going, so a stream endpoint that is broken rather than merely
+	 * interrupted would otherwise reattach, fail, and reattach forever.
+	 */
+	let recoveries = 0;
+	const MAX_RECOVERIES = 3;
+
+	/** Mirrors the guard at the top of send(), so the button can't look live and do nothing. */
+	const canSend = $derived(
+		Boolean(input.trim() || pendingFiles.length || uploadedRefs.length) && !streaming
+	);
 
 	onMount(async () => {
 		const [chatsRes, modelsRes] = await Promise.all([
@@ -231,8 +244,10 @@
 		await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST' }).catch(() => {});
 	}
 
-	function attachStream(jobId: string) {
+	/** `carriedRecoveries` keeps the reconnect budget across a reattach. */
+	function attachStream(jobId: string, carriedRecoveries = 0) {
 		closeStream();
+		recoveries = carriedRecoveries;
 		activeJobId = jobId;
 		stopping = false;
 		streaming = true;
@@ -266,10 +281,66 @@
 			}
 		};
 		source.onerror = () => {
-			// Server closed or network dropped; if a reply was mid-flight the
-			// job keeps running server-side — reselecting the chat reattaches.
-			if (streaming) finalizeStream(false);
+			// The connection dropped mid-reply. The turn almost always finished
+			// server-side anyway, so recover it rather than leaving the screen
+			// blank — that silence was indistinguishable from "the model never
+			// answered", and it was worst in hidden chats, which have no
+			// Observatory trail to check afterwards.
+			if (streaming) void recoverStream();
 		};
+	}
+
+	/**
+	 * Reconcile with the server after an interrupted stream: keep whatever text
+	 * arrived, then re-read the conversation so a reply that did complete shows
+	 * up. Re-fetching is what actually fixes this — the message is already
+	 * stored (or, for a hidden chat, held in memory server-side); nothing was
+	 * reading it back.
+	 */
+	async function recoverStream() {
+		const chatId = currentChat?.id;
+		const partial = streamText;
+		const partialModel = streamModel;
+		// Don't commit the partial yet — the server's copy is authoritative and
+		// usually complete. It is only worth keeping if the server has nothing.
+		finalizeStream(false);
+		if (!chatId) return;
+
+		const res = await fetch(`/api/chats/${chatId}`).catch(() => null);
+		if (!res?.ok) {
+			if (partial) appendLocalAssistant(partial, partialModel);
+			errorBanner = 'Lost the connection to this run — reopen the chat to see how it ended.';
+			return;
+		}
+
+		const data = await res.json();
+		messages = data.messages;
+		if (data.runningJobId && recoveries < MAX_RECOVERIES) {
+			// Still going: reattach rather than stranding the user on a dead view.
+			recoveries++;
+			attachStream(data.runningJobId, recoveries);
+			return;
+		}
+		if (data.runningJobId) {
+			errorBanner = 'Kept losing the connection to this run — reopen the chat to catch up.';
+			return;
+		}
+		const answered = messages.at(-1)?.role === 'assistant';
+		if (!answered && partial) {
+			// The turn died before the reply was saved. Show what did arrive rather
+			// than throwing it away, but say that it is unfinished.
+			appendLocalAssistant(partial, partialModel);
+			errorBanner = 'The connection dropped mid-reply — this answer is incomplete.';
+		} else if (!answered) {
+			errorBanner = 'That run ended without a reply. Check the Observatory for the reason.';
+		}
+	}
+
+	function appendLocalAssistant(content: string, modelKey: string) {
+		messages = [
+			...messages,
+			{ id: `local-a-${Date.now()}`, role: 'assistant', content, modelKey: modelKey || null, attachments: null }
+		];
 	}
 
 	function finalizeStream(commit = true) {
@@ -344,6 +415,9 @@
 
 	async function removeChat(chat: ChatMeta, ev?: Event) {
 		ev?.stopPropagation();
+		// The row actions are always visible on touch (no hover to reveal them),
+		// which puts an unlabelled × a thumb's width from the row you meant to open.
+		if (!confirm(`Delete "${chat.title}"? This cannot be undone.`)) return;
 		await fetch(`/api/chats/${chat.id}`, { method: 'DELETE' });
 		clearDraft(draftKey('chat', chat.id));
 		if (currentChat?.id === chat.id) {
@@ -365,11 +439,18 @@
 		target.value = '';
 	}
 
+	/**
+	 * Enter sends on a keyboard, and inserts a newline on a touch screen — where
+	 * there is no Shift-Enter, so Enter-to-send left no way to write a second
+	 * line at all. On touch the send button is the only way to send, which is
+	 * what every phone messaging app does.
+	 */
 	function onKeydown(ev: KeyboardEvent) {
-		if (ev.key === 'Enter' && !ev.shiftKey) {
-			ev.preventDefault();
-			void send();
-		}
+		// Mid-composition Enter commits the IME candidate; it must never send.
+		if (ev.key !== 'Enter' || ev.isComposing) return;
+		if (ev.shiftKey || !hasFinePointer()) return;
+		ev.preventDefault();
+		void send();
 	}
 
 </script>
@@ -515,7 +596,13 @@
 						aria-label="Stop generating">{stopping ? '…' : '■'}</button
 					>
 				{:else}
-					<button class="btn send" onclick={send} aria-label="Send message">➤</button>
+					<button
+						class="btn send"
+						onclick={send}
+						disabled={!canSend}
+						title={canSend ? 'Send message' : 'Type a message or attach a file first'}
+						aria-label="Send message">➤</button
+					>
 				{/if}
 			</div>
 			<div class="composer-opts">
@@ -897,6 +984,19 @@
 		}
 		.chat-list.open {
 			transform: translateX(0);
+		}
+	}
+
+	/* Reveal-on-hover hides these controls permanently on a touch screen, where
+	   there is no hover to reveal them with — the same reason CodeBlock.svelte
+	   unhides its copy button here. Deleting a chat asks for confirmation, since
+	   the × is now always a thumb away from the row it sits on. */
+	@media (hover: none) {
+		.row-actions {
+			display: inline-flex;
+		}
+		.save-doc {
+			opacity: 1;
 		}
 	}
 </style>

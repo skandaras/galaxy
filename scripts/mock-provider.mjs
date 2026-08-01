@@ -105,6 +105,20 @@ const server = createServer(async (req, res) => {
 			last?.role === 'user' &&
 			String(last.content).toLowerCase().includes('search');
 
+		// A provider that is simply down. Checked before either path picks its
+		// response headers — a 503 after the SSE headers are already out is an
+		// ERR_HTTP_HEADERS_SENT that takes this process with it. Every attempt
+		// fails, backup included, so the turn dies having produced nothing: the
+		// case where the Observatory record is the only way to find out why.
+		// Matched exactly, not by substring: the memory audit replays recent chat
+		// text back through this same endpoint, so a substring trigger would make
+		// every later audit fail too, purely because the word had been typed once.
+		if (String(last?.content ?? '').trim() === 'DEAD-PROVIDER') {
+			res.writeHead(503, { 'content-type': 'application/json' });
+			res.end(JSON.stringify({ error: { message: 'mock provider is down' } }));
+			return;
+		}
+
 		// Non-streaming path (complete()): memory audit, skill optimiser,
 		// compaction summaries, etc.
 		if (!parsed.stream) {
