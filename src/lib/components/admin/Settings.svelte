@@ -23,6 +23,7 @@
 	});
 	let coding = $state({ autoCheckpoint: true, autoContinue: true, maxLegs: 3 });
 	let retention = $state({ eventDays: 60, usageDays: 400, uxIdeaDays: 14 });
+	let fetchCfg = $state({ timeoutMs: 15000, maxChars: 20000, maxFetchesPerTurn: 5 });
 	let saved = $state<string | null>(null);
 	let deployBusy = $state<string | null>(null);
 	let deployMsg = $state<string | null>(null);
@@ -97,13 +98,22 @@
 		research = { baseUrl: '', ...data.research };
 		coding = { ...data.coding };
 		retention = { ...data.retention };
+		fetchCfg = { ...data.fetch };
 	}
 	$effect(() => {
 		void load();
 	});
 
 	async function save(
-		key: 'websearch' | 'compaction' | 'budget' | 'github' | 'research' | 'coding' | 'retention',
+		key:
+			| 'websearch'
+			| 'compaction'
+			| 'budget'
+			| 'github'
+			| 'research'
+			| 'coding'
+			| 'retention'
+			| 'fetch',
 		value: unknown
 	) {
 		await fetch('/api/admin/settings', {
@@ -342,6 +352,35 @@
 		</div>
 		<button class="btn primary" onclick={() => save('compaction', compaction)}>
 			{saved === 'compaction' ? 'Saved ✓' : 'Save'}
+		</button>
+	</article>
+
+	<article class="card">
+		<h3>Reading links</h3>
+		<div class="grid">
+			<label>
+				timeout (ms)
+				<input type="number" min="1000" step="1000" bind:value={fetchCfg.timeoutMs} />
+			</label>
+			<label>
+				characters per page
+				<input type="number" min="1000" step="1000" bind:value={fetchCfg.maxChars} />
+			</label>
+			<label>
+				pages per turn
+				<input type="number" min="1" max="20" bind:value={fetchCfg.maxFetchesPerTurn} />
+			</label>
+		</div>
+		<p class="hint">
+			Governs the <code>fetch_url</code> tool, which both the chat and coding agents use to read an
+			address you give them instead of searching for it. It is deliberately independent of the
+			composer's web-search toggle — turning search off shouldn't make the agent guess at a link
+			you handed it. To remove the capability entirely, disable <code>fetch_url</code> in
+			<strong>Tools</strong>. Re-reading an address already read in the same turn is free and
+			doesn't count against the per-turn limit.
+		</p>
+		<button class="btn primary" onclick={() => save('fetch', fetchCfg)}>
+			{saved === 'fetch' ? 'Saved ✓' : 'Save'}
 		</button>
 	</article>
 

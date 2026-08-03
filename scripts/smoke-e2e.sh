@@ -104,6 +104,21 @@ console.log([
 ].join(','));")
 check "hidden chat not persisted" "leak=$LEAK" "0,0,0,0,0"
 
+# Reading a supplied URL rather than searching for it. Exercised in both chat
+# and a coding session, since the whole point is that the tool is offered to
+# both — and with the web-search toggle off, to prove it is independent of it.
+PAGE="http://127.0.0.1:$MOCK_PORT/page/one"
+UCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+UJOB=$(api -X POST $B/api/chats/$UCHAT/messages -d "{\"content\":\"READ-THIS $PAGE\",\"webSearch\":false}" | jqn .jobId)
+USTREAM=$(curl -sN --max-time 40 $B/api/jobs/$UJOB/stream)
+check "chat can read a url" "$USTREAM" '"name":"fetch_url","status":"ok"'
+check "chat reads it without web search on" "$USTREAM" 'Contains FACT-42: true'
+
+# The GitHub rewrite (repo URL → README, blob URL → raw file) is asserted in
+# fetch-url.test.ts against a stubbed fetch. It is deliberately not exercised
+# here: this suite is the promotion gate and must not depend on api.github.com
+# being reachable, or on its unauthenticated rate limit.
+
 # A turn that cannot reach its provider must say so in the Observatory, in a
 # hidden chat as much as a visible one — that record is the only way to find out
 # why a run produced nothing. For the hidden one it carries a reason and no id.
@@ -168,6 +183,14 @@ OSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$OJOB/stream)
 # The mock calls web_search whenever any tools are offered, so the loop
 # reporting it as unknown is what proves the tool was genuinely withheld.
 check "coding honours the web search toggle" "$OSTREAM" 'unknown tool'
+
+# The coding agent gets fetch_url too, and keeps it with web search off — a
+# linked spec or upstream README is exactly what you want it reading in plan
+# mode, and it changes nothing in the workspace.
+UCJOB=$(api -X POST $B/api/code/sessions/$SID/messages -d "{\"content\":\"READ-THIS $PAGE\",\"webSearch\":false}" | jqn .jobId)
+UCSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$UCJOB/stream)
+check "coding can read a url" "$UCSTREAM" '"name":"fetch_url","status":"ok"'
+check "coding reads it without web search on" "$UCSTREAM" 'Contains FACT-42: true'
 
 # The nav cost bar reads this; it must be available to a non-admin user, since
 # the cap blocks everyone's turns.
