@@ -138,6 +138,18 @@ export function findRunningJobForChat(chatId: string): LiveJob | null {
 	return null;
 }
 
+/**
+ * Finished runs still in the buffer, newest first. The jobs table is the real
+ * record, but hidden chats never reach it — this is how a hidden conversation
+ * can still be told that its last attempt failed, for as long as the buffer
+ * holds (see FINISHED_JOB_TTL_MS).
+ */
+export function recentFinishedJobsForChat(chatId: string): LiveJob[] {
+	return [...live.values()]
+		.filter((j) => j.chatId === chatId && j.status !== 'running')
+		.sort((a, b) => b.createdAt - a.createdAt);
+}
+
 /** Replay history, then follow live chunks. Returns an unsubscribe fn. */
 export function subscribeJob(job: LiveJob, cb: (chunk: JobChunk) => void): () => void {
 	for (const chunk of job.chunks) cb(chunk);

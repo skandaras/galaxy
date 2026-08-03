@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '$lib/server/db';
 import { DEFAULT_FETCH } from '$lib/server/settings';
-import { fetchUrlTool, normaliseUrl, resolveGithub } from './fetch-url';
+import { fetchUrlTool, normaliseUrl, rankRepoDocs, resolveGithub } from './fetch-url';
 
 /** A stand-in response; only what the tool actually reads is provided. */
 function reply(
@@ -88,6 +88,29 @@ describe('resolveGithub', () => {
 	it('ignores other hosts, including lookalikes', () => {
 		expect(resolveGithub(new URL('https://example.com/o/r'))).toBeNull();
 		expect(resolveGithub(new URL('https://github.com.evil.test/o/r'))).toBeNull();
+	});
+});
+
+describe('rankRepoDocs', () => {
+	it('prefers a README, then conventional entry points, then anything else', () => {
+		expect(
+			rankRepoDocs(['CHANGELOG.md', 'overview.md', 'readme.md', 'notes.md'])
+		).toEqual(['readme.md', 'overview.md', 'notes.md', 'CHANGELOG.md']);
+	});
+
+	it('keeps only markdown-ish documents', () => {
+		expect(rankRepoDocs(['main.go', 'package.json', 'guide.md', 'spec.rst'])).toEqual([
+			'guide.md',
+			'spec.rst'
+		]);
+	});
+
+	it('breaks ties on the shorter name, as the likelier introduction', () => {
+		expect(rankRepoDocs(['architecture-decision-records.md', 'docs.md'])[0]).toBe('docs.md');
+	});
+
+	it('returns nothing when there is no documentation at all', () => {
+		expect(rankRepoDocs(['main.go', 'go.mod'])).toEqual([]);
 	});
 });
 
@@ -190,11 +213,58 @@ describe('fetch_url', () => {
 		expect(calls[1]).toBe('https://raw.githubusercontent.com/o/r/next/README.md');
 	});
 
-	it('reports the original failure when the fallback fails too', async () => {
+	it('falls back to any top-level document when the repo has no README', async () => {
+		// Plenty of repositories have no README at all, or call it something else.
+		// Guessing more filenames is a worse answer than asking what is there.
+		const { t, calls } = tool((url) => {
+			if (url.includes('/contents/')) {
+				return reply(
+					JSON.stringify([
+						{ name: 'src', type: 'dir', download_url: null },
+						{ name: 'CHANGELOG.md', type: 'file', download_url: 'https://raw.test/CHANGELOG.md' },
+						{ name: 'overview.md', type: 'file', download_url: 'https://raw.test/overview.md' },
+						{ name: 'package.json', type: 'file', download_url: 'https://raw.test/package.json' }
+					]),
+					{ contentType: 'application/json' }
+				);
+			}
+			if (url === 'https://raw.test/overview.md') {
+				return reply('# Overview', { contentType: 'text/plain' });
+			}
+			return reply('', { status: 404, statusText: 'Not Found' });
+		});
+
+		const out = await t.execute({ url: 'https://github.com/o/no-readme' });
+
+		expect(calls).toEqual([
+			'https://api.github.com/repos/o/no-readme/readme',
+			'https://raw.githubusercontent.com/o/no-readme/HEAD/README.md',
+			'https://api.github.com/repos/o/no-readme/contents/',
+			'https://raw.test/overview.md'
+		]);
+		expect(out).toContain('# Overview');
+		expect(out).toContain('this repository has no README');
+	});
+
+	it('says plainly when a repository has nothing readable at its root', async () => {
+		const { t } = tool((url) =>
+			url.includes('/contents/')
+				? reply(JSON.stringify([{ name: 'main.go', type: 'file', download_url: 'https://raw.test/main.go' }]), {
+						contentType: 'application/json'
+					})
+				: reply('', { status: 404, statusText: 'Not Found' })
+		);
+		const out = await t.execute({ url: 'https://github.com/o/bare' });
+
+		expect(out).toContain('No README or other document was found');
+		expect(out).toContain('say what you could not read rather than guessing');
+	});
+
+	it('reports the failure when even the listing is unavailable', async () => {
 		const { t } = tool(() => reply('', { status: 404, statusText: 'Not Found' }));
 		const out = await t.execute({ url: 'https://github.com/o/nope' });
 		expect(out).toContain('HTTP 404');
-		expect(out).toContain('may be private');
+		expect(out).toContain('No README or other document was found');
 	});
 
 	it('serves a repeat of the same address from memory, for free', async () => {

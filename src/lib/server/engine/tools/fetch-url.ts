@@ -10,8 +10,10 @@ export const fetchUrlToolDef: ToolDef = {
 		'Read the contents of a specific web address. Use this whenever a URL is given to you or ' +
 		'appears in something you have read — never search for a page whose address you already ' +
 		'have, and never guess at what is on it. Handles HTML (reduced to readable text), ' +
-		'markdown, JSON and plain text. GitHub links resolve to their real contents: a repository ' +
-		'URL returns its README, and a file URL returns that file.',
+		'markdown, JSON and plain text. GitHub links resolve to their real contents: a file URL ' +
+		'returns that file, and a repository URL returns its README — or, if it has none, whatever ' +
+		'introductory document is at its root. When that is not enough, ask for a specific file ' +
+		'URL rather than assuming a layout.',
 	parameters: {
 		type: 'object',
 		properties: {
@@ -106,6 +108,21 @@ export function fetchUrlTool(cfg: FetchSettings, deps: FetchToolDeps = {}): Loop
 					res = alt;
 				}
 			}
+
+			// Last resort for a repository with no README under any name: ask what
+			// documents are actually at the root and read the most likely one.
+			if (!res.ok && resolved?.discover) {
+				const found = await discoverRepoDoc(resolved.discover, get);
+				if (found) {
+					assertPublicHttpUrl(found.url);
+					const alt = await get(found.url);
+					if (alt.ok) {
+						usedUrl = found.url;
+						via = `${found.name} — this repository has no README`;
+						res = alt;
+					}
+				}
+			}
 			const shownUrl = usedUrl;
 
 			if (!res.ok) {
@@ -113,9 +130,11 @@ export function fetchUrlTool(cfg: FetchSettings, deps: FetchToolDeps = {}): Loop
 				// Returned rather than thrown: a 404 is information the model can act
 				// on (try another path, tell the user), not a reason to end the turn.
 				return `Could not read ${shownUrl} — HTTP ${res.status} ${res.statusText}.${
-					res.status === 404 && resolved
-						? ' The repository or file may be private, or the branch name may differ.'
-						: ''
+					resolved?.discover
+						? ' No README or other document was found at the root of this repository. It may be private, or it may simply have no documentation — try a specific file URL (github.com/owner/repo/blob/BRANCH/path) if you know one, and otherwise say what you could not read rather than guessing at the contents.'
+						: res.status === 404 && resolved
+							? ' The file may be private, or the branch name may differ.'
+							: ''
 				}`;
 			}
 
@@ -193,6 +212,13 @@ export interface GithubResolution {
 	 * this repo" into a failure when raw.githubusercontent.com is right there.
 	 */
 	fallback?: { url: string; via: string };
+	/**
+	 * Directory listing consulted only when every named candidate has failed.
+	 * Plenty of repositories have no README at all, or call their entry point
+	 * something else entirely; guessing more filenames is a worse answer than
+	 * asking what is actually there.
+	 */
+	discover?: { listUrl: string; ref?: string };
 }
 
 /**
@@ -237,11 +263,65 @@ export function resolveGithub(url: URL): GithubResolution | null {
 			fallback: {
 				url: `https://raw.githubusercontent.com/${owner}/${name}/${branch ?? 'HEAD'}/README.md`,
 				via: "the repository's README.md"
+			},
+			discover: {
+				listUrl: `https://api.github.com/repos/${owner}/${name}/contents/${ref}`,
+				ref: branch
 			}
 		};
 	}
 
 	return null;
+}
+
+interface GithubContentEntry {
+	name: string;
+	type: string;
+	download_url: string | null;
+}
+
+/**
+ * Rank the markdown at a repository root by how likely it is to be the thing
+ * someone means by "read this repo". A README under any spelling wins; then the
+ * conventional entry points; then whatever markdown exists, shortest name first,
+ * because `docs.md` beats `CHANGELOG-v2-archive.md` as an introduction.
+ */
+export function rankRepoDocs(names: string[]): string[] {
+	const score = (n: string): number => {
+		const base = n.toLowerCase().replace(/\.(md|markdown|rst|txt)$/, '');
+		if (base === 'readme') return 0;
+		if (base === 'index' || base === 'overview' || base === 'about') return 1;
+		if (base === 'getting-started' || base === 'getting_started' || base === 'start') return 2;
+		if (base === 'contributing' || base === 'changelog' || base === 'license') return 5;
+		return 3;
+	};
+	return names
+		.filter((n) => /\.(md|markdown|rst)$/i.test(n))
+		.sort((a, b) => score(a) - score(b) || a.length - b.length || a.localeCompare(b));
+}
+
+/** List a repository root and pick the most introductory document on it. */
+async function discoverRepoDoc(
+	discover: { listUrl: string; ref?: string },
+	get: (url: string, accept?: string) => Promise<Response>
+): Promise<{ url: string; name: string } | null> {
+	assertPublicHttpUrl(discover.listUrl);
+	const res = await get(discover.listUrl, 'application/vnd.github+json');
+	if (!res.ok) return null;
+
+	let entries: GithubContentEntry[];
+	try {
+		entries = (await res.json()) as GithubContentEntry[];
+	} catch {
+		return null;
+	}
+	if (!Array.isArray(entries)) return null;
+
+	const files = new Map(
+		entries.filter((e) => e?.type === 'file' && e.download_url).map((e) => [e.name, e.download_url!])
+	);
+	const best = rankRepoDocs([...files.keys()])[0];
+	return best ? { url: files.get(best)!, name: best } : null;
 }
 
 /** Read a response body up to a byte ceiling, then stop pulling. */
