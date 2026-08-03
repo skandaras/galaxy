@@ -27,6 +27,7 @@
 		lastError: string | null;
 		lastSyncAt: number | null;
 		hasHeaders: boolean;
+		hasEnv: boolean;
 		toolCount: number;
 	}
 
@@ -45,6 +46,7 @@
 		command: '',
 		argsText: '',
 		headersText: '',
+		envText: '',
 		toolPrefix: '',
 		enabled: true
 	});
@@ -118,6 +120,7 @@
 			command: s.command ?? '',
 			argsText: (s.args ?? []).join(' '),
 			headersText: '',
+			envText: '',
 			toolPrefix: s.toolPrefix,
 			enabled: s.enabled
 		};
@@ -131,6 +134,11 @@
 			errorMsg = 'Headers must be one "Name: value" pair per line';
 			return;
 		}
+		const env = parseEnv(serverForm.envText);
+		if (env === 'invalid') {
+			errorMsg = 'Environment must be one "NAME=value" pair per line';
+			return;
+		}
 		const body: Record<string, unknown> = {
 			name: serverForm.name,
 			transport: serverForm.transport,
@@ -140,8 +148,9 @@
 			toolPrefix: serverForm.toolPrefix,
 			enabled: serverForm.enabled
 		};
-		// Leaving the headers box empty on an edit keeps the stored ones.
+		// Leaving the headers/env box empty on an edit keeps the stored ones.
 		if (headers !== null) body.headers = headers;
+		if (env !== null) body.env = env;
 
 		const isNew = !serverForm.id;
 		const res = await fetch(
@@ -170,6 +179,19 @@
 		const out: Record<string, string> = {};
 		for (const line of trimmed.split('\n')) {
 			const idx = line.indexOf(':');
+			if (idx < 1) return 'invalid';
+			out[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+		}
+		return out;
+	}
+
+	/** Same contract as parseHeaders, but splits on the first '='. */
+	function parseEnv(text: string): Record<string, string> | null | 'invalid' {
+		const trimmed = text.trim();
+		if (!trimmed) return null;
+		const out: Record<string, string> = {};
+		for (const line of trimmed.split('\n')) {
+			const idx = line.indexOf('=');
 			if (idx < 1) return 'invalid';
 			out[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
 		}
@@ -305,6 +327,8 @@
 								{s.name}
 								<span class="badge">{s.transport}</span>
 								<span class="dim">{s.toolCount} tools</span>
+								{#if s.transport === 'http' && s.hasHeaders}<span class="dim" title="stored headers">· headers</span>{/if}
+								{#if s.transport === 'stdio' && s.hasEnv}<span class="dim" title="stored environment">· env</span>{/if}
 							</div>
 							<div class="desc">{s.transport === 'http' ? s.url : `${s.command} ${(s.args ?? []).join(' ')}`}</div>
 							{#if s.lastError}<div class="err-line">{s.lastError}</div>{/if}
@@ -354,6 +378,11 @@
 					<label>
 						args
 						<input bind:value={serverForm.argsText} placeholder="-y @modelcontextprotocol/server-git" />
+					</label>
+					<label class="wide">
+						environment (one "NAME=value" per line{serverForm.id ? '; leave blank to keep stored' : ''})
+						<textarea rows="2" bind:value={serverForm.envText} placeholder="FIGMA_API_KEY=figd_…"
+						></textarea>
 					</label>
 				{/if}
 				<label>

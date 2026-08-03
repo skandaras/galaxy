@@ -13,8 +13,8 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	if (!getServer(params.id)) error(404, 'Server not found');
 	const body = await request.json().catch(() => ({}));
 	try {
-		const { headersEnc, ...rest } = updateServer(params.id, body);
-		return json({ ...rest, hasHeaders: Boolean(headersEnc) });
+		const { headersEnc, envEnc, ...rest } = updateServer(params.id, body);
+		return json({ ...rest, hasHeaders: Boolean(headersEnc), hasEnv: Boolean(envEnc) });
 	} catch (err) {
 		if (err instanceof McpConfigError) error(400, err.message);
 		throw err;

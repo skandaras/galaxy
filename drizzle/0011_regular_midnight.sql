@@ -1,0 +1,1 @@
+ALTER TABLE `mcp_servers` ADD `env_enc` text;
