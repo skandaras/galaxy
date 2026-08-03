@@ -82,6 +82,31 @@ describe('validation', () => {
 		});
 		expect(server.headersEnc).not.toContain('super-secret');
 	});
+
+	it('keeps stored env when a patch omits it', () => {
+		const server = createServer({
+			name: 'x',
+			transport: 'stdio',
+			command: process.execPath,
+			args: [FIXTURE],
+			env: { FIGMA_API_KEY: 'figd_test-key' }
+		});
+		expect(server.envEnc).toBeTruthy();
+		expect(updateServer(server.id, { name: 'y' }).envEnc).toBe(server.envEnc);
+		// An explicit null clears it.
+		expect(updateServer(server.id, { env: null }).envEnc).toBeNull();
+	});
+
+	it('encrypts env rather than storing it in the clear', () => {
+		const server = createServer({
+			name: 'x',
+			transport: 'stdio',
+			command: process.execPath,
+			args: [FIXTURE],
+			env: { FIGMA_API_KEY: 'figd_super-secret' }
+		});
+		expect(server.envEnc).not.toContain('super-secret');
+	});
 });
 
 describe('qualifiedName', () => {
@@ -150,10 +175,10 @@ describe('against a real MCP server', () => {
 	it('discovers tools and caches them', async () => {
 		const server = addFixtureServer();
 		const result = await syncServer(server.id);
-		expect(result).toMatchObject({ ok: true, toolCount: 2 });
+		expect(result).toMatchObject({ ok: true, toolCount: 3 });
 
 		const cached = listServerTools(server.id).map((t) => t.name).sort();
-		expect(cached).toEqual(['weather__explode', 'weather__get_forecast']);
+		expect(cached).toEqual(['weather__echo_env', 'weather__explode', 'weather__get_forecast']);
 
 		const forecast = listServerTools(server.id).find((t) => t.remoteName === 'get_forecast')!;
 		expect(forecast.description).toBe('Return a fake forecast for a city.');
@@ -193,6 +218,7 @@ describe('against a real MCP server', () => {
 			.run();
 		await syncServer(server.id);
 		expect(listServerTools(server.id).map((t) => t.remoteName).sort()).toEqual([
+			'echo_env',
 			'explode',
 			'get_forecast'
 		]);
@@ -223,7 +249,18 @@ describe('against a real MCP server', () => {
 		await syncServer(server.id);
 		updateServer(server.id, { tasks: ['coding'] });
 		expect(mcpLoopTools('chat')).toHaveLength(0);
-		expect(mcpLoopTools('coding')).toHaveLength(2);
+		expect(mcpLoopTools('coding')).toHaveLength(3);
+	});
+
+	it('passes stored env vars through to the stdio child process', async () => {
+		const server = addFixtureServer({ env: { GALAXY_TEST_TOKEN: 'figd_reached' } });
+		await syncServer(server.id);
+		const tool = mcpLoopTools('chat').find((t) => t.def.name === 'weather__echo_env')!;
+		expect(tool).toBeDefined();
+		await expect(tool.execute({ name: 'GALAXY_TEST_TOKEN' })).resolves.toBe('figd_reached');
+		// A var that was never set comes back empty — confirms the child sees its
+		// own env, not a leaked copy of everything Galaxy was launched with.
+		await expect(tool.execute({ name: 'NOT_A_REAL_VAR_xyz' })).resolves.toBe('');
 	});
 
 	it('removes cached tools when the server is deleted', async () => {
