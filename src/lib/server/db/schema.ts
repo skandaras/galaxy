@@ -283,6 +283,10 @@ export const mcpServers = sqliteTable('mcp_servers', {
 	headersEnc: text('headers_enc'),
 	/** stdio transport; the command must exist inside the container. */
 	command: text('command'),
+	/** Environment for the stdio child process, as an encrypted JSON object —
+	 * it often carries an API key the server needs (e.g. FIGMA_API_KEY), and is
+	 * never returned to the browser once saved, like headers. */
+	envEnc: text('env_enc'),
 	args: text('args', { mode: 'json' }).$type<string[] | null>(),
 	/** Prepended to every tool name as `<prefix>__<tool>` to avoid collisions. */
 	toolPrefix: text('tool_prefix').notNull().default(''),

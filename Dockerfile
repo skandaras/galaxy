@@ -20,6 +20,12 @@ COPY --from=build /app/build ./build
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/drizzle ./drizzle
 COPY package.json ./
+# figma-developer-mcp (Framelink): community stdio MCP server for Figma's REST
+# API. Pinned — v0.8.0–0.11.0 emit progress notifications after the tool
+# response, which crash strict MCP clients (and Galaxy is one). Installed
+# globally so stdio MCP servers can call it by name; sharp ships prebuilt
+# binaries so no toolchain is needed at runtime.
+RUN npm i -g figma-developer-mcp@0.13.2
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD wget -qO- http://127.0.0.1:3000/healthz || exit 1

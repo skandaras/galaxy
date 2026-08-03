@@ -24,6 +24,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 			name: 'explode',
 			description: 'Always reports an error, to check error handling.',
 			inputSchema: { type: 'object', properties: {} }
+		},
+		{
+			name: 'echo_env',
+			description: 'Echo a process environment variable, to verify the stdio transport passes env.',
+			inputSchema: {
+				type: 'object',
+				properties: { name: { type: 'string', description: 'Env var name' } },
+				required: ['name']
+			}
 		}
 	]
 }));
@@ -31,6 +40,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
 	if (req.params.name === 'explode') {
 		return { content: [{ type: 'text', text: 'boom' }], isError: true };
+	}
+	if (req.params.name === 'echo_env') {
+		const name = req.params.arguments?.name ?? '';
+		return { content: [{ type: 'text', text: process.env[name] ?? '' }] };
 	}
 	const city = req.params.arguments?.city ?? 'nowhere';
 	return { content: [{ type: 'text', text: `Forecast for ${city}: 18C and clear.` }] };
