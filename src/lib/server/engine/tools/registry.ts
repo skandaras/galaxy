@@ -6,6 +6,7 @@ import { codingTools } from '../coding/tools';
 import { attachmentTools } from './attachments';
 import { fetchUrlToolDef } from './fetch-url';
 import { knowledgeTools } from './knowledge';
+import { runHistoryToolDef } from '../run-history';
 import { webSearchToolDef } from './web-search';
 
 export type ToolSource = 'builtin' | 'mcp';
@@ -80,6 +81,8 @@ export function builtinDescriptors(): ToolDescriptor[] {
 		['chat', 'coding'],
 		'not tied to the composer’s web-search toggle'
 	);
+	// The chat id only scopes execution, never the declaration.
+	add([{ def: runHistoryToolDef, execute: async () => '' }], 'diagnostics', ['chat', 'coding']);
 
 	// Constructing both modes is how we know which tools plan mode withholds.
 	const ctx = { workspaceRel: '', mode: 'plan' as const, repoUrl: '' };

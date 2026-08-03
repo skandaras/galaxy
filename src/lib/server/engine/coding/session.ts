@@ -21,6 +21,7 @@ import { maybeCompact } from '../compaction';
 import { buildContext } from '../context';
 import { codingMaxSteps } from '../limits';
 import { runAgentLoop, type LoopTool, type TurnSummary } from '../loop';
+import { previousRunNote, runHistoryTool } from '../run-history';
 import { webSearchConfigured, webSearchTool } from '../tools/web-search';
 import { attachmentTools } from '../tools/attachments';
 import { fetchUrlTool } from '../tools/fetch-url';
@@ -115,6 +116,9 @@ export function startCodingTurn(opts: {
 	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'coding', persist: true });
 
 	const systemPrompt = buildCodingSystemPrompt(cfg?.systemPrompt ?? '', session);
+	// Read once, before the first leg: it describes the run *before* this one,
+	// and must not start describing this turn's own legs partway through.
+	const priorRun = previousRunNote(chat.id);
 	const searchCfg = getSetting<WebSearchSettings>('websearch', DEFAULT_WEB_SEARCH);
 	// Built per turn, exactly as chat does it: the tool keeps a per-turn memo
 	// and search budget in its closure.
@@ -132,6 +136,7 @@ export function startCodingTurn(opts: {
 			// Reading a linked spec, an upstream README or an API doc is safe in
 			// plan mode as well as implement — it changes nothing in the repo.
 			fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH)),
+			runHistoryTool(chat.id),
 			...searchTools,
 			...mcpLoopTools('coding')
 		],
@@ -160,7 +165,7 @@ export function startCodingTurn(opts: {
 			// regardless is what let a long session grow without bound.
 			buildMessages: (): ProviderMessage[] =>
 				buildContext({
-					systemPrompt: systemPrompt + formatState(loadState(chat.id)),
+					systemPrompt: systemPrompt + formatState(loadState(chat.id)) + priorRun,
 					chat: getChat(chat.id, opts.userId) ?? chat,
 					history: getMessages(chat.id),
 					supportsVision: choice.model.supportsVision

@@ -413,6 +413,20 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
+		// Reports whether the system prompt carried a note about the previous
+		// attempt — the thing that stops a follow-up blindly re-running a turn
+		// that already failed.
+		if (String(last?.content ?? '').includes('echo-prior')) {
+			const m = system.match(/\[Previous attempt[^\]]*\]\n([^\n]*)/);
+			delta(res, {
+				content: `PRIORCHECK present=${system.includes('[Previous attempt')} says=${m ? m[1] : 'none'}`
+			});
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
 		// Bootstrap verification: report what the system prompt contained.
 		if (String(last?.content ?? '').includes('echo-system')) {
 			delta(res, {

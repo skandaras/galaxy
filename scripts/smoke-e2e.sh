@@ -139,6 +139,24 @@ console.log(JSON.stringify(r ?? {}));")
   fi
 done
 
+# ...and the next turn in that same conversation must be told about it. Without
+# this the failure is invisible: the user's message sits there with no reply and
+# no reason, so "any update?" just re-runs the whole thing and fails identically.
+PCHAT2=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+PJOB1=$(api -X POST $B/api/chats/$PCHAT2/messages -d '{"content":"DEAD-PROVIDER","webSearch":false}' | jqn .jobId)
+curl -sN --max-time 40 $B/api/jobs/$PJOB1/stream > /dev/null
+PJOB2=$(api -X POST $B/api/chats/$PCHAT2/messages -d '{"content":"echo-prior any update?","webSearch":false}' | jqn .jobId)
+PSTREAM2=$(curl -sN --max-time 40 $B/api/jobs/$PJOB2/stream)
+check "next turn is told the last one failed" "$PSTREAM2" 'PRIORCHECK present=true'
+check "next turn is told why" "$PSTREAM2" 'The last run failed'
+
+# A conversation whose last turn went fine must NOT carry the note.
+OKCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+OKJ1=$(api -X POST $B/api/chats/$OKCHAT/messages -d '{"content":"hello","webSearch":false}' | jqn .jobId)
+curl -sN --max-time 40 $B/api/jobs/$OKJ1/stream > /dev/null
+OKJ2=$(api -X POST $B/api/chats/$OKCHAT/messages -d '{"content":"echo-prior and again","webSearch":false}' | jqn .jobId)
+check "a healthy conversation carries no note" "$(curl -sN --max-time 40 $B/api/jobs/$OKJ2/stream)" 'PRIORCHECK present=false'
+
 # deep research pipeline
 RCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
 RJOB=$(api -X POST $B/api/chats/$RCHAT/messages -d '{"content":"How do nebulae form?","deepResearch":true}' | jqn .jobId)

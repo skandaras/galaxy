@@ -20,6 +20,7 @@ import { buildContext } from './context';
 import { maybeCompact } from './compaction';
 import { createJob, failJob, type LiveJob } from './jobs';
 import { runAgentLoop, type LoopTool } from './loop';
+import { previousRunNote, runHistoryTool } from './run-history';
 import { attachmentTools } from './tools/attachments';
 import { fetchUrlTool } from './tools/fetch-url';
 import { bootstrapContext, knowledgeTools } from './tools/knowledge';
@@ -94,7 +95,8 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		// *looking things up*; this is for reading an address the user has already
 		// handed over, and turning search off should not make the model guess at a
 		// link it was given. Admin → Tools switches it off outright.
-		fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH))
+		fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH)),
+		runHistoryTool(chat.id)
 	];
 	if (opts.webSearch && webSearchConfigured(searchCfg)) {
 		// Built per turn: the tool carries a per-turn memo and search budget in
@@ -102,7 +104,9 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		// an error, rather than being flattened into "no results".
 		tools.push(webSearchTool(searchCfg));
 	}
-	const fullSystemPrompt = systemPrompt + bootstrapContext(opts.userId);
+	// Read before the turn starts, so it describes the *previous* attempt and
+	// stays fixed for the whole of this one.
+	const fullSystemPrompt = systemPrompt + bootstrapContext(opts.userId) + previousRunNote(chat.id);
 	const activeTools = applyToolPolicy([...tools, ...mcpLoopTools('chat')], 'chat');
 
 	void runAgentLoop({

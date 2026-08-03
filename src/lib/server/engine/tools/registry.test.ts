@@ -30,6 +30,8 @@ const EXPECTED = [
 	// web
 	'web_search',
 	'fetch_url',
+	// diagnostics
+	'run_history',
 	// coding, available while planning
 	'list_files',
 	'read_file',
