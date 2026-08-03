@@ -6,6 +6,7 @@ import {
 	DEFAULT_BUDGET,
 	DEFAULT_CODING,
 	DEFAULT_COMPACTION,
+	DEFAULT_FETCH,
 	DEFAULT_MEMORY,
 	DEFAULT_RESEARCH,
 	DEFAULT_RETENTION,
@@ -25,7 +26,8 @@ const KNOWN_KEYS = [
 	'research',
 	'coding',
 	'uxaudit',
-	'retention'
+	'retention',
+	'fetch'
 ] as const;
 const DEFAULTS: Record<string, unknown> = {
 	websearch: DEFAULT_WEB_SEARCH,
@@ -36,7 +38,8 @@ const DEFAULTS: Record<string, unknown> = {
 	research: DEFAULT_RESEARCH,
 	coding: DEFAULT_CODING,
 	uxaudit: DEFAULT_UX_AUDIT,
-	retention: DEFAULT_RETENTION
+	retention: DEFAULT_RETENTION,
+	fetch: DEFAULT_FETCH
 };
 
 // Fields the UI submits in plaintext that are stored encrypted. An empty

@@ -9,8 +9,10 @@ import {
 } from '$lib/server/providers/registry';
 import {
 	DEFAULT_COMPACTION,
+	DEFAULT_FETCH,
 	DEFAULT_WEB_SEARCH,
 	getSetting,
+	type FetchSettings,
 	type WebSearchSettings
 } from '$lib/server/settings';
 import { assertBudget } from './budget';
@@ -19,6 +21,7 @@ import { maybeCompact } from './compaction';
 import { createJob, failJob, type LiveJob } from './jobs';
 import { runAgentLoop, type LoopTool } from './loop';
 import { attachmentTools } from './tools/attachments';
+import { fetchUrlTool } from './tools/fetch-url';
 import { bootstrapContext, knowledgeTools } from './tools/knowledge';
 import { mcpLoopTools } from './tools/mcp';
 import { applyToolPolicy } from './tools/registry';
@@ -84,7 +87,15 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'chat', persist });
 
 	const searchCfg = getSetting<WebSearchSettings>('websearch', DEFAULT_WEB_SEARCH);
-	const tools: LoopTool[] = [...knowledgeTools(), ...attachmentTools(chat.id)];
+	const tools: LoopTool[] = [
+		...knowledgeTools(),
+		...attachmentTools(chat.id),
+		// Deliberately not behind the web-search toggle. That toggle governs
+		// *looking things up*; this is for reading an address the user has already
+		// handed over, and turning search off should not make the model guess at a
+		// link it was given. Admin → Tools switches it off outright.
+		fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH))
+	];
 	if (opts.webSearch && webSearchConfigured(searchCfg)) {
 		// Built per turn: the tool carries a per-turn memo and search budget in
 		// its closure. A provider failure still throws and reaches the model as

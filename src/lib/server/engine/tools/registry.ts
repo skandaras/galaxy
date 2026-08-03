@@ -4,6 +4,7 @@ import { toolSettings } from '$lib/server/db/schema';
 import type { LoopTool } from '../loop';
 import { codingTools } from '../coding/tools';
 import { attachmentTools } from './attachments';
+import { fetchUrlToolDef } from './fetch-url';
 import { knowledgeTools } from './knowledge';
 import { webSearchToolDef } from './web-search';
 
@@ -73,6 +74,12 @@ export function builtinDescriptors(): ToolDescriptor[] {
 	// The chat id only affects execution, never the declaration.
 	add(attachmentTools('*'), 'attachments', ['chat', 'coding']);
 	add([{ def: webSearchToolDef, execute: async () => '' }], 'web', ['chat', 'coding']);
+	add(
+		[{ def: fetchUrlToolDef, execute: async () => '' }],
+		'web',
+		['chat', 'coding'],
+		'not tied to the composer’s web-search toggle'
+	);
 
 	// Constructing both modes is how we know which tools plan mode withholds.
 	const ctx = { workspaceRel: '', mode: 'plan' as const, repoUrl: '' };

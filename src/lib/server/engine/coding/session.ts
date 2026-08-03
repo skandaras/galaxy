@@ -9,9 +9,11 @@ import { EngineError, getTaskConfig, pickModel } from '../engine';
 import {
 	DEFAULT_CODING,
 	DEFAULT_COMPACTION,
+	DEFAULT_FETCH,
 	DEFAULT_WEB_SEARCH,
 	getSetting,
 	type CodingSettings,
+	type FetchSettings,
 	type WebSearchSettings
 } from '$lib/server/settings';
 import { completeJob, createJob, failJob, pushChunk, type LiveJob } from '../jobs';
@@ -21,6 +23,7 @@ import { codingMaxSteps } from '../limits';
 import { runAgentLoop, type LoopTool, type TurnSummary } from '../loop';
 import { webSearchConfigured, webSearchTool } from '../tools/web-search';
 import { attachmentTools } from '../tools/attachments';
+import { fetchUrlTool } from '../tools/fetch-url';
 import { bootstrapContext, knowledgeTools } from '../tools/knowledge';
 import { mcpLoopTools } from '../tools/mcp';
 import { applyToolPolicy } from '../tools/registry';
@@ -126,6 +129,9 @@ export function startCodingTurn(opts: {
 			}),
 			...knowledgeTools(),
 			...attachmentTools(chat.id),
+			// Reading a linked spec, an upstream README or an API doc is safe in
+			// plan mode as well as implement — it changes nothing in the repo.
+			fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH)),
 			...searchTools,
 			...mcpLoopTools('coding')
 		],

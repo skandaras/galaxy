@@ -29,7 +29,7 @@ This plan covers architecture, the locked stack, a mapping of every requested fe
 One agentic loop serves all six tasks. Per iteration: compose context → call the configured model through the provider layer → execute any tool calls → append results → repeat until done or budget/limit hit.
 
 - **Provider layer** — adapter interface (`chat`, `stream`, capability metadata, usage extraction). Day 1 adapters: OpenRouter + generic OpenAI-compatible. Model registry rows: id, provider, capability flags, cost rates, context window.
-- **Toolsets** — composable groups gated per task: `core` (web_search, fetch_page, library_read/write, skill_load), `coding` (bash-in-runner, read/write/edit file, glob/grep, git ops), plus tools mounted from registered MCP servers. Per-task allowlists from `task_configs`.
+- **Toolsets** — composable groups gated per task: `core` (web_search, fetch_url, library_read/write, skill_load), `coding` (bash-in-runner, read/write/edit file, glob/grep, git ops), plus tools mounted from registered MCP servers. Per-task allowlists from `task_configs`.
 - **Plan mode** — an engine-level permission state, not a vendor feature: in plan mode only read-only tools are executable; the loop produces a structured plan artifact, the UI renders it for approval/edits, and approval flips the session to implement mode.
 - **Failover** — timeout / 429 / 5xx / provider error → one retry on primary, then the task's backup model, with a visible "switched to backup" notice.
 - **Events** — every model call, tool call, skill load, MCP invocation, and failure emits a structured event (see the Observatory). The event bus is built into the engine from day one, not bolted on.

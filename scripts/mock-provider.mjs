@@ -267,6 +267,38 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
+		// Reading a link the user supplied, rather than searching for it. The
+		// second pass echoes what came back, so the smoke can prove the page text
+		// actually reached the model.
+		const fetched = parsed.messages.find(
+			(m) => m.role === 'tool' && String(m.content ?? '').includes('BEGIN CONTENT')
+		);
+		if (fetched) {
+			delta(res, { content: `Read the page. Contains FACT-42: ${String(fetched.content).includes('FACT-42')}` });
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+		if (String(last?.content ?? '').startsWith('READ-THIS ')) {
+			delta(res, {
+				tool_calls: [
+					{
+						index: 0,
+						id: 'call_fetch',
+						function: {
+							name: 'fetch_url',
+							arguments: JSON.stringify({ url: String(last.content).slice('READ-THIS '.length).trim() })
+						}
+					}
+				]
+			});
+			delta(res, {}, 'tool_calls');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
 		// Scripted coding agent: sequence driven by how many tool results have
 		// accumulated in this turn.
 		if (system.includes('PLAN mode') || system.includes('IMPLEMENT mode')) {

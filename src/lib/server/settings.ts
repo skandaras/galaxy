@@ -61,6 +61,24 @@ export const DEFAULT_WEB_SEARCH: WebSearchSettings = {
 	maxSearchesPerTurn: 4
 };
 
+export interface FetchSettings {
+	/** Per-request deadline for reading one address. */
+	timeoutMs: number;
+	/** Characters of a page handed to the model before it is clipped. */
+	maxChars: number;
+	/**
+	 * Pages one turn may read. Repeats of an address already read in the same
+	 * turn are served from memory and don't count.
+	 */
+	maxFetchesPerTurn: number;
+}
+
+export const DEFAULT_FETCH: FetchSettings = {
+	timeoutMs: 15_000,
+	maxChars: 20_000,
+	maxFetchesPerTurn: 5
+};
+
 export interface GithubSettings {
 	/** AES-encrypted personal access token. */
 	tokenEnc?: string;

@@ -29,6 +29,7 @@ const EXPECTED = [
 	'read_attachment',
 	// web
 	'web_search',
+	'fetch_url',
 	// coding, available while planning
 	'list_files',
 	'read_file',
