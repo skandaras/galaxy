@@ -258,9 +258,10 @@ describe('against a real MCP server', () => {
 		const tool = mcpLoopTools('chat').find((t) => t.def.name === 'weather__echo_env')!;
 		expect(tool).toBeDefined();
 		await expect(tool.execute({ name: 'GALAXY_TEST_TOKEN' })).resolves.toBe('figd_reached');
-		// A var that was never set comes back empty — confirms the child sees its
-		// own env, not a leaked copy of everything Galaxy was launched with.
-		await expect(tool.execute({ name: 'NOT_A_REAL_VAR_xyz' })).resolves.toBe('');
+		// A var that was never set comes back as the empty-output placeholder —
+		// confirms the child sees its own env, not a leaked copy of everything
+		// Galaxy was launched with.
+		await expect(tool.execute({ name: 'NOT_A_REAL_VAR_xyz' })).resolves.toBe('(no output)');
 	});
 
 	it('removes cached tools when the server is deleted', async () => {

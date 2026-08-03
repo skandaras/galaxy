@@ -195,8 +195,11 @@ async function connect(server: McpServer): Promise<Client> {
 			args: server.args ?? [],
 			// Spread process.env so PATH/HOME etc. still reach the child — the
 			// SDK replaces the environment entirely when env is set — then layer
-			// the server's decrypted env vars on top.
-			env: { ...process.env, ...envOf(server) },
+			// the server's decrypted env vars on top. Drop undefined values so
+			// the result is a clean Record<string, string>.
+			env: Object.fromEntries(
+				Object.entries({ ...process.env, ...envOf(server) }).filter(([, v]) => v !== undefined)
+			) as Record<string, string>,
 			// Default is 'inherit', which dumps a misconfigured server's crash
 			// output into Galaxy's own log. Pipe it and keep the tail so the
 			// admin sees the actual reason instead of "Connection closed".

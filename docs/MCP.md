@@ -98,31 +98,34 @@ an option for a server deployment: that loopback address is Galaxy's own
 container. It's designed for an editor running on the same machine as the Figma
 desktop app.
 
-### The community route, for when we pick this up
+### The community route (now wired up)
 
 A community MCP server can talk to Figma's **REST API** with a personal access
 token, which needs no OAuth. The leading one is
 [`figma-developer-mcp`](https://www.npmjs.com/package/figma-developer-mcp)
-(Framelink) — MIT, actively maintained, `node >= 20.20.0`.
+(Framelink) — MIT, actively maintained, `node >= 20.20.0`. It is installed in
+the runtime image (`figma-developer-mcp@0.13.2` via `npm i -g`), and a companion
+skill (`figma-reading`) is seeded on boot to guide agents in calling the tools.
 
 ```
 transport: stdio
-command:   npx
-args:      -y figma-developer-mcp@0.13.2 --stdio
+command:   figma-developer-mcp
+args:      --stdio
 env:       FIGMA_API_KEY=figd_…
+           FRAMELINK_TELEMETRY=0
+           SKIP_IMAGE_DOWNLOADS=1
 ```
 
+Register one in **Admin → Tools → MCP servers** with transport `stdio`, paste
+the env vars into the env field (one `NAME=value` per line), press **Sync**, and
+the two `figma__*` tools appear. Scope them to **chat** (leave coding off) if
+you don't want the coding agent reaching into Figma unsupervised.
+
 The token comes from Figma → **Settings → Security → Personal access tokens**,
-with the **`file_content:read`** scope.
+with the **`file_content:read`** scope. It is encrypted at rest like other
+secrets and never returned to the browser after save.
 
-**This does not work yet**, for one specific reason: Galaxy has no way to pass a
-secret to a `stdio` server (see [limitations](#limitations)). The only way to
-supply the key today would be `--figma-api-key=…` in the args, which leaks the
-token to anything that can read the process list and stores it unencrypted.
-Adding an encrypted env field is the unlock.
-
-Worth knowing before anyone invests in this, because it is a real step down from
-the official server:
+Worth knowing, because it is a real step down from the official server:
 
 - It exposes **two** tools — `get_figma_data` and `download_figma_images` —
   against the official server's ~40. No Code Connect, no live selection context,
@@ -144,11 +147,10 @@ the official server:
 ## Limitations
 
 - **No OAuth.** Static credentials only.
-- **`stdio` servers can't be given secrets.** There is no env field, and the SDK
-  only passes through `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM` and `USER` — so
-  setting a variable on the Galaxy container does *not* reach the child process.
-  This blocks most community stdio servers, which expect their token in an env
-  var.
+- **`stdio` servers can be given secrets via the env field.** Encrypted at
+  rest (same scheme as headers), merged with `process.env` at spawn time so
+  `PATH`/`HOME` still reach the child. Set one `NAME=value` per line in the
+  admin UI. This is how the Figma community server receives its `FIGMA_API_KEY`.
 - **No sampling or elicitation.** Galaxy connects with no client capabilities, so
   servers that ask the client to run a model call won't work.
 - Resources and prompts are not surfaced — tools only.
