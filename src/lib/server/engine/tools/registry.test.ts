@@ -32,6 +32,7 @@ const EXPECTED = [
 	'fetch_url',
 	// diagnostics
 	'run_history',
+	'set_chat_title',
 	// coding, available while planning
 	'list_files',
 	'read_file',

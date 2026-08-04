@@ -475,6 +475,33 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
+		// Naming the chat from inside the turn — the primary path now. Driven by
+		// the prompt note the engine injects while a chat is unnamed, so this
+		// exercises the real condition rather than a magic word. Deliberately
+		// last: that note is on the first turn of *every* new chat, so anywhere
+		// earlier it swallows the turns the scenarios above stage.
+		const namedAlready = parsed.messages.some(
+			(m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.function?.name === 'set_chat_title')
+		);
+		if (system.includes('[This conversation has no name yet]') && !namedAlready && !wantsTool) {
+			delta(res, {
+				tool_calls: [
+					{
+						index: 0,
+						id: 'call_title',
+						function: {
+							name: 'set_chat_title',
+							arguments: JSON.stringify({ title: 'Named from the turn' })
+						}
+					}
+				]
+			});
+			delta(res, {}, 'tool_calls');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
 		if (wantsTool) {
 			// Tool-call arguments intentionally split across chunks to exercise accumulation.
 			delta(res, {
