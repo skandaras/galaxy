@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "820c0dae-8b44-46dc-8c95-0c344fa6da66",
+  "id": "1f79e46c-559f-47b2-ab30-5fdd7bb782f4",
   "prevId": "77913178-ff91-4a79-ba8c-0d461e0b9438",
   "tables": {
     "attachments": {
@@ -130,21 +130,6 @@
         "model_id": {
           "name": "model_id",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "title_custom": {
-          "name": "title_custom",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "archived_at": {
-          "name": "archived_at",
-          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -556,6 +541,13 @@
         },
         "command": {
           "name": "command",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "env_enc": {
+          "name": "env_enc",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

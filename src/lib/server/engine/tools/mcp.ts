@@ -46,6 +46,7 @@ export interface ServerInput {
 	headers?: Record<string, string> | null;
 	command?: string | null;
 	args?: string[] | null;
+	env?: Record<string, string> | null;
 	toolPrefix?: string;
 	tasks?: string[] | null;
 	enabled?: boolean;
@@ -79,6 +80,7 @@ export function createServer(input: ServerInput): McpServer {
 		transport: input.transport,
 		url: input.url?.trim() || null,
 		headersEnc: input.headers ? encryptSecret(JSON.stringify(input.headers)) : null,
+		envEnc: input.env ? encryptSecret(JSON.stringify(input.env)) : null,
 		command: input.command?.trim() || null,
 		args: input.args ?? null,
 		toolPrefix: (input.toolPrefix || defaultPrefix(input.name)).trim(),
@@ -118,9 +120,12 @@ export function updateServer(id: string, patch: Partial<ServerInput>): McpServer
 			toolPrefix: merged.toolPrefix?.trim() || defaultPrefix(merged.name),
 			tasks: merged.tasks ?? null,
 			enabled: merged.enabled ?? true,
-			// Omitted headers keep the stored ones; an empty object clears them.
+			// Omitted headers/env keep the stored ones; an empty object clears them.
 			...(patch.headers !== undefined
 				? { headersEnc: patch.headers ? encryptSecret(JSON.stringify(patch.headers)) : null }
+				: {}),
+			...(patch.env !== undefined
+				? { envEnc: patch.env ? encryptSecret(JSON.stringify(patch.env)) : null }
 				: {})
 		})
 		.where(eq(mcpServers.id, id))
@@ -163,6 +168,15 @@ function headersOf(server: McpServer): Record<string, string> {
 	}
 }
 
+function envOf(server: McpServer): Record<string, string> {
+	if (!server.envEnc) return {};
+	try {
+		return JSON.parse(decryptSecret(server.envEnc)) as Record<string, string>;
+	} catch {
+		return {};
+	}
+}
+
 async function connect(server: McpServer): Promise<Client> {
 	const pooled = pool.get(server.id);
 	if (pooled) {
@@ -179,6 +193,13 @@ async function connect(server: McpServer): Promise<Client> {
 		const stdio = new StdioClientTransport({
 			command: server.command ?? '',
 			args: server.args ?? [],
+			// Spread process.env so PATH/HOME etc. still reach the child — the
+			// SDK replaces the environment entirely when env is set — then layer
+			// the server's decrypted env vars on top. Drop undefined values so
+			// the result is a clean Record<string, string>.
+			env: Object.fromEntries(
+				Object.entries({ ...process.env, ...envOf(server) }).filter(([, v]) => v !== undefined)
+			) as Record<string, string>,
 			// Default is 'inherit', which dumps a misconfigured server's crash
 			// output into Galaxy's own log. Pipe it and keep the tail so the
 			// admin sees the actual reason instead of "Connection closed".

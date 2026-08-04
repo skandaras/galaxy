@@ -8,10 +8,10 @@ import {
 	McpConfigError
 } from '$lib/server/engine/tools/mcp';
 
-/** Never leak stored headers back to the browser — they carry tokens. */
+/** Never leak stored headers or env back to the browser — they carry tokens. */
 function present(server: ReturnType<typeof listServers>[number]) {
-	const { headersEnc, ...rest } = server;
-	return { ...rest, hasHeaders: Boolean(headersEnc) };
+	const { headersEnc, envEnc, ...rest } = server;
+	return { ...rest, hasHeaders: Boolean(headersEnc), hasEnv: Boolean(envEnc) };
 }
 
 export const GET: RequestHandler = ({ locals }) => {
