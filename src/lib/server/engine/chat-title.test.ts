@@ -14,6 +14,15 @@ describe('cleanTitle', () => {
 		expect(cleanTitle('Rate limiting strategies.')).toBe('Rate limiting strategies');
 	});
 
+	it('strips them when they are combined, which is the common case', () => {
+		// Testing quotes and prefixes only in isolation is what let `Title: …`
+		// reach the sidebar: the prefix regex never matched, because the string
+		// started with a quote.
+		expect(cleanTitle('"Title: Mock conversation name"')).toBe('Mock conversation name');
+		expect(cleanTitle('“Title — SQLite indexing”')).toBe('SQLite indexing');
+		expect(cleanTitle("'Chat title: Deploy notes.'")).toBe('Deploy notes');
+	});
+
 	it('keeps only the first line, ignoring any commentary after it', () => {
 		expect(cleanTitle('SQLite indexing\n\nThis title covers the discussion of…')).toBe(
 			'SQLite indexing'

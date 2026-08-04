@@ -7,6 +7,10 @@
 // POST /v1/chat/completions  → streams text; emits a web_search tool call
 //                              when tools are offered and no tool result yet
 // GET  /searxng/search       → canned results (format=json)
+//
+// MOCK_SLOW_TITLE=1 delays the chat-title reply by 2.5s. Titling runs after the
+// reply lands, so an instant local answer hides whether the UI ever picks the
+// new name up — set this when checking that by hand.
 
 import { createServer } from 'node:http';
 
@@ -154,6 +158,10 @@ const server = createServer(async (req, res) => {
 					]
 				});
 			} else if (userText.includes('CHAT-TITLE')) {
+				// Titling happens after the reply, so a real (remote) model takes a
+				// beat. Simulated here, because an instant local answer hides whether
+				// the UI ever picks the new title up.
+				if (process.env.MOCK_SLOW_TITLE) await new Promise((r) => setTimeout(r, 2500));
 				// Deliberately decorated: the titler is expected to strip quotes and
 				// a "Title:" prefix rather than store them.
 				content = '"Title: Mock conversation name"';

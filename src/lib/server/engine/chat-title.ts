@@ -105,11 +105,18 @@ export async function maybeTitleChat(chatId: string, userId: string): Promise<st
  * the first line.
  */
 export function cleanTitle(raw: string): string {
-	const first = raw.trim().split('\n')[0] ?? '';
-	return first
-		.replace(/^(title|chat title)\s*[:\-—]\s*/i, '')
-		.replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, '')
-		.replace(/[.,;:]+$/, '')
-		.trim()
-		.slice(0, MAX_TITLE_CHARS);
+	let out = (raw.trim().split('\n')[0] ?? '').trim();
+
+	// The decorations nest — `"Title: Nebulae"` is the common shape — so quotes
+	// have to come off before the prefix is even at the start of the string.
+	// Stripping in one fixed order left the prefix in place, which is how
+	// "Title: …" ended up in the sidebar.
+	for (let pass = 0; pass < 3; pass++) {
+		const before = out;
+		out = out.replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, '').trim();
+		out = out.replace(/^(chat\s+)?title\s*[:\-—]\s*/i, '').trim();
+		if (out === before) break;
+	}
+
+	return out.replace(/[.,;:]+$/, '').trim().slice(0, MAX_TITLE_CHARS);
 }
