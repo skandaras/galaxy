@@ -84,13 +84,18 @@ export function listArchivedChats(userId: string): ChatMeta[] {
 		.select()
 		.from(chats)
 		.where(and(eq(chats.userId, userId), isNotNull(chats.archivedAt)))
-		.orderBy(desc(chats.archivedAt))
+		// id as a tie-break: archiving two chats in quick succession stamps them
+		// in the same millisecond, and without it their order reshuffles between
+		// identical queries (same reason listMemoryItems does this).
+		.orderBy(desc(chats.archivedAt), chats.id)
 		.all()
 		.map(rowToMeta);
 	const hidden = [...hiddenChats.values()]
 		.filter((h) => h.meta.userId === userId && h.meta.archivedAt)
 		.map((h) => h.meta);
-	return [...hidden, ...persisted].sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
+	return [...hidden, ...persisted].sort(
+		(a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0) || a.id.localeCompare(b.id)
+	);
 }
 
 /** Move a chat in or out of the archive. Returns null when it isn't the caller's. */

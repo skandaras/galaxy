@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
 import { chats, messages } from '$lib/server/db/schema';
 import {
@@ -56,14 +57,25 @@ describe('archiving', () => {
 		expect(listArchivedChats(USER)).toHaveLength(0);
 	});
 
-	it('records when it was archived, and orders the archive by that', () => {
-		const first = createChat({ userId: USER, title: 'first' });
-		const second = createChat({ userId: USER, title: 'second' });
-		setArchived(first.id, USER, true);
-		setArchived(second.id, USER, true);
+	it('records when it was archived', () => {
+		const chat = createChat({ userId: USER });
+		const before = Date.now();
+		setArchived(chat.id, USER, true);
+		expect(getChat(chat.id, USER)?.archivedAt).toBeGreaterThanOrEqual(before);
+	});
 
-		expect(listArchivedChats(USER).map((c) => c.title)).toEqual(['second', 'first']);
-		expect(getChat(first.id, USER)?.archivedAt).toBeGreaterThan(0);
+	it('orders the archive by when things were put away', () => {
+		const older = createChat({ userId: USER, title: 'older' });
+		const newer = createChat({ userId: USER, title: 'newer' });
+		setArchived(older.id, USER, true);
+		setArchived(newer.id, USER, true);
+		// Stamped directly rather than relying on two calls landing in different
+		// milliseconds — they don't, which is what made the first version of this
+		// test flaky.
+		db.update(chats).set({ archivedAt: new Date(1_000) }).where(eq(chats.id, older.id)).run();
+		db.update(chats).set({ archivedAt: new Date(2_000) }).where(eq(chats.id, newer.id)).run();
+
+		expect(listArchivedChats(USER).map((c) => c.title)).toEqual(['newer', 'older']);
 	});
 
 	it('is owner-scoped, like every other chat mutation', () => {
