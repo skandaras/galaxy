@@ -1,7 +1,14 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
-import { deleteChat, getChat, getMessages, setHidden, updateChat } from '$lib/server/chats';
+import {
+	deleteChat,
+	getChat,
+	getMessages,
+	setArchived,
+	setHidden,
+	updateChat
+} from '$lib/server/chats';
 import { findRunningJobForChat } from '$lib/server/engine/jobs';
 
 export const GET: RequestHandler = ({ locals, params }) => {
@@ -22,10 +29,15 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	const body = await request.json().catch(() => ({}));
 
 	if (typeof body.title === 'string' && body.title.trim()) {
-		updateChat(chat.id, { title: body.title.trim().slice(0, 120) });
+		// A rename is what marks the title as the user's, so the auto-titler
+		// leaves it alone from here on.
+		updateChat(chat.id, { title: body.title.trim().slice(0, 120), titleCustom: true });
 	}
 	if (typeof body.hidden === 'boolean' && body.hidden !== chat.hidden) {
 		chat = setHidden(chat.id, user.id, body.hidden) ?? chat;
+	}
+	if (typeof body.archived === 'boolean' && body.archived !== Boolean(chat.archivedAt)) {
+		chat = setArchived(chat.id, user.id, body.archived) ?? chat;
 	}
 	return json(getChat(params.id, user.id));
 };

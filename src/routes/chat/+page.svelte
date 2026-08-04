@@ -12,6 +12,7 @@
 		title: string;
 		hidden: boolean;
 		modelId?: string | null;
+		archivedAt?: number | null;
 		updatedAt: number;
 	}
 	interface AttachmentRef {
@@ -37,6 +38,8 @@
 	}
 
 	let chats = $state<ChatMeta[]>([]);
+	/** Loaded alongside the active list; rendered in the accordion beneath it. */
+	let archived = $state<ChatMeta[]>([]);
 	let models = $state<ModelOption[]>([]);
 	let currentChat = $state<ChatMeta | null>(null);
 	let messages = $state<Msg[]>([]);
@@ -98,11 +101,13 @@
 	);
 
 	onMount(async () => {
-		const [chatsRes, modelsRes] = await Promise.all([
+		const [chatsRes, archivedRes, modelsRes] = await Promise.all([
 			fetch('/api/chats'),
+			fetch('/api/chats?archived=1'),
 			fetch('/api/models')
 		]);
 		chats = filterChatMode(await chatsRes.json());
+		archived = filterChatMode(await archivedRes.json());
 		const m = await modelsRes.json();
 		models = m.models;
 		defaultModelId = m.defaultModelId ?? models[0]?.id ?? '';
@@ -393,14 +398,66 @@
 	}
 
 	async function refreshChats() {
-		const res = await fetch('/api/chats');
-		if (res.ok) {
-			chats = filterChatMode(await res.json());
+		const [activeRes, archivedRes] = await Promise.all([
+			fetch('/api/chats'),
+			fetch('/api/chats?archived=1')
+		]);
+		if (activeRes.ok) {
+			chats = filterChatMode(await activeRes.json());
 			if (currentChat) {
 				const updated = chats.find((c) => c.id === currentChat!.id);
 				if (updated) currentChat = { ...updated };
 			}
 		}
+		if (archivedRes.ok) archived = filterChatMode(await archivedRes.json());
+	}
+
+	/** Chat being renamed inline, and the text as typed. */
+	let renamingId = $state<string | null>(null);
+	let renameText = $state('');
+
+	function startRename(chat: ChatMeta, ev?: Event) {
+		ev?.stopPropagation();
+		renamingId = chat.id;
+		renameText = chat.title;
+	}
+
+	async function commitRename() {
+		const id = renamingId;
+		const title = renameText.trim();
+		renamingId = null;
+		if (!id || !title) return;
+		const existing = [...chats, ...archived].find((c) => c.id === id);
+		if (existing?.title === title) return;
+		await fetch(`/api/chats/${id}`, {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ title })
+		});
+		await refreshChats();
+		if (currentChat?.id === id) currentChat = { ...currentChat, title };
+	}
+
+	function onRenameKey(ev: KeyboardEvent) {
+		if (ev.key === 'Enter') {
+			ev.preventDefault();
+			void commitRename();
+		} else if (ev.key === 'Escape') {
+			ev.preventDefault();
+			renamingId = null;
+		}
+	}
+
+	async function toggleArchived(chat: ChatMeta, ev?: Event) {
+		ev?.stopPropagation();
+		await fetch(`/api/chats/${chat.id}`, {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ archived: !chat.archivedAt })
+		});
+		// Archiving the open chat leaves it on screen deliberately: it is still a
+		// perfectly good conversation, just no longer in the list.
+		await refreshChats();
 	}
 
 	async function toggleHidden(chat: ChatMeta, evOrNull?: Event) {
@@ -470,20 +527,62 @@
 		<ul>
 			{#each chats as chat (chat.id)}
 				<li class:selected={currentChat?.id === chat.id}>
-					<button class="chat-row" onclick={() => selectChat(chat.id)}>
-						<span class="title">{chat.hidden ? '◌ ' : ''}{chat.title}</span>
-					</button>
-					<span class="row-actions">
-						<button
-							class="icon"
-							title={chat.hidden ? 'Make visible (persist)' : 'Make hidden (forget)'}
-							onclick={(e) => toggleHidden(chat, e)}>{chat.hidden ? '◉' : '◌'}</button
-						>
-						<button class="icon" title="Delete" onclick={(e) => removeChat(chat, e)}>×</button>
-					</span>
+					{#if renamingId === chat.id}
+						<!-- svelte-ignore a11y_autofocus -->
+						<input
+							class="rename"
+							bind:value={renameText}
+							onkeydown={onRenameKey}
+							onblur={commitRename}
+							autofocus
+							maxlength="120"
+							aria-label="Chat name"
+						/>
+					{:else}
+						<button class="chat-row" onclick={() => selectChat(chat.id)} ondblclick={(e) => startRename(chat, e)}>
+							<span class="title">{chat.hidden ? '◌ ' : ''}{chat.title}</span>
+						</button>
+						<span class="row-actions">
+							<button class="icon" title="Rename" onclick={(e) => startRename(chat, e)}>✎</button>
+							<button
+								class="icon"
+								title="Archive — keeps the chat, removes it from this list"
+								onclick={(e) => toggleArchived(chat, e)}>▤</button
+							>
+							<button
+								class="icon"
+								title={chat.hidden ? 'Make visible (persist)' : 'Make hidden (forget)'}
+								onclick={(e) => toggleHidden(chat, e)}>{chat.hidden ? '◉' : '◌'}</button
+							>
+							<button class="icon" title="Delete" onclick={(e) => removeChat(chat, e)}>×</button>
+						</span>
+					{/if}
 				</li>
 			{/each}
 		</ul>
+
+		{#if archived.length}
+			<details class="archive">
+				<summary>Archived ({archived.length})</summary>
+				<ul>
+					{#each archived as chat (chat.id)}
+						<li class:selected={currentChat?.id === chat.id}>
+							<button class="chat-row" onclick={() => selectChat(chat.id)}>
+								<span class="title">{chat.hidden ? '◌ ' : ''}{chat.title}</span>
+							</button>
+							<span class="row-actions">
+								<button
+									class="icon"
+									title="Restore to the main list"
+									onclick={(e) => toggleArchived(chat, e)}>↩</button
+								>
+								<button class="icon" title="Delete" onclick={(e) => removeChat(chat, e)}>×</button>
+							</span>
+						</li>
+					{/each}
+				</ul>
+			</details>
+		{/if}
 	</aside>
 
 	<section class="thread-area">
@@ -651,7 +750,9 @@
 		min-width: 0;
 	}
 	.chat-list {
-		width: 250px;
+		/* Wider than it was: the row carries four actions on hover now, and at
+		   250px they left the title with about three legible characters. */
+		width: 280px;
 		flex-shrink: 0;
 		border-right: 1px solid var(--border);
 		padding: 0.75rem;
@@ -698,6 +799,11 @@
 		margin: 0;
 		padding: 0;
 	}
+	/* Holds the archive down the pane rather than letting it ride up under a
+	   short list, where it reads as another chat rather than a separate shelf. */
+	.chat-list > ul {
+		min-height: 45vh;
+	}
 	.chat-list li {
 		display: flex;
 		align-items: center;
@@ -726,21 +832,64 @@
 	}
 	.row-actions {
 		display: none;
-		gap: 0.15rem;
+		gap: 0.1rem;
+		padding-right: 0.15rem;
 	}
 	.chat-list li:hover .row-actions {
 		display: inline-flex;
 	}
+	/* Sized as a target rather than a glyph: at 0.8rem with 0.1rem of padding
+	   these were a ~13px tap area, which is a miss waiting to happen next to
+	   a Delete. */
 	.icon {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 1.5rem;
+		min-height: 1.5rem;
 		background: none;
 		border: none;
+		border-radius: 4px;
 		color: var(--fg-dim);
 		cursor: pointer;
-		font-size: 0.8rem;
-		padding: 0.1rem 0.25rem;
+		font-size: 0.95rem;
+		line-height: 1;
+		padding: 0.2rem;
 	}
 	.icon:hover {
 		color: var(--fg);
+		background: var(--bg-pane);
+	}
+	.rename {
+		flex: 1;
+		min-width: 0;
+		background: var(--bg-pane);
+		border: 1px solid var(--accent);
+		border-radius: 5px;
+		color: var(--fg);
+		font-family: inherit;
+		font-size: 0.8rem;
+		padding: 0.4rem 0.45rem;
+		margin: 0.05rem;
+		outline: none;
+	}
+	.archive {
+		margin-top: 0.9rem;
+		border-top: 1px solid var(--border);
+		padding-top: 0.5rem;
+	}
+	.archive summary {
+		font-size: 0.7rem;
+		color: var(--fg-dim);
+		cursor: pointer;
+		padding: 0.25rem 0.15rem;
+		letter-spacing: 0.06em;
+	}
+	.archive summary:hover {
+		color: var(--fg);
+	}
+	.archive .chat-row {
+		color: var(--fg-dim);
 	}
 
 	.thread-area {

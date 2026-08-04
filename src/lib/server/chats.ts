@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull } from 'drizzle-orm';
 import { db, dataDir } from '$lib/server/db';
 import { chats, messages, attachments, type AttachmentRef } from '$lib/server/db/schema';
 
@@ -13,6 +13,10 @@ export interface ChatMeta {
 	hidden: boolean;
 	/** Model last used in this chat; null until a turn runs. */
 	modelId: string | null;
+	/** True once a human has named it, which stops the auto-titler. */
+	titleCustom: boolean;
+	/** When it was archived, or null while active. */
+	archivedAt: number | null;
 	compactSummary: string | null;
 	compactedUpTo: number;
 	createdAt: number;
@@ -53,18 +57,58 @@ function uploadsDir(chatId: string): string {
 	return join(dataDir, 'uploads', chatId);
 }
 
+/** Active chats only. Archived ones are still readable — see listArchivedChats. */
 export function listChats(userId: string): ChatMeta[] {
 	const persisted = db
 		.select()
 		.from(chats)
-		.where(eq(chats.userId, userId))
+		.where(and(eq(chats.userId, userId), isNull(chats.archivedAt)))
 		.orderBy(desc(chats.updatedAt))
 		.all()
 		.map(rowToMeta);
 	const hidden = [...hiddenChats.values()]
-		.filter((h) => h.meta.userId === userId)
+		.filter((h) => h.meta.userId === userId && !h.meta.archivedAt)
 		.map((h) => h.meta);
 	return [...hidden, ...persisted].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/**
+ * Archived chats, most recently archived first.
+ *
+ * Archiving is not deletion and not hiding: the chat keeps its messages, still
+ * opens by id, and still counts as context for the memory agent. It is only out
+ * of the way.
+ */
+export function listArchivedChats(userId: string): ChatMeta[] {
+	const persisted = db
+		.select()
+		.from(chats)
+		.where(and(eq(chats.userId, userId), isNotNull(chats.archivedAt)))
+		.orderBy(desc(chats.archivedAt))
+		.all()
+		.map(rowToMeta);
+	const hidden = [...hiddenChats.values()]
+		.filter((h) => h.meta.userId === userId && h.meta.archivedAt)
+		.map((h) => h.meta);
+	return [...hidden, ...persisted].sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
+}
+
+/** Move a chat in or out of the archive. Returns null when it isn't the caller's. */
+export function setArchived(chatId: string, userId: string, archived: boolean): ChatMeta | null {
+	const meta = getChat(chatId, userId);
+	if (!meta) return null;
+	const archivedAt = archived ? Date.now() : null;
+
+	const hidden = hiddenChats.get(chatId);
+	if (hidden) {
+		hidden.meta.archivedAt = archivedAt;
+		return hidden.meta;
+	}
+	db.update(chats)
+		.set({ archivedAt: archivedAt ? new Date(archivedAt) : null })
+		.where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
+		.run();
+	return getChat(chatId, userId);
 }
 
 export function getChat(id: string, userId: string): ChatMeta | null {
@@ -92,6 +136,8 @@ export function createChat(opts: {
 		title: opts.title ?? 'New chat',
 		hidden: opts.hidden ?? false,
 		modelId: null,
+		titleCustom: false,
+		archivedAt: null,
 		compactSummary: null,
 		compactedUpTo: 0,
 		createdAt: now,
@@ -167,7 +213,9 @@ function countMessages(chatId: string): number {
 
 export function updateChat(
 	chatId: string,
-	patch: Partial<Pick<ChatMeta, 'title' | 'modelId' | 'compactSummary' | 'compactedUpTo'>>
+	patch: Partial<
+		Pick<ChatMeta, 'title' | 'titleCustom' | 'modelId' | 'compactSummary' | 'compactedUpTo'>
+	>
 ): void {
 	const hidden = hiddenChats.get(chatId);
 	if (hidden) {
@@ -387,6 +435,8 @@ function rowToMeta(row: typeof chats.$inferSelect): ChatMeta {
 		title: row.title,
 		hidden: false,
 		modelId: row.modelId,
+		titleCustom: row.titleCustom,
+		archivedAt: row.archivedAt?.getTime() ?? null,
 		compactSummary: row.compactSummary,
 		compactedUpTo: row.compactedUpTo,
 		createdAt: row.createdAt.getTime(),
