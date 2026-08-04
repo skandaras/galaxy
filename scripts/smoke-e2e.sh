@@ -108,16 +108,30 @@ check "hidden chat not persisted" "leak=$LEAK" "0,0,0,0,0"
 # Chat naming and the archive.
 # ---------------------------------------------------------------------------
 api -X PUT $B/api/admin/task-configs -d "{\"task\":\"chat-title\",\"primaryModelId\":\"$MODEL_ID\"}" > /dev/null
+
+# Primary path: the agent names the chat from inside the turn that answers, via
+# set_chat_title. No second model call, so nothing can fail separately.
 TCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
 TJOB=$(api -X POST $B/api/chats/$TCHAT/messages -d '{"content":"tell me about nebulae","webSearch":false}' | jqn .jobId)
-curl -sN --max-time 40 $B/api/jobs/$TJOB/stream > /dev/null
-sleep 1  # titling runs after the reply, deliberately off the streaming path
-TITLE=$(api $B/api/chats/$TCHAT | jqn .chat.title)
-check "chat gets an agent-written title" "$TITLE" 'Mock conversation name'
+TSTREAM=$(curl -sN --max-time 40 $B/api/jobs/$TJOB/stream)
+check "the agent names the chat itself" "$TSTREAM" '"name":"set_chat_title","status":"ok"'
+check "the name it chose is stored" "$(api $B/api/chats/$TCHAT | jqn .chat.title)" 'Named from the turn'
+
+# Fallback path: with set_chat_title switched off the agent cannot name it, so
+# the separate titling pass has to.
+api -X PATCH $B/api/admin/tools/set_chat_title -d '{"enabled":false}' > /dev/null
+FTCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+FTJOB=$(api -X POST $B/api/chats/$FTCHAT/messages -d '{"content":"tell me about pulsars","webSearch":false}' | jqn .jobId)
+curl -sN --max-time 40 $B/api/jobs/$FTJOB/stream > /dev/null
+sleep 1  # the fallback runs after the reply, deliberately off the streaming path
+TITLE=$(api $B/api/chats/$FTCHAT | jqn .chat.title)
+check "the fallback names it when the agent cannot" "$TITLE" 'Mock conversation name'
 # The mock deliberately answers `"Title: Mock conversation name"`. A substring
 # check alone passes on the undecorated text, which is how a stray "Title:"
 # prefix reached the sidebar unnoticed.
 check "the title is stripped of the model's decorations" "$(echo "$TITLE" | grep -c 'Title:')" "0"
+api -X DELETE $B/api/admin/tools/set_chat_title > /dev/null
+TCHAT=$FTCHAT
 
 # A name the user chose must survive the next turn untouched.
 api -X PATCH $B/api/chats/$TCHAT -d '{"title":"My own name"}' > /dev/null

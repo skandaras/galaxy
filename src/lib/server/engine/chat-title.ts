@@ -1,4 +1,6 @@
 import { getChat, getMessages, updateChat } from '$lib/server/chats';
+import type { ToolDef } from '$lib/server/providers/types';
+import type { LoopTool } from './loop';
 import { getBudgetStatus } from './budget';
 import { getTaskConfig, pickModel } from './engine';
 import { emitEvent } from './events';
@@ -7,6 +9,74 @@ import { logUsage } from './usage';
 /** Enough of the exchange to name it by; the rest is noise for this job. */
 const MAX_SOURCE_CHARS = 2_000;
 const MAX_TITLE_CHARS = 60;
+
+/**
+ * Generous for a six-word answer, because a reasoning model spends this budget
+ * thinking before it writes anything. At 32 those models returned empty and the
+ * chat silently kept its fallback name — the same starvation that once made
+ * deep research return nothing.
+ */
+const TITLE_MAX_TOKENS = 256;
+
+export const setChatTitleToolDef: ToolDef = {
+	name: 'set_chat_title',
+	description:
+		'Name this conversation. Call this once, as part of your first reply, with a short ' +
+		'subject-style name — two to five words, naming what the conversation is about rather ' +
+		'than restating the request. "Postgres connection pooling", not "Question about databases" ' +
+		'or "How to fix my pool". Only offered while the conversation is still unnamed; calling it ' +
+		'costs the user nothing and saves a second model call.',
+	parameters: {
+		type: 'object',
+		properties: {
+			title: { type: 'string', description: 'The name, two to five words' }
+		},
+		required: ['title']
+	}
+};
+
+/**
+ * Let the agent name the chat inside the turn it is already running.
+ *
+ * A separate titling call is a second thing that can fail on its own — a
+ * starved token budget, an unconfigured model, a provider hiccup — and when it
+ * does, the chat keeps a truncated first message and nothing says why. Naming it
+ * from the turn that produced the reply costs no extra call and cannot fail
+ * separately from the reply itself.
+ *
+ * `onSet` tells the caller the agent did the job, so the fallback stays quiet.
+ */
+export function setChatTitleTool(chatId: string, userId: string, onSet: () => void): LoopTool {
+	return {
+		def: setChatTitleToolDef,
+		describe: (args) => String(args.title ?? ''),
+		execute: async (args) => {
+			const title = cleanTitle(String(args.title ?? ''));
+			if (!title) throw new Error('title is required');
+
+			// A name the user chose always wins, even mid-turn.
+			const chat = getChat(chatId, userId);
+			if (!chat) throw new Error('chat not found');
+			if (chat.titleCustom) {
+				onSet();
+				return `This conversation is already named "${chat.title}" by the user — left unchanged.`;
+			}
+
+			updateChat(chatId, { title });
+			onSet();
+			return `Named this conversation "${title}".`;
+		}
+	};
+}
+
+/** Prompt note for a turn that is being asked to name its own chat. */
+export function nameThisChatNote(): string {
+	return [
+		'',
+		'[This conversation has no name yet]',
+		'Call set_chat_title once during this reply with a short, subject-style name for it. Do this alongside answering — it is not a reason to delay or shorten your reply.'
+	].join('\n');
+}
 
 /**
  * Name a chat from its opening exchange.
@@ -21,20 +91,47 @@ const MAX_TITLE_CHARS = 60;
  */
 export async function maybeTitleChat(chatId: string, userId: string): Promise<string | null> {
 	const chat = getChat(chatId, userId);
-	if (!chat || chat.titleCustom) return null;
+
+	/**
+	 * Record why a chat kept its fallback name. Every one of these used to be a
+	 * bare `return null`, which is precisely why intermittent failures here were
+	 * impossible to diagnose — the chat just quietly stayed named after its first
+	 * message, with nothing anywhere saying so.
+	 */
+	const skip = (reason: string): null => {
+		emitEvent(
+			{
+				userId,
+				chatId: chat?.hidden ? undefined : chatId,
+				task: 'chat-title',
+				type: 'job',
+				name: 'chat-title.skipped',
+				status: 'ok',
+				detail: { reason }
+			},
+			{ persist: !chat?.hidden }
+		);
+		return null;
+	};
+
+	if (!chat) return null;
+	if (chat.titleCustom) return skip('the user named this chat');
 
 	const messages = getMessages(chatId);
 	const firstUser = messages.find((m) => m.role === 'user');
 	const firstReply = messages.find((m) => m.role === 'assistant');
 	// Only the opening exchange earns a title. Re-titling later would rename a
 	// conversation under someone mid-read.
-	if (!firstUser || !firstReply) return null;
-	if (messages.filter((m) => m.role === 'assistant').length > 1) return null;
+	if (!firstUser) return skip('no user message');
+	if (!firstReply) return skip('the turn produced no reply');
+	if (messages.filter((m) => m.role === 'assistant').length > 1) {
+		return skip('not the first exchange');
+	}
 
-	if (getBudgetStatus().blocked) return null;
+	if (getBudgetStatus().blocked) return skip('budget cap reached');
 	const cfg = getTaskConfig('chat-title');
 	const choice = pickModel(cfg?.primaryModelId ?? null);
-	if (!choice) return null;
+	if (!choice) return skip('no model configured');
 
 	const started = Date.now();
 	try {
@@ -52,18 +149,21 @@ export async function maybeTitleChat(chatId: string, userId: string): Promise<st
 						].join('\n\n')
 					}
 				],
-				maxTokens: 32
+				maxTokens: TITLE_MAX_TOKENS
 			},
 			AbortSignal.timeout(30_000)
 		);
 
 		const title = cleanTitle(text);
-		if (!title) return null;
+		if (!title) {
+			logUsage('chat-title', choice.model.modelKey, usage, 'ok', userId);
+			return skip(`model returned nothing usable: ${JSON.stringify(text.slice(0, 120))}`);
+		}
 
 		// Re-read: the user may have renamed it while this was in flight, and
 		// their name wins.
 		const fresh = getChat(chatId, userId);
-		if (!fresh || fresh.titleCustom) return null;
+		if (!fresh || fresh.titleCustom) return skip('renamed while the title was in flight');
 
 		updateChat(chatId, { title });
 		logUsage('chat-title', choice.model.modelKey, usage, 'ok', userId);

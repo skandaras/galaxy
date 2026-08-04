@@ -7,6 +7,7 @@ import { attachmentTools } from './attachments';
 import { fetchUrlToolDef } from './fetch-url';
 import { knowledgeTools } from './knowledge';
 import { runHistoryToolDef } from '../run-history';
+import { setChatTitleToolDef } from '../chat-title';
 import { webSearchToolDef } from './web-search';
 
 export type ToolSource = 'builtin' | 'mcp';
@@ -83,6 +84,12 @@ export function builtinDescriptors(): ToolDescriptor[] {
 	);
 	// The chat id only scopes execution, never the declaration.
 	add([{ def: runHistoryToolDef, execute: async () => '' }], 'diagnostics', ['chat', 'coding']);
+	add(
+		[{ def: setChatTitleToolDef, execute: async () => '' }],
+		'diagnostics',
+		['chat'],
+		'offered only while a chat is unnamed'
+	);
 
 	// Constructing both modes is how we know which tools plan mode withholds.
 	const ctx = { workspaceRel: '', mode: 'plan' as const, repoUrl: '' };

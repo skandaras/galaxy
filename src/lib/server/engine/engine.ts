@@ -18,7 +18,7 @@ import {
 import { assertBudget } from './budget';
 import { buildContext } from './context';
 import { maybeCompact } from './compaction';
-import { maybeTitleChat } from './chat-title';
+import { maybeTitleChat, nameThisChatNote, setChatTitleTool } from './chat-title';
 import { createJob, failJob, type LiveJob } from './jobs';
 import { runAgentLoop, type LoopTool } from './loop';
 import { previousRunNote, runHistoryTool } from './run-history';
@@ -99,6 +99,20 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH)),
 		runHistoryTool(chat.id)
 	];
+
+	/**
+	 * Naming happens inside this turn when the chat is still unnamed: the agent
+	 * that writes the reply also names the conversation, in one call. The
+	 * separate titling pass below is only a fallback for when it doesn't — a
+	 * second model call is a second thing that can fail on its own, which is
+	 * exactly how chats ended up keeping their truncated first message.
+	 */
+	const needsName =
+		!chat.titleCustom && !getMessages(chat.id).some((m) => m.role === 'assistant');
+	let namedItself = false;
+	if (needsName) {
+		tools.push(setChatTitleTool(chat.id, opts.userId, () => (namedItself = true)));
+	}
 	if (opts.webSearch && webSearchConfigured(searchCfg)) {
 		// Built per turn: the tool carries a per-turn memo and search budget in
 		// its closure. A provider failure still throws and reaches the model as
@@ -107,7 +121,11 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	}
 	// Read before the turn starts, so it describes the *previous* attempt and
 	// stays fixed for the whole of this one.
-	const fullSystemPrompt = systemPrompt + bootstrapContext(opts.userId) + previousRunNote(chat.id);
+	const fullSystemPrompt =
+		systemPrompt +
+		bootstrapContext(opts.userId) +
+		previousRunNote(chat.id) +
+		(needsName ? nameThisChatNote() : '');
 	const activeTools = applyToolPolicy([...tools, ...mcpLoopTools('chat')], 'chat');
 
 	void runAgentLoop({
@@ -136,9 +154,12 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 			// Compaction and titling both run after the reply so neither delays
 			// streaming, and neither can fail the turn.
 			void (async () => {
-				await maybeTitleChat(chat.id, opts.userId).catch(() => {
-					// maybeTitleChat reports its own failures via events
-				});
+				// Only when the agent didn't take the offer.
+				if (!namedItself) {
+					await maybeTitleChat(chat.id, opts.userId).catch(() => {
+						// maybeTitleChat reports its own failures via events
+					});
+				}
 				const fresh = getChat(chat.id, opts.userId);
 				if (fresh) {
 					const compactionCfg = getSetting('compaction', DEFAULT_COMPACTION);
