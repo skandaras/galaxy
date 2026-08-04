@@ -112,7 +112,12 @@ TCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
 TJOB=$(api -X POST $B/api/chats/$TCHAT/messages -d '{"content":"tell me about nebulae","webSearch":false}' | jqn .jobId)
 curl -sN --max-time 40 $B/api/jobs/$TJOB/stream > /dev/null
 sleep 1  # titling runs after the reply, deliberately off the streaming path
-check "chat gets an agent-written title" "$(api $B/api/chats/$TCHAT | jqn .chat.title)" 'Mock conversation name'
+TITLE=$(api $B/api/chats/$TCHAT | jqn .chat.title)
+check "chat gets an agent-written title" "$TITLE" 'Mock conversation name'
+# The mock deliberately answers `"Title: Mock conversation name"`. A substring
+# check alone passes on the undecorated text, which is how a stray "Title:"
+# prefix reached the sidebar unnoticed.
+check "the title is stripped of the model's decorations" "$(echo "$TITLE" | grep -c 'Title:')" "0"
 
 # A name the user chose must survive the next turn untouched.
 api -X PATCH $B/api/chats/$TCHAT -d '{"title":"My own name"}' > /dev/null

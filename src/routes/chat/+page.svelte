@@ -12,6 +12,7 @@
 		title: string;
 		hidden: boolean;
 		modelId?: string | null;
+		titleCustom?: boolean;
 		archivedAt?: number | null;
 		updatedAt: number;
 	}
@@ -279,7 +280,15 @@
 							? `${chunk.name} failed`
 							: null;
 			} else if (chunk.type === 'notice') notices = [...notices, chunk.text];
-			else if (chunk.type === 'done') finalizeStream();
+			else if (chunk.type === 'done') {
+				// Read before finalizeStream appends the reply: zero assistant
+				// messages means the turn that just ended was this chat's first,
+				// which is the only one the auto-titler acts on.
+				const chat = currentChat;
+				const wasFirstTurn = !messages.some((m) => m.role === 'assistant');
+				finalizeStream();
+				if (chat && wasFirstTurn && !chat.titleCustom) void pickUpAutoTitle(chat.id);
+			}
 			else if (chunk.type === 'error') {
 				errorBanner = chunk.message;
 				finalizeStream(false);
@@ -346,6 +355,39 @@
 			...messages,
 			{ id: `local-a-${Date.now()}`, role: 'assistant', content, modelKey: modelKey || null, attachments: null }
 		];
+	}
+
+	/**
+	 * Wait for the title the server writes *after* the reply.
+	 *
+	 * Titling runs off the streaming path deliberately, so the refresh in
+	 * finalizeStream races it — and against a remote model it always loses,
+	 * leaving the sidebar on the truncated first message until the next reload.
+	 * A handful of cheap re-reads, only ever on a chat's first turn, and only
+	 * until the name actually changes.
+	 */
+	async function pickUpAutoTitle(chatId: string) {
+		// Only the active list, not refreshChats(), which also pulls the archive —
+		// nothing here can change it, and this runs several times.
+		const readTitle = async (): Promise<string | undefined> => {
+			const res = await fetch('/api/chats').catch(() => null);
+			if (!res?.ok) return undefined;
+			const list = filterChatMode(await res.json());
+			const found = list.find((c) => c.id === chatId);
+			if (found) {
+				chats = list;
+				if (currentChat?.id === chatId) currentChat = { ...currentChat, title: found.title };
+			}
+			return found?.title;
+		};
+
+		const before = await readTitle();
+		// ~15s of grace in total, which covers a slow model on a small prompt.
+		// Past that the name still lands server-side; it just waits for a reload.
+		for (const wait of [800, 1500, 2500, 4000, 6000]) {
+			await new Promise((resolve) => setTimeout(resolve, wait));
+			if ((await readTitle()) !== before) return;
+		}
 	}
 
 	function finalizeStream(commit = true) {
