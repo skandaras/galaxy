@@ -18,6 +18,7 @@ import {
 import { assertBudget } from './budget';
 import { buildContext } from './context';
 import { maybeCompact } from './compaction';
+import { maybeTitleChat } from './chat-title';
 import { createJob, failJob, type LiveJob } from './jobs';
 import { runAgentLoop, type LoopTool } from './loop';
 import { previousRunNote, runHistoryTool } from './run-history';
@@ -132,8 +133,12 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 				content: text,
 				modelKey: usedChoice.model.modelKey
 			});
-			// Compaction runs after the reply so it never delays streaming.
+			// Compaction and titling both run after the reply so neither delays
+			// streaming, and neither can fail the turn.
 			void (async () => {
+				await maybeTitleChat(chat.id, opts.userId).catch(() => {
+					// maybeTitleChat reports its own failures via events
+				});
 				const fresh = getChat(chat.id, opts.userId);
 				if (fresh) {
 					const compactionCfg = getSetting('compaction', DEFAULT_COMPACTION);

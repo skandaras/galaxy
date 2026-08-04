@@ -19,8 +19,16 @@ export interface Theme {
 	font: string;
 	/** Corner radius for buttons/controls, e.g. "5px" or "999px" */
 	radius: string;
-	/** Root font size — controls overall layout density */
+	/**
+	 * Root font size. A percentage (e.g. '106%') resolves against the browser's
+	 * own default, so anyone who has set a larger base size keeps that
+	 * relationship; a length ('16px') pins it absolutely. Both are accepted.
+	 */
 	baseFont: string;
+	/** Colour of the hover glow on buttons. */
+	glow: string;
+	/** Blur radius of that glow, e.g. '10px'. '0px' switches it off. */
+	glowStrength: string;
 	/** Ambient ASCII galaxy backdrop */
 	galaxyBg: boolean;
 	/** Slowly rotate the backdrop spiral (ignored when galaxyBg is off) */
@@ -38,7 +46,9 @@ export const PRESETS: Record<string, Theme> = {
 		danger: '#ff5d73',
 		font: "'SF Mono', ui-monospace, 'Cascadia Code', Menlo, monospace",
 		radius: '5px',
-		baseFont: '16px',
+		baseFont: '100%',
+		glow: '#7f9cff',
+		glowStrength: '10px',
 		galaxyBg: true,
 		galaxyAnimate: true
 	},
@@ -52,7 +62,9 @@ export const PRESETS: Record<string, Theme> = {
 		danger: '#fb7185',
 		font: "'SF Mono', ui-monospace, 'Cascadia Code', Menlo, monospace",
 		radius: '8px',
-		baseFont: '16px',
+		baseFont: '100%',
+		glow: '#c084fc',
+		glowStrength: '12px',
 		galaxyBg: true,
 		galaxyAnimate: true
 	},
@@ -66,7 +78,9 @@ export const PRESETS: Record<string, Theme> = {
 		danger: '#f87171',
 		font: "'SF Mono', ui-monospace, 'Cascadia Code', Menlo, monospace",
 		radius: '3px',
-		baseFont: '16px',
+		baseFont: '100%',
+		glow: '#fbbf24',
+		glowStrength: '10px',
 		galaxyBg: true,
 		galaxyAnimate: true
 	},
@@ -80,7 +94,9 @@ export const PRESETS: Record<string, Theme> = {
 		danger: '#ff4d4d',
 		font: "ui-monospace, 'Cascadia Code', Menlo, monospace",
 		radius: '0px',
-		baseFont: '15px',
+		baseFont: '94%',
+		glow: '#ffffff',
+		glowStrength: '8px',
 		galaxyBg: false,
 		galaxyAnimate: false
 	},
@@ -94,7 +110,9 @@ export const PRESETS: Record<string, Theme> = {
 		danger: '#d6455d',
 		font: "'SF Mono', ui-monospace, Menlo, monospace",
 		radius: '6px',
-		baseFont: '16px',
+		baseFont: '100%',
+		glow: '#4c6ef5',
+		glowStrength: '7px',
 		galaxyBg: false,
 		galaxyAnimate: false
 	}
@@ -114,8 +132,17 @@ export function themeCss(t: Theme): string {
 		`--danger:${t.danger};`,
 		`--font-mono:${t.font};`,
 		`--radius:${t.radius};`,
+		`--glow:${t.glow};`,
+		`--glow-size:${t.glowStrength};`,
 		'}',
-		`html{font-size:${t.baseFont};}`
+		`html{font-size:${t.baseFont};}`,
+		// Part of the design system rather than a per-component flourish: every
+		// button lifts on hover, and one theme value tunes all of them at once.
+		// A strength of 0 collapses the shadow, which is how it is switched off.
+		'button:not(:disabled):hover{box-shadow:0 0 var(--glow-size) var(--glow);}',
+		// The glow itself is not motion; the fade to it is. Anyone who has asked
+		// for less motion gets the state change without the animation.
+		'@media (prefers-reduced-motion: no-preference){button{transition:box-shadow .15s ease;}}'
 	].join('');
 }
 

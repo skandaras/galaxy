@@ -67,6 +67,18 @@ export const chats = sqliteTable(
 		 * disabled — callers fall back to the task default.
 		 */
 		modelId: text('model_id'),
+		/**
+		 * Set once a human names the chat, so the auto-titler never overwrites a
+		 * title someone chose. Nothing clears it but another rename.
+		 */
+		titleCustom: integer('title_custom', { mode: 'boolean' }).notNull().default(false),
+		/**
+		 * When the chat was archived, or null while it is active. A timestamp
+		 * rather than a flag so the archive can be ordered by when things were put
+		 * away. Archiving only hides a chat from the list — it stays readable, and
+		 * stays part of the platform's context.
+		 */
+		archivedAt: integer('archived_at', { mode: 'timestamp_ms' }),
 		compactSummary: text('compact_summary'),
 		compactedUpTo: integer('compacted_up_to').notNull().default(0),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
@@ -151,7 +163,8 @@ export const CORE_TASKS = [
 	'visual',
 	'memory',
 	'skill-optimiser',
-	'ux-audit'
+	'ux-audit',
+	'chat-title'
 ] as const;
 export type CoreTask = (typeof CORE_TASKS)[number];
 

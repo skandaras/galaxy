@@ -30,8 +30,33 @@
 		root.style.setProperty('--danger', draft.danger);
 		root.style.setProperty('--font-mono', draft.font);
 		root.style.setProperty('--radius', draft.radius);
+		root.style.setProperty('--glow', draft.glow);
+		root.style.setProperty('--glow-size', draft.glowStrength);
 		root.style.fontSize = draft.baseFont;
 	});
+
+	/**
+	 * The size control works in percent, because that is the unit people reason
+	 * about. Themes saved before this stored a pixel size, so those are converted
+	 * against the 16px browser default rather than being thrown away.
+	 */
+	const sizePercent = $derived.by(() => {
+		const v = draft?.baseFont ?? '100%';
+		const n = parseFloat(v);
+		if (!Number.isFinite(n)) return 100;
+		return v.trim().endsWith('%') ? Math.round(n) : Math.round((n / 16) * 100);
+	});
+
+	function setSize(percent: number) {
+		if (!draft) return;
+		draft.baseFont = `${Math.min(140, Math.max(80, Math.round(percent)))}%`;
+	}
+
+	const SIZE_PRESETS: { label: string; percent: number }[] = [
+		{ label: 'compact', percent: 88 },
+		{ label: 'comfortable', percent: 100 },
+		{ label: 'roomy', percent: 110 }
+	];
 
 	async function save(saveAs?: string) {
 		if (!draft) return;
@@ -162,6 +187,11 @@
 
 		<section class="card">
 			<h3>Typography &amp; layout</h3>
+			<p class="hint">
+				Buttons glow on hover across the whole interface — set strength to <code>0px</code> to
+				turn that off. Text size is a percentage of your browser's own default, so it stacks
+				with any size you have set there.
+			</p>
 			<div class="grid">
 				<label class="wide">
 					font stack
@@ -171,13 +201,44 @@
 					corner radius
 					<input bind:value={draft.radius} placeholder="5px" />
 				</label>
+				<label class="wide">
+					interface text size — {sizePercent}%
+					<span class="size-row">
+						<input
+							type="range"
+							min="80"
+							max="140"
+							step="1"
+							value={sizePercent}
+							oninput={(e) => setSize(Number(e.currentTarget.value))}
+						/>
+						<input
+							class="size-num"
+							type="number"
+							min="80"
+							max="140"
+							value={sizePercent}
+							oninput={(e) => setSize(Number(e.currentTarget.value))}
+						/>
+						{#each SIZE_PRESETS as p (p.label)}
+							<button
+								class="size-preset"
+								class:on={sizePercent === p.percent}
+								onclick={() => setSize(p.percent)}>{p.label}</button
+							>
+						{/each}
+					</span>
+				</label>
 				<label>
-					density (base font size)
-					<select bind:value={draft.baseFont}>
-						<option value="17px">roomy</option>
-						<option value="16px">comfortable</option>
-						<option value="14px">compact</option>
-					</select>
+					hover glow
+					<span class="color-pair">
+						<input type="color" bind:value={draft.glow} />
+						<input class="hex" bind:value={draft.glow} />
+					</span>
+				</label>
+				<label>
+					glow strength
+					<input bind:value={draft.glowStrength} placeholder="10px" />
 				</label>
 				<label class="row">
 					<input type="checkbox" bind:checked={draft.galaxyBg} />
@@ -309,8 +370,7 @@
 		background: none;
 		cursor: pointer;
 	}
-	input:not([type='color']):not([type='checkbox']),
-	select {
+	input:not([type='color']):not([type='checkbox']):not([type='range']) {
 		background: var(--bg-pane);
 		border: 1px solid var(--border);
 		color: var(--fg);
@@ -320,6 +380,40 @@
 	}
 	.hex {
 		width: 6.5rem;
+	}
+	.hint {
+		font-size: 0.68rem;
+		color: var(--fg-dim);
+		line-height: 1.5;
+		margin: -0.3rem 0 0.7rem;
+	}
+	.size-row {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+	.size-row input[type='range'] {
+		flex: 1;
+		min-width: 10rem;
+		accent-color: var(--accent);
+	}
+	.size-num {
+		width: 4.5rem;
+	}
+	.size-preset {
+		background: transparent;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		color: var(--fg-dim);
+		font-family: inherit;
+		font-size: 0.68rem;
+		padding: 0.2rem 0.6rem;
+		cursor: pointer;
+	}
+	.size-preset.on {
+		border-color: var(--accent);
+		color: var(--accent);
 	}
 	.actions {
 		display: flex;

@@ -104,6 +104,32 @@ console.log([
 ].join(','));")
 check "hidden chat not persisted" "leak=$LEAK" "0,0,0,0,0"
 
+# ---------------------------------------------------------------------------
+# Chat naming and the archive.
+# ---------------------------------------------------------------------------
+api -X PUT $B/api/admin/task-configs -d "{\"task\":\"chat-title\",\"primaryModelId\":\"$MODEL_ID\"}" > /dev/null
+TCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+TJOB=$(api -X POST $B/api/chats/$TCHAT/messages -d '{"content":"tell me about nebulae","webSearch":false}' | jqn .jobId)
+curl -sN --max-time 40 $B/api/jobs/$TJOB/stream > /dev/null
+sleep 1  # titling runs after the reply, deliberately off the streaming path
+check "chat gets an agent-written title" "$(api $B/api/chats/$TCHAT | jqn .chat.title)" 'Mock conversation name'
+
+# A name the user chose must survive the next turn untouched.
+api -X PATCH $B/api/chats/$TCHAT -d '{"title":"My own name"}' > /dev/null
+check "rename sticks" "$(api $B/api/chats/$TCHAT | jqn .chat.title)" 'My own name'
+TJOB2=$(api -X POST $B/api/chats/$TCHAT/messages -d '{"content":"more please","webSearch":false}' | jqn .jobId)
+curl -sN --max-time 40 $B/api/jobs/$TJOB2/stream > /dev/null
+sleep 1
+check "the titler leaves a user's name alone" "$(api $B/api/chats/$TCHAT | jqn .chat.title)" 'My own name'
+
+# Archive hides a chat from the list without losing anything.
+api -X PATCH $B/api/chats/$TCHAT -d '{"archived":true}' > /dev/null
+check "archived chat leaves the list" "$(api $B/api/chats | grep -c $TCHAT)" "0"
+check "archived chat is in the archive" "$(api "$B/api/chats?archived=1" | grep -c $TCHAT)" "1"
+check "archived chat still opens" "$(api $B/api/chats/$TCHAT | jqn '.messages.length > 0')" 'true'
+api -X PATCH $B/api/chats/$TCHAT -d '{"archived":false}' > /dev/null
+check "unarchive restores it" "$(api $B/api/chats | grep -c $TCHAT)" "1"
+
 # Reading a supplied URL rather than searching for it. Exercised in both chat
 # and a coding session, since the whole point is that the tool is offered to
 # both — and with the web-search toggle off, to prove it is independent of it.

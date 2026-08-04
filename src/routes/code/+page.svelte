@@ -770,16 +770,28 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
+	/* Sized as a target rather than a glyph — see the chat list for the same fix. */
 	.icon {
+		align-items: center;
+		justify-content: center;
+		min-width: 1.6rem;
+		min-height: 1.6rem;
 		background: none;
 		border: none;
+		border-radius: 4px;
 		color: var(--fg-dim);
 		cursor: pointer;
-		padding: 0.1rem 0.3rem;
+		font-size: 0.95rem;
+		line-height: 1;
+		padding: 0.2rem;
 		display: none;
 	}
+	.session-list li:hover .icon:hover {
+		color: var(--fg);
+		background: var(--bg-pane);
+	}
 	.session-list li:hover .icon {
-		display: inline;
+		display: inline-flex;
 	}
 
 	.work-area {
@@ -1168,7 +1180,7 @@
 	   and CodeBlock's copy button. Deleting a session already confirms. */
 	@media (hover: none) {
 		.session-list .icon {
-			display: inline;
+			display: inline-flex;
 		}
 	}
 </style>

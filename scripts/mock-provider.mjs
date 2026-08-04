@@ -153,6 +153,10 @@ const server = createServer(async (req, res) => {
 						}
 					]
 				});
+			} else if (userText.includes('CHAT-TITLE')) {
+				// Deliberately decorated: the titler is expected to strip quotes and
+				// a "Title:" prefix rather than store them.
+				content = '"Title: Mock conversation name"';
 			} else if (userText.includes('UX-AUDIT')) {
 				// Echo back something only a reader of the real prompt could know,
 				// so the smoke test can prove the audit was handed live telemetry
