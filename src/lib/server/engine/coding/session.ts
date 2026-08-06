@@ -131,7 +131,7 @@ export function startCodingTurn(opts: {
 				mode: session.mode,
 				repoUrl: session.repoUrl
 			}),
-			...knowledgeTools(),
+			...knowledgeTools(opts.userId),
 			...attachmentTools(chat.id),
 			// Reading a linked spec, an upstream README or an API doc is safe in
 			// plan mode as well as implement — it changes nothing in the repo.

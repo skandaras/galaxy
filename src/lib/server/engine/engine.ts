@@ -90,7 +90,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 
 	const searchCfg = getSetting<WebSearchSettings>('websearch', DEFAULT_WEB_SEARCH);
 	const tools: LoopTool[] = [
-		...knowledgeTools(),
+		...knowledgeTools(opts.userId),
 		...attachmentTools(chat.id),
 		// Deliberately not behind the web-search toggle. That toggle governs
 		// *looking things up*; this is for reading an address the user has already

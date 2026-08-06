@@ -385,6 +385,51 @@ as alice -X PUT $M/api/memory/settings -d '{"enabled":false}' > /dev/null
 check "opt-out persists" "$(as alice $M/api/memory)" '"enabled":false'
 
 # ---------------------------------------------------------------------------
+# Library visibility. The library had no owner column at all before this, so
+# every doc reached every user's list AND their agents' system prompt. These
+# checks are the ones that stop one person's notes feeding another's model.
+# ---------------------------------------------------------------------------
+as alice -X POST $M/api/library -d '{"title":"Alice Private","content":"marker PRIVATE-A"}' > /dev/null
+as alice -X POST $M/api/library -d '{"title":"Team Notes","content":"marker SHARED-A","visibility":"shared"}' > /dev/null
+
+check "alice sees her personal doc" "$(as alice $M/api/library)" 'Alice Private'
+check "bob cannot see it" "$(as bob $M/api/library | grep -c 'Alice Private')" "0"
+check "bob sees the shared one" "$(as bob $M/api/library)" 'Team Notes'
+check "search does not leak it" "$(as bob "$M/api/library?q=PRIVATE-A" | grep -c 'Alice Private')" "0"
+
+APRIV=$(as alice $M/api/library | node -pe "JSON.parse(require('fs').readFileSync(0)).find(d=>d.title==='Alice Private').id")
+check "bob gets 404 fetching it directly" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/library/$APRIV)" "404"
+
+# The digest goes straight into the system prompt, so this is the real test.
+BSYS=$(as bob -X POST $M/api/chats -d '{}' | jqn .id)
+BJOB=$(as bob -X POST $M/api/chats/$BSYS/messages -d '{"content":"echo-lib","webSearch":false}' | jqn .jobId)
+BOUT=$(curl -sN --max-time 20 -H 'Remote-User: bob' $M/api/jobs/$BJOB/stream | grep -o 'LIBCHECK[^"]*' | head -1)
+check "alice's personal doc is absent from bob's prompt" "$BOUT" 'private=false'
+check "the shared doc is present in bob's prompt" "$BOUT" 'shared=true'
+
+# Bob may read a shared doc but not change or delete someone else's.
+ASHARED=$(as bob $M/api/library | node -pe "JSON.parse(require('fs').readFileSync(0)).find(d=>d.title==='Team Notes').id")
+check "bob cannot delete alice's shared doc" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Remote-User: bob' $M/api/library/$ASHARED)" "403"
+
+# ---------------------------------------------------------------------------
+# Coding is a per-user grant, because it pushes with one shared GitHub token.
+# ---------------------------------------------------------------------------
+check "a new user has no coding access" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' -H 'content-type: application/json' -d '{}' $M/api/code/sessions)" "403"
+check "nor can they list repos" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: alice' $M/api/github/repos)" "403"
+
+ALICE_ID=$(asadmin $M/api/admin/users | node -pe "JSON.parse(require('fs').readFileSync(0)).find(u=>u.username==='alice').id")
+check "admin sees the accounts" "$(asadmin $M/api/admin/users)" '"username":"alice"'
+asadmin -X PATCH $M/api/admin/users -d "{\"id\":\"$ALICE_ID\",\"canCode\":true}" > /dev/null
+check "granting access opens the door" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: alice' $M/api/github/repos)" "200"
+check "a non-admin cannot reach the user list" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/admin/users)" "403"
+
+# ---------------------------------------------------------------------------
 # A coding turn that runs out of steps must not just stop mid-task. Needs a
 # tiny step budget, which is process-wide, so this runs as its own instance on
 # its own data dir rather than disturbing the one above.

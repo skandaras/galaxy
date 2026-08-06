@@ -5,7 +5,18 @@ export const users = sqliteTable('users', {
 	username: text('username').notNull().unique(),
 	email: text('email'),
 	displayName: text('display_name'),
+	/**
+	 * Re-derived from Authelia group membership on every request (see
+	 * hooks.server.ts), so this column is a cache, not a control — setting it
+	 * in-app is overwritten on the user's next request.
+	 */
 	isAdmin: integer('is_admin', { mode: 'boolean' }).notNull().default(false),
+	/**
+	 * Coding mode clones and pushes with one shared GitHub token, so it grants
+	 * write access to every repository that token reaches. Off for new users;
+	 * granted per user in Admin → Users.
+	 */
+	canCode: integer('can_code', { mode: 'boolean' }).notNull().default(false),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 	lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull()
 });
@@ -208,15 +219,33 @@ export const codeSessions = sqliteTable('code_sessions', {
 // Library metadata + cached snippet; the markdown body lives on disk at
 // DATA_DIR/library/<id>.md. Full-text search runs on the library_fts
 // virtual table created at boot (drizzle doesn't manage FTS5).
-export const libraryDocs = sqliteTable('library_docs', {
-	id: text('id').primaryKey(), // slug, doubles as the filename
-	title: text('title').notNull(),
-	snippet: text('snippet').notNull().default(''),
-	author: text('author', { enum: ['user', 'agent'] }).notNull().default('user'),
-	sizeBytes: integer('size_bytes').notNull().default(0),
-	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-	updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
-});
+export const libraryDocs = sqliteTable(
+	'library_docs',
+	{
+		id: text('id').primaryKey(), // slug, doubles as the filename
+		title: text('title').notNull(),
+		snippet: text('snippet').notNull().default(''),
+		author: text('author', { enum: ['user', 'agent'] }).notNull().default('user'),
+		/**
+		 * Who owns the doc. Null means it predates ownership — those stay visible
+		 * to everyone, which is exactly how the library behaved before this.
+		 */
+		ownerId: text('owner_id'),
+		/**
+		 * 'shared' shows in every user's list and context; 'personal' only in the
+		 * owner's. New docs start personal — the library used to be entirely
+		 * global, so sharing is now the deliberate act rather than the default.
+		 */
+		visibility: text('visibility', { enum: ['personal', 'shared'] })
+			.notNull()
+			.default('shared'),
+		sizeBytes: integer('size_bytes').notNull().default(0),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	// Every list is "what may this user see", which is owner or shared.
+	(t) => [index('library_docs_owner_idx').on(t.ownerId, t.visibility)]
+);
 
 // Skill index; the SKILL.md body lives on disk at
 // DATA_DIR/skills/<category>/<name>/SKILL.md (a git repo, committed on save).

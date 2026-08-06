@@ -3,7 +3,10 @@ export interface SessionUser {
 	username: string;
 	email: string | null;
 	displayName: string | null;
+	/** From Authelia group membership, re-derived on every request. */
 	isAdmin: boolean;
+	/** Granted per user in Admin → Users; see requireCoder in api.ts. */
+	canCode: boolean;
 }
 
 export interface AuthHeaders {

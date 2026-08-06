@@ -1,11 +1,11 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { requireUser } from '$lib/server/api';
+import { requireCoder } from '$lib/server/api';
 import { createSession } from '$lib/server/engine/coding/session';
 import { emitEvent } from '$lib/server/engine/events';
 
 export const POST: RequestHandler = async ({ locals, request }) => {
-	const user = requireUser(locals);
+	const user = requireCoder(locals);
 	const body = await request.json().catch(() => ({}));
 	const repoUrl = typeof body.repoUrl === 'string' ? body.repoUrl.trim() : '';
 	if (!repoUrl) error(400, 'repoUrl is required');

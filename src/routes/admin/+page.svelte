@@ -5,11 +5,13 @@
 	import Skills from '$lib/components/admin/Skills.svelte';
 	import Tools from '$lib/components/admin/Tools.svelte';
 	import Memory from '$lib/components/admin/Memory.svelte';
+	import Users from '$lib/components/admin/Users.svelte';
 	import Ux from '$lib/components/admin/Ux.svelte';
 	import Settings from '$lib/components/admin/Settings.svelte';
 	import Usage from '$lib/components/admin/Usage.svelte';
 
 	const tabs = [
+		'Users',
 		'Providers',
 		'Models',
 		'Tasks',
@@ -20,7 +22,7 @@
 		'Settings',
 		'Usage'
 	] as const;
-	let active = $state<(typeof tabs)[number]>('Providers');
+	let active = $state<(typeof tabs)[number]>('Users');
 	let modelsRefreshKey = $state(0);
 </script>
 
@@ -32,7 +34,9 @@
 	</nav>
 
 	<div class="body">
-		{#if active === 'Providers'}
+		{#if active === 'Users'}
+			<Users />
+		{:else if active === 'Providers'}
 			<Providers onchanged={() => modelsRefreshKey++} />
 		{:else if active === 'Models'}
 			<Models refreshKey={modelsRefreshKey} />

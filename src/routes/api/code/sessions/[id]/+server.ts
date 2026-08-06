@@ -1,12 +1,12 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { requireUser } from '$lib/server/api';
+import { requireCoder } from '$lib/server/api';
 import { getChat, getMessages } from '$lib/server/chats';
 import { destroySession, getSession, setSessionMode } from '$lib/server/engine/coding/session';
 import { findRunningJobForChat } from '$lib/server/engine/jobs';
 
 export const GET: RequestHandler = ({ locals, params }) => {
-	const user = requireUser(locals);
+	const user = requireCoder(locals);
 	const session = getSession(params.id, user.id);
 	if (!session) error(404, 'Session not found');
 	return json({
@@ -19,7 +19,7 @@ export const GET: RequestHandler = ({ locals, params }) => {
 };
 
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {
-	const user = requireUser(locals);
+	const user = requireCoder(locals);
 	const session = getSession(params.id, user.id);
 	if (!session) error(404, 'Session not found');
 	const body = await request.json().catch(() => ({}));
@@ -30,7 +30,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 };
 
 export const DELETE: RequestHandler = ({ locals, params }) => {
-	const user = requireUser(locals);
+	const user = requireCoder(locals);
 	const session = getSession(params.id, user.id);
 	if (!session) error(404, 'Session not found');
 	if (findRunningJobForChat(session.chatId)) error(409, 'A run is in progress');

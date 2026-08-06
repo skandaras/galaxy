@@ -439,6 +439,19 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
+		// Library scoping: report which docs reached this user's system prompt.
+		// The digest is what actually feeds another person's model, so this is
+		// the check that matters rather than what the API happens to list.
+		if (String(last?.content ?? '').includes('echo-lib')) {
+			delta(res, {
+				content: `LIBCHECK private=${system.includes('Alice Private')} shared=${system.includes('Team Notes')}`
+			});
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
 		// Bootstrap verification: report what the system prompt contained.
 		if (String(last?.content ?? '').includes('echo-system')) {
 			delta(res, {

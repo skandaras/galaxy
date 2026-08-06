@@ -72,7 +72,9 @@ export function builtinDescriptors(): ToolDescriptor[] {
 		}
 	};
 
-	add(knowledgeTools(), 'knowledge', ['chat', 'coding']);
+	// The user id only scopes execution, never the declaration — same placeholder
+	// convention as attachmentTools('*') below.
+	add(knowledgeTools('*'), 'knowledge', ['chat', 'coding']);
 	// The chat id only affects execution, never the declaration.
 	add(attachmentTools('*'), 'attachments', ['chat', 'coding']);
 	add([{ def: webSearchToolDef, execute: async () => '' }], 'web', ['chat', 'coding']);

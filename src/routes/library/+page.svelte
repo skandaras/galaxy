@@ -7,6 +7,9 @@
 		title: string;
 		snippet: string;
 		author: 'user' | 'agent';
+		/** Null on docs that predate ownership — those stay visible to everyone. */
+		ownerId: string | null;
+		visibility: 'personal' | 'shared';
 		updatedAt: number;
 		match?: string;
 	}
@@ -17,6 +20,9 @@
 	let title = $state('');
 	let body = $state('');
 	let author = $state<'user' | 'agent'>('user');
+	let visibility = $state<'personal' | 'shared'>('personal');
+	/** False for someone else's shared doc: readable, not editable. */
+	let editable = $state(true);
 	let preview = $state(false);
 	let saved = $state(false);
 	let listOpen = $state(false);
@@ -35,6 +41,8 @@
 		currentId = doc.meta.id;
 		title = doc.meta.title;
 		author = doc.meta.author;
+		visibility = doc.meta.visibility;
+		editable = doc.canEdit !== false;
 		body = doc.body;
 		preview = false;
 		listOpen = false;
@@ -45,6 +53,9 @@
 		title = '';
 		body = '';
 		author = 'user';
+		// New docs start personal; sharing is a deliberate act.
+		visibility = 'personal';
+		editable = true;
 		preview = false;
 		listOpen = false;
 	}
@@ -55,12 +66,12 @@
 			? await fetch(`/api/library/${currentId}`, {
 					method: 'PUT',
 					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({ title, content: body })
+					body: JSON.stringify({ title, content: body, visibility })
 				})
 			: await fetch('/api/library', {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({ title, content: body })
+					body: JSON.stringify({ title, content: body, visibility })
 				});
 		if (res.ok) {
 			const doc = await res.json();
@@ -122,6 +133,7 @@
 						<span class="doc-title">
 							{doc.title}
 							{#if doc.author === 'agent'}<span class="agent-badge">agent</span>{/if}
+							{#if doc.visibility === 'shared'}<span class="vis-badge">shared</span>{/if}
 						</span>
 						<span class="doc-snippet">{doc.match ?? doc.snippet}</span>
 					</button>
@@ -136,18 +148,36 @@
 		<header>
 			<input class="title" placeholder="Document title" bind:value={title} />
 			<div class="actions">
+				<button
+					class="chip"
+					class:on={visibility === 'shared'}
+					disabled={!editable}
+					title={editable
+						? 'Shared docs appear in every user\u2019s library and feed their agents\u2019 context'
+						: 'This document belongs to another user'}
+					onclick={() => (visibility = visibility === 'shared' ? 'personal' : 'shared')}
+				>
+					{visibility === 'shared' ? '\u25c9 Widely viewable' : '\u25cc Personal'}
+				</button>
 				<button class="chip" class:on={preview} onclick={() => (preview = !preview)}>
 					{preview ? 'edit' : 'preview'}
 				</button>
-				<button class="btn primary" onclick={save}>{saved ? 'Saved ✓' : 'Save'}</button>
-				{#if currentId}<button class="btn danger" onclick={remove}>Delete</button>{/if}
+				<button class="btn primary" disabled={!editable} onclick={save}>
+					{saved ? 'Saved \u2713' : 'Save'}
+				</button>
+				{#if currentId}
+					<button class="btn danger" disabled={!editable} onclick={remove}>Delete</button>
+				{/if}
 			</div>
 		</header>
 		{#if preview}
 			<div class="preview"><Markdown text={body} /></div>
 		{:else}
 			<textarea
-				placeholder="Markdown content… readable by every agent as shared knowledge."
+				placeholder={visibility === 'shared'
+					? 'Markdown content… readable by every user and every agent.'
+					: 'Markdown content… yours alone, and only your agents see it.'}
+				readonly={!editable}
 				bind:value={body}
 			></textarea>
 		{/if}
@@ -214,6 +244,15 @@
 		align-items: center;
 		gap: 0.4rem;
 		font-size: 0.8rem;
+	}
+	.vis-badge {
+		font-size: 0.58rem;
+		border: 1px solid var(--accent);
+		border-radius: 3px;
+		padding: 0 0.25rem;
+		margin-left: 0.3rem;
+		color: var(--accent);
+		vertical-align: middle;
 	}
 	.agent-badge {
 		font-size: 0.58rem;
