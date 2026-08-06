@@ -22,7 +22,9 @@ import { maybeTitleChat, nameThisChatNote, setChatTitleTool } from './chat-title
 import { createJob, failJob, type LiveJob } from './jobs';
 import { runAgentLoop, type LoopTool } from './loop';
 import { previousRunNote, runHistoryTool } from './run-history';
+import { askUserTool } from './ask-user';
 import { attachmentTools } from './tools/attachments';
+import { boardTools } from './tools/boards';
 import { fetchUrlTool } from './tools/fetch-url';
 import { bootstrapContext, knowledgeTools } from './tools/knowledge';
 import { mcpLoopTools } from './tools/mcp';
@@ -97,7 +99,11 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		// handed over, and turning search off should not make the model guess at a
 		// link it was given. Admin → Tools switches it off outright.
 		fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH)),
-		runHistoryTool(chat.id)
+		runHistoryTool(chat.id),
+		// Scoped to this user's boards and anything shared with them.
+		...boardTools(opts.userId),
+		// The turn parks on the promise this returns until the browser answers.
+		askUserTool(job)
 	];
 
 	/**

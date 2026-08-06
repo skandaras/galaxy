@@ -7,6 +7,7 @@
 	import { autoresize } from '$lib/autoresize';
 	import { hasFinePointer } from '$lib/pointer';
 	import { copyText } from '$lib/clipboard';
+	import AskSheet from '$lib/components/AskSheet.svelte';
 
 	interface ChatMeta {
 		id: string;
@@ -90,6 +91,8 @@
 	let streaming = $state(false);
 	/** Job currently streaming, so it can be stopped. */
 	let activeJobId = $state<string | null>(null);
+	/** Open question from ask_user; cleared by the server's `answer` chunk. */
+	let question = $state<{ id: string; prompt: string; options: string[] } | null>(null);
 	let stopping = $state(false);
 	let streamText = $state('');
 	let streamModel = $state('');
@@ -289,6 +292,7 @@
 		streamModel = '';
 		trace = [];
 		notices = [];
+		question = null;
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
 			const chunk = JSON.parse(ev.data);
@@ -307,7 +311,11 @@
 					}
 				}
 			} else if (chunk.type === 'notice') notices = [...notices, chunk.text];
-			else if (chunk.type === 'done') finalize();
+			else if (chunk.type === 'question') {
+				question = { id: chunk.id, prompt: chunk.prompt, options: chunk.options ?? [] };
+			} else if (chunk.type === 'answer') {
+				if (question?.id === chunk.id) question = null;
+			} else if (chunk.type === 'done') finalize();
 			else if (chunk.type === 'error') {
 				errorBanner = chunk.message;
 				finalize(false);
@@ -376,8 +384,19 @@
 		streaming = false;
 		activeJobId = null;
 		stopping = false;
+		question = null;
 		streamText = '';
 		closeStream();
+	}
+
+	/** Resolves the waiting tool call; the sheet closes on the server's reply. */
+	async function answerQuestion(answer: string) {
+		if (!activeJobId || !question) return;
+		await fetch(`/api/jobs/${activeJobId}/answer`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ questionId: question.id, answer })
+		}).catch(() => {});
 	}
 
 	function closeStream() {
@@ -702,6 +721,10 @@
 		{/if}
 	</section>
 </div>
+
+{#if question}
+	<AskSheet prompt={question.prompt} options={question.options} onanswer={answerQuestion} />
+{/if}
 
 <script module lang="ts">
 	function esc(s: string): string {

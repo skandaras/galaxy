@@ -486,6 +486,63 @@ check "a non-admin cannot" \
   "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/admin/boards)" "403"
 
 # ---------------------------------------------------------------------------
+# Agents on the board. The digest is what actually reaches a model, so that is
+# what these check — not what the API happens to return.
+# ---------------------------------------------------------------------------
+as bob -X POST $M/api/boards -d '{"name":"Bob only"}' > /dev/null
+BCHAT=$(as alice -X POST $M/api/chats -d '{}' | jqn .id)
+BBJOB=$(as alice -X POST $M/api/chats/$BCHAT/messages -d '{"content":"echo-board","webSearch":false}' | jqn .jobId)
+BBOUT=$(curl -sN --max-time 20 -H 'Remote-User: alice' $M/api/jobs/$BBJOB/stream | grep -o 'BOARDCHECK[^"]*' | head -1)
+check "alice's board reaches her agent" "$BBOUT" 'mine=true'
+check "bob's board does not" "$BBOUT" 'theirs=false'
+
+# ask_user: the run parks on the tool call until the browser answers.
+AKCHAT=$(as alice -X POST $M/api/chats -d '{}' | jqn .id)
+AKJOB=$(as alice -X POST $M/api/chats/$AKCHAT/messages -d '{"content":"ask-me","webSearch":false}' | jqn .jobId)
+curl -sN --max-time 30 -H 'Remote-User: alice' $M/api/jobs/$AKJOB/stream > $DATA/ask.sse &
+SSE_PID=$!
+# Poll for the question rather than sleeping a fixed amount: the whole point is
+# that the run is still open, so there is nothing racing us to finish it.
+for _ in $(seq 1 40); do grep -q '"type":"question"' $DATA/ask.sse && break; sleep 0.25; done
+QID=$(grep -o '"type":"question","id":"[^"]*"' $DATA/ask.sse | head -1 | sed 's/.*"id":"//;s/"//')
+check "the agent asks and the run stays open" "$(grep -c '"type":"question"' $DATA/ask.sse)" "1"
+check "the question carries its options" "$(cat $DATA/ask.sse)" '"Joint"'
+check "an unanswered question keeps the job running" \
+  "$(as alice $M/api/chats/$AKCHAT | jqn '.runningJobId !== null')" 'true'
+check "another user cannot answer it" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' -H 'content-type: application/json' -d "{\"questionId\":\"$QID\",\"answer\":\"x\"}" $M/api/jobs/$AKJOB/answer)" "404"
+check "answering resolves it" \
+  "$(as alice -X POST $M/api/jobs/$AKJOB/answer -d "{\"questionId\":\"$QID\",\"answer\":\"The joint one\"}")" '"answered":true'
+wait $SSE_PID 2>/dev/null || true
+check "the answer reaches the model as the tool result" "$(cat $DATA/ask.sse)" 'ANSWERED:The joint one'
+check "the question is closed on the stream" "$(cat $DATA/ask.sse)" '"type":"answer"'
+check "answering twice is a no-op, not an error" \
+  "$(as alice -X POST $M/api/jobs/$AKJOB/answer -d "{\"questionId\":\"$QID\",\"answer\":\"again\"}")" '"answered":false'
+
+# Card → AI: the board starts an ordinary chat and the agent works the card.
+HCARD=$(as alice -X POST $M/api/boards/$BOARD/cards -d '{"title":"Book plumber","description":"Kitchen tap drips"}' | jqn .id)
+HAND=$(as alice -X POST $M/api/cards/$HCARD/agent)
+HCHAT=$(echo "$HAND" | jqn .chatId)
+HJOB=$(echo "$HAND" | jqn .jobId)
+HOUT=$(curl -sN --max-time 40 -H 'Remote-User: alice' $M/api/jobs/$HJOB/stream)
+check "the agent reads the card it was given" "$HOUT" '"name":"card_read","status":"ok"'
+check "and writes what it did to the log" "$HOUT" '"name":"card_comment","status":"ok"'
+check "the hand-off finishes" "$HOUT" 'CARD HANDLED'
+check "the chat is named after the card" "$(as alice $M/api/chats/$HCHAT | jqn .chat.title)" 'Card: Book plumber'
+HLOG=$(as alice $M/api/cards/$HCARD)
+check "the card records the hand-off" "$HLOG" 'handed to agent'
+check "the agent's note is on the card" "$HLOG" 'waiting on a callback'
+check "and is attributed to the agent" "$HLOG" '"actor":"agent"'
+# Bob is a collaborator on Household, so that card is legitimately his to hand
+# over too. The check that matters is a board he is not on at all.
+BOBBOARD=$(as bob $M/api/boards | node -pe "JSON.parse(require('fs').readFileSync(0)).find(b=>b.name==='Bob only').id")
+BOBCARD=$(as bob -X POST $M/api/boards/$BOBBOARD/cards -d '{"title":"Bob private task"}' | jqn .id)
+check "alice cannot hand bob's card to an agent" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' $M/api/cards/$BOBCARD/agent)" "404"
+check "nor run a board action on his board" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' -H 'content-type: application/json' -d '{"action":"prioritise"}' $M/api/boards/$BOBBOARD/agent)" "404"
+
+# ---------------------------------------------------------------------------
 # A coding turn that runs out of steps must not just stop mid-task. Needs a
 # tiny step budget, which is process-wide, so this runs as its own instance on
 # its own data dir rather than disturbing the one above.

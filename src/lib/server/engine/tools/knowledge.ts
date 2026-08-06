@@ -8,6 +8,7 @@ import {
 	searchDocs
 } from '$lib/server/library';
 import { memoryDigest } from '../memory';
+import { boardsDigest } from './boards';
 
 /**
  * The context bootstrap: appended to every agent's system prompt so it knows
@@ -22,6 +23,9 @@ export function bootstrapContext(userId: string): string {
 		'',
 		'[Library — docs you can see: your own plus anything shared. Read with library_read, search with library_search, save durable knowledge with library_write]',
 		libraryDigest(userId),
+		'',
+		'[Task boards — yours plus any shared with you. Read them with board_read, one card in full with card_read]',
+		boardsDigest(userId),
 		// Only this user's memories — never another user's observations.
 		memoryDigest(userId)
 	].join('\n');

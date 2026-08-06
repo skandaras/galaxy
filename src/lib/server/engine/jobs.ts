@@ -9,6 +9,11 @@ export type JobChunk =
 	| { type: 'tool'; name: string; status: 'running' | 'ok' | 'error'; detail?: string }
 	| { type: 'stage'; name: string; detail?: string }
 	| { type: 'notice'; text: string }
+	// The agent is waiting on a person. `answer` closes the question it names —
+	// which matters on replay, since a reconnecting client would otherwise
+	// re-open a question that has already been dealt with.
+	| { type: 'question'; id: string; prompt: string; options: string[] }
+	| { type: 'answer'; id: string; text: string }
 	| { type: 'done'; messageId?: string; stopped?: boolean }
 	| { type: 'error'; message: string };
 

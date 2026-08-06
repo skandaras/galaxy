@@ -30,6 +30,13 @@ const EXPECTED = [
 	// web
 	'web_search',
 	'fetch_url',
+	// boards
+	'board_read',
+	'card_read',
+	'card_add',
+	'card_update',
+	'card_comment',
+	'ask_user',
 	// diagnostics
 	'run_history',
 	'set_chat_title',

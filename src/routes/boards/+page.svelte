@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import CardDetail from '$lib/components/boards/CardDetail.svelte';
 	import { PRIORITY_MARK, type Board, type BoardView, type Card } from '$lib/board-types';
 
@@ -13,6 +14,7 @@
 	let newCardLane = $state<string | null>(null);
 	let newCardTitle = $state('');
 	let error = $state<string | null>(null);
+	let running = $state(false);
 
 	onMount(loadBoards);
 
@@ -89,6 +91,29 @@
 		await loadBoard();
 	}
 
+	/**
+	 * Run an agent across every open card. Like the per-card hand-off, the work
+	 * happens in an ordinary chat rather than somewhere new — so this navigates
+	 * there instead of running anything inside the board.
+	 */
+	async function boardAction(action: 'prioritise' | 'next-steps') {
+		if (!selectedId || running) return;
+		running = true;
+		error = null;
+		const res = await fetch(`/api/boards/${selectedId}/agent`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ action })
+		});
+		running = false;
+		if (!res.ok) {
+			error = (await res.json().catch(() => ({}))).message ?? 'Could not start the agent';
+			return;
+		}
+		const { chatId } = await res.json();
+		await goto(`/chat?chat=${chatId}`);
+	}
+
 	function onDrop(laneId: string) {
 		const id = draggingId;
 		draggingId = null;
@@ -119,6 +144,12 @@
 		<button class="btn" onclick={createBoard}>New board</button>
 		<span class="spacer"></span>
 		{#if view}
+			<button class="btn" disabled={running || !view.cards.length} onclick={() => boardAction('prioritise')}>
+				✦ Prioritise
+			</button>
+			<button class="btn" disabled={running || !view.cards.length} onclick={() => boardAction('next-steps')}>
+				✦ Next steps
+			</button>
 			<span class="members" title="Everyone who can see this board">
 				{view.members.map((m) => m.username).join(', ')}
 			</span>
@@ -515,6 +546,10 @@
 		background: transparent;
 		border: 1px dashed var(--fg-dim);
 		color: var(--fg-dim);
+	}
+	.btn:disabled {
+		opacity: 0.5;
+		cursor: default;
 	}
 
 	@media (hover: none) {

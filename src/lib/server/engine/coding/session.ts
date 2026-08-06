@@ -23,7 +23,9 @@ import { codingMaxSteps } from '../limits';
 import { runAgentLoop, type LoopTool, type TurnSummary } from '../loop';
 import { previousRunNote, runHistoryTool } from '../run-history';
 import { webSearchConfigured, webSearchTool } from '../tools/web-search';
+import { askUserTool } from '../ask-user';
 import { attachmentTools } from '../tools/attachments';
+import { boardTools } from '../tools/boards';
 import { fetchUrlTool } from '../tools/fetch-url';
 import { bootstrapContext, knowledgeTools } from '../tools/knowledge';
 import { mcpLoopTools } from '../tools/mcp';
@@ -137,6 +139,10 @@ export function startCodingTurn(opts: {
 			// plan mode as well as implement — it changes nothing in the repo.
 			fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH)),
 			runHistoryTool(chat.id),
+			// A coding task often is a card; reading the board is how the agent
+			// finds out what it was actually asked for.
+			...boardTools(opts.userId),
+			askUserTool(job),
 			...searchTools,
 			...mcpLoopTools('coding')
 		],

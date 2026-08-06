@@ -141,7 +141,13 @@ export function createChat(opts: {
 		title: opts.title ?? 'New chat',
 		hidden: opts.hidden ?? false,
 		modelId: null,
-		titleCustom: false,
+		/**
+		 * A chat created with a title was named on purpose — after the repository
+		 * for a coding session, after the card for a board hand-off — so the
+		 * auto-titler must leave it alone. Without this it renamed them on the
+		 * first reply, which is how "Card: Book plumber" became a generic summary.
+		 */
+		titleCustom: !!opts.title,
 		archivedAt: null,
 		compactSummary: null,
 		compactedUpTo: 0,
@@ -157,6 +163,7 @@ export function createChat(opts: {
 				userId: meta.userId,
 				mode: meta.mode,
 				title: meta.title,
+				titleCustom: meta.titleCustom,
 				createdAt: new Date(now),
 				updatedAt: new Date(now)
 			})

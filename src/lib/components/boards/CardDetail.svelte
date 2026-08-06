@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import {
 		PRIORITIES,
 		PRIORITY_LABEL,
@@ -29,6 +30,7 @@
 	let comment = $state('');
 	let uploadError = $state<string | null>(null);
 	let busy = $state(false);
+	let handoffError = $state<string | null>(null);
 
 	// Reloads whenever the drawer is pointed at a different card.
 	$effect(() => {
@@ -94,6 +96,25 @@
 	async function removeAttachment(id: string) {
 		await fetch(`/api/cards/${cardId}/attachments/${id}`, { method: 'DELETE' });
 		await load(cardId);
+	}
+
+	/**
+	 * Hand the card to an agent. The work happens in an ordinary chat — that is
+	 * where streaming, recovery and the question drawer already live — so this
+	 * navigates rather than running anything inside the board.
+	 */
+	async function giveToAgent() {
+		busy = true;
+		handoffError = null;
+		const res = await fetch(`/api/cards/${cardId}/agent`, { method: 'POST' });
+		busy = false;
+		if (!res.ok) {
+			handoffError = (await res.json().catch(() => ({}))).message ?? 'Could not start the agent';
+			return;
+		}
+		const { chatId } = await res.json();
+		onchanged();
+		await goto(`/chat?chat=${chatId}`);
 	}
 
 	async function remove() {
@@ -222,8 +243,16 @@
 			</section>
 
 			<footer>
+				<button class="btn primary" disabled={busy} onclick={giveToAgent}>
+					{busy ? 'Starting…' : 'Give to AI'}
+				</button>
 				<button class="btn danger" disabled={busy} onclick={remove}>Delete card</button>
 			</footer>
+			{#if handoffError}<p class="error">{handoffError}</p>{/if}
+			<p class="hint">
+				The agent reads the card, its attachments and its Log first, and asks you before
+				guessing at anything it needs.
+			</p>
 		</div>
 	{/if}
 </aside>
@@ -369,6 +398,8 @@
 		font-size: 0.7rem;
 	}
 	footer {
+		display: flex;
+		gap: 0.4rem;
 		margin-top: 1.2rem;
 		padding-top: 0.6rem;
 		border-top: 1px solid var(--border);
@@ -382,6 +413,10 @@
 		font-family: inherit;
 		font-size: 0.74rem;
 		cursor: pointer;
+	}
+	.btn.primary {
+		background: var(--accent);
+		color: var(--bg);
 	}
 	.btn.danger {
 		background: transparent;

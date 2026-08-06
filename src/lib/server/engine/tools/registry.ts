@@ -3,7 +3,9 @@ import { db } from '$lib/server/db';
 import { toolSettings } from '$lib/server/db/schema';
 import type { LoopTool } from '../loop';
 import { codingTools } from '../coding/tools';
+import { askUserToolDef } from '../ask-user';
 import { attachmentTools } from './attachments';
+import { boardTools } from './boards';
 import { fetchUrlToolDef } from './fetch-url';
 import { knowledgeTools } from './knowledge';
 import { runHistoryToolDef } from '../run-history';
@@ -83,6 +85,16 @@ export function builtinDescriptors(): ToolDescriptor[] {
 		'web',
 		['chat', 'coding'],
 		'not tied to the composer’s web-search toggle'
+	);
+	// The user id only scopes execution. The write tools are also gated at run
+	// time on the agentWrites setting, so the catalogue lists them either way
+	// rather than hiding controls that reappear when the setting flips.
+	add(boardTools('*', true), 'boards', ['chat', 'coding']);
+	add(
+		[{ def: askUserToolDef, execute: async () => '' }],
+		'boards',
+		['chat', 'coding'],
+		'parks the run until the user answers'
 	);
 	// The chat id only scopes execution, never the declaration.
 	add([{ def: runHistoryToolDef, execute: async () => '' }], 'diagnostics', ['chat', 'coding']);
