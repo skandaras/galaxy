@@ -25,8 +25,16 @@ jobs:
   docker-dev:
     # Every green build of main becomes the :dev image; promotion to :stable
     # is a separate manual step (admin panel button, M7).
+    #
+    # workflow_dispatch counts as well as push, because a push made with an app
+    # credential (which is how agents commit here) triggers nothing at all — so
+    # a merge can land on main with no run behind it. Running CI by hand from
+    # the Actions tab used to verify main and then skip this job, leaving :dev
+    # silently stale; now it publishes too.
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,8 +57,11 @@ jobs:
   docker-runner:
     # The sandbox image agent commands run inside. Published so a fresh host
     # pulls it instead of building locally. Independent of the app image.
+    # Same trigger set as docker-dev, for the same reason.
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       contents: read
