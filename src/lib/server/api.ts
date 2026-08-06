@@ -12,6 +12,20 @@ export function requireAdmin(locals: App.Locals): SessionUser {
 	return user;
 }
 
+/**
+ * Coding mode clones and pushes with one shared GitHub token, so it hands the
+ * caller write access to every repository that token can reach. That is fine
+ * for the token's owner and emphatically not fine by default for everyone else,
+ * so it is a per-user grant rather than something every account gets.
+ */
+export function requireCoder(locals: App.Locals): SessionUser {
+	const user = requireUser(locals);
+	if (!user.canCode) {
+		error(403, 'Coding is not enabled for your account — an admin can grant it in Admin → Users');
+	}
+	return user;
+}
+
 const HEARTBEAT_MS = 25_000;
 
 export interface SseChannel {

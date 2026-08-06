@@ -385,6 +385,164 @@ as alice -X PUT $M/api/memory/settings -d '{"enabled":false}' > /dev/null
 check "opt-out persists" "$(as alice $M/api/memory)" '"enabled":false'
 
 # ---------------------------------------------------------------------------
+# Library visibility. The library had no owner column at all before this, so
+# every doc reached every user's list AND their agents' system prompt. These
+# checks are the ones that stop one person's notes feeding another's model.
+# ---------------------------------------------------------------------------
+as alice -X POST $M/api/library -d '{"title":"Alice Private","content":"marker PRIVATE-A"}' > /dev/null
+as alice -X POST $M/api/library -d '{"title":"Team Notes","content":"marker SHARED-A","visibility":"shared"}' > /dev/null
+
+check "alice sees her personal doc" "$(as alice $M/api/library)" 'Alice Private'
+check "bob cannot see it" "$(as bob $M/api/library | grep -c 'Alice Private')" "0"
+check "bob sees the shared one" "$(as bob $M/api/library)" 'Team Notes'
+check "search does not leak it" "$(as bob "$M/api/library?q=PRIVATE-A" | grep -c 'Alice Private')" "0"
+
+APRIV=$(as alice $M/api/library | node -pe "JSON.parse(require('fs').readFileSync(0)).find(d=>d.title==='Alice Private').id")
+check "bob gets 404 fetching it directly" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/library/$APRIV)" "404"
+
+# The digest goes straight into the system prompt, so this is the real test.
+BSYS=$(as bob -X POST $M/api/chats -d '{}' | jqn .id)
+BJOB=$(as bob -X POST $M/api/chats/$BSYS/messages -d '{"content":"echo-lib","webSearch":false}' | jqn .jobId)
+BOUT=$(curl -sN --max-time 20 -H 'Remote-User: bob' $M/api/jobs/$BJOB/stream | grep -o 'LIBCHECK[^"]*' | head -1)
+check "alice's personal doc is absent from bob's prompt" "$BOUT" 'private=false'
+check "the shared doc is present in bob's prompt" "$BOUT" 'shared=true'
+
+# Bob may read a shared doc but not change or delete someone else's.
+ASHARED=$(as bob $M/api/library | node -pe "JSON.parse(require('fs').readFileSync(0)).find(d=>d.title==='Team Notes').id")
+check "bob cannot delete alice's shared doc" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Remote-User: bob' $M/api/library/$ASHARED)" "403"
+
+# ---------------------------------------------------------------------------
+# Coding is a per-user grant, because it pushes with one shared GitHub token.
+# ---------------------------------------------------------------------------
+check "a new user has no coding access" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' -H 'content-type: application/json' -d '{}' $M/api/code/sessions)" "403"
+check "nor can they list repos" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: alice' $M/api/github/repos)" "403"
+
+ALICE_ID=$(asadmin $M/api/admin/users | node -pe "JSON.parse(require('fs').readFileSync(0)).find(u=>u.username==='alice').id")
+check "admin sees the accounts" "$(asadmin $M/api/admin/users)" '"username":"alice"'
+asadmin -X PATCH $M/api/admin/users -d "{\"id\":\"$ALICE_ID\",\"canCode\":true}" > /dev/null
+check "granting access opens the door" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: alice' $M/api/github/repos)" "200"
+check "a non-admin cannot reach the user list" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/admin/users)" "403"
+
+# ---------------------------------------------------------------------------
+# Boards. Membership is the whole access model — a board's owner gets a member
+# row at creation — so these checks are what prove there is no second path in.
+# ---------------------------------------------------------------------------
+BOARD=$(as alice -X POST $M/api/boards -d '{"name":"Household"}' | jqn .id)
+BLANE=$(as alice $M/api/boards/$BOARD | jqn '.lanes[0].id')
+
+check "a new board arrives with lanes" "$(as alice $M/api/boards/$BOARD | jqn '.lanes.length > 0')" 'true'
+check "and with statuses" "$(as alice $M/api/boards/$BOARD | jqn '.statuses.length > 0')" 'true'
+check "exactly one status finishes a card" \
+  "$(as alice $M/api/boards/$BOARD | jqn '.statuses.filter(s=>s.isDone).length')" "1"
+check "bob cannot see alice's board" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/boards/$BOARD)" "404"
+check "nor add a card to it" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' -H 'content-type: application/json' -d '{"title":"sneaky"}' $M/api/boards/$BOARD/cards)" "404"
+check "it is absent from his list" "$(as bob $M/api/boards | grep -c Household)" "0"
+
+# Inviting by username is the whole sharing flow — there is no email step.
+as alice -X POST $M/api/boards/$BOARD/members -d '{"username":"bob"}' > /dev/null
+check "an invite puts the board in bob's list" "$(as bob $M/api/boards)" 'Household'
+check "and lets him add a card" \
+  "$(as bob -X POST $M/api/boards/$BOARD/cards -d '{"title":"Bins"}' | jqn .title)" 'Bins'
+check "inviting someone who has never signed in 404s" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' -H 'content-type: application/json' -d '{"username":"nobody"}' $M/api/boards/$BOARD/members)" "404"
+# A collaborator works on cards; the board itself stays with its owner.
+check "a collaborator cannot rename the board" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H 'Remote-User: bob' -H 'content-type: application/json' -d '{"name":"Bobs"}' $M/api/boards/$BOARD)" "403"
+check "nor delete it" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Remote-User: bob' $M/api/boards/$BOARD)" "403"
+
+# Finishing a card is what archives it — there is no second "archive" action.
+CARD=$(as alice -X POST $M/api/boards/$BOARD/cards -d '{"title":"Renew passport"}' | jqn .id)
+DONE=$(as alice $M/api/boards/$BOARD | jqn '.statuses.find(s=>s.isDone).id')
+check "a new card is not already finished" "$(as alice $M/api/cards/$CARD | jqn '.card.archivedAt')" 'null'
+as alice -X PATCH $M/api/cards/$CARD -d "{\"statusId\":\"$DONE\"}" > /dev/null
+check "a finished card leaves the board" "$(as alice $M/api/boards/$BOARD | jqn '.cards.filter(c=>c.title==="Renew passport").length')" "0"
+check "and lands in the archive" "$(as alice "$M/api/boards/$BOARD?archived=1" | jqn '.archived.filter(c=>c.title==="Renew passport").length')" "1"
+check "the log records who did what" "$(as alice $M/api/cards/$CARD | jqn '.log.map(l=>l.event).join(",")')" 'created,status,archived'
+
+# Removing a column must not remove the work in it.
+KEEP=$(as alice -X POST $M/api/boards/$BOARD/cards -d "{\"title\":\"Keep me\",\"laneId\":\"$BLANE\"}" | jqn .id)
+as alice -X DELETE $M/api/boards/$BOARD/lanes/$BLANE > /dev/null
+check "a deleted lane moves its cards rather than dropping them" \
+  "$(as alice $M/api/cards/$KEEP | jqn '.card.title')" 'Keep me'
+
+# Lanes are columns on a screen, so the ceiling is what fits.
+while [ "$(as alice $M/api/boards/$BOARD | jqn '.lanes.length')" -lt 5 ]; do
+  as alice -X POST $M/api/boards/$BOARD/lanes -d '{"name":"More"}' > /dev/null
+done
+check "a sixth lane is refused" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' -H 'content-type: application/json' -d '{"name":"Too many"}' $M/api/boards/$BOARD/lanes)" "409"
+
+check "admin sees every board" "$(asadmin $M/api/admin/boards)" '"name":"Household"'
+check "a non-admin cannot" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/admin/boards)" "403"
+
+# ---------------------------------------------------------------------------
+# Agents on the board. The digest is what actually reaches a model, so that is
+# what these check — not what the API happens to return.
+# ---------------------------------------------------------------------------
+as bob -X POST $M/api/boards -d '{"name":"Bob only"}' > /dev/null
+BCHAT=$(as alice -X POST $M/api/chats -d '{}' | jqn .id)
+BBJOB=$(as alice -X POST $M/api/chats/$BCHAT/messages -d '{"content":"echo-board","webSearch":false}' | jqn .jobId)
+BBOUT=$(curl -sN --max-time 20 -H 'Remote-User: alice' $M/api/jobs/$BBJOB/stream | grep -o 'BOARDCHECK[^"]*' | head -1)
+check "alice's board reaches her agent" "$BBOUT" 'mine=true'
+check "bob's board does not" "$BBOUT" 'theirs=false'
+
+# ask_user: the run parks on the tool call until the browser answers.
+AKCHAT=$(as alice -X POST $M/api/chats -d '{}' | jqn .id)
+AKJOB=$(as alice -X POST $M/api/chats/$AKCHAT/messages -d '{"content":"ask-me","webSearch":false}' | jqn .jobId)
+curl -sN --max-time 30 -H 'Remote-User: alice' $M/api/jobs/$AKJOB/stream > $DATA/ask.sse &
+SSE_PID=$!
+# Poll for the question rather than sleeping a fixed amount: the whole point is
+# that the run is still open, so there is nothing racing us to finish it.
+for _ in $(seq 1 40); do grep -q '"type":"question"' $DATA/ask.sse && break; sleep 0.25; done
+QID=$(grep -o '"type":"question","id":"[^"]*"' $DATA/ask.sse | head -1 | sed 's/.*"id":"//;s/"//')
+check "the agent asks and the run stays open" "$(grep -c '"type":"question"' $DATA/ask.sse)" "1"
+check "the question carries its options" "$(cat $DATA/ask.sse)" '"Joint"'
+check "an unanswered question keeps the job running" \
+  "$(as alice $M/api/chats/$AKCHAT | jqn '.runningJobId !== null')" 'true'
+check "another user cannot answer it" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' -H 'content-type: application/json' -d "{\"questionId\":\"$QID\",\"answer\":\"x\"}" $M/api/jobs/$AKJOB/answer)" "404"
+check "answering resolves it" \
+  "$(as alice -X POST $M/api/jobs/$AKJOB/answer -d "{\"questionId\":\"$QID\",\"answer\":\"The joint one\"}")" '"answered":true'
+wait $SSE_PID 2>/dev/null || true
+check "the answer reaches the model as the tool result" "$(cat $DATA/ask.sse)" 'ANSWERED:The joint one'
+check "the question is closed on the stream" "$(cat $DATA/ask.sse)" '"type":"answer"'
+check "answering twice is a no-op, not an error" \
+  "$(as alice -X POST $M/api/jobs/$AKJOB/answer -d "{\"questionId\":\"$QID\",\"answer\":\"again\"}")" '"answered":false'
+
+# Card → AI: the board starts an ordinary chat and the agent works the card.
+HCARD=$(as alice -X POST $M/api/boards/$BOARD/cards -d '{"title":"Book plumber","description":"Kitchen tap drips"}' | jqn .id)
+HAND=$(as alice -X POST $M/api/cards/$HCARD/agent)
+HCHAT=$(echo "$HAND" | jqn .chatId)
+HJOB=$(echo "$HAND" | jqn .jobId)
+HOUT=$(curl -sN --max-time 40 -H 'Remote-User: alice' $M/api/jobs/$HJOB/stream)
+check "the agent reads the card it was given" "$HOUT" '"name":"card_read","status":"ok"'
+check "and writes what it did to the log" "$HOUT" '"name":"card_comment","status":"ok"'
+check "the hand-off finishes" "$HOUT" 'CARD HANDLED'
+check "the chat is named after the card" "$(as alice $M/api/chats/$HCHAT | jqn .chat.title)" 'Card: Book plumber'
+HLOG=$(as alice $M/api/cards/$HCARD)
+check "the card records the hand-off" "$HLOG" 'handed to agent'
+check "the agent's note is on the card" "$HLOG" 'waiting on a callback'
+check "and is attributed to the agent" "$HLOG" '"actor":"agent"'
+# Bob is a collaborator on Household, so that card is legitimately his to hand
+# over too. The check that matters is a board he is not on at all.
+BOBBOARD=$(as bob $M/api/boards | node -pe "JSON.parse(require('fs').readFileSync(0)).find(b=>b.name==='Bob only').id")
+BOBCARD=$(as bob -X POST $M/api/boards/$BOBBOARD/cards -d '{"title":"Bob private task"}' | jqn .id)
+check "alice cannot hand bob's card to an agent" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' $M/api/cards/$BOBCARD/agent)" "404"
+check "nor run a board action on his board" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' -H 'content-type: application/json' -d '{"action":"prioritise"}' $M/api/boards/$BOBBOARD/agent)" "404"
+
+# ---------------------------------------------------------------------------
 # A coding turn that runs out of steps must not just stop mid-task. Needs a
 # tiny step budget, which is process-wide, so this runs as its own instance on
 # its own data dir rather than disturbing the one above.

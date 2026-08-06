@@ -1,8 +1,9 @@
 <script lang="ts">
 	import Theme from '$lib/components/settings/Theme.svelte';
 	import Memory from '$lib/components/settings/Memory.svelte';
+	import Boards from '$lib/components/settings/Boards.svelte';
 
-	const tabs = ['Theme', 'Memory'] as const;
+	const tabs = ['Theme', 'Boards', 'Memory'] as const;
 	let active = $state<(typeof tabs)[number]>('Theme');
 </script>
 
@@ -16,6 +17,8 @@
 	<div class="body">
 		{#if active === 'Theme'}
 			<Theme />
+		{:else if active === 'Boards'}
+			<Boards />
 		{:else}
 			<Memory />
 		{/if}

@@ -6,6 +6,7 @@
 	import { createAutoscroll } from '$lib/autoscroll.svelte';
 	import { autoresize } from '$lib/autoresize';
 	import { hasFinePointer } from '$lib/pointer';
+	import AskSheet from '$lib/components/AskSheet.svelte';
 
 	interface ChatMeta {
 		id: string;
@@ -79,6 +80,12 @@
 	let streaming = $state(false);
 	/** Job currently streaming, so it can be stopped. */
 	let activeJobId = $state<string | null>(null);
+	/**
+	 * The question an agent is currently waiting on, if any. Chunk replay means a
+	 * reconnecting client re-reads the whole stream, so an `answer` chunk clears
+	 * the question it names rather than the sheet reopening on every reattach.
+	 */
+	let question = $state<{ id: string; prompt: string; options: string[] } | null>(null);
 	let stopping = $state(false);
 	let streamText = $state('');
 	let streamModel = $state('');
@@ -113,6 +120,12 @@
 		models = m.models;
 		defaultModelId = m.defaultModelId ?? models[0]?.id ?? '';
 		selectedModelId = defaultModelId;
+
+		// ?chat=<id> is how the board hands work over: it starts the turn, then
+		// sends the user here to watch it — including to answer any question the
+		// agent asks, since selectChat reattaches to the running job.
+		const wanted = new URLSearchParams(location.search).get('chat');
+		if (wanted) await selectChat(wanted);
 	});
 
 	/**
@@ -262,6 +275,7 @@
 		toolActivity = null;
 		stages = [];
 		notices = [];
+		question = null;
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
 			const chunk = JSON.parse(ev.data);
@@ -280,6 +294,11 @@
 							? `${chunk.name} failed`
 							: null;
 			} else if (chunk.type === 'notice') notices = [...notices, chunk.text];
+			else if (chunk.type === 'question') {
+				question = { id: chunk.id, prompt: chunk.prompt, options: chunk.options ?? [] };
+			} else if (chunk.type === 'answer') {
+				if (question?.id === chunk.id) question = null;
+			}
 			else if (chunk.type === 'done') {
 				// Read before finalizeStream appends the reply: zero assistant
 				// messages means the turn that just ended was this chat's first,
@@ -406,11 +425,26 @@
 		streaming = false;
 		activeJobId = null;
 		stopping = false;
+		question = null;
 		streamText = '';
 		toolActivity = null;
 		stages = [];
 		closeStream();
 		void refreshChats();
+	}
+
+	/**
+	 * Resolve the waiting tool call. The sheet closes on the `answer` chunk the
+	 * server pushes back, not here — so what the screen shows is what the run
+	 * actually received.
+	 */
+	async function answerQuestion(answer: string) {
+		if (!activeJobId || !question) return;
+		await fetch(`/api/jobs/${activeJobId}/answer`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ questionId: question.id, answer })
+		}).catch(() => {});
 	}
 
 	async function saveToLibrary(msg: Msg) {
@@ -675,6 +709,8 @@
 					{/if}
 					{#if streamText}
 						<Markdown text={streamText} />
+					{:else if question}
+						<span class="thinking">waiting on your answer</span>
 					{:else if !stages.length}
 						<span class="thinking">{streamModel || '…'} is thinking</span>
 					{/if}
@@ -784,6 +820,10 @@
 		</footer>
 	</section>
 </div>
+
+{#if question}
+	<AskSheet prompt={question.prompt} options={question.options} onanswer={answerQuestion} />
+{/if}
 
 <style>
 	.chat-shell {

@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { requireAdmin } from '$lib/server/api';
 import { encryptSecret } from '$lib/server/crypto';
 import {
+	DEFAULT_BOARDS,
 	DEFAULT_BUDGET,
 	DEFAULT_CODING,
 	DEFAULT_COMPACTION,
@@ -27,7 +28,8 @@ const KNOWN_KEYS = [
 	'coding',
 	'uxaudit',
 	'retention',
-	'fetch'
+	'fetch',
+	'boards'
 ] as const;
 const DEFAULTS: Record<string, unknown> = {
 	websearch: DEFAULT_WEB_SEARCH,
@@ -39,7 +41,8 @@ const DEFAULTS: Record<string, unknown> = {
 	coding: DEFAULT_CODING,
 	uxaudit: DEFAULT_UX_AUDIT,
 	retention: DEFAULT_RETENTION,
-	fetch: DEFAULT_FETCH
+	fetch: DEFAULT_FETCH,
+	boards: DEFAULT_BOARDS
 };
 
 // Fields the UI submits in plaintext that are stored encrypted. An empty

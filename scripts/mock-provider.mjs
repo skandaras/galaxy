@@ -439,6 +439,19 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
+		// Library scoping: report which docs reached this user's system prompt.
+		// The digest is what actually feeds another person's model, so this is
+		// the check that matters rather than what the API happens to list.
+		if (String(last?.content ?? '').includes('echo-lib')) {
+			delta(res, {
+				content: `LIBCHECK private=${system.includes('Alice Private')} shared=${system.includes('Team Notes')}`
+			});
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
 		// Bootstrap verification: report what the system prompt contained.
 		if (String(last?.content ?? '').includes('echo-system')) {
 			delta(res, {
@@ -470,6 +483,92 @@ const server = createServer(async (req, res) => {
 		if (last?.role === 'tool' && usedSkillLoad) {
 			delta(res, { content: `SKILL:${String(last.content).slice(0, 60)}` });
 			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
+		// Boards reach the agent through the context bootstrap, so this reports
+		// what actually landed in the system prompt rather than what the API lists.
+		if (String(last?.content ?? '').includes('echo-board')) {
+			delta(res, {
+				content: `BOARDCHECK mine=${system.includes('Household')} theirs=${system.includes('Bob only')}`
+			});
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
+		// ask_user: the turn parks on the tool call until the browser answers,
+		// then carries on with the answer as the tool result.
+		const usedAsk = parsed.messages.some(
+			(m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.function?.name === 'ask_user')
+		);
+		if (String(last?.content ?? '').includes('ask-me') && !usedAsk) {
+			delta(res, {
+				tool_calls: [
+					{
+						index: 0,
+						id: 'call_ask',
+						function: {
+							name: 'ask_user',
+							arguments: JSON.stringify({ question: 'Which account?', options: ['Joint', 'Mine'] })
+						}
+					}
+				]
+			});
+			delta(res, {}, 'tool_calls');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+		if (last?.role === 'tool' && usedAsk) {
+			delta(res, { content: `ANSWERED:${String(last.content)}` });
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
+		// The card hand-off: read the card, write to its Log, then report. Driven
+		// by the seeded prompt the board sends, so this exercises the real path.
+		const handoff = parsed.messages.find((m) =>
+			String(m.content ?? '').includes('handing you a card from my task board')
+		);
+		if (handoff) {
+			const cardId = String(handoff.content).match(/Its id is ([0-9a-f-]+)/)?.[1] ?? '';
+			const called = (name) =>
+				parsed.messages.some(
+					(m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.function?.name === name)
+				);
+			if (!called('card_read')) {
+				delta(res, {
+					tool_calls: [
+						{ index: 0, id: 'call_cr', function: { name: 'card_read', arguments: JSON.stringify({ cardId }) } }
+					]
+				});
+			} else if (!called('card_comment')) {
+				delta(res, {
+					tool_calls: [
+						{
+							index: 0,
+							id: 'call_cc',
+							function: {
+								name: 'card_comment',
+								arguments: JSON.stringify({ cardId, note: 'Rang them, waiting on a callback' })
+							}
+						}
+					]
+				});
+			} else {
+				delta(res, { content: 'CARD HANDLED' });
+				delta(res, {}, 'stop');
+				res.write('data: [DONE]\n\n');
+				res.end();
+				return;
+			}
+			delta(res, {}, 'tool_calls');
 			res.write('data: [DONE]\n\n');
 			res.end();
 			return;

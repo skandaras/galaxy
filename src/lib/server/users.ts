@@ -8,8 +8,18 @@ import type { AuthHeaders, SessionUser } from '$lib/server/auth';
 const LAST_SEEN_INTERVAL_MS = 5 * 60 * 1000;
 const lastSeenCache = new Map<string, number>();
 
-/** Find-or-create the user for an authenticated identity. */
-export function provisionUser(auth: AuthHeaders, isAdmin: boolean): SessionUser {
+/**
+ * Find-or-create the user for an authenticated identity.
+ *
+ * `grantCode` is for dev mode, which already bypasses Authelia and grants
+ * admin; withholding coding there would only break local development. In
+ * Authelia mode it is false and the stored per-user grant decides.
+ */
+export function provisionUser(
+	auth: AuthHeaders,
+	isAdmin: boolean,
+	grantCode = false
+): SessionUser {
 	const now = Date.now();
 	const existing = db.select().from(users).where(eq(users.username, auth.username)).get();
 
@@ -20,6 +30,9 @@ export function provisionUser(auth: AuthHeaders, isAdmin: boolean): SessionUser 
 			email: auth.email,
 			displayName: auth.displayName,
 			isAdmin,
+			// Off for anyone new: coding pushes with a shared GitHub token, so it
+			// is granted deliberately in Admin → Users rather than on sign-up.
+			canCode: grantCode,
 			createdAt: new Date(now),
 			lastSeenAt: new Date(now)
 		};
@@ -38,7 +51,7 @@ export function provisionUser(auth: AuthHeaders, isAdmin: boolean): SessionUser 
 		lastSeenCache.set(auth.username, now);
 	}
 
-	return toSessionUser({ ...existing, isAdmin });
+	return toSessionUser({ ...existing, isAdmin, canCode: grantCode || existing.canCode });
 }
 
 function toSessionUser(row: {
@@ -47,12 +60,14 @@ function toSessionUser(row: {
 	email: string | null;
 	displayName: string | null;
 	isAdmin: boolean;
+	canCode?: boolean;
 }): SessionUser {
 	return {
 		id: row.id,
 		username: row.username,
 		email: row.email,
 		displayName: row.displayName,
-		isAdmin: row.isAdmin
+		isAdmin: row.isAdmin,
+		canCode: row.canCode ?? false
 	};
 }

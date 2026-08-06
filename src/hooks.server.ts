@@ -28,8 +28,11 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	if (authMode === 'dev') {
 		const username = env.DEV_USER || 'dev';
+		// Dev mode is a local bypass: it already grants admin, so it grants
+		// coding too rather than leaving development half-crippled.
 		event.locals.user = provisionUser(
 			{ username, email: null, displayName: username, groups: [adminGroup] },
+			true,
 			true
 		);
 		return resolve(event);

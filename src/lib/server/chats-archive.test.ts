@@ -108,6 +108,16 @@ describe('title ownership', () => {
 		expect(createChat({ userId: USER }).titleCustom).toBe(false);
 	});
 
+	it('treats a chat created with a title as already named', () => {
+		// Coding sessions are named after the repository and board hand-offs after
+		// the card. Both were being renamed by the auto-titler on the first reply.
+		const chat = createChat({ userId: USER, title: 'Card: Book plumber' });
+		expect(chat.titleCustom).toBe(true);
+		// Read back, not just returned: the insert used to omit the column, so the
+		// object said one thing and the stored row said another.
+		expect(getChat(chat.id, USER)?.titleCustom).toBe(true);
+	});
+
 	it('remembers that a human named it', () => {
 		const chat = createChat({ userId: USER });
 		updateChat(chat.id, { title: 'My name for it', titleCustom: true });

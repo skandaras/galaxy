@@ -201,3 +201,20 @@ export interface CompactionSettings {
 }
 
 export const DEFAULT_COMPACTION: CompactionSettings = { ratio: 0.7, keepRecent: 8 };
+
+export interface BoardSettings {
+	/**
+	 * Boards one person may own. Not a scaling limit — a household runs out of
+	 * attention long before SQLite runs out of rows — but it stops a runaway
+	 * agent or a stuck button filling the picker with empty boards.
+	 */
+	maxBoardsPerUser: number;
+	/**
+	 * Whether agents may change cards, or only read them. Reading is what makes
+	 * an agent aware of what you are doing; writing is what lets it tick things
+	 * off, which not everyone wants on day one.
+	 */
+	agentWrites: boolean;
+}
+
+export const DEFAULT_BOARDS: BoardSettings = { maxBoardsPerUser: 20, agentWrites: true };

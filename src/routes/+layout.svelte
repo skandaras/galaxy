@@ -9,7 +9,10 @@
 
 	const links = $derived([
 		{ href: '/chat', label: 'Chat' },
-		{ href: '/code', label: 'Code' },
+		// Coding is a per-user grant, because it pushes with a shared GitHub
+		// token; the API refuses it either way, this just stops offering it.
+		...(data.user?.canCode ? [{ href: '/code', label: 'Code' }] : []),
+		{ href: '/boards', label: 'Boards' },
 		{ href: '/library', label: 'Library' },
 		{ href: '/settings', label: 'Settings' },
 		...(data.user?.isAdmin ? [{ href: '/admin', label: 'Admin' }] : [])

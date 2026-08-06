@@ -1,11 +1,11 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { requireUser } from '$lib/server/api';
+import { requireCoder } from '$lib/server/api';
 import { githubToken } from '$lib/server/engine/coding/workspace';
 
 // Repos visible to the configured GitHub token, for the Code page dropdown.
 export const GET: RequestHandler = async ({ locals }) => {
-	requireUser(locals);
+	requireCoder(locals);
 	const token = githubToken();
 	if (!token) return json({ configured: false, repos: [] });
 
