@@ -175,7 +175,8 @@ export const CORE_TASKS = [
 	'memory',
 	'skill-optimiser',
 	'ux-audit',
-	'chat-title'
+	'chat-title',
+	'board'
 ] as const;
 export type CoreTask = (typeof CORE_TASKS)[number];
 
@@ -391,6 +392,152 @@ export const jobs = sqliteTable(
 		finishedAt: integer('finished_at', { mode: 'timestamp_ms' })
 	},
 	(t) => [index('jobs_created_idx').on(t.createdAt), index('jobs_chat_idx').on(t.chatId)]
+);
+
+// --- task boards -----------------------------------------------------------
+//
+// A board is a small shared workspace: lanes group cards however the owner
+// likes, and a card's status moves through the workflow independently (the
+// Linear split, rather than Trello's "the column *is* the status"). Marking a
+// card with the board's done status archives it off the board.
+//
+// Access is entirely through board_members — a board's owner gets a member row
+// when the board is created, so there is exactly one table to consult and no
+// "owner or member" special case anywhere.
+
+export const boards = sqliteTable(
+	'boards',
+	{
+		id: text('id').primaryKey(),
+		ownerId: text('owner_id').notNull(),
+		name: text('name').notNull(),
+		description: text('description').notNull().default(''),
+		/** Archiving a whole board hides it from the picker; nothing is deleted. */
+		archivedAt: integer('archived_at', { mode: 'timestamp_ms' }),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [index('boards_owner_idx').on(t.ownerId)]
+);
+
+export const BOARD_ROLES = ['owner', 'collaborator'] as const;
+export type BoardRole = (typeof BOARD_ROLES)[number];
+
+/**
+ * Who may see a board. Collaborators do everything on the board's contents;
+ * only the owner may rename or delete the board itself, or change membership.
+ */
+export const boardMembers = sqliteTable(
+	'board_members',
+	{
+		boardId: text('board_id').notNull(),
+		userId: text('user_id').notNull(),
+		role: text('role', { enum: BOARD_ROLES }).notNull().default('collaborator'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	// "Which boards may this user see" is the question asked on every request,
+	// including from agent tools, so it gets its own index rather than riding
+	// the primary key's leading column.
+	(t) => [primaryKey({ columns: [t.boardId, t.userId] }), index('board_members_user_idx').on(t.userId)]
+);
+
+/** Columns on the board. Capped at MAX_LANES, enforced on write. */
+export const boardLanes = sqliteTable(
+	'board_lanes',
+	{
+		id: text('id').primaryKey(),
+		boardId: text('board_id').notNull(),
+		name: text('name').notNull(),
+		position: integer('position').notNull().default(0)
+	},
+	(t) => [index('board_lanes_board_idx').on(t.boardId, t.position)]
+);
+
+export const boardStatuses = sqliteTable(
+	'board_statuses',
+	{
+		id: text('id').primaryKey(),
+		boardId: text('board_id').notNull(),
+		name: text('name').notNull(),
+		colour: text('colour').notNull().default(''),
+		position: integer('position').notNull().default(0),
+		/**
+		 * The status that means finished. Setting a card to it archives the card.
+		 * A board may have more than one (e.g. "Done" and "Won't do").
+		 */
+		isDone: integer('is_done', { mode: 'boolean' }).notNull().default(false)
+	},
+	(t) => [index('board_statuses_board_idx').on(t.boardId, t.position)]
+);
+
+export const CARD_PRIORITIES = ['none', 'low', 'medium', 'high', 'urgent'] as const;
+export type CardPriority = (typeof CARD_PRIORITIES)[number];
+
+export const cards = sqliteTable(
+	'cards',
+	{
+		id: text('id').primaryKey(),
+		boardId: text('board_id').notNull(),
+		laneId: text('lane_id').notNull(),
+		statusId: text('status_id').notNull(),
+		title: text('title').notNull(),
+		description: text('description').notNull().default(''),
+		priority: text('priority', { enum: CARD_PRIORITIES }).notNull().default('none'),
+		/** Order within the lane, renumbered from 0 whenever a lane is reordered. */
+		position: integer('position').notNull().default(0),
+		createdBy: text('created_by').notNull(),
+		assignedTo: text('assigned_to'),
+		/** Set when the card reaches a done status; archived cards leave the board. */
+		archivedAt: integer('archived_at', { mode: 'timestamp_ms' }),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	// The board view reads one board's live cards in lane order; the archive
+	// reads the same board's archived ones newest first.
+	(t) => [
+		index('cards_board_lane_idx').on(t.boardId, t.laneId, t.position),
+		index('cards_board_archived_idx').on(t.boardId, t.archivedAt)
+	]
+);
+
+// Cards need their own attachments: the chat `attachments` table is keyed by
+// chatId, and a card has no chat.
+export const cardAttachments = sqliteTable(
+	'card_attachments',
+	{
+		id: text('id').primaryKey(),
+		cardId: text('card_id').notNull(),
+		name: text('name').notNull(),
+		mime: text('mime').notNull(),
+		size: integer('size').notNull(),
+		path: text('path').notNull(),
+		kind: text('kind', { enum: ['image', 'document'] }).notNull().default('document'),
+		extractedText: text('extracted_text'),
+		textChars: integer('text_chars').notNull().default(0),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [index('card_attachments_card_idx').on(t.cardId)]
+);
+
+/**
+ * Every change to a card lands here, so the card's Log is the audit trail
+ * rather than a separate feature — and an agent that picks a card up can read
+ * what has already been tried.
+ */
+export const cardLog = sqliteTable(
+	'card_log',
+	{
+		id: text('id').primaryKey(),
+		cardId: text('card_id').notNull(),
+		actor: text('actor', { enum: ['user', 'agent'] }).notNull().default('user'),
+		/** Who did it — the acting user, or the user an agent was acting for. */
+		userId: text('user_id'),
+		/** Short verb: created, moved, status, priority, assigned, comment, agent. */
+		event: text('event').notNull(),
+		detail: text('detail').notNull().default(''),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [index('card_log_card_created_idx').on(t.cardId, t.createdAt)]
 );
 
 /**

@@ -430,6 +430,62 @@ check "a non-admin cannot reach the user list" \
   "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/admin/users)" "403"
 
 # ---------------------------------------------------------------------------
+# Boards. Membership is the whole access model — a board's owner gets a member
+# row at creation — so these checks are what prove there is no second path in.
+# ---------------------------------------------------------------------------
+BOARD=$(as alice -X POST $M/api/boards -d '{"name":"Household"}' | jqn .id)
+BLANE=$(as alice $M/api/boards/$BOARD | jqn '.lanes[0].id')
+
+check "a new board arrives with lanes" "$(as alice $M/api/boards/$BOARD | jqn '.lanes.length > 0')" 'true'
+check "and with statuses" "$(as alice $M/api/boards/$BOARD | jqn '.statuses.length > 0')" 'true'
+check "exactly one status finishes a card" \
+  "$(as alice $M/api/boards/$BOARD | jqn '.statuses.filter(s=>s.isDone).length')" "1"
+check "bob cannot see alice's board" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/boards/$BOARD)" "404"
+check "nor add a card to it" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' -H 'content-type: application/json' -d '{"title":"sneaky"}' $M/api/boards/$BOARD/cards)" "404"
+check "it is absent from his list" "$(as bob $M/api/boards | grep -c Household)" "0"
+
+# Inviting by username is the whole sharing flow — there is no email step.
+as alice -X POST $M/api/boards/$BOARD/members -d '{"username":"bob"}' > /dev/null
+check "an invite puts the board in bob's list" "$(as bob $M/api/boards)" 'Household'
+check "and lets him add a card" \
+  "$(as bob -X POST $M/api/boards/$BOARD/cards -d '{"title":"Bins"}' | jqn .title)" 'Bins'
+check "inviting someone who has never signed in 404s" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' -H 'content-type: application/json' -d '{"username":"nobody"}' $M/api/boards/$BOARD/members)" "404"
+# A collaborator works on cards; the board itself stays with its owner.
+check "a collaborator cannot rename the board" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H 'Remote-User: bob' -H 'content-type: application/json' -d '{"name":"Bobs"}' $M/api/boards/$BOARD)" "403"
+check "nor delete it" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Remote-User: bob' $M/api/boards/$BOARD)" "403"
+
+# Finishing a card is what archives it — there is no second "archive" action.
+CARD=$(as alice -X POST $M/api/boards/$BOARD/cards -d '{"title":"Renew passport"}' | jqn .id)
+DONE=$(as alice $M/api/boards/$BOARD | jqn '.statuses.find(s=>s.isDone).id')
+check "a new card is not already finished" "$(as alice $M/api/cards/$CARD | jqn '.card.archivedAt')" 'null'
+as alice -X PATCH $M/api/cards/$CARD -d "{\"statusId\":\"$DONE\"}" > /dev/null
+check "a finished card leaves the board" "$(as alice $M/api/boards/$BOARD | jqn '.cards.filter(c=>c.title==="Renew passport").length')" "0"
+check "and lands in the archive" "$(as alice "$M/api/boards/$BOARD?archived=1" | jqn '.archived.filter(c=>c.title==="Renew passport").length')" "1"
+check "the log records who did what" "$(as alice $M/api/cards/$CARD | jqn '.log.map(l=>l.event).join(",")')" 'created,status,archived'
+
+# Removing a column must not remove the work in it.
+KEEP=$(as alice -X POST $M/api/boards/$BOARD/cards -d "{\"title\":\"Keep me\",\"laneId\":\"$BLANE\"}" | jqn .id)
+as alice -X DELETE $M/api/boards/$BOARD/lanes/$BLANE > /dev/null
+check "a deleted lane moves its cards rather than dropping them" \
+  "$(as alice $M/api/cards/$KEEP | jqn '.card.title')" 'Keep me'
+
+# Lanes are columns on a screen, so the ceiling is what fits.
+while [ "$(as alice $M/api/boards/$BOARD | jqn '.lanes.length')" -lt 5 ]; do
+  as alice -X POST $M/api/boards/$BOARD/lanes -d '{"name":"More"}' > /dev/null
+done
+check "a sixth lane is refused" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' -H 'content-type: application/json' -d '{"name":"Too many"}' $M/api/boards/$BOARD/lanes)" "409"
+
+check "admin sees every board" "$(asadmin $M/api/admin/boards)" '"name":"Household"'
+check "a non-admin cannot" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/admin/boards)" "403"
+
+# ---------------------------------------------------------------------------
 # A coding turn that runs out of steps must not just stop mid-task. Needs a
 # tiny step budget, which is process-wide, so this runs as its own instance on
 # its own data dir rather than disturbing the one above.

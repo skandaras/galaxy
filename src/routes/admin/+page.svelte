@@ -6,6 +6,7 @@
 	import Tools from '$lib/components/admin/Tools.svelte';
 	import Memory from '$lib/components/admin/Memory.svelte';
 	import Users from '$lib/components/admin/Users.svelte';
+	import Boards from '$lib/components/admin/Boards.svelte';
 	import Ux from '$lib/components/admin/Ux.svelte';
 	import Settings from '$lib/components/admin/Settings.svelte';
 	import Usage from '$lib/components/admin/Usage.svelte';
@@ -18,6 +19,7 @@
 		'Tools',
 		'Skills',
 		'Memory',
+		'Boards',
 		'UX',
 		'Settings',
 		'Usage'
@@ -48,6 +50,8 @@
 			<Skills />
 		{:else if active === 'Memory'}
 			<Memory />
+		{:else if active === 'Boards'}
+			<Boards />
 		{:else if active === 'UX'}
 			<Ux />
 		{:else if active === 'Settings'}
