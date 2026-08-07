@@ -99,6 +99,45 @@
 		coding = { ...data.coding };
 		retention = { ...data.retention };
 		fetchCfg = { ...data.fetch };
+		await loadPush();
+	}
+
+	let push = $state({ configured: false, publicKey: '', subject: '', devices: 0 });
+	let pushNotice = $state<string | null>(null);
+
+	async function loadPush() {
+		const data = await (await fetch('/api/admin/push')).json();
+		push = { ...push, ...data, publicKey: data.publicKey ?? '' };
+	}
+
+	async function generateKeys() {
+		// Regenerating orphans every registration, so make the person say so.
+		if (
+			push.configured &&
+			!confirm(
+				`Generating new keys signs out all ${push.devices} registered device(s) — everyone has to enable notifications again. Continue?`
+			)
+		) {
+			return;
+		}
+		const res = await fetch('/api/admin/push', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ action: 'generate', subject: push.subject })
+		});
+		const data = await res.json();
+		pushNotice = `New keys generated${data.clearedDevices ? `, ${data.clearedDevices} device(s) cleared` : ''}.`;
+		await loadPush();
+	}
+
+	async function savePushSubject() {
+		await fetch('/api/admin/push', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ subject: push.subject })
+		});
+		pushNotice = 'Contact saved.';
+		await loadPush();
 	}
 	$effect(() => {
 		void load();
@@ -410,6 +449,41 @@
 		</p>
 		<button class="btn primary" onclick={() => save('retention', retention)}>
 			{saved === 'retention' ? 'Saved ✓' : 'Save'}
+		</button>
+	</article>
+
+	<article class="card">
+		<h3>Push</h3>
+		{#if pushNotice}<p class="notice">{pushNotice}</p>{/if}
+		<p class="hint">
+			Web Push needs one VAPID key pair for the whole instance. Generate it once here; each person
+			then turns notifications on per device in <strong>Settings → Notifications</strong>. The
+			private half is stored encrypted and never leaves the server. Only notifications that hold
+			work up are pushed — currently an agent waiting on an answer.
+		</p>
+		<div class="grid">
+			<label>
+				contact (VAPID subject)
+				<input
+					type="text"
+					placeholder="mailto:you@example.com"
+					bind:value={push.subject}
+					onblur={savePushSubject}
+				/>
+			</label>
+			<label>
+				status
+				<input
+					type="text"
+					readonly
+					value={push.configured
+						? `configured · ${push.devices} device(s)`
+						: 'not set up'}
+				/>
+			</label>
+		</div>
+		<button class="btn primary" onclick={generateKeys}>
+			{push.configured ? 'Regenerate keys' : 'Generate keys'}
 		</button>
 	</article>
 </section>

@@ -15,6 +15,7 @@ import {
 	type BoardRole,
 	type CardPriority
 } from '$lib/server/db/schema';
+import { notify } from '$lib/server/notifications';
 
 export type Board = typeof boards.$inferSelect;
 export type BoardLane = typeof boardLanes.$inferSelect;
@@ -223,6 +224,17 @@ export function addMember(boardId: string, userId: string, username: string): In
 	db.insert(boardMembers)
 		.values({ boardId, userId: target.id, role: 'collaborator', createdAt: new Date() })
 		.run();
+	// There is no invite email — the board simply appears in their picker. So
+	// this is the only thing that tells them it is there.
+	const board = db.select().from(boards).where(eq(boards.id, boardId)).get();
+	notify({
+		userId: target.id,
+		kind: 'board-shared',
+		title: `${nameOf(userId)} shared a board with you`,
+		body: board?.name ?? '',
+		link: '/boards',
+		entityId: boardId
+	});
 	return {
 		ok: true,
 		member: {
@@ -503,6 +515,18 @@ export function updateCard(
 	if (patch.assignedTo !== undefined && patch.assignedTo !== card.assignedTo) {
 		set.assignedTo = patch.assignedTo;
 		notes.push({ event: 'assigned', detail: patch.assignedTo ? nameOf(patch.assignedTo) : 'nobody' });
+		// Assigning something to yourself is not news; assigning it to the other
+		// person is the whole reason they would ever find out.
+		if (patch.assignedTo && patch.assignedTo !== userId) {
+			notify({
+				userId: patch.assignedTo,
+				kind: 'card-assigned',
+				title: `${nameOf(userId)} gave you a card`,
+				body: card.title,
+				link: `/boards?card=${card.id}`,
+				entityId: card.id
+			});
+		}
 	}
 
 	const targetLane = patch.laneId ? lanes.find((l) => l.id === patch.laneId) : undefined;

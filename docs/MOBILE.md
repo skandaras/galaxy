@@ -27,6 +27,31 @@ web manifest, and a registered service worker.
 > If the app logs you out constantly, raise the session/remember-me duration in
 > your Authelia config.
 
+## Notifications
+
+Galaxy pushes to your phone only when something is genuinely holding work up.
+Today that means one thing: an agent has stopped mid-run to ask you a question,
+and gives up after ten minutes if nobody answers. Cards, shared boards and
+failed runs appear in the **Alerts** bell in the sidebar, but they will not
+buzz you.
+
+Two steps, in order:
+
+1. **An admin generates the keys once** for the whole instance, in
+   **Admin → Settings → Push**. Regenerating them later signs out every
+   registered device, so do it once and leave it alone.
+2. **Each person enables it per device**, in **Settings → Notifications**.
+   Your phone and your laptop are separate registrations, and the browser only
+   allows the permission prompt from a real button press — which is why it is a
+   button rather than something that happens on first load.
+
+> **iPhone note.** Safari only delivers Web Push to a web app **installed to
+> the home screen** — the Add to Home Screen step above is a prerequisite, not
+> a nicety. Open Galaxy from the home-screen icon, then enable notifications
+> from inside it. Enabling in Safari itself will not work.
+
+Android and desktop Chrome/Edge do not need the install, though it still helps.
+
 ## What works offline
 
 Deliberately little. The service worker caches only the immutable build assets

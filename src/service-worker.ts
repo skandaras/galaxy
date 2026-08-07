@@ -20,6 +20,62 @@ self.addEventListener('activate', (event) => {
 	);
 });
 
+/**
+ * Web Push. Only urgent notifications are ever sent (see server/push.ts), so
+ * anything arriving here is worth showing — today that means an agent parked on
+ * a question, which gives up after ten minutes if nobody answers.
+ */
+self.addEventListener('push', (event) => {
+	const e = event as PushEvent;
+	if (!e.data) return;
+	let payload: { id?: string; title?: string; body?: string; link?: string };
+	try {
+		payload = e.data.json();
+	} catch {
+		// Never show a raw undecodable payload to the user.
+		return;
+	}
+	e.waitUntil(
+		(self as unknown as ServiceWorkerGlobalScope).registration.showNotification(
+			payload.title || 'Galaxy',
+			{
+				body: payload.body ?? '',
+				icon: '/icon.svg',
+				badge: '/icon.svg',
+				// Collapses repeats of the same question rather than stacking them.
+				tag: payload.id ?? 'galaxy',
+				data: { link: payload.link || '/chat' },
+				requireInteraction: true
+			}
+		)
+	);
+});
+
+self.addEventListener('notificationclick', (event) => {
+	const e = event as NotificationEvent;
+	e.notification.close();
+	const link = (e.notification.data as { link?: string } | null)?.link ?? '/chat';
+	e.waitUntil(
+		(async () => {
+			const scope = self as unknown as ServiceWorkerGlobalScope;
+			const clients = await scope.clients.matchAll({
+				type: 'window',
+				includeUncontrolled: true
+			});
+			// Reuse a window that is already open rather than piling up tabs; the
+			// installed PWA usually has exactly one.
+			for (const client of clients) {
+				if ('focus' in client) {
+					await client.focus();
+					if ('navigate' in client) await client.navigate(link);
+					return;
+				}
+			}
+			await scope.clients.openWindow(link);
+		})()
+	);
+});
+
 self.addEventListener('fetch', (event) => {
 	const e = event as FetchEvent;
 	if (e.request.method !== 'GET') return;

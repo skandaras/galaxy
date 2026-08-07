@@ -1,7 +1,8 @@
 import { getCard, listCards, listLanes, listStatuses, logCard, type Board } from '$lib/server/boards';
 import { createChat } from '$lib/server/chats';
 import { getTaskConfig, startChatTurn } from './engine';
-import type { LiveJob } from './jobs';
+import { notify } from '$lib/server/notifications';
+import { subscribeJob, type LiveJob } from './jobs';
 
 /**
  * Handing board work to an agent.
@@ -68,6 +69,24 @@ export function startCardTurn(cardId: string, userId: string): { chatId: string;
 		userId,
 		event: 'handed to agent',
 		detail: `working in chat ${chat.id}`
+	});
+	// You click Give to AI and walk away, so the result would otherwise land
+	// silently in the card's Log. Watching the job is enough — no engine hook
+	// needed, and it costs one subscriber for the life of the run.
+	const off = subscribeJob(job, (chunk) => {
+		if (chunk.type !== 'done' && chunk.type !== 'error') return;
+		off();
+		notify({
+			userId,
+			kind: 'card-done',
+			title:
+				chunk.type === 'error'
+					? `An agent gave up on "${card.title}"`
+					: `An agent finished with "${card.title}"`,
+			body: chunk.type === 'error' ? chunk.message : 'Read what it did on the card.',
+			link: `/boards?card=${card.id}`,
+			entityId: card.id
+		});
 	});
 	return { chatId: chat.id, job };
 }

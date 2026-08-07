@@ -21,7 +21,8 @@
     "mammoth": "^1.12.0",
     "marked": "^18.0.7",
     "mermaid": "^11.16.0",
-    "pdfjs-dist": "^6.1.200"
+    "pdfjs-dist": "^6.1.200",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.2.0",
@@ -29,6 +30,7 @@
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^22.0.0",
+    "@types/web-push": "^3.6.4",
     "drizzle-kit": "^0.31.0",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",

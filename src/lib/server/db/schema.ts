@@ -540,6 +540,84 @@ export const cardLog = sqliteTable(
 	(t) => [index('card_log_card_created_idx').on(t.cardId, t.createdAt)]
 );
 
+// --- notifications ---------------------------------------------------------
+
+/**
+ * What raised a notification. The kind drives the icon and, more importantly,
+ * whether it is worth waking a phone for — only `question` parks real work.
+ */
+export const NOTIFICATION_KINDS = [
+	'question',
+	'card-assigned',
+	'board-shared',
+	'card-done',
+	'turn-failed'
+] as const;
+export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
+
+/**
+ * Things addressed to one person that they have not dealt with yet.
+ *
+ * Deliberately not the events table: events record what the platform did, and
+ * a notification records what somebody still needs to look at. The failure mode
+ * this exists for is being *away*, so it is durable rather than live-only — a
+ * badge that only exists while you are watching solves nothing.
+ */
+export const notifications = sqliteTable(
+	'notifications',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id').notNull(),
+		kind: text('kind', { enum: NOTIFICATION_KINDS }).notNull(),
+		title: text('title').notNull(),
+		body: text('body').notNull().default(''),
+		/** Where to go when it is clicked, e.g. /chat?chat=… or /boards?card=… */
+		link: text('link').notNull().default(''),
+		/**
+		 * The thing this is about — a question id, card id, chat id. Lets a
+		 * notification be cleared when its subject is dealt with somewhere else, so
+		 * the badge never claims attention for something already handled.
+		 */
+		entityId: text('entity_id'),
+		/** Worth interrupting for: the run is parked until it is answered. */
+		urgent: integer('urgent', { mode: 'boolean' }).notNull().default(false),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		readAt: integer('read_at', { mode: 'timestamp_ms' })
+	},
+	// The two reads: this user's unread count, and their list newest first.
+	(t) => [
+		index('notifications_user_read_idx').on(t.userId, t.readAt),
+		index('notifications_user_created_idx').on(t.userId, t.createdAt),
+		index('notifications_entity_idx').on(t.entityId)
+	]
+);
+
+/**
+ * Web Push registrations — one row per browser/device that has granted
+ * permission, which is why a single user has several.
+ *
+ * The keys are the browser's own public key material, not ours; they are
+ * useless without the VAPID private key held in settings, so they are stored
+ * as-is. A push service reports a dead registration as 404/410, and those rows
+ * are deleted rather than retried.
+ */
+export const pushSubscriptions = sqliteTable(
+	'push_subscriptions',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id').notNull(),
+		/** Unique per browser install; re-registering the same one is an upsert. */
+		endpoint: text('endpoint').notNull().unique(),
+		p256dh: text('p256dh').notNull(),
+		auth: text('auth').notNull(),
+		/** So a person can tell their phone from their laptop when revoking one. */
+		userAgent: text('user_agent').notNull().default(''),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' })
+	},
+	(t) => [index('push_subscriptions_user_idx').on(t.userId)]
+);
+
 /**
  * The UX backlog: ideas the weekly ux-audit agent proposes for the owner to
  * skim. Nothing here is ever actioned automatically — a human marks each one
