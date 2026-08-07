@@ -8,15 +8,30 @@ const ASSETS = [...build, ...files];
 
 self.addEventListener('install', (event) => {
 	const e = event as ExtendableEvent;
-	e.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
+	e.waitUntil(
+		caches.open(CACHE).then(async (cache) => {
+			await cache.addAll(ASSETS);
+			// Take over as soon as we're installed rather than waiting for every
+			// tab to close. Without this a worker with a new capability — the push
+			// handler, say — sits in "waiting" while the old one stays active, so a
+			// device can subscribe successfully and then silently drop every
+			// notification because the running worker has no listener for them.
+			await (self as unknown as ServiceWorkerGlobalScope).skipWaiting();
+		})
+	);
 });
 
 self.addEventListener('activate', (event) => {
 	const e = event as ExtendableEvent;
 	e.waitUntil(
-		caches.keys().then(async (keys) => {
-			for (const key of keys) if (key !== CACHE) await caches.delete(key);
-		})
+		(async () => {
+			for (const key of await caches.keys()) {
+				if (key !== CACHE) await caches.delete(key);
+			}
+			// Claim pages loaded before this worker existed, so the tab that just
+			// updated is controlled without needing a reload.
+			await (self as unknown as ServiceWorkerGlobalScope).clients.claim();
+		})()
 	);
 });
 

@@ -8,6 +8,7 @@
 		type CardLogEntry,
 		type Lane,
 		type Member,
+		type Project,
 		type Status
 	} from '$lib/board-types';
 
@@ -15,12 +16,13 @@
 		cardId: string;
 		lanes: Lane[];
 		statuses: Status[];
+		projects: Project[];
 		members: Member[];
 		onclose: () => void;
 		/** Fired after any change, so the board behind can refresh. */
 		onchanged: () => void;
 	}
-	let { cardId, lanes, statuses, members, onclose, onchanged }: Props = $props();
+	let { cardId, lanes, statuses, projects, members, onclose, onchanged }: Props = $props();
 
 	let card = $state<Card | null>(null);
 	let log = $state<CardLogEntry[]>([]);
@@ -164,6 +166,18 @@
 					<select value={card.priority} onchange={(e) => patch({ priority: e.currentTarget.value })}>
 						{#each PRIORITIES as p (p)}
 							<option value={p}>{PRIORITY_LABEL[p]}</option>
+						{/each}
+					</select>
+				</label>
+				<label>
+					<span>Project</span>
+					<select
+						value={card.projectId ?? ''}
+						onchange={(e) => patch({ projectId: e.currentTarget.value || null })}
+					>
+						<option value="">None</option>
+						{#each projects as p (p.id)}
+							<option value={p.id}>{p.name}</option>
 						{/each}
 					</select>
 				</label>

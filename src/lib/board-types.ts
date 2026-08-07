@@ -35,11 +35,20 @@ export interface Status {
 	isDone: boolean;
 }
 
+export interface Project {
+	id: string;
+	boardId: string;
+	name: string;
+	colour: string;
+	position: number;
+}
+
 export interface Card {
 	id: string;
 	boardId: string;
 	laneId: string;
 	statusId: string;
+	projectId: string | null;
 	title: string;
 	description: string;
 	priority: CardPriority;
@@ -81,6 +90,7 @@ export interface BoardView {
 	role: BoardRole;
 	lanes: Lane[];
 	statuses: Status[];
+	projects: Project[];
 	cards: Card[];
 	members: Member[];
 	archived: Card[];

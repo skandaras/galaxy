@@ -470,6 +470,27 @@ export const boardStatuses = sqliteTable(
 	(t) => [index('board_statuses_board_idx').on(t.boardId, t.position)]
 );
 
+/**
+ * A strand of work running across a board — "kitchen", "the move", "tax".
+ *
+ * Purely a way of grouping and then filtering the view: hiding a project hides
+ * its cards from the board, it does not archive or remove them. That is why
+ * this is separate from status (which finishes a card) and from lane (which
+ * decides where it sits).
+ */
+export const boardProjects = sqliteTable(
+	'board_projects',
+	{
+		id: text('id').primaryKey(),
+		boardId: text('board_id').notNull(),
+		name: text('name').notNull(),
+		/** Drawn as the card's border, so a board reads as colour at a glance. */
+		colour: text('colour').notNull().default(''),
+		position: integer('position').notNull().default(0)
+	},
+	(t) => [index('board_projects_board_idx').on(t.boardId, t.position)]
+);
+
 export const CARD_PRIORITIES = ['none', 'low', 'medium', 'high', 'urgent'] as const;
 export type CardPriority = (typeof CARD_PRIORITIES)[number];
 
@@ -480,6 +501,8 @@ export const cards = sqliteTable(
 		boardId: text('board_id').notNull(),
 		laneId: text('lane_id').notNull(),
 		statusId: text('status_id').notNull(),
+		/** Optional: a card need not belong to a project. Nulled if one is deleted. */
+		projectId: text('project_id'),
 		title: text('title').notNull(),
 		description: text('description').notNull().default(''),
 		priority: text('priority', { enum: CARD_PRIORITIES }).notNull().default('none'),

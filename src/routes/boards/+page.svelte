@@ -4,6 +4,14 @@
 	import CardDetail from '$lib/components/boards/CardDetail.svelte';
 	import { PRIORITY_MARK, type Board, type BoardView, type Card } from '$lib/board-types';
 
+	/**
+	 * Which projects are showing. Hiding one only hides its cards from this
+	 * view — every card is still on the board — so the choice is a per-browser
+	 * preference rather than anything the server needs to know.
+	 */
+	const HIDDEN_KEY = (boardId: string) => `galaxy:board-hidden-projects:${boardId}`;
+	let hidden = $state<Set<string>>(new Set());
+
 	let boards = $state<Board[]>([]);
 	let view = $state<BoardView | null>(null);
 	let selectedId = $state<string | null>(null);
@@ -33,6 +41,30 @@
 			return;
 		}
 		view = await res.json();
+		hidden = new Set<string>(JSON.parse(localStorage.getItem(HIDDEN_KEY(selectedId)) ?? '[]'));
+	}
+
+	function toggleProject(id: string) {
+		const next = new Set(hidden);
+		if (next.has(id)) next.delete(id);
+		else next.add(id);
+		hidden = next;
+		if (selectedId) localStorage.setItem(HIDDEN_KEY(selectedId), JSON.stringify([...next]));
+	}
+
+	async function addProject() {
+		const name = prompt('Name this project');
+		if (!name?.trim() || !selectedId) return;
+		const res = await fetch(`/api/boards/${selectedId}/projects`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ name })
+		});
+		if (!res.ok) {
+			error = (await res.json().catch(() => ({}))).message ?? 'Could not add the project';
+			return;
+		}
+		await loadBoard();
 	}
 
 	async function select(id: string) {
@@ -122,7 +154,10 @@
 	}
 
 	const cardsIn = (laneId: string) =>
-		(view?.cards ?? []).filter((c) => c.laneId === laneId).sort((a, b) => a.position - b.position);
+		(view?.cards ?? [])
+			.filter((c) => c.laneId === laneId && !hidden.has(c.projectId ?? 'none'))
+			.sort((a, b) => a.position - b.position);
+	const projectOf = (card: Card) => view?.projects.find((p) => p.id === card.projectId);
 	const statusOf = (card: Card) => view?.statuses.find((s) => s.id === card.statusId);
 	const memberName = (id: string | null) =>
 		id ? (view?.members.find((m) => m.userId === id)?.username ?? '') : '';
@@ -142,6 +177,7 @@
 			{/each}
 		</select>
 		<button class="btn" onclick={createBoard}>New board</button>
+		{#if view}<button class="btn" onclick={addProject}>+ Project</button>{/if}
 		<span class="spacer"></span>
 		{#if view}
 			<button class="btn" disabled={running || !view.cards.length} onclick={() => boardAction('prioritise')}>
@@ -158,6 +194,26 @@
 	</header>
 
 	{#if error}<p class="error">{error}</p>{/if}
+
+	{#if view?.projects.length}
+		<div class="filters">
+			<span class="filter-label">Showing</span>
+			{#each view.projects as p (p.id)}
+				<button
+					class="chip"
+					class:off={hidden.has(p.id)}
+					style={`--chip:${p.colour || 'var(--fg-dim)'}`}
+					onclick={() => toggleProject(p.id)}
+					title={hidden.has(p.id) ? `Show ${p.name}` : `Hide ${p.name}`}
+				>
+					{p.name}
+				</button>
+			{/each}
+			<button class="chip" class:off={hidden.has('none')} onclick={() => toggleProject('none')}>
+				No project
+			</button>
+		</div>
+	{/if}
 
 	{#if !boards.length}
 		<div class="empty-state">
@@ -192,6 +248,8 @@
 						{#each cardsIn(lane.id) as card (card.id)}
 							<article
 								class="card"
+								class:projected={!!projectOf(card)}
+								style={`--project:${projectOf(card)?.colour ?? 'transparent'}`}
 								class:dragging={draggingId === card.id}
 								draggable="true"
 								ondragstart={() => (draggingId = card.id)}
@@ -262,6 +320,7 @@
 					cardId={openCardId}
 					lanes={view.lanes}
 					statuses={view.statuses}
+					projects={view.projects}
 					members={view.members}
 					onclose={() => (openCardId = null)}
 					onchanged={loadBoard}
@@ -379,6 +438,43 @@
 	}
 	.card.dragging {
 		opacity: 0.45;
+	}
+	/* The project reads as the card's edge, so a board is scannable by colour
+	   without a label on every card. */
+	.card.projected {
+		border-color: var(--project);
+	}
+
+	.filters {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.3rem;
+		padding: 0.5rem 1rem 0;
+	}
+	.filter-label {
+		font-size: 0.62rem;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--fg-dim);
+		margin-right: 0.2rem;
+	}
+	.chip {
+		background: transparent;
+		border: 1px solid var(--chip, var(--border));
+		border-left-width: 3px;
+		border-radius: 999px;
+		color: var(--fg);
+		font-family: inherit;
+		font-size: 0.68rem;
+		padding: 0.15rem 0.6rem;
+		cursor: pointer;
+	}
+	.chip.off {
+		color: var(--fg-dim);
+		border-color: var(--border);
+		opacity: 0.6;
+		text-decoration: line-through;
 	}
 	.card-face {
 		display: flex;

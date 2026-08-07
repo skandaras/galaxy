@@ -3,6 +3,7 @@ import { db, runMigrations } from '$lib/server/db';
 import {
 	boardLanes,
 	boardMembers,
+	boardProjects,
 	boardStatuses,
 	boards,
 	cardLog,
@@ -15,8 +16,12 @@ import {
 	createBoard,
 	createCard,
 	getCard,
+	listBoards,
 	listCards,
-	listStatuses
+	listLanes,
+	listProjects,
+	listStatuses,
+	MAX_LANES
 } from '$lib/server/boards';
 import { setSetting } from '$lib/server/settings';
 import { boardTools, boardsDigest } from './boards';
@@ -30,7 +35,16 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-	for (const t of [cardLog, cards, boardLanes, boardStatuses, boardMembers, boards, users]) {
+	for (const t of [
+		cardLog,
+		cards,
+		boardLanes,
+		boardStatuses,
+		boardProjects,
+		boardMembers,
+		boards,
+		users
+	]) {
 		db.delete(t).run();
 	}
 	db.delete(settings).run();
@@ -163,6 +177,85 @@ describe('what an agent can change', () => {
 	});
 });
 
+describe('shaping a board', () => {
+	it('adds and renames a lane on a board it is on', async () => {
+		const b = createBoard({ ownerId: ALICE, name: 'Household' });
+		await call(boardTools(ALICE), 'lane_add', { board: 'Household', name: 'Waiting' });
+		expect(listLanes(b.id).map((l) => l.name)).toContain('Waiting');
+
+		await call(boardTools(ALICE), 'lane_rename', {
+			board: 'Household',
+			lane: 'Waiting',
+			name: 'Parked'
+		});
+		expect(listLanes(b.id).map((l) => l.name)).toContain('Parked');
+	});
+
+	it('cannot touch a board it is not on', async () => {
+		createBoard({ ownerId: ALICE, name: 'Household' });
+		await expect(
+			call(boardTools(BOB), 'lane_add', { board: 'Household', name: 'Sneaky' })
+		).rejects.toThrow('No board called "Household"');
+	});
+
+	it('is told the lane cap rather than silently failing', async () => {
+		const b = createBoard({ ownerId: ALICE, name: 'Household' });
+		while (listLanes(b.id).length < MAX_LANES) {
+			await call(boardTools(ALICE), 'lane_add', { board: 'Household', name: 'More' });
+		}
+		await expect(
+			call(boardTools(ALICE), 'lane_add', { board: 'Household', name: 'Too many' })
+		).rejects.toThrow(/maximum of 5 lanes/);
+	});
+
+	it('names the real lanes when asked to rename one that is not there', async () => {
+		createBoard({ ownerId: ALICE, name: 'Household' });
+		await expect(
+			call(boardTools(ALICE), 'lane_rename', { board: 'Household', lane: 'Nope', name: 'x' })
+		).rejects.toThrow(/No lane called "Nope".*Now/s);
+	});
+
+	it('creates a board, and obeys the cap that used to live in the route', async () => {
+		setSetting('boards', { maxBoardsPerUser: 1, agentWrites: true });
+		await call(boardTools(ALICE), 'board_add', { name: 'Weekend' });
+		expect(listBoards(ALICE).map((b) => b.name)).toEqual(['Weekend']);
+
+		await expect(call(boardTools(ALICE), 'board_add', { name: 'One too many' })).rejects.toThrow(
+			/limit an admin has set/
+		);
+	});
+
+	it('adds a project and can file a card against it by name', async () => {
+		const b = createBoard({ ownerId: ALICE, name: 'Household' });
+		await call(boardTools(ALICE), 'project_add', { board: 'Household', name: 'Kitchen' });
+		expect(listProjects(b.id).map((p) => p.name)).toEqual(['Kitchen']);
+
+		await call(boardTools(ALICE), 'card_add', {
+			board: 'Household',
+			title: 'Order tiles',
+			project: 'Kitchen'
+		});
+		expect(listCards(b.id)[0].projectId).toBe(listProjects(b.id)[0].id);
+	});
+
+	it('refuses a project that is not on the board, and says what is', async () => {
+		createBoard({ ownerId: ALICE, name: 'Household' });
+		await expect(
+			call(boardTools(ALICE), 'card_add', {
+				board: 'Household',
+				title: 'x',
+				project: 'Nonexistent'
+			})
+		).rejects.toThrow(/No project called "Nonexistent"/);
+	});
+
+	it('is offered no way to delete a lane, project or board', () => {
+		const names = boardTools(ALICE, true).map((t) => t.def.name);
+		// Destructive board surgery stays a human action.
+		expect(names.filter((n) => n.includes('delete') || n.includes('remove'))).toEqual([]);
+	});
+});
+
 describe('when the admin turns agent writes off', () => {
 	beforeEach(() => {
 		setSetting('boards', { maxBoardsPerUser: 20, agentWrites: false });
@@ -175,6 +268,10 @@ describe('when the admin turns agent writes off', () => {
 		expect(names).not.toContain('card_update');
 		expect(names).not.toContain('card_comment');
 		expect(names).not.toContain('card_add');
+		// Structural tools are writes too — an agent that cannot tick a card off
+		// certainly should not be reorganising the board.
+		expect(names).not.toContain('lane_add');
+		expect(names).not.toContain('board_add');
 	});
 
 	it('leaves cards untouched, since there is no tool to touch them with', () => {

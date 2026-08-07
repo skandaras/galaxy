@@ -103,6 +103,58 @@
 	let recoveries = 0;
 	const MAX_RECOVERIES = 3;
 
+	/**
+	 * Width of the chat list, draggable by the divider. Clamped so it can never
+	 * be dragged to nothing or wide enough to squeeze the conversation out, and
+	 * remembered per browser — it's a preference about this screen, not
+	 * something worth a round trip.
+	 */
+	const LIST_MIN = 220;
+	const LIST_MAX = 520;
+	const LIST_DEFAULT = 340;
+	const LIST_KEY = 'galaxy:chat-list-width';
+	let listWidth = $state(LIST_DEFAULT);
+	let dragging = $state(false);
+
+	onMount(() => {
+		const saved = Number(localStorage.getItem(LIST_KEY));
+		if (Number.isFinite(saved) && saved > 0) listWidth = clampWidth(saved);
+	});
+
+	const clampWidth = (px: number) => Math.min(LIST_MAX, Math.max(LIST_MIN, Math.round(px)));
+
+	function startResize(e: PointerEvent) {
+		e.preventDefault();
+		dragging = true;
+		const handle = e.currentTarget as HTMLElement;
+		// Pointer capture keeps the drag alive over the thread and the composer,
+		// which would otherwise swallow the move events.
+		handle.setPointerCapture(e.pointerId);
+		const startX = e.clientX;
+		const startWidth = listWidth;
+
+		const move = (ev: PointerEvent) => (listWidth = clampWidth(startWidth + ev.clientX - startX));
+		const up = () => {
+			dragging = false;
+			handle.releasePointerCapture(e.pointerId);
+			handle.removeEventListener('pointermove', move);
+			handle.removeEventListener('pointerup', up);
+			localStorage.setItem(LIST_KEY, String(listWidth));
+		};
+		handle.addEventListener('pointermove', move);
+		handle.addEventListener('pointerup', up);
+	}
+
+	/** Keyboard resizing, so the divider isn't mouse-only. */
+	function nudge(e: KeyboardEvent) {
+		const step = e.shiftKey ? 40 : 10;
+		if (e.key === 'ArrowLeft') listWidth = clampWidth(listWidth - step);
+		else if (e.key === 'ArrowRight') listWidth = clampWidth(listWidth + step);
+		else return;
+		e.preventDefault();
+		localStorage.setItem(LIST_KEY, String(listWidth));
+	}
+
 	/** Mirrors the guard at the top of send(), so the button can't look live and do nothing. */
 	const canSend = $derived(
 		Boolean(input.trim() || pendingFiles.length || uploadedRefs.length) && !streaming
@@ -593,7 +645,7 @@
 		☰
 	</button>
 
-	<aside class="chat-list" class:open={listOpen}>
+	<aside class="chat-list" class:open={listOpen} style={`--list-width:${listWidth}px`}>
 		<div class="list-actions">
 			<button class="btn" onclick={() => newChat(false)}>+ New chat</button>
 			<button class="btn ghost" title="Hidden: not stored, invisible to memory" onclick={() => newChat(true)}>
@@ -660,6 +712,20 @@
 			</details>
 		{/if}
 	</aside>
+
+	<div
+		class="resizer"
+		class:dragging
+		role="slider"
+		aria-orientation="vertical"
+		aria-label="Resize the chat list"
+		aria-valuenow={listWidth}
+		aria-valuemin={LIST_MIN}
+		aria-valuemax={LIST_MAX}
+		tabindex="0"
+		onpointerdown={startResize}
+		onkeydown={nudge}
+	></div>
 
 	<section class="thread-area">
 		{#if errorBanner}
@@ -832,14 +898,31 @@
 		min-width: 0;
 	}
 	.chat-list {
-		/* Wider than it was: the row carries four actions on hover now, and at
-		   250px they left the title with about three legible characters. */
-		width: 280px;
+		/* Set from the drag handle and remembered per browser; the row carries
+		   four actions on hover, which at 250px left the title with about three
+		   legible characters. */
+		width: var(--list-width, 340px);
 		flex-shrink: 0;
-		border-right: 1px solid var(--border);
 		padding: 0.75rem;
 		box-sizing: border-box;
 		overflow-y: auto;
+	}
+	/* The divider doubles as the drag handle: a 1px border with a wider
+	   invisible grab area, so it is hittable without looking like a gutter. */
+	.resizer {
+		flex: 0 0 5px;
+		margin-right: -4px;
+		background: var(--border);
+		background-clip: content-box;
+		border-right: 4px solid transparent;
+		cursor: col-resize;
+		touch-action: none;
+	}
+	.resizer:hover,
+	.resizer:focus-visible,
+	.resizer.dragging {
+		background-color: var(--accent);
+		outline: none;
 	}
 	.list-toggle {
 		display: none;
@@ -1205,8 +1288,12 @@
 			border-radius: 5px;
 			padding: 0.25rem 0.5rem;
 		}
+		.resizer {
+			display: none;
+		}
 		.chat-list {
 			position: fixed;
+			width: auto;
 			inset: 0 30% 0 0;
 			background: var(--bg-pane);
 			z-index: 20;

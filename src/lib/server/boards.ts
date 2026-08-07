@@ -6,6 +6,7 @@ import { db, dataDir } from '$lib/server/db';
 import {
 	boardLanes,
 	boardMembers,
+	boardProjects,
 	boardStatuses,
 	boards,
 	cardAttachments,
@@ -16,10 +17,12 @@ import {
 	type CardPriority
 } from '$lib/server/db/schema';
 import { notify } from '$lib/server/notifications';
+import { DEFAULT_BOARDS, getSetting, type BoardSettings } from '$lib/server/settings';
 
 export type Board = typeof boards.$inferSelect;
 export type BoardLane = typeof boardLanes.$inferSelect;
 export type BoardStatus = typeof boardStatuses.$inferSelect;
+export type BoardProject = typeof boardProjects.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type CardLogEntry = typeof cardLog.$inferSelect;
 export type CardAttachment = typeof cardAttachments.$inferSelect;
@@ -90,6 +93,20 @@ const DEFAULT_STATUSES: { name: string; colour: string; isDone: boolean }[] = [
 	{ name: 'Blocked', colour: '#eb5757', isDone: false },
 	{ name: 'Done', colour: '#27ae60', isDone: true }
 ];
+
+/**
+ * How many boards this person already owns, and the ceiling an admin has set.
+ *
+ * Lives here rather than in the route because agents create boards too, and a
+ * cap enforced only at the HTTP edge is a cap an agent walks straight past.
+ */
+export function boardQuota(userId: string): { owned: number; limit: number; exceeded: boolean } {
+	const limit = { ...DEFAULT_BOARDS, ...getSetting<Partial<BoardSettings>>('boards', {}) }
+		.maxBoardsPerUser;
+	// Boards you were invited to don't count — the cap is on what you create.
+	const owned = listBoards(userId, true).filter((b) => b.ownerId === userId).length;
+	return { owned, limit, exceeded: owned >= limit };
+}
 
 export function createBoard(opts: {
 	ownerId: string;
@@ -164,6 +181,7 @@ export function deleteBoard(boardId: string, userId: string): boolean {
 		tx.delete(cards).where(eq(cards.boardId, boardId)).run();
 		tx.delete(boardLanes).where(eq(boardLanes.boardId, boardId)).run();
 		tx.delete(boardStatuses).where(eq(boardStatuses.boardId, boardId)).run();
+		tx.delete(boardProjects).where(eq(boardProjects.boardId, boardId)).run();
 		tx.delete(boardMembers).where(eq(boardMembers.boardId, boardId)).run();
 		tx.delete(boards).where(eq(boards.id, boardId)).run();
 	});
@@ -362,6 +380,71 @@ export function updateStatus(
 	return db.select().from(boardStatuses).where(eq(boardStatuses.id, statusId)).get() ?? null;
 }
 
+export function listProjects(boardId: string): BoardProject[] {
+	return db
+		.select()
+		.from(boardProjects)
+		.where(eq(boardProjects.boardId, boardId))
+		.orderBy(asc(boardProjects.position))
+		.all();
+}
+
+/** Muted grey-blues through to warm tones; distinguishable without being loud. */
+const PROJECT_COLOURS = ['#5b8def', '#27ae60', '#f2994a', '#9b51e0', '#eb5757', '#2d9cdb'];
+
+export function addProject(
+	boardId: string,
+	userId: string,
+	opts: { name: string; colour?: string }
+): BoardProject | null {
+	if (!boardRole(boardId, userId)) return null;
+	const existing = listProjects(boardId);
+	const project: BoardProject = {
+		id: randomUUID(),
+		boardId,
+		name: opts.name.trim() || `Project ${existing.length + 1}`,
+		// Cycle the palette so a new project is immediately distinguishable
+		// without anyone having to open the colour picker first.
+		colour: opts.colour || PROJECT_COLOURS[existing.length % PROJECT_COLOURS.length],
+		position: existing.length
+	};
+	db.insert(boardProjects).values(project).run();
+	return project;
+}
+
+export function updateProject(
+	projectId: string,
+	userId: string,
+	patch: { name?: string; colour?: string }
+): BoardProject | null {
+	const project = db.select().from(boardProjects).where(eq(boardProjects.id, projectId)).get();
+	if (!project || !boardRole(project.boardId, userId)) return null;
+	const set: Partial<BoardProject> = {};
+	if (patch.name !== undefined) set.name = patch.name.trim() || project.name;
+	if (patch.colour !== undefined) set.colour = patch.colour;
+	db.update(boardProjects).set(set).where(eq(boardProjects.id, projectId)).run();
+	return db.select().from(boardProjects).where(eq(boardProjects.id, projectId)).get() ?? null;
+}
+
+/**
+ * Remove a project. Its cards lose the label and stay on the board — a project
+ * is a way of grouping work, so deleting one must not delete the work.
+ */
+export function deleteProject(projectId: string, userId: string): boolean {
+	const project = db.select().from(boardProjects).where(eq(boardProjects.id, projectId)).get();
+	if (!project || !boardRole(project.boardId, userId)) return false;
+	db.transaction((tx) => {
+		tx.update(cards).set({ projectId: null }).where(eq(cards.projectId, projectId)).run();
+		tx.delete(boardProjects).where(eq(boardProjects.id, projectId)).run();
+		for (const [i, p] of listProjects(project.boardId)
+			.filter((p) => p.id !== projectId)
+			.entries()) {
+			tx.update(boardProjects).set({ position: i }).where(eq(boardProjects.id, p.id)).run();
+		}
+	});
+	return true;
+}
+
 /** Cards on a deleted status fall back to the board's first status. */
 export function deleteStatus(statusId: string, userId: string): boolean {
 	const status = db.select().from(boardStatuses).where(eq(boardStatuses.id, statusId)).get();
@@ -436,6 +519,7 @@ export function createCard(
 		laneId?: string;
 		statusId?: string;
 		priority?: CardPriority;
+		projectId?: string | null;
 		assignedTo?: string | null;
 	}
 ): Card | null {
@@ -454,6 +538,10 @@ export function createCard(
 		boardId,
 		laneId: lane.id,
 		statusId: status.id,
+		projectId:
+			opts.projectId && listProjects(boardId).some((p) => p.id === opts.projectId)
+				? opts.projectId
+				: null,
 		title: opts.title.trim() || 'Untitled',
 		description: opts.description?.trim() ?? '',
 		priority: opts.priority ?? 'none',
@@ -476,6 +564,8 @@ export interface CardPatch {
 	statusId?: string;
 	priority?: CardPriority;
 	assignedTo?: string | null;
+	/** null clears the project; undefined leaves it alone. */
+	projectId?: string | null;
 	/** Index within the target lane; omitted means "leave where it is". */
 	position?: number;
 	archived?: boolean;
@@ -527,6 +617,18 @@ export function updateCard(
 				entityId: card.id
 			});
 		}
+	}
+
+	if (patch.projectId !== undefined && patch.projectId !== card.projectId) {
+		const projects = listProjects(card.boardId);
+		// An unknown id clears rather than corrupts: a card must never point at a
+		// project that isn't on its board.
+		const target = patch.projectId ? projects.find((p) => p.id === patch.projectId) : null;
+		set.projectId = target?.id ?? null;
+		notes.push({
+			event: 'project',
+			detail: `${projects.find((p) => p.id === card.projectId)?.name ?? 'none'} → ${target?.name ?? 'none'}`
+		});
 	}
 
 	const targetLane = patch.laneId ? lanes.find((l) => l.id === patch.laneId) : undefined;
