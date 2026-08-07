@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { LoopTool } from './loop';
 import type { ToolDef } from '$lib/server/providers/types';
 import { pushChunk, type LiveJob } from './jobs';
+import { notify, resolveEntity } from '$lib/server/notifications';
 
 /**
  * Letting an agent stop and ask.
@@ -81,6 +82,9 @@ function waitForAnswer(job: LiveJob, prompt: string, options: string[]): Promise
 			// Always close the question on the stream, however it ended, so a
 			// reconnecting client doesn't reopen a sheet nobody can answer.
 			pushChunk(job, { type: 'answer', id, text: note ?? answer });
+			// And clear the bell, however it ended — a badge still demanding an
+			// answer to a question that has timed out teaches people to ignore it.
+			resolveEntity(id, job.userId);
 			resolve(answer);
 		};
 
@@ -101,6 +105,19 @@ function waitForAnswer(job: LiveJob, prompt: string, options: string[]): Promise
 
 		pending.set(id, { jobId: job.id, userId: job.userId, settle: (answer) => finish(answer) });
 		pushChunk(job, { type: 'question', id, prompt, options });
+
+		// The only notification urgent enough to wake a phone: the run is parked
+		// until this is answered, and it gives up after ASK_TIMEOUT_MS. Anyone not
+		// looking at this exact chat has no other way to find out.
+		notify({
+			userId: job.userId,
+			kind: 'question',
+			title: 'An agent needs an answer',
+			body: prompt,
+			link: `/chat?chat=${job.chatId}`,
+			entityId: id,
+			urgent: true
+		});
 	});
 }
 

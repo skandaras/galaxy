@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { jobs } from '$lib/server/db/schema';
+import { notify } from '$lib/server/notifications';
 
 export type JobChunk =
 	| { type: 'meta'; model: string }
@@ -117,8 +118,24 @@ export function isCancellation(err: unknown, signal?: AbortSignal): boolean {
 
 export function failJob(job: LiveJob, error: string): void {
 	job.status = 'error';
+	// Read before pushing: the chunk itself can close the last subscriber.
+	const unwatched = job.subscribers.size === 0;
 	pushChunk(job, { type: 'error', message: error });
 	persistFinal(job, error);
+
+	// Only tell someone about a failure they did not see happen. A turn that
+	// broke while they were watching it already showed them the error, and a
+	// bell that repeats what is on screen is noise.
+	if (unwatched) {
+		notify({
+			userId: job.userId,
+			kind: 'turn-failed',
+			title: 'A run failed while you were away',
+			body: error.slice(0, 200),
+			link: `/chat?chat=${job.chatId}`,
+			entityId: job.id
+		});
+	}
 }
 
 function persistFinal(job: LiveJob, error: string | null): void {

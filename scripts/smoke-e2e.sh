@@ -509,6 +509,14 @@ check "the agent asks and the run stays open" "$(grep -c '"type":"question"' $DA
 check "the question carries its options" "$(cat $DATA/ask.sse)" '"Joint"'
 check "an unanswered question keeps the job running" \
   "$(as alice $M/api/chats/$AKCHAT | jqn '.runningJobId !== null')" 'true'
+check "the question raises a notification" \
+  "$(as alice $M/api/notifications | jqn '.notifications[0].kind')" 'question'
+check "and it is marked urgent, the only kind that pushes" \
+  "$(as alice $M/api/notifications | jqn '.notifications[0].urgent')" 'true'
+# Bob legitimately has an unread board-share from earlier, so count the kind
+# rather than the total.
+check "bob is not told about alice's question" \
+  "$(as bob $M/api/notifications | node -pe "JSON.parse(require('fs').readFileSync(0)).notifications.filter(n=>n.kind==='question').length")" "0"
 check "another user cannot answer it" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' -H 'content-type: application/json' -d "{\"questionId\":\"$QID\",\"answer\":\"x\"}" $M/api/jobs/$AKJOB/answer)" "404"
 check "answering resolves it" \
@@ -518,6 +526,9 @@ check "the answer reaches the model as the tool result" "$(cat $DATA/ask.sse)" '
 check "the question is closed on the stream" "$(cat $DATA/ask.sse)" '"type":"answer"'
 check "answering twice is a no-op, not an error" \
   "$(as alice -X POST $M/api/jobs/$AKJOB/answer -d "{\"questionId\":\"$QID\",\"answer\":\"again\"}")" '"answered":false'
+# A bell still demanding an answer already given teaches people to ignore it.
+check "answering clears the notification" \
+  "$(as alice $M/api/notifications | node -pe "JSON.parse(require('fs').readFileSync(0)).notifications.filter(n=>n.kind==='question'&&!n.readAt).length")" "0"
 
 # Card → AI: the board starts an ordinary chat and the agent works the card.
 HCARD=$(as alice -X POST $M/api/boards/$BOARD/cards -d '{"title":"Book plumber","description":"Kitchen tap drips"}' | jqn .id)
@@ -541,6 +552,59 @@ check "alice cannot hand bob's card to an agent" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' $M/api/cards/$BOBCARD/agent)" "404"
 check "nor run a board action on his board" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' -H 'content-type: application/json' -d '{"action":"prioritise"}' $M/api/boards/$BOBBOARD/agent)" "404"
+
+# ---------------------------------------------------------------------------
+# Notifications. The point of these is what happens when nobody is looking, so
+# what matters is that they are addressed to one person and clear themselves.
+# ---------------------------------------------------------------------------
+as bob -X POST $M/api/notifications > /dev/null   # clear the board-share he got earlier
+ACARD=$(as alice -X POST $M/api/boards/$BOARD/cards -d '{"title":"Take the bins out"}' | jqn .id)
+BOB_ID=$(asadmin $M/api/admin/users | node -pe "JSON.parse(require('fs').readFileSync(0)).find(u=>u.username==='bob').id")
+as alice -X PATCH $M/api/cards/$ACARD -d "{\"assignedTo\":\"$BOB_ID\"}" > /dev/null
+check "assigning a card tells the other person" "$(as bob $M/api/notifications)" 'gave you a card'
+check "it points at the card" "$(as bob $M/api/notifications | jqn '.notifications[0].link')" "card=$ACARD"
+check "and does not tell the person who assigned it" \
+  "$(as alice $M/api/notifications | grep -c 'gave you a card')" "0"
+
+# Assigning something to yourself is not news.
+as alice -X PATCH $M/api/cards/$ACARD -d '{"assignedTo":null}' > /dev/null
+ALICE_UNREAD=$(as alice $M/api/notifications | jqn .unread)
+as alice -X PATCH $M/api/cards/$ACARD -d "{\"assignedTo\":\"$ALICE_ID\"}" > /dev/null
+check "assigning to yourself raises nothing" "$(as alice $M/api/notifications | jqn .unread)" "$ALICE_UNREAD"
+
+# Sharing is the only thing that tells someone a board exists — there is no invite email.
+SHARED=$(as alice -X POST $M/api/boards -d '{"name":"Weekend"}' | jqn .id)
+as alice -X POST $M/api/boards/$SHARED/members -d '{"username":"bob"}' > /dev/null
+check "sharing a board tells the invitee" "$(as bob $M/api/notifications)" 'shared a board with you'
+
+# Reading is per-user and does not touch anyone else's list.
+BOB_BEFORE=$(as bob $M/api/notifications | jqn .unread)
+as alice -X POST $M/api/notifications > /dev/null
+check "clearing is per-user" "$(as bob $M/api/notifications | jqn .unread)" "$BOB_BEFORE"
+check "and does clear your own" "$(as alice $M/api/notifications | jqn .unread)" "0"
+check "read notifications stay in the list" \
+  "$(as alice $M/api/notifications | jqn '.notifications.length > 0')" 'true'
+check "one user cannot read another's notification" \
+  "$(as bob $M/api/notifications | node -pe "JSON.parse(require('fs').readFileSync(0)).notifications.filter(n=>n.title.includes('bins')).length")" "0"
+
+# Push: no keys means no subscribing, and the browser is told why.
+check "push is not configured out of the box" \
+  "$(as alice $M/api/push/subscriptions | jqn .publicKey)" 'null'
+check "so registering a device is refused" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' -H 'content-type: application/json' -d '{"endpoint":"https://example.invalid/x","keys":{"p256dh":"a","auth":"b"}}' $M/api/push/subscriptions)" "409"
+asadmin -X POST $M/api/admin/push -d '{"action":"generate","subject":"mailto:smoke@example.com"}' > /dev/null
+check "an admin can generate the keys" "$(asadmin $M/api/admin/push | jqn .configured)" 'true'
+check "the public key reaches the browser" \
+  "$(as alice $M/api/push/subscriptions | jqn '.publicKey.length > 20')" 'true'
+check "the private key never does" "$(asadmin $M/api/admin/push | grep -c privateKey)" "0"
+check "a non-admin cannot touch the keys" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/admin/push)" "403"
+check "now a device can register" \
+  "$(as alice -X POST $M/api/push/subscriptions -d '{"endpoint":"https://example.invalid/x","keys":{"p256dh":"a","auth":"b"}}' | jqn '.id.length > 10')" 'true'
+check "and it is listed" "$(as alice $M/api/push/subscriptions | jqn '.devices.length')" "1"
+check "re-registering the same browser does not duplicate it" \
+  "$(as alice -X POST $M/api/push/subscriptions -d '{"endpoint":"https://example.invalid/x","keys":{"p256dh":"a","auth":"b"}}' > /dev/null; as alice $M/api/push/subscriptions | jqn '.devices.length')" "1"
+check "bob sees none of alice's devices" "$(as bob $M/api/push/subscriptions | jqn '.devices.length')" "0"
 
 # ---------------------------------------------------------------------------
 # A coding turn that runs out of steps must not just stop mid-task. Needs a

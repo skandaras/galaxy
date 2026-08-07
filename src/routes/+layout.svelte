@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import Observatory from '$lib/components/Observatory.svelte';
 	import BudgetBar from '$lib/components/BudgetBar.svelte';
+	import NotificationBell from '$lib/components/NotificationBell.svelte';
 	import GalaxyBackdrop from '$lib/components/GalaxyBackdrop.svelte';
 	import { themeCss } from '$lib/theme';
 
@@ -42,6 +43,7 @@
 		</nav>
 		<div class="pane-bottom">
 			{#if data.user}
+				<div class="bell-dock"><NotificationBell /></div>
 				<div class="obs-dock"><Observatory /></div>
 				<div class="budget-dock"><BudgetBar /></div>
 			{/if}
@@ -105,6 +107,10 @@
 	.nav-item.active {
 		color: var(--fg);
 		background: var(--border);
+	}
+	.bell-dock {
+		border-top: 1px solid var(--border);
+		padding-top: 0.4rem;
 	}
 	.pane-bottom {
 		margin-top: auto;
@@ -180,6 +186,15 @@
 		/* The docked feed needs vertical room it doesn't have in a top bar;
 		   the full view at /observatory stays available. */
 		.obs-dock {
+			display: none;
+		}
+		/* In the top bar the bell is just the glyph and its count — the word
+		   "Alerts" and the divider are desktop-sidebar furniture. */
+		.bell-dock {
+			border-top: none;
+			padding-top: 0;
+		}
+		.bell-dock :global(.label) {
 			display: none;
 		}
 		/* Same reasoning as the feed above: the top bar has no vertical room, so
