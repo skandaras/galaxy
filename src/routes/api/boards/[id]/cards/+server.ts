@@ -20,6 +20,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 		laneId: typeof body.laneId === 'string' ? body.laneId : undefined,
 		statusId: typeof body.statusId === 'string' ? body.statusId : undefined,
 		priority: priority(body.priority),
+		projectId: typeof body.projectId === 'string' ? body.projectId : null,
 		assignedTo: typeof body.assignedTo === 'string' ? body.assignedTo : null
 	});
 	if (!card) error(409, 'This board has no lanes or statuses to put a card in');

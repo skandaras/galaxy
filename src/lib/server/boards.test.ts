@@ -3,6 +3,7 @@ import { db, runMigrations } from '$lib/server/db';
 import {
 	boardLanes,
 	boardMembers,
+	boardProjects,
 	boardStatuses,
 	boards,
 	cardLog,
@@ -12,6 +13,7 @@ import {
 import {
 	MAX_LANES,
 	addLane,
+	addProject,
 	addMember,
 	addStatus,
 	boardRole,
@@ -25,8 +27,10 @@ import {
 	listBoards,
 	listCards,
 	listLanes,
+	listProjects,
 	listMembers,
 	listStatuses,
+	deleteProject,
 	removeMember,
 	updateBoard,
 	updateCard
@@ -40,7 +44,16 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-	for (const t of [cardLog, cards, boardLanes, boardStatuses, boardMembers, boards, users]) {
+	for (const t of [
+		cardLog,
+		cards,
+		boardLanes,
+		boardStatuses,
+		boardProjects,
+		boardMembers,
+		boards,
+		users
+	]) {
 		db.delete(t).run();
 	}
 	for (const [id, username] of [
@@ -258,10 +271,66 @@ describe('lanes and statuses', () => {
 	});
 });
 
+describe('projects', () => {
+	it('gives each new project a distinct colour without anyone picking one', () => {
+		const b = board();
+		const one = addProject(b.id, ALICE, { name: 'Kitchen' })!;
+		const two = addProject(b.id, ALICE, { name: 'Tax' })!;
+		expect(one.colour).not.toBe('');
+		expect(two.colour).not.toBe(one.colour);
+	});
+
+	it('files a card against a project and records the change', () => {
+		const b = board();
+		const project = addProject(b.id, ALICE, { name: 'Kitchen' })!;
+		const card = createCard(b.id, ALICE, { title: 'Order tiles' })!;
+
+		expect(updateCard(card.id, ALICE, { projectId: project.id })!.projectId).toBe(project.id);
+		expect(getCard(card.id, ALICE)!.log.map((l) => l.event)).toContain('project');
+	});
+
+	it('keeps the project when the card moves lane', () => {
+		const b = board();
+		const project = addProject(b.id, ALICE, { name: 'Kitchen' })!;
+		const [, second] = listLanes(b.id);
+		const card = createCard(b.id, ALICE, { title: 'Order tiles', projectId: project.id })!;
+
+		updateCard(card.id, ALICE, { laneId: second.id });
+		expect(getCard(card.id, ALICE)!.card.projectId).toBe(project.id);
+	});
+
+	it('refuses a project from another board rather than storing it', () => {
+		const mine = board();
+		const other = createBoard({ ownerId: ALICE, name: 'Other' });
+		const foreign = addProject(other.id, ALICE, { name: 'Elsewhere' })!;
+		const card = createCard(mine.id, ALICE, { title: 'Order tiles' })!;
+
+		// Clearing is the safe outcome; pointing at another board's project is not.
+		expect(updateCard(card.id, ALICE, { projectId: foreign.id })!.projectId).toBeNull();
+	});
+
+	it('deleting a project keeps its cards, it only removes the label', () => {
+		const b = board();
+		const project = addProject(b.id, ALICE, { name: 'Kitchen' })!;
+		const card = createCard(b.id, ALICE, { title: 'Order tiles', projectId: project.id })!;
+
+		expect(deleteProject(project.id, ALICE)).toBe(true);
+		expect(listCards(b.id)).toHaveLength(1);
+		expect(getCard(card.id, ALICE)!.card.projectId).toBeNull();
+	});
+
+	it('is not something a non-member can add', () => {
+		const b = board();
+		expect(addProject(b.id, BOB, { name: 'Sneaky' })).toBeNull();
+		expect(listProjects(b.id)).toHaveLength(0);
+	});
+});
+
 describe('deleting a board', () => {
 	it('takes its cards, lanes, statuses, members and log with it', () => {
 		const b = board();
 		addMember(b.id, ALICE, 'bob');
+		addProject(b.id, ALICE, { name: 'Kitchen' });
 		const card = createCard(b.id, ALICE, { title: 'Gone' })!;
 
 		expect(deleteBoard(b.id, ALICE)).toBe(true);
@@ -271,6 +340,7 @@ describe('deleting a board', () => {
 		expect(db.select().from(cardLog).all()).toHaveLength(0);
 		expect(db.select().from(boardLanes).all()).toHaveLength(0);
 		expect(db.select().from(boardStatuses).all()).toHaveLength(0);
+		expect(db.select().from(boardProjects).all()).toHaveLength(0);
 		expect(db.select().from(boardMembers).all()).toHaveLength(0);
 		expect(getCard(card.id, ALICE)).toBeNull();
 	});

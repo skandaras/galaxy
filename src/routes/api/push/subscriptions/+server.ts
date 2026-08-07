@@ -10,6 +10,9 @@ export const GET: RequestHandler = ({ locals }) => {
 		publicKey: publicKey(),
 		devices: listSubscriptions(user.id).map((s) => ({
 			id: s.id,
+			// So a browser can recognise its own registration in the list. This is
+			// the caller's own device's endpoint, which their browser already holds.
+			endpoint: s.endpoint,
 			userAgent: s.userAgent,
 			createdAt: s.createdAt.getTime(),
 			lastUsedAt: s.lastUsedAt?.getTime() ?? null

@@ -25,6 +25,9 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 		laneId: typeof body.laneId === 'string' ? body.laneId : undefined,
 		statusId: typeof body.statusId === 'string' ? body.statusId : undefined,
 		priority: priority(body.priority),
+		// null clears the project, so undefined is the only "leave it alone".
+		projectId:
+			body.projectId === null || typeof body.projectId === 'string' ? body.projectId : undefined,
 		// null is meaningful here — it unassigns — so undefined is the only "leave it".
 		assignedTo:
 			body.assignedTo === null || typeof body.assignedTo === 'string' ? body.assignedTo : undefined,

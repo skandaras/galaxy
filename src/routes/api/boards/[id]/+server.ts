@@ -9,6 +9,7 @@ import {
 	listCards,
 	listLanes,
 	listMembers,
+	listProjects,
 	listStatuses,
 	updateBoard
 } from '$lib/server/boards';
@@ -24,6 +25,7 @@ export const GET: RequestHandler = ({ locals, params, url }) => {
 		role: boardRole(params.id, user.id),
 		lanes: listLanes(params.id),
 		statuses: listStatuses(params.id),
+		projects: listProjects(params.id),
 		cards: listCards(params.id),
 		members: listMembers(params.id, user.id) ?? [],
 		archived: url.searchParams.get('archived') === '1' ? listArchivedCards(params.id) : []

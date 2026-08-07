@@ -1,5 +1,10 @@
 import type { LoopTool } from '../loop';
 import {
+	MAX_LANES,
+	addLane,
+	addProject,
+	boardQuota,
+	createBoard,
 	createCard,
 	getCard,
 	listArchivedCards,
@@ -7,8 +12,10 @@ import {
 	listCards,
 	listLanes,
 	listMembers,
+	listProjects,
 	listStatuses,
 	logCard,
+	renameLane,
 	updateCard,
 	type Board,
 	type Card
@@ -125,6 +132,7 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 					.map((b) => {
 						const lanes = listLanes(b.id);
 						const statuses = listStatuses(b.id);
+						const projects = listProjects(b.id);
 						const cards = a.archived === true ? listArchivedCards(b.id) : listCards(b.id);
 						const people = (listMembers(b.id, userId) ?? []).map((m) => m.username).join(', ');
 						const body = cards.length
@@ -132,7 +140,8 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 									.map((c) => {
 										const lane = lanes.find((l) => l.id === c.laneId)?.name ?? '?';
 										const status = statuses.find((s) => s.id === c.statusId)?.name ?? '?';
-										return `- [${c.id}] ${c.title} — ${lane} / ${status}${c.priority === 'none' ? '' : ` / ${c.priority}`}`;
+										const project = projects.find((p) => p.id === c.projectId);
+										return `- [${c.id}] ${c.title} — ${lane} / ${status}${c.priority === 'none' ? '' : ` / ${c.priority}`}${project ? ` / ${project.name}` : ''}`;
 									})
 									.join('\n')
 							: '(no cards)';
@@ -140,6 +149,7 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 							`## ${b.name}`,
 							`people: ${people}`,
 							`lanes: ${lanes.map((l) => l.name).join(', ')}`,
+							projects.length ? `projects: ${projects.map((p) => p.name).join(', ')}` : '',
 							`statuses: ${statuses.map((s) => `${s.name}${s.isDone ? ' (finishes)' : ''}`).join(', ')}`,
 							body
 						].join('\n');
@@ -180,21 +190,33 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 						board: { type: 'string', description: 'Board name.' },
 						title: { type: 'string' },
 						description: { type: 'string' },
-						priority: { type: 'string', enum: [...CARD_PRIORITIES] }
+						priority: { type: 'string', enum: [...CARD_PRIORITIES] },
+						project: { type: 'string', description: 'Project name on that board.' }
 					},
 					required: ['board', 'title']
 				}
 			},
 			describe: (a) => String(a.title ?? ''),
 			execute: async (a) => {
-				const wanted = String(a.board ?? '').trim().toLowerCase();
-				const board = listBoards(userId).find(
-					(b) => b.name.toLowerCase() === wanted || b.id === a.board
-				);
-				if (!board) throw new Error(`No board called "${a.board}".`);
+				const board = findBoard(userId, a.board);
+				const projects = listProjects(board.id);
+				const project =
+					typeof a.project === 'string'
+						? projects.find(
+								(p) => p.name.toLowerCase() === String(a.project).trim().toLowerCase()
+							)
+						: undefined;
+				// Filing under a project that doesn't exist would silently drop the
+				// label, which is worse than being told.
+				if (a.project && !project) {
+					throw new Error(
+						`No project called "${a.project}" on ${board.name}. It has: ${projects.map((p) => p.name).join(', ') || 'none'}.`
+					);
+				}
 				const card = createCard(board.id, userId, {
 					title: String(a.title ?? ''),
 					description: typeof a.description === 'string' ? a.description : '',
+					projectId: project?.id ?? null,
 					priority: CARD_PRIORITIES.includes(a.priority as CardPriority)
 						? (a.priority as CardPriority)
 						: undefined
@@ -216,6 +238,10 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 						status: { type: 'string', description: 'Status name on that card’s board.' },
 						lane: { type: 'string', description: 'Lane name on that card’s board.' },
 						priority: { type: 'string', enum: [...CARD_PRIORITIES] },
+						project: {
+							type: 'string',
+							description: 'Project name on that card’s board, or "" to clear it.'
+						},
 						title: { type: 'string' },
 						description: { type: 'string' }
 					},
@@ -236,6 +262,13 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 						`No status called "${a.status}". This board has: ${listStatuses(card.boardId).map((s) => s.name).join(', ')}.`
 					);
 				}
+				const projectId =
+					a.project === '' ? null : (named(listProjects(card.boardId), a.project) ?? undefined);
+				if (a.project && projectId === undefined) {
+					throw new Error(
+						`No project called "${a.project}". This board has: ${listProjects(card.boardId).map((p) => p.name).join(', ') || 'none'}.`
+					);
+				}
 				const laneId = named(listLanes(card.boardId), a.lane);
 				if (a.lane && !laneId) {
 					throw new Error(
@@ -249,6 +282,7 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 					{
 						statusId,
 						laneId,
+						projectId,
 						priority: CARD_PRIORITIES.includes(a.priority as CardPriority)
 							? (a.priority as CardPriority)
 							: undefined,
@@ -285,5 +319,131 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 		}
 	];
 
-	return [...read, ...write];
+	/**
+	 * Shaping the board, rather than filling it.
+	 *
+	 * Deliberately add-and-rename only. Deleting a lane moves its cards, deleting
+	 * a board destroys every card on it, and neither is something an agent should
+	 * reach for on its own reading of a situation — that stays a human action.
+	 */
+	const structure: LoopTool[] = [
+		{
+			def: {
+				name: 'lane_add',
+				description:
+					'Add a lane (a column) to a board. Lanes group cards however the person likes — status is a separate field, so do not create lanes named after workflow states.',
+				parameters: {
+					type: 'object',
+					properties: {
+						board: { type: 'string', description: 'Board name.' },
+						name: { type: 'string' }
+					},
+					required: ['board', 'name']
+				}
+			},
+			describe: (a) => `${a.board}: ${a.name}`,
+			execute: async (a) => {
+				const board = findBoard(userId, a.board);
+				const result = addLane(board.id, userId, String(a.name ?? ''));
+				if (!result.ok) {
+					throw new Error(
+						result.reason === 'limit'
+							? `${board.name} already has the maximum of ${MAX_LANES} lanes. Rename one instead, or ask the person which to drop.`
+							: `You cannot change ${board.name}.`
+					);
+				}
+				return `Added lane "${result.lane.name}" to ${board.name}.`;
+			}
+		},
+		{
+			def: {
+				name: 'lane_rename',
+				description: 'Rename a lane on a board.',
+				parameters: {
+					type: 'object',
+					properties: {
+						board: { type: 'string', description: 'Board name.' },
+						lane: { type: 'string', description: 'Current lane name.' },
+						name: { type: 'string', description: 'New name.' }
+					},
+					required: ['board', 'lane', 'name']
+				}
+			},
+			describe: (a) => `${a.lane} → ${a.name}`,
+			execute: async (a) => {
+				const board = findBoard(userId, a.board);
+				const lane = listLanes(board.id).find(
+					(l) => l.name.toLowerCase() === String(a.lane ?? '').trim().toLowerCase()
+				);
+				if (!lane) {
+					throw new Error(
+						`No lane called "${a.lane}" on ${board.name}. It has: ${listLanes(board.id).map((l) => l.name).join(', ')}.`
+					);
+				}
+				const renamed = renameLane(lane.id, userId, String(a.name ?? ''));
+				if (!renamed) throw new Error('Could not rename that lane.');
+				return `Renamed "${lane.name}" to "${renamed.name}" on ${board.name}.`;
+			}
+		},
+		{
+			def: {
+				name: 'project_add',
+				description:
+					'Add a project to a board. Projects are a way of grouping and filtering cards across lanes — a house move, a holiday, the tax return. Cards are then filed against one with card_add or card_update.',
+				parameters: {
+					type: 'object',
+					properties: {
+						board: { type: 'string', description: 'Board name.' },
+						name: { type: 'string' }
+					},
+					required: ['board', 'name']
+				}
+			},
+			describe: (a) => `${a.board}: ${a.name}`,
+			execute: async (a) => {
+				const board = findBoard(userId, a.board);
+				const project = addProject(board.id, userId, { name: String(a.name ?? '') });
+				if (!project) throw new Error(`You cannot change ${board.name}.`);
+				return `Added project "${project.name}" to ${board.name}.`;
+			}
+		},
+		{
+			def: {
+				name: 'board_add',
+				description:
+					'Create a new board. Only when the person has asked for one — a board is a place they will have to tend, not a filing convenience. It arrives with default lanes and statuses.',
+				parameters: {
+					type: 'object',
+					properties: { name: { type: 'string' }, description: { type: 'string' } },
+					required: ['name']
+				}
+			},
+			describe: (a) => String(a.name ?? ''),
+			execute: async (a) => {
+				// The cap lives in the service layer precisely so this path obeys it.
+				const quota = boardQuota(userId);
+				if (quota.exceeded) {
+					throw new Error(
+						`They already own ${quota.owned} boards, which is the limit an admin has set. Ask them which to archive.`
+					);
+				}
+				const board = createBoard({
+					ownerId: userId,
+					name: String(a.name ?? ''),
+					description: typeof a.description === 'string' ? a.description : ''
+				});
+				return `Created board "${board.name}" with lanes ${listLanes(board.id).map((l) => l.name).join(', ')}.`;
+			}
+		}
+	];
+
+	return [...read, ...write, ...structure];
+}
+
+/** Resolve a board by name for the tools, with the same "no such board" story. */
+function findBoard(userId: string, name: unknown): Board {
+	const wanted = String(name ?? '').trim().toLowerCase();
+	const board = listBoards(userId).find((b) => b.name.toLowerCase() === wanted || b.id === name);
+	if (!board) throw new Error(`No board called "${name}".`);
+	return board;
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
 	interface Device {
 		id: string;
+		endpoint: string;
 		userAgent: string;
 		createdAt: number;
 		lastUsedAt: number | null;
@@ -12,6 +13,30 @@
 	let busy = $state(false);
 	let notice = $state<string | null>(null);
 	let error = $state<string | null>(null);
+	/** This browser's own registration, so the panel can say "already on". */
+	let thisDeviceId = $state<string | null>(null);
+
+	/**
+	 * Nothing in the push handshake is allowed to wait forever. The browser's
+	 * own promises can legitimately never settle — `serviceWorker.ready` pends
+	 * indefinitely when no worker is registered — and an unbounded await here
+	 * left the button reading "Asking…" with no way to find out why.
+	 */
+	const STEP_TIMEOUT_MS = 15_000;
+
+	class StepError extends Error {}
+
+	function withTimeout<T>(work: Promise<T>, step: string): Promise<T> {
+		return Promise.race([
+			work,
+			new Promise<never>((_, reject) =>
+				setTimeout(
+					() => reject(new StepError(`${step} did not respond within 15 seconds`)),
+					STEP_TIMEOUT_MS
+				)
+			)
+		]);
+	}
 
 	$effect(() => {
 		void load();
@@ -24,6 +49,20 @@
 		const data = await res.json();
 		publicKey = data.publicKey;
 		devices = data.devices;
+		thisDeviceId = await currentDeviceId();
+	}
+
+	/** Match this browser's live subscription against what the server knows. */
+	async function currentDeviceId(): Promise<string | null> {
+		if (!supported()) return null;
+		try {
+			const reg = await navigator.serviceWorker.getRegistration();
+			const sub = await reg?.pushManager.getSubscription();
+			if (!sub) return null;
+			return devices.find((d) => d.endpoint === sub.endpoint)?.id ?? null;
+		} catch {
+			return null;
+		}
 	}
 
 	const supported = () =>
@@ -65,13 +104,27 @@
 						: 'Permission was dismissed.';
 				return;
 			}
-			const reg = await navigator.serviceWorker.ready;
+
+			// Check for a registration rather than awaiting `ready`, which pends
+			// forever when there is none instead of rejecting.
+			const existing = await navigator.serviceWorker.getRegistration();
+			if (!existing) {
+				error =
+					'No service worker is registered for this site, so push cannot be set up. Reload the page and try again — if it keeps happening the app was served without its service worker.';
+				return;
+			}
+			const reg = await withTimeout(navigator.serviceWorker.ready, 'The service worker');
+
 			const sub =
 				(await reg.pushManager.getSubscription()) ??
-				(await reg.pushManager.subscribe({
-					userVisibleOnly: true,
-					applicationServerKey: toBytes(publicKey)
-				}));
+				(await withTimeout(
+					reg.pushManager.subscribe({
+						userVisibleOnly: true,
+						applicationServerKey: toBytes(publicKey)
+					}),
+					'The browser’s push service'
+				));
+
 			const res = await fetch('/api/push/subscriptions', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
@@ -84,7 +137,13 @@
 			notice = 'This device will now be notified.';
 			await load();
 		} catch (err) {
-			error = `Could not enable notifications: ${err instanceof Error ? err.message : String(err)}`;
+			// Says which step failed: permission, service worker, the browser's push
+			// service and the server all fail for entirely different reasons, and
+			// "could not enable notifications" told you none of them.
+			error =
+				err instanceof StepError
+					? `${err.message}. Nothing was registered — try again, and check the browser console if it persists.`
+					: `Could not enable notifications: ${err instanceof Error ? err.message : String(err)}`;
 		} finally {
 			busy = false;
 		}
@@ -138,9 +197,13 @@
 				<strong>Admin → Settings → Push</strong>.
 			</p>
 		{:else}
-			<button class="btn primary" disabled={busy} onclick={enable}>
-				{busy ? 'Asking…' : 'Enable on this device'}
-			</button>
+			{#if thisDeviceId}
+				<p class="hint enabled">◉ Notifications are on for this device.</p>
+			{:else}
+				<button class="btn primary" disabled={busy} onclick={enable}>
+					{busy ? 'Asking…' : 'Enable on this device'}
+				</button>
+			{/if}
 			{#if permission === 'denied'}
 				<p class="hint">
 					This site is currently blocked from sending notifications. Allow them in your browser's
@@ -212,6 +275,9 @@
 	.error {
 		color: var(--danger);
 		font-size: 0.75rem;
+	}
+	.hint.enabled {
+		color: var(--accent);
 	}
 	.btn {
 		background: var(--border);

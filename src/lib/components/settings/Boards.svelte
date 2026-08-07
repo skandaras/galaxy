@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import type { Board, BoardView, Lane, Member, Status } from '$lib/board-types';
+	import type { Board, BoardView, Lane, Member, Project, Status } from '$lib/board-types';
 
 	/** Mirrors MAX_LANES in $lib/server/boards — the API is the real enforcement. */
 	const MAX_LANES = 5;
@@ -11,6 +11,7 @@
 	let newBoardName = $state('');
 	let newLaneName = $state('');
 	let newStatusName = $state('');
+	let newProjectName = $state('');
 	let inviteName = $state('');
 	let notice = $state<string | null>(null);
 	let error = $state<string | null>(null);
@@ -133,6 +134,37 @@
 			`/api/boards/${selectedId}/statuses/${status.id}`,
 			{ method: 'DELETE' },
 			'Status removed'
+		);
+		await loadBoard();
+	}
+
+	async function addProject() {
+		const name = newProjectName.trim();
+		if (!name || !selectedId) return;
+		if (
+			await call(`/api/boards/${selectedId}/projects`, jsonInit('POST', { name }), 'Project added')
+		) {
+			newProjectName = '';
+			await loadBoard();
+		}
+	}
+
+	async function patchProject(project: Project, patch: Record<string, unknown>) {
+		await call(
+			`/api/boards/${selectedId}/projects/${project.id}`,
+			jsonInit('PATCH', patch),
+			'Project updated'
+		);
+		await loadBoard();
+	}
+
+	async function removeProject(project: Project) {
+		if (!confirm(`Remove "${project.name}"? Its cards stay on the board, they just lose the label.`))
+			return;
+		await call(
+			`/api/boards/${selectedId}/projects/${project.id}`,
+			{ method: 'DELETE' },
+			'Project removed'
 		);
 		await loadBoard();
 	}
@@ -274,6 +306,39 @@
 					onkeydown={(e) => e.key === 'Enter' && addStatus()}
 				/>
 				<button class="btn" onclick={addStatus}>Add status</button>
+			</div>
+		</article>
+
+		<article class="card">
+			<h3>Projects</h3>
+			<p class="hint">
+				Projects cut across lanes — a house move, a holiday, the tax return. A card belongs to at
+				most one, and the colour becomes its border so the board is scannable at a glance. Hiding a
+				project on the board only hides it from that view; nothing is archived or deleted.
+			</p>
+			{#each view.projects as project (project.id)}
+				<div class="row">
+					<input
+						value={project.name}
+						onblur={(e) => patchProject(project, { name: e.currentTarget.value })}
+					/>
+					<input
+						class="colour"
+						type="color"
+						value={project.colour || '#5b8def'}
+						onchange={(e) => patchProject(project, { colour: e.currentTarget.value })}
+						aria-label="Colour"
+					/>
+					<button class="btn danger" onclick={() => removeProject(project)}>Remove</button>
+				</div>
+			{/each}
+			<div class="row">
+				<input
+					placeholder="New project"
+					bind:value={newProjectName}
+					onkeydown={(e) => e.key === 'Enter' && addProject()}
+				/>
+				<button class="btn" onclick={addProject}>Add project</button>
 			</div>
 		</article>
 

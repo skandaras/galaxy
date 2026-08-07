@@ -553,6 +553,23 @@ check "alice cannot hand bob's card to an agent" \
 check "nor run a board action on his board" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' -H 'content-type: application/json' -d '{"action":"prioritise"}' $M/api/boards/$BOBBOARD/agent)" "404"
 
+# Projects: a way of grouping and filtering cards, never of removing them.
+PROJ=$(as alice -X POST $M/api/boards/$BOARD/projects -d '{"name":"Kitchen"}' | jqn .id)
+check "a new project gets a colour without anyone picking one" \
+  "$(as alice $M/api/boards/$BOARD | node -pe "JSON.parse(require('fs').readFileSync(0)).projects[0].colour.length > 0")" 'true'
+PCARD=$(as alice -X POST $M/api/boards/$BOARD/cards -d "{\"title\":\"Order tiles\",\"projectId\":\"$PROJ\"}" | jqn .id)
+check "a card can be filed against a project" "$(as alice $M/api/cards/$PCARD | jqn .card.projectId)" "$PROJ"
+# Moving a card off a project is a change worth recording, like every other field.
+as alice -X PATCH $M/api/cards/$PCARD -d '{"projectId":null}' > /dev/null
+check "the log records a project change" "$(as alice $M/api/cards/$PCARD)" '"event":"project"'
+as alice -X PATCH $M/api/cards/$PCARD -d "{\"projectId\":\"$PROJ\"}" > /dev/null
+# Deleting a project must not delete the work filed under it.
+as alice -X DELETE $M/api/boards/$BOARD/projects/$PROJ > /dev/null
+check "deleting a project keeps its cards" "$(as alice $M/api/cards/$PCARD | jqn .card.title)" 'Order tiles'
+check "and only removes the label" "$(as alice $M/api/cards/$PCARD | jqn .card.projectId)" 'null'
+check "alice cannot add a project to a board she is not on" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' -H 'content-type: application/json' -d '{"name":"Sneaky"}' $M/api/boards/$BOBBOARD/projects)" "404"
+
 # ---------------------------------------------------------------------------
 # Notifications. The point of these is what happens when nobody is looking, so
 # what matters is that they are addressed to one person and clear themselves.

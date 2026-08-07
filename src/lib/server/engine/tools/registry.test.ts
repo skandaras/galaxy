@@ -36,6 +36,10 @@ const EXPECTED = [
 	'card_add',
 	'card_update',
 	'card_comment',
+	'lane_add',
+	'lane_rename',
+	'project_add',
+	'board_add',
 	'ask_user',
 	// diagnostics
 	'run_history',

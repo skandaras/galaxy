@@ -8,53 +8,22 @@
 		cards: number;
 		members: number;
 	}
-	interface ModelRow {
-		id: string;
-		displayName: string;
-		enabled: boolean;
-	}
-	interface TaskConfig {
-		task: string;
-		primaryModelId: string | null;
-		backupModelId: string | null;
-	}
-
 	let rows = $state<BoardRow[]>([]);
-	let models = $state<ModelRow[]>([]);
-	let config = $state<TaskConfig>({ task: 'board', primaryModelId: null, backupModelId: null });
 	let limits = $state({ maxBoardsPerUser: 20, agentWrites: true });
 	let notice = $state<string | null>(null);
 
 	async function load() {
-		const [boardsRes, modelsRes, tasksRes, settingsRes] = await Promise.all([
+		const [boardsRes, settingsRes] = await Promise.all([
 			fetch('/api/admin/boards'),
-			fetch('/api/admin/models'),
-			fetch('/api/admin/task-configs'),
 			fetch('/api/admin/settings')
 		]);
 		rows = await boardsRes.json();
-		models = await modelsRes.json();
-		const tasks: TaskConfig[] = await tasksRes.json();
-		config = tasks.find((t) => t.task === 'board') ?? config;
 		const settings = await settingsRes.json();
 		if (settings.boards) limits = { ...limits, ...settings.boards };
 	}
 	$effect(() => {
 		void load();
 	});
-
-	async function saveModels() {
-		await fetch('/api/admin/task-configs', {
-			method: 'PUT',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({
-				task: 'board',
-				primaryModelId: config.primaryModelId,
-				backupModelId: config.backupModelId
-			})
-		});
-		notice = 'Model saved';
-	}
 
 	async function saveLimits() {
 		await fetch('/api/admin/settings', {
@@ -75,29 +44,9 @@
 	<article class="card">
 		<h3>Model</h3>
 		<p class="hint">
-			Which model does the board work — reviewing a card before taking it on, prioritising a board,
-			looking for next steps. The prompt itself lives in <strong>Tasks → board</strong>.
+			The model and prompt for board work live in <strong>Tasks → board</strong>, with every other
+			task's. They were editable here too, which just meant two controls writing the same row.
 		</p>
-		<div class="grid">
-			<label>
-				primary
-				<select bind:value={config.primaryModelId} onchange={saveModels}>
-					<option value={null}>(platform default)</option>
-					{#each models.filter((m) => m.enabled) as m (m.id)}
-						<option value={m.id}>{m.displayName}</option>
-					{/each}
-				</select>
-			</label>
-			<label>
-				backup
-				<select bind:value={config.backupModelId} onchange={saveModels}>
-					<option value={null}>(none)</option>
-					{#each models.filter((m) => m.enabled) as m (m.id)}
-						<option value={m.id}>{m.displayName}</option>
-					{/each}
-				</select>
-			</label>
-		</div>
 	</article>
 
 	<article class="card">
@@ -183,8 +132,7 @@
 		align-items: center;
 		gap: 0.4rem;
 	}
-	input,
-	select {
+	input {
 		background: var(--bg-pane);
 		border: 1px solid var(--border);
 		border-radius: 5px;
