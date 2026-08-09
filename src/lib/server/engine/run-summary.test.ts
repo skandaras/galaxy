@@ -14,6 +14,7 @@ const leg = (patch: Partial<TurnSummary> = {}): TurnSummary => ({
 		{ name: 'read_file', summary: 'src/lib/loop.ts' },
 		{ name: 'edit_file', summary: 'src/lib/loop.ts' }
 	],
+	trace: [],
 	fallbackReply: false,
 	...patch
 });

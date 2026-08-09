@@ -71,6 +71,7 @@ async function run(opts: {
 	maxIterations: number;
 	budgetBlocked?: () => boolean;
 	cancelAfterMs?: number;
+	tools?: LoopTool[];
 }): Promise<{ summary: TurnSummary | null; chunks: JobChunk[]; text: string | null }> {
 	const job = createJob({ chatId: 'c1', userId: 'u1', task: 'coding', persist: false });
 	const chunks: JobChunk[] = [];
@@ -87,7 +88,7 @@ async function run(opts: {
 		persist: false,
 		primary: opts.choice,
 		backup: null,
-		tools: [readTool],
+		tools: opts.tools ?? [readTool],
 		maxIterations: opts.maxIterations,
 		budgetBlocked: opts.budgetBlocked,
 		buildMessages: () => [],
@@ -120,9 +121,18 @@ describe('turn stop reasons', () => {
 	it('records the tool calls made, with their targets', async () => {
 		const { summary } = await run({ choice: scriptedChoice({ toolRounds: 2 }), maxIterations: 20 });
 		expect(summary?.toolCalls).toEqual([
-			{ name: 'read_file', summary: 'file0.ts' },
-			{ name: 'read_file', summary: 'file1.ts' }
+			{ name: 'read_file', summary: 'file0.ts', status: 'ok' },
+			{ name: 'read_file', summary: 'file1.ts', status: 'ok' }
 		]);
+	});
+
+	it('groups those same calls under the step that made them', async () => {
+		const { summary } = await run({ choice: scriptedChoice({ toolRounds: 2 }), maxIterations: 20 });
+		expect(summary?.trace).toHaveLength(2);
+		// One set of facts, two views of it — the grouped record must be the very
+		// object in the flat list, not a copy that can drift from it.
+		expect(summary?.trace[0].toolCalls[0]).toBe(summary?.toolCalls[0]);
+		expect(summary?.trace.flatMap((s) => s.toolCalls)).toEqual(summary?.toolCalls);
 	});
 
 	it('stops when the budget runs out mid-run, and says so', async () => {
@@ -146,6 +156,55 @@ describe('turn stop reasons', () => {
 			cancelAfterMs: 5
 		});
 		expect(summary?.stopReason).toBe('cancelled');
+	});
+});
+
+describe('step chunks', () => {
+	const steps = (chunks: JobChunk[]) => chunks.filter((c) => c.type === 'step');
+	const tools = (chunks: JobChunk[]) => chunks.filter((c) => c.type === 'tool');
+
+	it('opens and closes one step per tool-calling round-trip', async () => {
+		const { chunks } = await run({
+			choice: scriptedChoice({ toolRounds: 2, narrate: true }),
+			maxIterations: 20
+		});
+		const emitted = steps(chunks);
+		// Two tool rounds; the closing answer is the reply, not a step.
+		expect(emitted).toHaveLength(4);
+		expect(emitted.map((s) => s.status)).toEqual(['running', 'ok', 'running', 'ok']);
+		expect(emitted[0].label).toBe('Reading file0.');
+		// A step keeps its id from open to close, which is what makes replay
+		// converge instead of duplicating the row.
+		expect(emitted[0].id).toBe(emitted[1].id);
+		expect(emitted[0].id).not.toBe(emitted[2].id);
+	});
+
+	it('nests each tool call under its step, with the provider call id', async () => {
+		const { chunks } = await run({ choice: scriptedChoice({ toolRounds: 1 }), maxIterations: 20 });
+		const step = steps(chunks)[0];
+		for (const t of tools(chunks)) {
+			expect(t.stepId).toBe(step.id);
+			// Name-matching mispairs the moment two calls to one tool overlap.
+			expect(t.callId).toBe('c0');
+		}
+	});
+
+	it('marks a step failed when a call inside it fails', async () => {
+		const failing: LoopTool = {
+			def: { name: 'read_file', description: 'read', parameters: {} },
+			describe: (a) => String(a.path ?? ''),
+			execute: async () => {
+				throw new Error('no such file');
+			}
+		};
+		const { chunks, summary } = await run({
+			choice: scriptedChoice({ toolRounds: 1 }),
+			maxIterations: 20,
+			tools: [failing]
+		});
+		expect(steps(chunks).at(-1)?.status).toBe('error');
+		expect(summary?.trace[0].status).toBe('error');
+		expect(summary?.toolCalls[0].status).toBe('error');
 	});
 });
 

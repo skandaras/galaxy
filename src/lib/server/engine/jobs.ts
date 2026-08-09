@@ -7,7 +7,24 @@ import { notify } from '$lib/server/notifications';
 export type JobChunk =
 	| { type: 'meta'; model: string }
 	| { type: 'delta'; text: string }
-	| { type: 'tool'; name: string; status: 'running' | 'ok' | 'error'; detail?: string }
+	// One model round-trip that ended in tool calls, labelled with whatever the
+	// model said it was about to do. Re-sent with the same `id` when its status
+	// changes, so replay converges rather than duplicating — see subscribeJob.
+	| { type: 'step'; id: string; label: string; status: 'running' | 'ok' | 'error' }
+	| {
+			type: 'tool';
+			name: string;
+			status: 'running' | 'ok' | 'error';
+			detail?: string;
+			/**
+			 * The provider's own call id. Matching a terminal chunk to its running
+			 * one by tool *name* mispairs the moment two calls to the same tool are
+			 * in flight; this is the identity that does not.
+			 */
+			callId?: string;
+			/** The step this call belongs under. Absent for callers with no steps. */
+			stepId?: string;
+	  }
 	| { type: 'stage'; name: string; detail?: string }
 	| { type: 'notice'; text: string }
 	// The agent is waiting on a person. `answer` closes the question it names —

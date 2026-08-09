@@ -46,6 +46,23 @@ export interface ToolCallRecord {
 	name: string;
 	/** Whatever `describe` yielded — a path for file tools, the command for bash. */
 	summary?: string;
+	/** Absent while the call is still running. */
+	status?: 'ok' | 'error';
+}
+
+/**
+ * One model round-trip that ended in tool calls, and the calls it made.
+ *
+ * A grouping of the records in `TurnSummary.toolCalls`, not a copy of them —
+ * the same objects appear in both, so there is one set of facts about a run
+ * with a flat view for the callers that want every call in order and a nested
+ * view for the ones rendering a timeline.
+ */
+export interface TurnStep {
+	id: string;
+	label: string;
+	status: 'ok' | 'error';
+	toolCalls: ToolCallRecord[];
 }
 
 export interface TurnSummary {
@@ -53,6 +70,8 @@ export interface TurnSummary {
 	/** Model round-trips used, which is what `maxIterations` actually counts. */
 	steps: number;
 	toolCalls: ToolCallRecord[];
+	/** The same calls, grouped under the step that made them. */
+	trace: TurnStep[];
 	/**
 	 * True when the leg produced no closing prose and the saved message is the
 	 * step-label stand-in rather than something the model wrote. The caller uses
@@ -361,6 +380,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	let stopReason: StopReason = 'exhausted';
 	let steps = 0;
 	const toolCallRecords: ToolCallRecord[] = [];
+	const trace: TurnStep[] = [];
 	/** Label of the most recent tool-calling step, for the empty-reply fallback. */
 	let lastStepLabel = '';
 
@@ -458,12 +478,17 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		// call, so it labels the step rather than joining the answer. The model
 		// still sees it — see the `messages.push` below — this only governs what
 		// reaches the user and the saved message.
-		lastStepLabel = stepLabel(iterationText, describeBatch(toolCalls, toolByName));
+		const label = stepLabel(iterationText, describeBatch(toolCalls, toolByName));
+		lastStepLabel = label;
 		// Stop before spending money on a toolchain the user has abandoned.
 		if (job.controller.signal.aborted) {
 			stopReason = 'cancelled';
 			break;
 		}
+
+		const stepId = randomUUID();
+		const stepCalls: ToolCallRecord[] = [];
+		pushChunk(job, { type: 'step', id: stepId, label, status: 'running' });
 
 		messages.push({ role: 'assistant', content: iterationText, tool_calls: toolCalls });
 		for (const call of toolCalls) {
@@ -471,10 +496,22 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			if (job.controller.signal.aborted) break;
 			const tool = toolByName.get(call.name);
 			const args = safeParseArgs(call.arguments);
-			toolCallRecords.push({ name: call.name, summary: tool?.describe?.(args) });
-			const result = await executeToolCall(opts, call, tool);
-			messages.push({ role: 'tool', content: result, tool_call_id: call.id });
+			// One record, held in both views — the flat list every existing caller
+			// reads, and this step's group.
+			const record: ToolCallRecord = { name: call.name, summary: tool?.describe?.(args) };
+			toolCallRecords.push(record);
+			stepCalls.push(record);
+			const { output, ok } = await executeToolCall(opts, call, tool, stepId);
+			record.status = ok ? 'ok' : 'error';
+			messages.push({ role: 'tool', content: output, tool_call_id: call.id });
 		}
+
+		// A step is only as good as its calls: one failure leaves the group open
+		// in the timeline instead of collapsing it out of sight.
+		const stepStatus = stepCalls.some((c) => c.status === 'error') ? 'error' : 'ok';
+		pushChunk(job, { type: 'step', id: stepId, label, status: stepStatus });
+		trace.push({ id: stepId, label, status: stepStatus, toolCalls: stepCalls });
+
 		if (job.controller.signal.aborted) {
 			stopReason = 'cancelled';
 			break;
@@ -508,6 +545,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		stopReason,
 		steps,
 		toolCalls: toolCallRecords,
+		trace,
 		fallbackReply: usedFallback
 	};
 	if (stopReason === 'budget') {
@@ -539,20 +577,25 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	if (opts.autoComplete !== false) completeJob(job, messageId || undefined);
 }
 
+/** `ok` is false for a failed call, so its step can be marked failed too. */
 async function executeToolCall(
 	opts: LoopOptions,
 	call: ToolCall,
-	tool: LoopTool | undefined
-): Promise<string> {
+	tool: LoopTool | undefined,
+	stepId: string
+): Promise<{ output: string; ok: boolean }> {
 	const { job, persist } = opts;
 	const args = safeParseArgs(call.arguments);
 	const summary = tool?.describe?.(args);
 	const started = Date.now();
-	pushChunk(job, { type: 'tool', name: call.name, status: 'running', detail: summary });
+	// callId is the provider's own id for this call, which is what makes a
+	// terminal chunk findable when several calls to one tool are in flight.
+	const chunk = { type: 'tool' as const, name: call.name, callId: call.id, stepId };
+	pushChunk(job, { ...chunk, status: 'running', detail: summary });
 
 	if (!tool) {
-		pushChunk(job, { type: 'tool', name: call.name, status: 'error', detail: 'unknown tool' });
-		return JSON.stringify({ error: `Unknown tool: ${call.name}` });
+		pushChunk(job, { ...chunk, status: 'error', detail: 'unknown tool' });
+		return { output: JSON.stringify({ error: `Unknown tool: ${call.name}` }), ok: false };
 	}
 	let meta: Record<string, unknown> = {};
 	try {
@@ -572,8 +615,8 @@ async function executeToolCall(
 			},
 			{ persist }
 		);
-		pushChunk(job, { type: 'tool', name: call.name, status: 'ok', detail: summary });
-		return result;
+		pushChunk(job, { ...chunk, status: 'ok', detail: summary });
+		return { output: result, ok: true };
 	} catch (err) {
 		emitEvent(
 			{
@@ -588,8 +631,8 @@ async function executeToolCall(
 			},
 			{ persist }
 		);
-		pushChunk(job, { type: 'tool', name: call.name, status: 'error', detail: String(err) });
-		return JSON.stringify({ error: String(err) });
+		pushChunk(job, { ...chunk, status: 'error', detail: String(err) });
+		return { output: JSON.stringify({ error: String(err) }), ok: false };
 	}
 }
 
