@@ -127,6 +127,13 @@
       "when": 1786244758464,
       "tag": "0017_friendly_millenium_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1786312308931,
+      "tag": "0018_tan_skin",
+      "breakpoints": true
     }
   ]
 }

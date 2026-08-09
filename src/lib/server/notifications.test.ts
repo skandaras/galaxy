@@ -7,6 +7,7 @@ import {
 	markRead,
 	notify,
 	resolveEntity,
+	resolveOpened,
 	subscribeNotifications,
 	subscribeRead,
 	unreadCount
@@ -105,6 +106,75 @@ describe('resolving by subject', () => {
 		expect(resolveEntity('b1', ALICE)).toBe(1);
 		expect(unreadCount(ALICE)).toBe(0);
 		expect(unreadCount(BOB)).toBe(1);
+	});
+});
+
+describe('clearing on engagement', () => {
+	const CHAT = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+	const JOB = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+
+	it('clears an alert when you open what it pointed at', () => {
+		// A failed turn is filed under its job id but points at the chat, so
+		// matching only on entityId would never clear it.
+		notify({
+			userId: ALICE,
+			kind: 'turn-failed',
+			title: 'A run failed',
+			link: `/chat?chat=${CHAT}`,
+			entityId: JOB
+		});
+		expect(resolveOpened(ALICE, CHAT)).toBe(1);
+		expect(unreadCount(ALICE)).toBe(0);
+	});
+
+	it('matches on the subject as well as the link', () => {
+		notify({ userId: ALICE, kind: 'board-shared', title: 'Board', link: '/boards', entityId: 'b1' });
+		expect(resolveOpened(ALICE, 'b1')).toBe(1);
+	});
+
+	it('leaves a pending question alone, because the agent is still waiting', () => {
+		// Glancing at the chat does not answer it. Dropping the badge here would
+		// retire the one alert that means work is blocked.
+		notify({
+			userId: ALICE,
+			kind: 'question',
+			title: 'Which account?',
+			link: `/chat?chat=${CHAT}`,
+			entityId: 'q1',
+			urgent: true
+		});
+		expect(resolveOpened(ALICE, CHAT)).toBe(0);
+		expect(unreadCount(ALICE)).toBe(1);
+		// Answering is what clears it, exactly as before.
+		expect(resolveEntity('q1', ALICE)).toBe(1);
+	});
+
+	it('never reaches another user opening the same thing', () => {
+		notify({ userId: BOB, kind: 'card-done', title: 'Done', link: `/chat?chat=${CHAT}` });
+		expect(resolveOpened(ALICE, CHAT)).toBe(0);
+		expect(unreadCount(BOB)).toBe(1);
+	});
+
+	it('leaves alerts about other places untouched', () => {
+		notify({ userId: ALICE, kind: 'card-assigned', title: 'A card', link: '/boards?card=other' });
+		expect(resolveOpened(ALICE, CHAT)).toBe(0);
+		expect(unreadCount(ALICE)).toBe(1);
+	});
+
+	it('is a no-op when nothing was opened', () => {
+		raise(ALICE, 'Something');
+		expect(resolveOpened(ALICE)).toBe(0);
+		expect(resolveOpened(ALICE, null, undefined)).toBe(0);
+		expect(unreadCount(ALICE)).toBe(1);
+	});
+
+	it('tells other tabs, so a second window drops its badge', () => {
+		const seen: string[][] = [];
+		const off = subscribeRead(ALICE, (ids) => seen.push(ids));
+		const n = notify({ userId: ALICE, kind: 'card-done', title: 'Done', entityId: 'c9' });
+		resolveOpened(ALICE, 'c9');
+		off();
+		expect(seen).toEqual([[n.id]]);
 	});
 });
 

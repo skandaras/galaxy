@@ -13,6 +13,7 @@ import {
 	listStatuses,
 	updateBoard
 } from '$lib/server/boards';
+import { resolveOpened } from '$lib/server/notifications';
 
 /** Everything the board view needs, in one round trip. */
 export const GET: RequestHandler = ({ locals, params, url }) => {
@@ -20,6 +21,9 @@ export const GET: RequestHandler = ({ locals, params, url }) => {
 	const board = getBoard(params.id, user.id);
 	// A board you are not a member of is indistinguishable from one that isn't there.
 	if (!board) error(404, 'Board not found');
+	// Opening a board clears the "someone shared a board with you" alert. Card
+	// alerts are left alone — the board view is not the card.
+	resolveOpened(user.id, board.id);
 	return json({
 		board,
 		role: boardRole(params.id, user.id),

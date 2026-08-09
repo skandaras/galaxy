@@ -110,6 +110,38 @@ const BUDGET_CHECK_EVERY = 4;
 const STEP_LABEL_MAX = 100;
 
 /**
+ * Longest a piece of text can be and still be read as a lead-in rather than
+ * something the model wrote for the user.
+ *
+ * Real narration is one short line — "Reading the loop to see how legs are
+ * driven" is 45 characters, and even a wordy one rarely passes 150.
+ */
+const NARRATION_MAX = 200;
+
+/**
+ * Is this iteration's text a line introducing the tools it is about to call,
+ * or is it content that happens to be followed by a tool call?
+ *
+ * The distinction is the whole safety of turning narration into step labels.
+ * Asked to redraft an email, a model writes the new draft *and* calls a tool
+ * in the same message — and treating that draft as a label threw the user's
+ * actual work away, leaving them a reply that only described it.
+ *
+ * So the test is deliberately mean: anything long, anything with a blank line,
+ * anything with a code fence or more than a couple of lines is content. Being
+ * wrong that way merely leaves a lead-in sitting in the reply, which is what
+ * used to happen to all of them. Being wrong the other way destroys writing.
+ */
+export function isNarration(text: string): boolean {
+	const t = text.trim();
+	if (!t) return true; // nothing to lose either way
+	if (t.length > NARRATION_MAX) return false;
+	if (/\n\s*\n/.test(t)) return false; // more than one paragraph
+	if (t.includes('```')) return false; // a code block is never a lead-in
+	return t.split('\n').filter((l) => l.trim()).length <= 2;
+}
+
+/**
  * Turn the narration a model writes before a batch of tool calls into a label
  * for that step.
  *
@@ -465,11 +497,16 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			stopReason = 'complete';
 			break;
 		}
-		// Everything this iteration wrote introduces the tools it is about to
-		// call, so it labels the step rather than joining the answer. The model
-		// still sees it — see the `messages.push` below — this only governs what
-		// reaches the user and the saved message.
-		const label = stepLabel(iterationText, describeBatch(toolCalls, toolByName));
+		// A lead-in introducing the tools about to run becomes this step's label
+		// and leaves the reply. Anything more substantial is the model writing
+		// for the user — it stays in the reply and the step is named after what
+		// it actually called. Either way the model still sees the text: the
+		// `messages.push` below is untouched.
+		const consumedText = isNarration(iterationText);
+		const label = consumedText
+			? stepLabel(iterationText, describeBatch(toolCalls, toolByName))
+			: describeBatch(toolCalls, toolByName);
+		if (!consumedText) assistantText += iterationText;
 		lastStepLabel = label;
 		// Stop before spending money on a toolchain the user has abandoned.
 		if (job.controller.signal.aborted) {
@@ -479,7 +516,10 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 
 		const stepId = randomUUID();
 		const stepCalls: ToolCallRecord[] = [];
-		pushChunk(job, { type: 'step', id: stepId, label, status: 'running' });
+		// consumedText tells the browser whether the text it has been streaming
+		// just became this label — and so should leave the reply — or is part of
+		// the answer and must stay put.
+		pushChunk(job, { type: 'step', id: stepId, label, status: 'running', consumedText });
 
 		messages.push({ role: 'assistant', content: iterationText, tool_calls: toolCalls });
 		for (const call of toolCalls) {
@@ -500,7 +540,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		// A step is only as good as its calls: one failure leaves the group open
 		// in the timeline instead of collapsing it out of sight.
 		const stepStatus = stepCalls.some((c) => c.status === 'error') ? 'error' : 'ok';
-		pushChunk(job, { type: 'step', id: stepId, label, status: stepStatus });
+		pushChunk(job, { type: 'step', id: stepId, label, status: stepStatus, consumedText });
 		trace.push({ id: stepId, label, status: stepStatus, toolCalls: stepCalls });
 
 		if (job.controller.signal.aborted) {

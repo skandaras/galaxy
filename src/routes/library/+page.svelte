@@ -10,17 +10,42 @@
 		/** Null on docs that predate ownership — those stay visible to everyone. */
 		ownerId: string | null;
 		visibility: 'personal' | 'shared';
+		/** Cosmetic grouping; '' means unfiled. */
+		folder: string;
 		updatedAt: number;
 		match?: string;
 	}
+
+	const UNFILED = 'Unfiled';
 
 	let docs = $state<Doc[]>([]);
 	let query = $state('');
 	let currentId = $state<string | null>(null);
 	let title = $state('');
 	let body = $state('');
+	let folder = $state('');
 	let author = $state<'user' | 'agent'>('user');
 	let visibility = $state<'personal' | 'shared'>('personal');
+	/** Folders collapsed by hand; everything else stays open. */
+	let collapsed = $state<Record<string, boolean>>({});
+
+	/**
+	 * The shelf, grouped. Unfiled sits last: it is the overflow, not the
+	 * headline, and putting it first buries the folders someone made on purpose.
+	 */
+	const grouped = $derived.by(() => {
+		const by = new Map<string, Doc[]>();
+		for (const doc of docs) {
+			const key = doc.folder || UNFILED;
+			by.set(key, [...(by.get(key) ?? []), doc]);
+		}
+		return [...by.entries()].sort(([a], [b]) =>
+			a === UNFILED ? 1 : b === UNFILED ? -1 : a.localeCompare(b)
+		);
+	});
+
+	/** Existing folder names, so the picker suggests rather than demands. */
+	const folders = $derived([...new Set(docs.map((d) => d.folder).filter(Boolean))].sort());
 	/** False for someone else's shared doc: readable, not editable. */
 	let editable = $state(true);
 	let preview = $state(false);
@@ -42,16 +67,19 @@
 		title = doc.meta.title;
 		author = doc.meta.author;
 		visibility = doc.meta.visibility;
+		folder = doc.meta.folder ?? '';
 		editable = doc.canEdit !== false;
 		body = doc.body;
 		preview = false;
 		listOpen = false;
 	}
 
-	function startNew() {
+	/** `into` pre-files a doc created from a folder's own + button. */
+	function startNew(into = '') {
 		currentId = null;
 		title = '';
 		body = '';
+		folder = into;
 		author = 'user';
 		// New docs start personal; sharing is a deliberate act.
 		visibility = 'personal';
@@ -66,12 +94,12 @@
 			? await fetch(`/api/library/${currentId}`, {
 					method: 'PUT',
 					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({ title, content: body, visibility })
+					body: JSON.stringify({ title, content: body, visibility, folder })
 				})
 			: await fetch('/api/library', {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({ title, content: body, visibility })
+					body: JSON.stringify({ title, content: body, visibility, folder })
 				});
 		if (res.ok) {
 			const doc = await res.json();
@@ -114,7 +142,8 @@
 
 	<aside class="doc-list" class:open={listOpen}>
 		<div class="list-actions">
-			<button class="btn primary" onclick={startNew}>+ New doc</button>
+			<!-- Wrapped, or the click event arrives as the folder to file it under. -->
+			<button class="btn primary" onclick={() => startNew()}>+ New doc</button>
 			<label class="btn ghost upload">
 				Upload .md
 				<input type="file" accept=".md,.txt,text/markdown,text/plain" hidden onchange={upload} />
@@ -126,27 +155,72 @@
 			bind:value={query}
 			oninput={() => load()}
 		/>
-		<ul>
-			{#each docs as doc (doc.id)}
-				<li class:selected={currentId === doc.id}>
-					<button class="row" onclick={() => open(doc.id)}>
-						<span class="doc-title">
-							{doc.title}
-							{#if doc.author === 'agent'}<span class="agent-badge">agent</span>{/if}
-							{#if doc.visibility === 'shared'}<span class="vis-badge">shared</span>{/if}
-						</span>
-						<span class="doc-snippet">{doc.match ?? doc.snippet}</span>
-					</button>
-				</li>
-			{:else}
-				<li class="empty">No documents{query ? ' match' : ' yet'}.</li>
+		{#snippet docRow(doc: Doc)}
+			<li class:selected={currentId === doc.id}>
+				<button class="row" onclick={() => open(doc.id)}>
+					<span class="doc-title">
+						{doc.title}
+						{#if doc.author === 'agent'}<span class="agent-badge">agent</span>{/if}
+						{#if doc.visibility === 'shared'}<span class="vis-badge">shared</span>{/if}
+					</span>
+					<span class="doc-snippet">{doc.match ?? doc.snippet}</span>
+				</button>
+			</li>
+		{/snippet}
+
+		{#if !docs.length}
+			<ul><li class="empty">No documents{query ? ' match' : ' yet'}.</li></ul>
+		{:else if query.trim()}
+			<!-- Results are ranked by relevance; folders would fight that ordering. -->
+			<ul>
+				{#each docs as doc (doc.id)}{@render docRow(doc)}{/each}
+			</ul>
+		{:else}
+			{#each grouped as [name, items] (name)}
+				<section class="folder">
+					<div class="folder-head">
+						<button
+							class="folder-name"
+							aria-expanded={!collapsed[name]}
+							onclick={() => (collapsed = { ...collapsed, [name]: !collapsed[name] })}
+						>
+							<span class="caret">{collapsed[name] ? '▸' : '▾'}</span>
+							{name}
+							<span class="count">{items.length}</span>
+						</button>
+						{#if name !== UNFILED}
+							<button
+								class="icon"
+								title="New doc in {name}"
+								aria-label="New doc in {name}"
+								onclick={() => startNew(name)}>+</button
+							>
+						{/if}
+					</div>
+					{#if !collapsed[name]}
+						<ul>
+							{#each items as doc (doc.id)}{@render docRow(doc)}{/each}
+						</ul>
+					{/if}
+				</section>
 			{/each}
-		</ul>
+		{/if}
 	</aside>
 
 	<section class="editor">
 		<header>
 			<input class="title" placeholder="Document title" bind:value={title} />
+			<input
+				class="folder-input"
+				list="library-folders"
+				placeholder="Folder"
+				title="Group this doc on the shelf. Type a new name or pick an existing one; leave it empty to keep it unfiled."
+				disabled={!editable}
+				bind:value={folder}
+			/>
+			<datalist id="library-folders">
+				{#each folders as f (f)}<option value={f}></option>{/each}
+			</datalist>
 			<div class="actions">
 				<button
 					class="chip"
@@ -222,6 +296,83 @@
 		list-style: none;
 		margin: 0;
 		padding: 0;
+	}
+	/* Grouping only — a folder holds no permission and nests nowhere. */
+	.folder + .folder {
+		margin-top: 0.35rem;
+	}
+	.folder-head {
+		display: flex;
+		align-items: center;
+		gap: 0.2rem;
+	}
+	.folder-name {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		background: none;
+		border: none;
+		color: var(--fg-dim);
+		cursor: pointer;
+		font-family: inherit;
+		font-size: 0.66rem;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		text-align: left;
+		padding: 0.35rem 0.2rem 0.2rem;
+	}
+	.folder-name:hover {
+		color: var(--fg);
+	}
+	.caret {
+		font-size: 0.6rem;
+	}
+	.count {
+		margin-left: auto;
+		opacity: 0.6;
+		letter-spacing: 0;
+	}
+	.folder-head .icon {
+		background: none;
+		border: none;
+		border-radius: 4px;
+		color: var(--fg-dim);
+		cursor: pointer;
+		font-size: 0.9rem;
+		line-height: 1;
+		padding: 0.15rem 0.3rem;
+		opacity: 0;
+	}
+	.folder-head:hover .icon {
+		opacity: 1;
+	}
+	.folder-head .icon:hover {
+		color: var(--accent);
+	}
+	.folder-input {
+		width: 9rem;
+		background: var(--bg-pane);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		color: var(--fg);
+		font-family: inherit;
+		font-size: 0.74rem;
+		padding: 0.3rem 0.5rem;
+	}
+	.folder-input:focus {
+		border-color: var(--accent);
+		outline: none;
+	}
+	.folder-input:disabled {
+		opacity: 0.5;
+	}
+	/* No hover on a touch screen to reveal the per-folder add button. */
+	@media (hover: none) {
+		.folder-head .icon {
+			opacity: 1;
+		}
 	}
 	.doc-list li {
 		border-radius: 6px;

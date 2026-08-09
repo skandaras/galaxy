@@ -62,7 +62,14 @@ export interface TimelineNotice {
 export type TimelineItem = TimelineStep | TimelineStage | TimelineNotice;
 
 export type TimelineChunk =
-	| { type: 'step'; id: string; label: string; status: 'running' | 'ok' | 'error' }
+	| {
+			type: 'step';
+			id: string;
+			label: string;
+			status: 'running' | 'ok' | 'error';
+			/** The streamed text became this label and should leave the reply. */
+			consumedText?: boolean;
+	  }
 	| {
 			type: 'tool';
 			name: string;

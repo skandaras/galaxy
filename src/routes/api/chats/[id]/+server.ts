@@ -10,11 +10,16 @@ import {
 	updateChat
 } from '$lib/server/chats';
 import { findRunningJobForChat } from '$lib/server/engine/jobs';
+import { resolveOpened } from '$lib/server/notifications';
 
 export const GET: RequestHandler = ({ locals, params }) => {
 	const user = requireUser(locals);
 	const chat = getChat(params.id, user.id);
 	if (!chat) error(404, 'Chat not found');
+	// Opening the chat an alert pointed at *is* dealing with it. A read on a GET
+	// is deliberate: this endpoint is only ever called because someone opened
+	// the conversation, which is exactly the engagement we are clearing on.
+	resolveOpened(user.id, chat.id);
 	return json({
 		chat,
 		messages: getMessages(chat.id),

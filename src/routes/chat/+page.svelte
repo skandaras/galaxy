@@ -353,10 +353,10 @@
 			} else if (chunk.type === 'delta') streamText += chunk.text;
 			else if (chunk.type === 'stage') stages = [...stages, { name: chunk.name, detail: chunk.detail }];
 			else if (chunk.type === 'step' || chunk.type === 'tool') {
-				// Text before a step introduced the tools it is about to call and
-				// has already become that step's label, so it must not also be left
-				// sitting in the reply.
-				if (chunk.type === 'step') streamText = '';
+				// Only drop the buffered text when the server says it became this
+				// step's label — see the same guard on the code page. Text the model
+				// wrote for the user before calling a tool is the reply.
+				if (chunk.type === 'step' && chunk.consumedText) streamText = '';
 				timeline = applyChunk(timeline, chunk);
 			} else if (chunk.type === 'notice') notices = [...notices, chunk.text];
 			else if (chunk.type === 'question') {

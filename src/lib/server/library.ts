@@ -18,6 +18,25 @@ export function slugify(title: string): string {
 	);
 }
 
+/** Longest a folder label may be; it has to fit a narrow shelf. */
+const MAX_FOLDER = 48;
+
+/**
+ * Tidy a folder label. Flat by design — a slash is just a character in a name,
+ * not a hierarchy, because nesting brings moves, renames and orphans with it
+ * and this is a way of grouping a shelf, nothing more.
+ */
+export function cleanFolder(raw: string): string {
+	return raw.replace(/[\\/]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_FOLDER);
+}
+
+/** Folder labels in use, for the picker. Only ones this user can see. */
+export function listFolders(userId: string): string[] {
+	return [...new Set(listDocs(userId).map((d) => d.folder).filter(Boolean))].sort((a, b) =>
+		a.localeCompare(b)
+	);
+}
+
 /** Crude markdown-stripped preview used in listings and the agent digest. */
 export function makeSnippet(body: string, max = 180): string {
 	return body
@@ -89,6 +108,8 @@ export function saveDoc(opts: {
 	ownerId: string;
 	/** New docs start personal; sharing is a deliberate act. */
 	visibility?: 'personal' | 'shared';
+	/** Cosmetic grouping. Omitted leaves an existing doc where it was filed. */
+	folder?: string;
 }): LibraryDoc {
 	mkdirSync(libraryDir(), { recursive: true });
 	const now = new Date();
@@ -100,6 +121,11 @@ export function saveDoc(opts: {
 
 	writeFileSync(join(libraryDir(), `${id}.md`), opts.body);
 
+	// An omitted folder means "leave it where it is", so that saving a doc from
+	// anywhere that doesn't know about folders cannot quietly unfile it.
+	const folder =
+		opts.folder === undefined ? (existing?.folder ?? '') : cleanFolder(opts.folder);
+
 	const row: LibraryDoc = {
 		id,
 		title: opts.title.trim() || id,
@@ -107,13 +133,14 @@ export function saveDoc(opts: {
 		author: existing?.author ?? opts.author,
 		ownerId: existing ? existing.ownerId : opts.ownerId,
 		visibility: existing ? existing.visibility : (opts.visibility ?? 'personal'),
+		folder,
 		sizeBytes: Buffer.byteLength(opts.body),
 		createdAt: existing?.createdAt ?? now,
 		updatedAt: now
 	};
 	if (existing) {
 		db.update(libraryDocs)
-			.set({ title: row.title, snippet, sizeBytes: row.sizeBytes, updatedAt: now })
+			.set({ title: row.title, snippet, folder, sizeBytes: row.sizeBytes, updatedAt: now })
 			.where(eq(libraryDocs.id, id))
 			.run();
 	} else {

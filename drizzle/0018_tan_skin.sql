@@ -1,0 +1,1 @@
+ALTER TABLE `library_docs` ADD `folder` text DEFAULT '' NOT NULL;

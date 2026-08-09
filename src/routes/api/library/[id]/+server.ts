@@ -30,7 +30,9 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
 			typeof body.title === 'string' && body.title.trim() ? body.title.trim() : existing.meta.title,
 		body: typeof body.content === 'string' ? body.content : existing.body,
 		author: existing.meta.author,
-		ownerId: user.id
+		ownerId: user.id,
+		// Undefined leaves it filed where it was; '' is a deliberate unfiling.
+		folder: typeof body.folder === 'string' ? body.folder : undefined
 	});
 	return json(doc);
 };

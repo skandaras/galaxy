@@ -252,6 +252,12 @@ export const libraryDocs = sqliteTable(
 		visibility: text('visibility', { enum: ['personal', 'shared'] })
 			.notNull()
 			.default('shared'),
+		/**
+		 * Cosmetic grouping for the shelf — a flat label, not a path, and no part
+		 * of who may see a doc. Empty means unfiled, which is where everything
+		 * starts and most things stay.
+		 */
+		folder: text('folder').notNull().default(''),
 		sizeBytes: integer('size_bytes').notNull().default(0),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()

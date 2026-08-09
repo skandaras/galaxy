@@ -22,7 +22,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		ownerId: user.id,
 		// New docs are personal unless the caller asks otherwise; the library used
 		// to be entirely global, so sharing is now deliberate.
-		visibility: body.visibility === 'shared' ? 'shared' : 'personal'
+		visibility: body.visibility === 'shared' ? 'shared' : 'personal',
+		folder: typeof body.folder === 'string' ? body.folder : undefined
 	});
 	return json(doc, { status: 201 });
 };

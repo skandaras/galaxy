@@ -25,7 +25,7 @@ const DEFAULT_PROMPTS: Record<string, string> = {
 		' When you summarise a turn, lead with what changed and where, then anything the user has to decide or do next.' +
 		// Read back as the label for that step in the run timeline, which is why
 		// it is worth asking for — the line costs nothing and names the work.
-		' Before each batch of tool calls, write one short present-tense line saying what you are about to do ("Checking how the loop handles a cancelled turn"). One line, no preamble, and never a substitute for actually calling the tool.',
+		' Before each batch of tool calls, write one short present-tense line saying what you are about to do ("Checking how the loop handles a cancelled turn"). One line, no preamble, and never a substitute for actually calling the tool. Keep anything you are writing for the user — a draft, a summary, an answer — out of those lines and in your final reply, after the tools have run.',
 	'deep-research':
 		'You are the research agent of Galaxy. Plan searches, gather sources, verify claims across them, and synthesise findings with citations.',
 	visual:
