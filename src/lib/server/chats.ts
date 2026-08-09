@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { and, asc, desc, eq, isNotNull, isNull } from 'drizzle-orm';
 import { db, dataDir } from '$lib/server/db';
 import { chats, messages, attachments, type AttachmentRef } from '$lib/server/db/schema';
+import type { MessageTrace } from '$lib/run-timeline';
 
 export interface ChatMeta {
 	id: string;
@@ -31,6 +32,8 @@ export interface StoredMessage {
 	content: string;
 	attachments: AttachmentRef[] | null;
 	modelKey: string | null;
+	/** What the agent did to produce this reply; null for everything else. */
+	trace: MessageTrace | null;
 	createdAt: number;
 }
 
@@ -181,7 +184,12 @@ export function getMessages(chatId: string): StoredMessage[] {
 		.where(eq(messages.chatId, chatId))
 		.orderBy(asc(messages.seq))
 		.all()
-		.map((r) => ({ ...r, createdAt: r.createdAt.getTime(), attachments: r.attachments ?? null }));
+		.map((r) => ({
+			...r,
+			createdAt: r.createdAt.getTime(),
+			attachments: r.attachments ?? null,
+			trace: r.trace ?? null
+		}));
 }
 
 export function appendMessage(
@@ -191,6 +199,7 @@ export function appendMessage(
 		content: string;
 		attachments?: AttachmentRef[];
 		modelKey?: string;
+		trace?: MessageTrace | null;
 	}
 ): StoredMessage {
 	const now = Date.now();
@@ -204,6 +213,7 @@ export function appendMessage(
 		content: msg.content,
 		attachments: msg.attachments ?? null,
 		modelKey: msg.modelKey ?? null,
+		trace: msg.trace ?? null,
 		createdAt: now
 	};
 	if (hidden) {
@@ -230,16 +240,17 @@ export function appendMessage(
 export function updateMessage(
 	chatId: string,
 	messageId: string,
-	patch: { content: string }
+	patch: { content?: string; trace?: MessageTrace | null }
 ): void {
+	if (patch.content === undefined && patch.trace === undefined) return;
 	const hidden = hiddenChats.get(chatId);
 	if (hidden) {
 		const msg = hidden.messages.find((m) => m.id === messageId);
-		if (msg) msg.content = patch.content;
+		if (msg) Object.assign(msg, patch);
 		return;
 	}
 	db.update(messages)
-		.set({ content: patch.content })
+		.set(patch)
 		.where(and(eq(messages.id, messageId), eq(messages.chatId, chatId)))
 		.run();
 }

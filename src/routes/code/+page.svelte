@@ -8,6 +8,14 @@
 	import { hasFinePointer } from '$lib/pointer';
 	import { copyText } from '$lib/clipboard';
 	import AskSheet from '$lib/components/AskSheet.svelte';
+	import RunTimeline from '$lib/components/RunTimeline.svelte';
+	import {
+		applyChunk,
+		isTimelineChunk,
+		itemsFromTrace,
+		type MessageTrace,
+		type TimelineItem
+	} from '$lib/run-timeline';
 
 	interface ChatMeta {
 		id: string;
@@ -36,6 +44,8 @@
 		content: string;
 		modelKey: string | null;
 		attachments?: AttachmentRef[] | null;
+		/** What the agent did to produce this reply, kept with it. */
+		trace?: MessageTrace | null;
 	}
 	interface ModelOption {
 		id: string;
@@ -49,12 +59,6 @@
 		cloneUrl: string;
 		private: boolean;
 	}
-	interface TraceRow {
-		name: string;
-		status: string;
-		detail?: string;
-	}
-
 	let sessions = $state<ChatMeta[]>([]);
 	let models = $state<ModelOption[]>([]);
 	let repos = $state<Repo[]>([]);
@@ -96,8 +100,8 @@
 	let stopping = $state(false);
 	let streamText = $state('');
 	let streamModel = $state('');
-	let trace = $state<TraceRow[]>([]);
-	let notices = $state<string[]>([]);
+	/** Steps, stages and notices for the run in flight, in the order they arrived. */
+	let timeline = $state<TimelineItem[]>([]);
 	let errorBanner = $state<string | null>(null);
 	let diffText = $state<string | null>(null);
 	let source: EventSource | null = null;
@@ -136,7 +140,7 @@
 	$effect(() => {
 		streamText;
 		messages.length;
-		trace.length;
+		timeline.length;
 		if (scroll.pinned) void scroll.toBottom('auto');
 	});
 
@@ -290,28 +294,25 @@
 		streaming = true;
 		streamText = '';
 		streamModel = '';
-		trace = [];
-		notices = [];
+		timeline = [];
 		question = null;
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
 			const chunk = JSON.parse(ev.data);
 			if (chunk.type === 'meta') {
-				// New (re)attempt: drop partial text from a failed attempt.
+				// New (re)attempt: drop partial text from a failed attempt. The
+				// timeline is left alone — "tried, failed over, retried" is exactly
+				// what it is for.
 				streamModel = chunk.model;
 				streamText = '';
 			} else if (chunk.type === 'delta') streamText += chunk.text;
-			else if (chunk.type === 'tool') {
-				if (chunk.status === 'running') {
-					trace = [...trace, { name: chunk.name, status: 'running', detail: chunk.detail }];
-				} else {
-					const idx = trace.findLastIndex((t) => t.name === chunk.name && t.status === 'running');
-					if (idx >= 0) {
-						trace[idx] = { ...trace[idx], status: chunk.status, detail: chunk.detail ?? trace[idx].detail };
-					}
-				}
-			} else if (chunk.type === 'notice') notices = [...notices, chunk.text];
-			else if (chunk.type === 'question') {
+			else if (isTimelineChunk(chunk)) {
+				// Text that preceded a step introduced the tools it is about to
+				// call: the server has already turned it into that step's label, so
+				// it must not also be left sitting in the reply.
+				if (chunk.type === 'step') streamText = '';
+				timeline = applyChunk(timeline, chunk);
+			} else if (chunk.type === 'question') {
 				question = { id: chunk.id, prompt: chunk.prompt, options: chunk.options ?? [] };
 			} else if (chunk.type === 'answer') {
 				if (question?.id === chunk.id) question = null;
@@ -370,15 +371,42 @@
 	function appendLocalAssistant(content: string, modelKey: string) {
 		messages = [
 			...messages,
-			{ id: `local-a-${Date.now()}`, role: 'assistant', content, modelKey }
+			{ id: `local-a-${Date.now()}`, role: 'assistant', content, modelKey, trace: localTrace() }
 		];
+	}
+
+	/**
+	 * The run just watched, in the shape the server stores it — so the reply
+	 * keeps its timeline on screen without a refetch. A reload reads the
+	 * server's copy, which also carries the leg summary.
+	 */
+	function localTrace(): MessageTrace | null {
+		const steps = timeline
+			.filter((i) => i.kind === 'step')
+			.map((s) => ({
+				id: s.id,
+				status: s.status === 'error' ? ('error' as const) : ('ok' as const),
+				label: s.label,
+				toolCalls: s.tools.map((t) => ({
+					name: t.name,
+					summary: t.detail,
+					status: t.status === 'error' ? ('error' as const) : ('ok' as const)
+				}))
+			}));
+		return steps.length ? { steps } : null;
 	}
 
 	function finalize(commit = true) {
 		if (commit && streamText) {
 			messages = [
 				...messages,
-				{ id: `local-a-${Date.now()}`, role: 'assistant', content: streamText, modelKey: streamModel }
+				{
+					id: `local-a-${Date.now()}`,
+					role: 'assistant',
+					content: streamText,
+					modelKey: streamModel,
+					trace: localTrace()
+				}
 			];
 		}
 		streaming = false;
@@ -386,6 +414,7 @@
 		stopping = false;
 		question = null;
 		streamText = '';
+		timeline = [];
 		closeStream();
 	}
 
@@ -516,8 +545,10 @@
 	</aside>
 
 	<section class="work-area">
+		<!-- Notices used to stack here as full-width banners, detached in space and
+		     time from the step that raised them. They are now inline in the
+		     timeline; only a terminal error still earns the top of the page. -->
 		{#if errorBanner}<div class="banner error">{errorBanner}</div>{/if}
-		{#each notices as n (n)}<div class="banner">{n}</div>{/each}
 
 		{#if creating}
 			<div class="new-session">
@@ -590,6 +621,14 @@
 				{#each messages as msg (msg.id)}
 					<div class="msg {msg.role}">
 						{#if msg.role === 'assistant'}
+							{#if msg.trace?.steps?.length}
+								<details class="past-run">
+									<summary>
+										{msg.trace.summary || `${msg.trace.steps.length} steps`}
+									</summary>
+									<RunTimeline items={itemsFromTrace(msg.trace)} />
+								</details>
+							{/if}
 							<Markdown text={msg.content} />
 							{#if msg.modelKey}<span class="msg-model">{msg.modelKey}</span>{/if}
 						{:else}
@@ -602,19 +641,12 @@
 				{/each}
 				{#if streaming}
 					<div class="msg assistant">
-						{#if trace.length}
-							<ul class="trace">
-								{#each trace as t, i (i)}
-									<li class="t-{t.status}">
-										<span class="t-name">{t.name}</span>
-										{#if t.detail}<span class="t-detail">{t.detail}</span>{/if}
-									</li>
-								{/each}
-							</ul>
+						{#if timeline.length}
+							<RunTimeline items={timeline} live />
 						{/if}
 						{#if streamText}
 							<Markdown text={streamText} />
-						{:else if !trace.length}
+						{:else if !timeline.length}
 							<span class="thinking">{streamModel || '…'} is working</span>
 						{/if}
 					</div>
@@ -999,37 +1031,22 @@
 			opacity: 0.35;
 		}
 	}
-	.trace {
-		list-style: none;
-		margin: 0 0 0.6rem;
-		padding: 0.5rem 0.7rem;
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		font-size: 0.72rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.2rem;
+	/* What the agent did, kept with the reply and folded away. Scrolled-back
+	   history used to show the prose and no evidence at all. */
+	.past-run {
+		margin-bottom: 0.4rem;
 	}
-	.trace li {
-		display: flex;
-		gap: 0.5rem;
-		align-items: baseline;
-	}
-	.t-name {
-		color: var(--accent);
-	}
-	.t-running .t-name {
-		animation: pulse 1.2s ease-in-out infinite;
-	}
-	.t-error .t-name,
-	.t-error .t-detail {
-		color: var(--danger);
-	}
-	.t-detail {
+	.past-run > summary {
 		color: var(--fg-dim);
-		overflow: hidden;
+		cursor: pointer;
+		font-size: 0.68rem;
+		padding: 0.1rem 0;
 		white-space: nowrap;
+		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+	.past-run > summary:hover {
+		color: var(--fg);
 	}
 	.plan-actions {
 		display: flex;

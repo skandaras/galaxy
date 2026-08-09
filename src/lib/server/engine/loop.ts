@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { RunStep, RunToolCall } from '$lib/run-timeline';
 import { db } from '$lib/server/db';
 import { usageLog } from '$lib/server/db/schema';
 import type { ModelChoice } from '$lib/server/providers/registry';
@@ -42,28 +43,18 @@ export interface LoopTool {
  */
 export type StopReason = 'complete' | 'exhausted' | 'cancelled' | 'budget';
 
-export interface ToolCallRecord {
-	name: string;
-	/** Whatever `describe` yielded — a path for file tools, the command for bash. */
-	summary?: string;
-	/** Absent while the call is still running. */
-	status?: 'ok' | 'error';
-}
-
 /**
- * One model round-trip that ended in tool calls, and the calls it made.
+ * Defined in `$lib/run-timeline` so the engine, the `trace` column and the two
+ * pages that draw a run all read from one definition. Re-exported here under
+ * the names the engine has always used.
  *
- * A grouping of the records in `TurnSummary.toolCalls`, not a copy of them —
- * the same objects appear in both, so there is one set of facts about a run
- * with a flat view for the callers that want every call in order and a nested
- * view for the ones rendering a timeline.
+ * A TurnStep groups the records in `TurnSummary.toolCalls` — it does not copy
+ * them. The same objects appear in both, so there is one set of facts about a
+ * run, with a flat view for the callers that want every call in order and a
+ * nested view for the ones rendering a timeline.
  */
-export interface TurnStep {
-	id: string;
-	label: string;
-	status: 'ok' | 'error';
-	toolCalls: ToolCallRecord[];
-}
+export type ToolCallRecord = RunToolCall;
+export type TurnStep = RunStep;
 
 export interface TurnSummary {
 	stopReason: StopReason;

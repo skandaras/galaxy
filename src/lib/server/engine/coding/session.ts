@@ -197,7 +197,11 @@ export function startCodingTurn(opts: {
 				const saved = appendMessage(chat.id, {
 					role: 'assistant',
 					content: text,
-					modelKey: usedChoice.model.modelKey
+					modelKey: usedChoice.model.modelKey,
+					// Kept with the reply so scrolled-back history still shows what
+					// the agent did, not just what it said about it. The leg summary
+					// heads it once it lands (see driveCodingTurn).
+					trace: turnSummary.trace.length ? { steps: turnSummary.trace } : null
 				});
 				messageId = saved.id;
 				updateChat(chat.id, {});
@@ -262,13 +266,19 @@ async function driveCodingTurn(opts: {
 			summary
 		}).catch(() => null);
 
-		// A leg cut short saved a stand-in reply built from its last step label.
-		// Upgrade it to the real summary when one arrives — only ever the
-		// stand-in, never something the model actually wrote.
-		if (summary.fallbackReply && messageId) {
+		// Fold the summary into the saved message once it lands: it heads the
+		// collapsed step group in history, and it upgrades the stand-in reply a
+		// cut-short leg saved — only ever the stand-in, never something the model
+		// actually wrote.
+		if (messageId) {
 			const id = messageId;
+			const leg = summary;
 			void legSummary.then((note) => {
-				if (note) updateMessage(opts.chat, id, { content: fallbackReply(summary.stopReason, note) });
+				if (!note) return;
+				updateMessage(opts.chat, id, {
+					...(leg.trace.length ? { trace: { summary: note, steps: leg.trace } } : {}),
+					...(leg.fallbackReply ? { content: fallbackReply(leg.stopReason, note) } : {})
+				});
 			});
 		}
 
