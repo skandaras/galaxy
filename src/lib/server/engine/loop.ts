@@ -89,6 +89,69 @@ export interface LoopOptions {
 /** How often the budget is re-checked mid-run, in model round-trips. */
 const BUDGET_CHECK_EVERY = 4;
 
+/** A step label is a glance, not a sentence to read. */
+const STEP_LABEL_MAX = 100;
+
+/**
+ * Turn the narration a model writes before a batch of tool calls into a label
+ * for that step.
+ *
+ * This text used to be appended to the reply, which is why narration and final
+ * answer arrived glued together as one blob. It is far more use as the name of
+ * the step it introduces — and it costs nothing, because the model was already
+ * writing it.
+ *
+ * `fallback` covers a model that narrates nothing, which is why the prompt line
+ * asking for narration is a nudge rather than a requirement.
+ */
+export function stepLabel(narration: string, fallback: string): string {
+	const firstLine =
+		narration
+			.trim()
+			.split('\n')
+			.map((l) => l.trim())
+			.find(Boolean) ?? '';
+	// Narration commonly opens as a bullet, a heading or a bold lead-in. Those
+	// marks are noise on a single line.
+	const line = firstLine
+		.replace(/^[#>*\-+\s]+/, '')
+		.replace(/\*\*/g, '')
+		.trim();
+	if (!line) return fallback;
+	if (line.length <= STEP_LABEL_MAX) return line;
+	// Too long for a label: prefer a whole first sentence over a hard cut.
+	const sentence = /^.*?[.!?](?=\s|$)/.exec(line)?.[0];
+	if (sentence && sentence.length <= STEP_LABEL_MAX) return sentence;
+	return `${line.slice(0, STEP_LABEL_MAX - 1).trimEnd()}…`;
+}
+
+/** Label for a step the model introduced with nothing: name what it called. */
+function describeBatch(calls: ToolCall[], tools: Map<string, LoopTool>): string {
+	const first = calls[0];
+	const detail = tools.get(first.name)?.describe?.(safeParseArgs(first.arguments)) ?? '';
+	const head = detail ? `${first.name} ${detail}` : first.name;
+	return calls.length > 1 ? `${head} (+${calls.length - 1} more)` : head;
+}
+
+/**
+ * What to save when a leg ends with tool calls still in flight and therefore no
+ * closing prose of its own.
+ *
+ * Before intent lines this could not happen — every iteration's text was
+ * appended, so something was always there. Now the last iteration's narration
+ * has become a step label, and an empty assistant message is a reply the user
+ * simply never got.
+ */
+function fallbackReply(stopReason: StopReason, lastLabel: string): string {
+	const why =
+		stopReason === 'cancelled'
+			? 'Stopped before finishing.'
+			: stopReason === 'budget'
+				? 'Stopped by the spend cap before finishing.'
+				: 'Ran out of steps before finishing.';
+	return `${why} Last thing I was doing:\n\n${lastLabel}`;
+}
+
 /**
  * The shared agentic loop: stream from the model, execute tool calls, feed
  * results back, repeat. Handles failover (primary → primary retry → backup),
@@ -288,6 +351,8 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	let stopReason: StopReason = 'exhausted';
 	let steps = 0;
 	const toolCallRecords: ToolCallRecord[] = [];
+	/** Label of the most recent tool-calling step, for the empty-reply fallback. */
+	let lastStepLabel = '';
 
 	for (let iteration = 0; iteration < opts.maxIterations; iteration++) {
 		// A long run has to keep asking, or it can sail well past the cap that
@@ -371,13 +436,19 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			{ persist }
 		);
 
-		assistantText += iterationText;
 		if (!toolCalls.length) {
 			// The model answered instead of calling anything, so it considers the
-			// task done — even if it only narrated an edit it never made.
+			// task done — even if it only narrated an edit it never made. This is
+			// the only iteration whose text is the reply.
+			assistantText += iterationText;
 			stopReason = 'complete';
 			break;
 		}
+		// Everything this iteration wrote introduces the tools it is about to
+		// call, so it labels the step rather than joining the answer. The model
+		// still sees it — see the `messages.push` below — this only governs what
+		// reaches the user and the saved message.
+		lastStepLabel = stepLabel(iterationText, describeBatch(toolCalls, toolByName));
 		// Stop before spending money on a toolchain the user has abandoned.
 		if (job.controller.signal.aborted) {
 			stopReason = 'cancelled';
@@ -429,7 +500,16 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			text: 'Stopped: the spend cap was reached partway through this run.'
 		});
 	}
-	const messageId = opts.onDone(assistantText, usage, choice, summary);
+	// A leg cut short mid-toolchain has no closing prose of its own — its last
+	// narration became a step label — and saving that as a blank assistant
+	// message is a reply the user simply never got. A run that called nothing
+	// and still came back empty is left alone: that is a genuine empty answer,
+	// and run-history reports it as one (see lastReplyWasEmpty).
+	const finalText =
+		assistantText.trim() || !lastStepLabel
+			? assistantText
+			: fallbackReply(stopReason, lastStepLabel);
+	const messageId = opts.onDone(finalText, usage, choice, summary);
 	logUsage(opts, choice.model.modelKey, usage, 'ok', choice);
 	emitEvent(
 		{

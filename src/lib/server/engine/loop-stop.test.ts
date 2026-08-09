@@ -12,9 +12,16 @@ beforeAll(() => {
 /**
  * A model that asks for `toolRounds` tool calls and then answers — unless
  * `neverStops`, which keeps calling forever the way a task too big for the
- * step budget does.
+ * step budget does. `narrate` makes it write a line before each batch, which is
+ * what the prompt asks a real model for and what step labels are built from.
  */
-function scriptedChoice(opts: { toolRounds: number; neverStops?: boolean }): ModelChoice {
+function scriptedChoice(opts: {
+	toolRounds: number;
+	neverStops?: boolean;
+	narrate?: boolean;
+	/** Answers with nothing at all — a real empty reply, not a cut-short leg. */
+	silent?: boolean;
+}): ModelChoice {
 	let round = 0;
 	return {
 		model: {
@@ -34,9 +41,10 @@ function scriptedChoice(opts: { toolRounds: number; neverStops?: boolean }): Mod
 					arguments: JSON.stringify({ path: `file${round}.ts` })
 				};
 				if (opts.neverStops || round < opts.toolRounds) {
+					if (opts.narrate) yield { type: 'text', delta: `Reading file${round}.` };
 					round++;
 					yield { type: 'tool_calls', calls: [call] };
-				} else {
+				} else if (!opts.silent) {
 					yield { type: 'text', delta: 'All done.' };
 				}
 				yield { type: 'done', finishReason: 'stop' };
@@ -63,11 +71,13 @@ async function run(opts: {
 	maxIterations: number;
 	budgetBlocked?: () => boolean;
 	cancelAfterMs?: number;
-}): Promise<{ summary: TurnSummary | null; chunks: JobChunk[] }> {
+}): Promise<{ summary: TurnSummary | null; chunks: JobChunk[]; text: string | null }> {
 	const job = createJob({ chatId: 'c1', userId: 'u1', task: 'coding', persist: false });
 	const chunks: JobChunk[] = [];
 	job.subscribers.add((c) => chunks.push(c));
 	let summary: TurnSummary | null = null;
+	// What onDone would persist as the assistant message.
+	let text: string | null = null;
 	if (opts.cancelAfterMs !== undefined) setTimeout(() => cancelJob(job), opts.cancelAfterMs);
 	await runAgentLoop({
 		job,
@@ -81,11 +91,12 @@ async function run(opts: {
 		maxIterations: opts.maxIterations,
 		budgetBlocked: opts.budgetBlocked,
 		buildMessages: () => [],
-		onDone: (_t, _u, _c, s) => {
+		onDone: (t, _u, _c, s) => {
 			summary = s;
+			text = t;
 		}
 	});
-	return { summary, chunks };
+	return { summary, chunks, text };
 }
 
 describe('turn stop reasons', () => {
@@ -135,5 +146,94 @@ describe('turn stop reasons', () => {
 			cancelAfterMs: 5
 		});
 		expect(summary?.stopReason).toBe('cancelled');
+	});
+});
+
+/**
+ * Narration written before a batch of tool calls labels that step instead of
+ * being appended to the reply — which is what used to glue a model's running
+ * commentary to its final answer as one blob.
+ */
+describe('narration becomes a step label, not the reply', () => {
+	it('keeps mid-turn narration out of the saved message', async () => {
+		const { text } = await run({
+			choice: scriptedChoice({ toolRounds: 2, narrate: true }),
+			maxIterations: 20
+		});
+		// Both rounds narrated; only the closing, tool-less answer is the reply.
+		expect(text).toBe('All done.');
+		expect(text).not.toContain('Reading file');
+	});
+
+	it('never saves an empty message when the step cap cuts a leg short', async () => {
+		// The regression this guards: the last iteration ended on tool calls, so
+		// its text became a label and there was nothing left for the reply.
+		const { text, summary } = await run({
+			choice: scriptedChoice({ toolRounds: 0, neverStops: true, narrate: true }),
+			maxIterations: 3
+		});
+		expect(summary?.stopReason).toBe('exhausted');
+		expect(text?.trim()).not.toBe('');
+		expect(text).toContain('Ran out of steps');
+		expect(text).toContain('Reading file2.');
+	});
+
+	it('never saves an empty message when the user stops a leg', async () => {
+		const { text, summary } = await run({
+			choice: scriptedChoice({ toolRounds: 0, neverStops: true, narrate: true }),
+			maxIterations: 50,
+			cancelAfterMs: 5
+		});
+		expect(summary?.stopReason).toBe('cancelled');
+		expect(text?.trim()).not.toBe('');
+		expect(text).toContain('Stopped before finishing');
+	});
+
+	it('still keeps a partial reply the user interrupted mid-stream', async () => {
+		// The other half of the rule: text cut off while it was streaming *is*
+		// the reply, and must not be replaced by the fallback.
+		const choice = {
+			model: {
+				modelKey: 'mock',
+				displayName: 'Mock',
+				supportsTools: true,
+				supportsVision: false,
+				promptCostPerMTok: null,
+				completionCostPerMTok: null
+			},
+			provider: {},
+			adapter: {
+				async *stream(_req: ChatRequest, signal?: AbortSignal): AsyncGenerator<StreamEvent> {
+					yield { type: 'text', delta: 'Half an answ' };
+					await new Promise((_, reject) => {
+						signal?.addEventListener('abort', () => reject(signal.reason));
+					});
+				},
+				complete: async () => ({ text: '', usage: null }),
+				listModels: async () => []
+			}
+		} as unknown as ModelChoice;
+
+		const { summary, text } = await run({ choice, maxIterations: 5, cancelAfterMs: 10 });
+		expect(summary?.stopReason).toBe('cancelled');
+		expect(text).toBe('Half an answ');
+	});
+
+	it('falls back to the tool call when the model narrates nothing', async () => {
+		const { text } = await run({
+			choice: scriptedChoice({ toolRounds: 0, neverStops: true }),
+			maxIterations: 2
+		});
+		expect(text).toContain('read_file file1.ts');
+	});
+
+	it('leaves a genuinely empty answer empty, so run-history still spots it', async () => {
+		// A turn that called nothing and returned nothing is a real empty reply;
+		// dressing it up would hide it from previousRunNote's lastReplyWasEmpty.
+		const { text } = await run({
+			choice: scriptedChoice({ toolRounds: 0, silent: true }),
+			maxIterations: 20
+		});
+		expect(text).toBe('');
 	});
 });
