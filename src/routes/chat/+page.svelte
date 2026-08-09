@@ -7,6 +7,13 @@
 	import { autoresize } from '$lib/autoresize';
 	import { hasFinePointer } from '$lib/pointer';
 	import AskSheet from '$lib/components/AskSheet.svelte';
+	import RunTimeline from '$lib/components/RunTimeline.svelte';
+	import {
+		applyChunk,
+		itemsFromTrace,
+		type MessageTrace,
+		type TimelineItem
+	} from '$lib/run-timeline';
 
 	interface ChatMeta {
 		id: string;
@@ -30,6 +37,8 @@
 		content: string;
 		modelKey: string | null;
 		attachments: AttachmentRef[] | null;
+		/** What the agent did to produce this reply, when it used tools. */
+		trace?: MessageTrace | null;
 	}
 	interface ModelOption {
 		id: string;
@@ -89,7 +98,12 @@
 	let stopping = $state(false);
 	let streamText = $state('');
 	let streamModel = $state('');
-	let toolActivity = $state<string | null>(null);
+	/**
+	 * Steps and their tool calls for the turn in flight. Stages stay separate
+	 * below — they are the deep-research pipeline's breadcrumb, a different
+	 * thing from an agent's steps, and they render as one.
+	 */
+	let timeline = $state<TimelineItem[]>([]);
 	let stages = $state<{ name: string; detail?: string }[]>([]);
 	let notices = $state<string[]>([]);
 	let errorBanner = $state<string | null>(null);
@@ -324,7 +338,7 @@
 		streaming = true;
 		streamText = '';
 		streamModel = '';
-		toolActivity = null;
+		timeline = [];
 		stages = [];
 		notices = [];
 		question = null;
@@ -338,13 +352,12 @@
 				streamText = '';
 			} else if (chunk.type === 'delta') streamText += chunk.text;
 			else if (chunk.type === 'stage') stages = [...stages, { name: chunk.name, detail: chunk.detail }];
-			else if (chunk.type === 'tool') {
-				toolActivity =
-					chunk.status === 'running'
-						? `${chunk.name}…`
-						: chunk.status === 'error'
-							? `${chunk.name} failed`
-							: null;
+			else if (chunk.type === 'step' || chunk.type === 'tool') {
+				// Text before a step introduced the tools it is about to call and
+				// has already become that step's label, so it must not also be left
+				// sitting in the reply.
+				if (chunk.type === 'step') streamText = '';
+				timeline = applyChunk(timeline, chunk);
 			} else if (chunk.type === 'notice') notices = [...notices, chunk.text];
 			else if (chunk.type === 'question') {
 				question = { id: chunk.id, prompt: chunk.prompt, options: chunk.options ?? [] };
@@ -424,8 +437,35 @@
 	function appendLocalAssistant(content: string, modelKey: string) {
 		messages = [
 			...messages,
-			{ id: `local-a-${Date.now()}`, role: 'assistant', content, modelKey: modelKey || null, attachments: null }
+			{
+				id: `local-a-${Date.now()}`,
+				role: 'assistant',
+				content,
+				modelKey: modelKey || null,
+				attachments: null,
+				trace: localTrace()
+			}
 		];
+	}
+
+	/**
+	 * The turn just watched, in the shape the server stores it, so the reply
+	 * keeps its steps on screen without a refetch.
+	 */
+	function localTrace(): MessageTrace | null {
+		const steps = timeline
+			.filter((i) => i.kind === 'step')
+			.map((s) => ({
+				id: s.id,
+				label: s.label,
+				status: s.status === 'error' ? ('error' as const) : ('ok' as const),
+				toolCalls: s.tools.map((t) => ({
+					name: t.name,
+					summary: t.detail,
+					status: t.status === 'error' ? ('error' as const) : ('ok' as const)
+				}))
+			}));
+		return steps.length ? { steps } : null;
 	}
 
 	/**
@@ -470,7 +510,8 @@
 					role: 'assistant',
 					content: streamText,
 					modelKey: streamModel || null,
-					attachments: null
+					attachments: null,
+					trace: localTrace()
 				}
 			];
 		}
@@ -479,7 +520,7 @@
 		stopping = false;
 		question = null;
 		streamText = '';
-		toolActivity = null;
+		timeline = [];
 		stages = [];
 		closeStream();
 		void refreshChats();
@@ -745,6 +786,12 @@
 				{#if msg.role !== 'tool'}
 					<div class="msg {msg.role}">
 						{#if msg.role === 'assistant'}
+							{#if msg.trace?.steps?.length}
+								<details class="past-run">
+									<summary>{msg.trace.summary || `${msg.trace.steps.length} steps`}</summary>
+									<RunTimeline items={itemsFromTrace(msg.trace)} />
+								</details>
+							{/if}
 							<Markdown text={msg.content} />
 							<span class="msg-meta">
 								{#if msg.modelKey}<span class="msg-model">{msg.modelKey}</span>{/if}
@@ -773,14 +820,16 @@
 							{/each}
 						</div>
 					{/if}
+					{#if timeline.length}
+						<RunTimeline items={timeline} live />
+					{/if}
 					{#if streamText}
 						<Markdown text={streamText} />
 					{:else if question}
 						<span class="thinking">waiting on your answer</span>
-					{:else if !stages.length}
+					{:else if !stages.length && !timeline.length}
 						<span class="thinking">{streamModel || '…'} is thinking</span>
 					{/if}
-					{#if toolActivity}<span class="tool-activity">⚙ {toolActivity}</span>{/if}
 				</div>
 			{/if}
 		</div>
@@ -1153,11 +1202,21 @@
 		font-size: 0.8rem;
 		animation: pulse 1.4s ease-in-out infinite;
 	}
-	.tool-activity {
-		display: block;
+	/* What the agent did, kept with the reply and folded away. */
+	.past-run {
+		margin-bottom: 0.4rem;
+	}
+	.past-run > summary {
 		color: var(--fg-dim);
-		font-size: 0.72rem;
-		margin-top: 0.3rem;
+		cursor: pointer;
+		font-size: 0.68rem;
+		padding: 0.1rem 0;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.past-run > summary:hover {
+		color: var(--fg);
 	}
 	@keyframes pulse {
 		50% {

@@ -7,7 +7,7 @@ import type {
 } from '$lib/server/providers/types';
 import { isRetryable, StreamTimeoutError } from '$lib/server/providers/types';
 import { isCancellation } from './jobs';
-import { elideOldToolOutput, streamWithIdleTimeout } from './loop';
+import { elideOldToolOutput, stepLabel, streamWithIdleTimeout } from './loop';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -97,6 +97,38 @@ describe('timeout classification', () => {
 		// The distinction matters: a cancellation keeps the partial reply and
 		// finishes normally, which would silently truncate a stalled answer.
 		expect(isCancellation(new StreamTimeoutError('quiet'))).toBe(false);
+	});
+});
+
+describe('stepLabel', () => {
+	const FALLBACK = 'read_file src/lib/loop.ts';
+
+	it('takes the first line of the narration', () => {
+		expect(stepLabel('Checking how cancellation is handled.\n\nThen I will…', FALLBACK)).toBe(
+			'Checking how cancellation is handled.'
+		);
+	});
+
+	it('strips the bullet and bold marks models lead with', () => {
+		expect(stepLabel('- **Reading the loop**', FALLBACK)).toBe('Reading the loop');
+		expect(stepLabel('## Reading the loop', FALLBACK)).toBe('Reading the loop');
+	});
+
+	it('falls back to the tool call when the model narrated nothing', () => {
+		// The prompt asks for a narration line but must never depend on it.
+		expect(stepLabel('', FALLBACK)).toBe(FALLBACK);
+		expect(stepLabel('   \n\n  ', FALLBACK)).toBe(FALLBACK);
+	});
+
+	it('prefers a whole first sentence over a hard cut', () => {
+		const long = `I am going to read the loop. ${'x'.repeat(200)}`;
+		expect(stepLabel(long, FALLBACK)).toBe('I am going to read the loop.');
+	});
+
+	it('truncates when even the first sentence is too long', () => {
+		const label = stepLabel('y'.repeat(300), FALLBACK);
+		expect(label).toHaveLength(100);
+		expect(label.endsWith('…')).toBe(true);
 	});
 });
 

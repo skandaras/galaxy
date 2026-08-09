@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { RunStep, RunToolCall } from '$lib/run-timeline';
 import { db } from '$lib/server/db';
 import { usageLog } from '$lib/server/db/schema';
 import type { ModelChoice } from '$lib/server/providers/registry';
@@ -42,17 +43,33 @@ export interface LoopTool {
  */
 export type StopReason = 'complete' | 'exhausted' | 'cancelled' | 'budget';
 
-export interface ToolCallRecord {
-	name: string;
-	/** Whatever `describe` yielded — a path for file tools, the command for bash. */
-	summary?: string;
-}
+/**
+ * Defined in `$lib/run-timeline` so the engine, the `trace` column and the two
+ * pages that draw a run all read from one definition. Re-exported here under
+ * the names the engine has always used.
+ *
+ * A TurnStep groups the records in `TurnSummary.toolCalls` — it does not copy
+ * them. The same objects appear in both, so there is one set of facts about a
+ * run, with a flat view for the callers that want every call in order and a
+ * nested view for the ones rendering a timeline.
+ */
+export type ToolCallRecord = RunToolCall;
+export type TurnStep = RunStep;
 
 export interface TurnSummary {
 	stopReason: StopReason;
 	/** Model round-trips used, which is what `maxIterations` actually counts. */
 	steps: number;
 	toolCalls: ToolCallRecord[];
+	/** The same calls, grouped under the step that made them. */
+	trace: TurnStep[];
+	/**
+	 * True when the leg produced no closing prose and the saved message is the
+	 * step-label stand-in rather than something the model wrote. The caller uses
+	 * this to replace it with a real summary later — and to know it is safe to,
+	 * since overwriting an actual reply never would be.
+	 */
+	fallbackReply: boolean;
 }
 
 export interface LoopOptions {
@@ -88,6 +105,72 @@ export interface LoopOptions {
 
 /** How often the budget is re-checked mid-run, in model round-trips. */
 const BUDGET_CHECK_EVERY = 4;
+
+/** A step label is a glance, not a sentence to read. */
+const STEP_LABEL_MAX = 100;
+
+/**
+ * Turn the narration a model writes before a batch of tool calls into a label
+ * for that step.
+ *
+ * This text used to be appended to the reply, which is why narration and final
+ * answer arrived glued together as one blob. It is far more use as the name of
+ * the step it introduces — and it costs nothing, because the model was already
+ * writing it.
+ *
+ * `fallback` covers a model that narrates nothing, which is why the prompt line
+ * asking for narration is a nudge rather than a requirement.
+ */
+export function stepLabel(narration: string, fallback: string): string {
+	const firstLine =
+		narration
+			.trim()
+			.split('\n')
+			.map((l) => l.trim())
+			.find(Boolean) ?? '';
+	// Narration commonly opens as a bullet, a heading or a bold lead-in. Those
+	// marks are noise on a single line.
+	const line = firstLine
+		.replace(/^[#>*\-+\s]+/, '')
+		.replace(/\*\*/g, '')
+		.trim();
+	if (!line) return fallback;
+	if (line.length <= STEP_LABEL_MAX) return line;
+	// Too long for a label: prefer a whole first sentence over a hard cut.
+	const sentence = /^.*?[.!?](?=\s|$)/.exec(line)?.[0];
+	if (sentence && sentence.length <= STEP_LABEL_MAX) return sentence;
+	return `${line.slice(0, STEP_LABEL_MAX - 1).trimEnd()}…`;
+}
+
+/** Label for a step the model introduced with nothing: name what it called. */
+function describeBatch(calls: ToolCall[], tools: Map<string, LoopTool>): string {
+	const first = calls[0];
+	const detail = tools.get(first.name)?.describe?.(safeParseArgs(first.arguments)) ?? '';
+	const head = detail ? `${first.name} ${detail}` : first.name;
+	return calls.length > 1 ? `${head} (+${calls.length - 1} more)` : head;
+}
+
+/**
+ * What to save when a leg ends with tool calls still in flight and therefore no
+ * closing prose of its own.
+ *
+ * Before intent lines this could not happen — every iteration's text was
+ * appended, so something was always there. Now the last iteration's narration
+ * has become a step label, and an empty assistant message is a reply the user
+ * simply never got.
+ *
+ * `body` starts as the last step label and is rewritten to the leg summary once
+ * that arrives (see driveCodingTurn), which is why this is exported.
+ */
+export function fallbackReply(stopReason: StopReason, body: string): string {
+	const why =
+		stopReason === 'cancelled'
+			? 'Stopped before finishing.'
+			: stopReason === 'budget'
+				? 'Stopped by the spend cap before finishing.'
+				: 'Ran out of steps before finishing.';
+	return `${why}\n\n${body}`;
+}
 
 /**
  * The shared agentic loop: stream from the model, execute tool calls, feed
@@ -288,6 +371,9 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	let stopReason: StopReason = 'exhausted';
 	let steps = 0;
 	const toolCallRecords: ToolCallRecord[] = [];
+	const trace: TurnStep[] = [];
+	/** Label of the most recent tool-calling step, for the empty-reply fallback. */
+	let lastStepLabel = '';
 
 	for (let iteration = 0; iteration < opts.maxIterations; iteration++) {
 		// A long run has to keep asking, or it can sail well past the cap that
@@ -371,18 +457,29 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			{ persist }
 		);
 
-		assistantText += iterationText;
 		if (!toolCalls.length) {
 			// The model answered instead of calling anything, so it considers the
-			// task done — even if it only narrated an edit it never made.
+			// task done — even if it only narrated an edit it never made. This is
+			// the only iteration whose text is the reply.
+			assistantText += iterationText;
 			stopReason = 'complete';
 			break;
 		}
+		// Everything this iteration wrote introduces the tools it is about to
+		// call, so it labels the step rather than joining the answer. The model
+		// still sees it — see the `messages.push` below — this only governs what
+		// reaches the user and the saved message.
+		const label = stepLabel(iterationText, describeBatch(toolCalls, toolByName));
+		lastStepLabel = label;
 		// Stop before spending money on a toolchain the user has abandoned.
 		if (job.controller.signal.aborted) {
 			stopReason = 'cancelled';
 			break;
 		}
+
+		const stepId = randomUUID();
+		const stepCalls: ToolCallRecord[] = [];
+		pushChunk(job, { type: 'step', id: stepId, label, status: 'running' });
 
 		messages.push({ role: 'assistant', content: iterationText, tool_calls: toolCalls });
 		for (const call of toolCalls) {
@@ -390,10 +487,22 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			if (job.controller.signal.aborted) break;
 			const tool = toolByName.get(call.name);
 			const args = safeParseArgs(call.arguments);
-			toolCallRecords.push({ name: call.name, summary: tool?.describe?.(args) });
-			const result = await executeToolCall(opts, call, tool);
-			messages.push({ role: 'tool', content: result, tool_call_id: call.id });
+			// One record, held in both views — the flat list every existing caller
+			// reads, and this step's group.
+			const record: ToolCallRecord = { name: call.name, summary: tool?.describe?.(args) };
+			toolCallRecords.push(record);
+			stepCalls.push(record);
+			const { output, ok } = await executeToolCall(opts, call, tool, stepId);
+			record.status = ok ? 'ok' : 'error';
+			messages.push({ role: 'tool', content: output, tool_call_id: call.id });
 		}
+
+		// A step is only as good as its calls: one failure leaves the group open
+		// in the timeline instead of collapsing it out of sight.
+		const stepStatus = stepCalls.some((c) => c.status === 'error') ? 'error' : 'ok';
+		pushChunk(job, { type: 'step', id: stepId, label, status: stepStatus });
+		trace.push({ id: stepId, label, status: stepStatus, toolCalls: stepCalls });
+
 		if (job.controller.signal.aborted) {
 			stopReason = 'cancelled';
 			break;
@@ -422,14 +531,27 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		}
 	}
 
-	const summary: TurnSummary = { stopReason, steps, toolCalls: toolCallRecords };
+	const usedFallback = !assistantText.trim() && !!lastStepLabel;
+	const summary: TurnSummary = {
+		stopReason,
+		steps,
+		toolCalls: toolCallRecords,
+		trace,
+		fallbackReply: usedFallback
+	};
 	if (stopReason === 'budget') {
 		pushChunk(job, {
 			type: 'notice',
 			text: 'Stopped: the spend cap was reached partway through this run.'
 		});
 	}
-	const messageId = opts.onDone(assistantText, usage, choice, summary);
+	// A leg cut short mid-toolchain has no closing prose of its own — its last
+	// narration became a step label — and saving that as a blank assistant
+	// message is a reply the user simply never got. A run that called nothing
+	// and still came back empty is left alone: that is a genuine empty answer,
+	// and run-history reports it as one (see lastReplyWasEmpty).
+	const finalText = usedFallback ? fallbackReply(stopReason, lastStepLabel) : assistantText;
+	const messageId = opts.onDone(finalText, usage, choice, summary);
 	logUsage(opts, choice.model.modelKey, usage, 'ok', choice);
 	emitEvent(
 		{
@@ -446,20 +568,34 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	if (opts.autoComplete !== false) completeJob(job, messageId || undefined);
 }
 
+/** `ok` is false for a failed call, so its step can be marked failed too. */
 async function executeToolCall(
 	opts: LoopOptions,
 	call: ToolCall,
-	tool: LoopTool | undefined
-): Promise<string> {
+	tool: LoopTool | undefined,
+	stepId: string
+): Promise<{ output: string; ok: boolean }> {
 	const { job, persist } = opts;
 	const args = safeParseArgs(call.arguments);
 	const summary = tool?.describe?.(args);
 	const started = Date.now();
-	pushChunk(job, { type: 'tool', name: call.name, status: 'running', detail: summary });
+	/**
+	 * callId is the provider's own id for this call, which is what makes a
+	 * terminal chunk findable when several calls to one tool are in flight.
+	 *
+	 * Key order is deliberate and load-bearing: the end-to-end smoke suite —
+	 * the gate that decides whether an image is cut — matches raw SSE text for
+	 * `"type":"tool","name":"…","status":"ok"`. Building this by spreading a
+	 * prefix object put the ids between `name` and `status` and broke seven of
+	 * those assertions at once. New fields go on the end.
+	 */
+	const emit = (status: 'running' | 'ok' | 'error', detail?: string) =>
+		pushChunk(job, { type: 'tool', name: call.name, status, detail, callId: call.id, stepId });
+	emit('running', summary);
 
 	if (!tool) {
-		pushChunk(job, { type: 'tool', name: call.name, status: 'error', detail: 'unknown tool' });
-		return JSON.stringify({ error: `Unknown tool: ${call.name}` });
+		emit('error', 'unknown tool');
+		return { output: JSON.stringify({ error: `Unknown tool: ${call.name}` }), ok: false };
 	}
 	let meta: Record<string, unknown> = {};
 	try {
@@ -479,8 +615,8 @@ async function executeToolCall(
 			},
 			{ persist }
 		);
-		pushChunk(job, { type: 'tool', name: call.name, status: 'ok', detail: summary });
-		return result;
+		emit('ok', summary);
+		return { output: result, ok: true };
 	} catch (err) {
 		emitEvent(
 			{
@@ -495,8 +631,8 @@ async function executeToolCall(
 			},
 			{ persist }
 		);
-		pushChunk(job, { type: 'tool', name: call.name, status: 'error', detail: String(err) });
-		return JSON.stringify({ error: String(err) });
+		emit('error', String(err));
+		return { output: JSON.stringify({ error: String(err) }), ok: false };
 	}
 }
 

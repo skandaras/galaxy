@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer, real, primaryKey, index } from 'drizzle-orm/sqlite-core';
+import type { MessageTrace } from '$lib/run-timeline';
 
 export const users = sqliteTable('users', {
 	id: text('id').primaryKey(),
@@ -109,6 +110,16 @@ export const messages = sqliteTable(
 		content: text('content').notNull(),
 		attachments: text('attachments', { mode: 'json' }).$type<AttachmentRef[] | null>(),
 		modelKey: text('model_key'),
+		/**
+		 * What the agent did to produce this reply — the steps it took and the
+		 * tools each one called. Null for every message written before runs were
+		 * recorded, and for anything that isn't an agent reply.
+		 *
+		 * Without it, scrolling back through a coding session showed the prose and
+		 * no evidence at all: the trace was live-only and thrown away the moment
+		 * the run finished.
+		 */
+		trace: text('trace', { mode: 'json' }).$type<MessageTrace | null>(),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 	},
 	// Every turn reads a whole chat in seq order, so the sort rides the index.
@@ -176,6 +187,7 @@ export const CORE_TASKS = [
 	'skill-optimiser',
 	'ux-audit',
 	'chat-title',
+	'run-summary',
 	'board'
 ] as const;
 export type CoreTask = (typeof CORE_TASKS)[number];

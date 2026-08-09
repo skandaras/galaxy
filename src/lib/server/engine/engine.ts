@@ -151,11 +151,14 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 				history: getMessages(chat.id),
 				supportsVision: choice.model.supportsVision
 			}),
-		onDone: (text, _usage, usedChoice) => {
+		onDone: (text, _usage, usedChoice, summary) => {
 			const saved = appendMessage(chat.id, {
 				role: 'assistant',
 				content: text,
-				modelKey: usedChoice.model.modelKey
+				modelKey: usedChoice.model.modelKey,
+				// Kept with the reply, so a turn that searched and read three pages
+				// still says so when it is scrolled back to.
+				trace: summary.trace.length ? { steps: summary.trace } : null
 			});
 			// Compaction and titling both run after the reply so neither delays
 			// streaming, and neither can fail the turn.

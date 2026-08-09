@@ -1,7 +1,15 @@
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { codeSessions, type AttachmentRef } from '$lib/server/db/schema';
-import { appendMessage, createChat, deleteChat, getChat, getMessages, updateChat } from '$lib/server/chats';
+import {
+	appendMessage,
+	createChat,
+	deleteChat,
+	getChat,
+	getMessages,
+	updateChat,
+	updateMessage
+} from '$lib/server/chats';
 import { resolveModel } from '$lib/server/providers/registry';
 import type { ProviderMessage } from '$lib/server/providers/types';
 import { assertBudget, getBudgetStatus } from '../budget';
@@ -20,8 +28,9 @@ import { completeJob, createJob, failJob, pushChunk, type LiveJob } from '../job
 import { maybeCompact } from '../compaction';
 import { buildContext } from '../context';
 import { codingMaxSteps } from '../limits';
-import { runAgentLoop, type LoopTool, type TurnSummary } from '../loop';
+import { fallbackReply, runAgentLoop, type LoopTool, type TurnSummary } from '../loop';
 import { previousRunNote, runHistoryTool } from '../run-history';
+import { summariseLeg, withDeadline } from '../run-summary';
 import { webSearchConfigured, webSearchTool } from '../tools/web-search';
 import { askUserTool } from '../ask-user';
 import { attachmentTools } from '../tools/attachments';
@@ -36,6 +45,13 @@ import { codingTools } from './tools';
 import { createWorkspace, destroyWorkspace, scrubSecrets, shellQuote } from './workspace';
 
 export type CodeSession = typeof codeSessions.$inferSelect;
+
+/**
+ * How long a checkpoint commit will wait for its leg summary. Short on
+ * purpose: past this the commit takes the changed-file list it always used,
+ * rather than a run staying open because a summariser is slow.
+ */
+const CHECKPOINT_SUMMARY_WAIT_MS = 6_000;
 
 export function getSession(chatId: string, userId: string): CodeSession | null {
 	const row = db.select().from(codeSessions).where(eq(codeSessions.chatId, chatId)).get();
@@ -181,7 +197,11 @@ export function startCodingTurn(opts: {
 				const saved = appendMessage(chat.id, {
 					role: 'assistant',
 					content: text,
-					modelKey: usedChoice.model.modelKey
+					modelKey: usedChoice.model.modelKey,
+					// Kept with the reply so scrolled-back history still shows what
+					// the agent did, not just what it said about it. The leg summary
+					// heads it once it lands (see driveCodingTurn).
+					trace: turnSummary.trace.length ? { steps: turnSummary.trace } : null
 				});
 				messageId = saved.id;
 				updateChat(chat.id, {});
@@ -204,7 +224,7 @@ export function startCodingTurn(opts: {
 		return { summary, messageId };
 	};
 
-	void driveCodingTurn({ job, chat: chat.id, session, runLeg }).catch((err) => {
+	void driveCodingTurn({ job, chat: chat.id, session, userId: opts.userId, runLeg }).catch((err) => {
 		if (job.status === 'running') failJob(job, String(err));
 	});
 	return job;
@@ -222,6 +242,7 @@ async function driveCodingTurn(opts: {
 	job: LiveJob;
 	chat: string;
 	session: CodeSession;
+	userId: string;
 	runLeg: () => Promise<{ summary: TurnSummary | null; messageId?: string }>;
 }): Promise<void> {
 	const { job, session } = opts;
@@ -229,10 +250,37 @@ async function driveCodingTurn(opts: {
 	let lastMessageId: string | undefined;
 
 	for (let leg = 1; ; leg++) {
+		pushChunk(job, { type: 'stage', name: 'working', detail: `leg ${leg}` });
 		const { summary, messageId } = await opts.runLeg();
 		lastMessageId = messageId ?? lastMessageId;
 		// No summary means the loop failed and already failed the job.
 		if (!summary) return;
+
+		// Started here and deliberately not awaited: the git snapshot below is
+		// several subprocess round-trips, which is free time for a cheap model.
+		// One call per leg — never per tool call.
+		const legSummary = summariseLeg({
+			chatId: opts.chat,
+			userId: opts.userId,
+			persist: true,
+			summary
+		}).catch(() => null);
+
+		// Fold the summary into the saved message once it lands: it heads the
+		// collapsed step group in history, and it upgrades the stand-in reply a
+		// cut-short leg saved — only ever the stand-in, never something the model
+		// actually wrote.
+		if (messageId) {
+			const id = messageId;
+			const leg = summary;
+			void legSummary.then((note) => {
+				if (!note) return;
+				updateMessage(opts.chat, id, {
+					...(leg.trace.length ? { trace: { summary: note, steps: leg.trace } } : {}),
+					...(leg.fallbackReply ? { content: fallbackReply(leg.stopReason, note) } : {})
+				});
+			});
+		}
 
 		await captureState({
 			chatId: opts.chat,
@@ -243,7 +291,13 @@ async function driveCodingTurn(opts: {
 
 		const dirty = await isDirty(session.workspaceRel);
 		if (dirty && coding.autoCheckpoint) {
-			const committed = await checkpoint(job, session, summary);
+			pushChunk(job, { type: 'stage', name: 'checkpointing' });
+			// The one place that waits on the summary at all, and only briefly:
+			// the commit message wants it, and by now the model call has had the
+			// git snapshot above to finish in. Past the deadline the commit falls
+			// back to the changed-file list rather than holding the run open.
+			const note = await withDeadline(legSummary, CHECKPOINT_SUMMARY_WAIT_MS);
+			const committed = await checkpoint(job, session, summary, note);
 			if (committed) {
 				// Refresh so the next leg sees a clean tree and the new commit.
 				await captureState({
@@ -277,6 +331,7 @@ async function driveCodingTurn(opts: {
 			break;
 		}
 
+		pushChunk(job, { type: 'stage', name: 'continuing', detail: `leg ${leg + 1}` });
 		pushChunk(job, {
 			type: 'notice',
 			text: `Step limit reached — continuing automatically (leg ${leg + 1} of ${coding.maxLegs}).`
@@ -293,11 +348,18 @@ async function driveCodingTurn(opts: {
 	completeJob(job, lastMessageId);
 }
 
-/** Commit whatever the turn left behind. Local only — never pushes. */
+/**
+ * Commit whatever the turn left behind. Local only — never pushes.
+ *
+ * `note` is the leg summary when one arrived in time. It replaces a commit
+ * message that was a list of up to five paths — accurate, and no use at all
+ * for working out later what the checkpoint was in the middle of.
+ */
 async function checkpoint(
 	job: LiveJob,
 	session: CodeSession,
-	summary: TurnSummary
+	summary: TurnSummary,
+	note: string | null
 ): Promise<boolean> {
 	const changed = [
 		...new Set(
@@ -306,7 +368,7 @@ async function checkpoint(
 				.map((c) => c.summary as string)
 		)
 	];
-	const what = changed.length ? changed.slice(0, 5).join(', ') : 'work in progress';
+	const what = note || (changed.length ? changed.slice(0, 5).join(', ') : 'work in progress');
 	const res = await getExecutor().exec(
 		`git add -A && git commit -m ${shellQuote(`WIP checkpoint (auto): ${what}`)}`,
 		{ cwdRel: session.workspaceRel, timeoutMs: 30_000 }
