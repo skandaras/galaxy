@@ -579,13 +579,22 @@ async function executeToolCall(
 	const args = safeParseArgs(call.arguments);
 	const summary = tool?.describe?.(args);
 	const started = Date.now();
-	// callId is the provider's own id for this call, which is what makes a
-	// terminal chunk findable when several calls to one tool are in flight.
-	const chunk = { type: 'tool' as const, name: call.name, callId: call.id, stepId };
-	pushChunk(job, { ...chunk, status: 'running', detail: summary });
+	/**
+	 * callId is the provider's own id for this call, which is what makes a
+	 * terminal chunk findable when several calls to one tool are in flight.
+	 *
+	 * Key order is deliberate and load-bearing: the end-to-end smoke suite —
+	 * the gate that decides whether an image is cut — matches raw SSE text for
+	 * `"type":"tool","name":"…","status":"ok"`. Building this by spreading a
+	 * prefix object put the ids between `name` and `status` and broke seven of
+	 * those assertions at once. New fields go on the end.
+	 */
+	const emit = (status: 'running' | 'ok' | 'error', detail?: string) =>
+		pushChunk(job, { type: 'tool', name: call.name, status, detail, callId: call.id, stepId });
+	emit('running', summary);
 
 	if (!tool) {
-		pushChunk(job, { ...chunk, status: 'error', detail: 'unknown tool' });
+		emit('error', 'unknown tool');
 		return { output: JSON.stringify({ error: `Unknown tool: ${call.name}` }), ok: false };
 	}
 	let meta: Record<string, unknown> = {};
@@ -606,7 +615,7 @@ async function executeToolCall(
 			},
 			{ persist }
 		);
-		pushChunk(job, { ...chunk, status: 'ok', detail: summary });
+		emit('ok', summary);
 		return { output: result, ok: true };
 	} catch (err) {
 		emitEvent(
@@ -622,7 +631,7 @@ async function executeToolCall(
 			},
 			{ persist }
 		);
-		pushChunk(job, { ...chunk, status: 'error', detail: String(err) });
+		emit('error', String(err));
 		return { output: JSON.stringify({ error: String(err) }), ok: false };
 	}
 }

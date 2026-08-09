@@ -212,6 +212,16 @@ describe('step chunks', () => {
 		expect(live.filter((i) => i.kind === 'step')).toHaveLength(3);
 	});
 
+	it('keeps type, name and status adjacent on the wire', async () => {
+		// scripts/smoke-e2e.sh — the gate that decides whether an image is cut —
+		// matches raw SSE text for `"type":"tool","name":"…","status":"ok"`.
+		// Putting a new field between them breaks seven of its assertions at
+		// once, and nothing else here would notice.
+		const { chunks } = await run({ choice: scriptedChoice({ toolRounds: 1 }), maxIterations: 20 });
+		const done = chunks.find((c) => c.type === 'tool' && c.status === 'ok');
+		expect(JSON.stringify(done)).toContain('"type":"tool","name":"read_file","status":"ok"');
+	});
+
 	it('marks a step failed when a call inside it fails', async () => {
 		const failing: LoopTool = {
 			def: { name: 'read_file', description: 'read', parameters: {} },
