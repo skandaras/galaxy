@@ -7,7 +7,7 @@ import type {
 } from '$lib/server/providers/types';
 import { isRetryable, StreamTimeoutError } from '$lib/server/providers/types';
 import { isCancellation } from './jobs';
-import { elideOldToolOutput, stepLabel, streamWithIdleTimeout } from './loop';
+import { elideOldToolOutput, isNarration, stepLabel, streamWithIdleTimeout } from './loop';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -97,6 +97,41 @@ describe('timeout classification', () => {
 		// The distinction matters: a cancellation keeps the partial reply and
 		// finishes normally, which would silently truncate a stalled answer.
 		expect(isCancellation(new StreamTimeoutError('quiet'))).toBe(false);
+	});
+});
+
+describe('isNarration', () => {
+	it('accepts the one-line lead-in the prompt asks for', () => {
+		expect(isNarration('Checking how the loop handles a cancelled turn.')).toBe(true);
+		expect(isNarration('Reading src/lib/loop.ts and src/lib/jobs.ts now')).toBe(true);
+		expect(isNarration('')).toBe(true);
+	});
+
+	it('refuses a drafted email, which is the reply and not a label', () => {
+		// The regression this exists for: the model redrafts an email, calls a
+		// tool in the same message, and the draft is silently dropped — leaving
+		// the user a reply that only says the work was done.
+		const email = [
+			'Hi Sam,',
+			'',
+			'Thanks for sending the proposal over. I have read it and I think the',
+			'scope is right, but the timeline needs another two weeks.',
+			'',
+			'Best,',
+			'Alex'
+		].join('\n');
+		expect(isNarration(email)).toBe(false);
+	});
+
+	it('refuses anything long, multi-paragraph, or holding code', () => {
+		expect(isNarration('x'.repeat(201))).toBe(false);
+		expect(isNarration('First thought.\n\nSecond thought.')).toBe(false);
+		expect(isNarration('Here it is:\n```\nconst x = 1;\n```')).toBe(false);
+		expect(isNarration('one\ntwo\nthree')).toBe(false);
+	});
+
+	it('allows a lead-in that wrapped onto a second line', () => {
+		expect(isNarration('Checking the loop,\nthen the session file.')).toBe(true);
 	});
 });
 

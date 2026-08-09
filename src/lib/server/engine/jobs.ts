@@ -10,7 +10,19 @@ export type JobChunk =
 	// One model round-trip that ended in tool calls, labelled with whatever the
 	// model said it was about to do. Re-sent with the same `id` when its status
 	// changes, so replay converges rather than duplicating — see subscribeJob.
-	| { type: 'step'; id: string; label: string; status: 'running' | 'ok' | 'error' }
+	| {
+			type: 'step';
+			id: string;
+			label: string;
+			status: 'running' | 'ok' | 'error';
+			/**
+			 * True when the text streamed before this step became its label and is
+			 * not part of the reply, so the browser should drop what it buffered.
+			 * False when the model wrote something substantial before calling a
+			 * tool — that is the answer, and clearing it would lose the work.
+			 */
+			consumedText?: boolean;
+	  }
 	| {
 			type: 'tool';
 			name: string;

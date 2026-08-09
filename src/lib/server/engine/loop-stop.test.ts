@@ -281,6 +281,62 @@ describe('narration becomes a step label, not the reply', () => {
 		expect(text).toContain('Stopped before finishing');
 	});
 
+	it('keeps writing the model did for the user, even before a tool call', async () => {
+		// The reported regression: asked to redraft an email, the model wrote the
+		// new draft and called a tool in the same message. The draft became a
+		// 100-character step label and the user was left with a reply that only
+		// said the work had been done.
+		const EMAIL = [
+			'Hi Sam,',
+			'',
+			'Thanks for the proposal. The scope looks right, but the timeline needs',
+			'another two weeks.',
+			'',
+			'Best,',
+			'Alex'
+		].join('\n');
+		let round = 0;
+		const choice = {
+			model: {
+				modelKey: 'mock',
+				displayName: 'Mock',
+				supportsTools: true,
+				supportsVision: false,
+				promptCostPerMTok: null,
+				completionCostPerMTok: null
+			},
+			provider: {},
+			adapter: {
+				async *stream(): AsyncGenerator<StreamEvent> {
+					if (round++ === 0) {
+						yield { type: 'text', delta: EMAIL };
+						yield {
+							type: 'tool_calls',
+							calls: [
+								{ id: 'c0', name: 'read_file', arguments: JSON.stringify({ path: 'notes.md' }) }
+							]
+						};
+					} else {
+						yield { type: 'text', delta: "\n\nI've saved that as the new draft." };
+					}
+					yield { type: 'done', finishReason: 'stop' };
+				},
+				complete: async () => ({ text: '', usage: null }),
+				listModels: async () => []
+			}
+		} as unknown as ModelChoice;
+
+		const { text, chunks, summary } = await run({ choice, maxIterations: 10 });
+		expect(text).toContain('Thanks for the proposal');
+		expect(text).toContain('Best,');
+		expect(text).toContain("I've saved that as the new draft.");
+		// The step is named after what it called, not after a line of the email.
+		expect(summary?.trace[0].label).toBe('read_file notes.md');
+		// ...and the browser is told to keep what it has buffered.
+		const step = chunks.find((c) => c.type === 'step');
+		expect(step && 'consumedText' in step && step.consumedText).toBe(false);
+	});
+
 	it('still keeps a partial reply the user interrupted mid-stream', async () => {
 		// The other half of the rule: text cut off while it was streaming *is*
 		// the reply, and must not be replaced by the fallback.

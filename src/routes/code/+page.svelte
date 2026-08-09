@@ -307,10 +307,11 @@
 				streamText = '';
 			} else if (chunk.type === 'delta') streamText += chunk.text;
 			else if (isTimelineChunk(chunk)) {
-				// Text that preceded a step introduced the tools it is about to
-				// call: the server has already turned it into that step's label, so
-				// it must not also be left sitting in the reply.
-				if (chunk.type === 'step') streamText = '';
+				// Only drop the buffered text when the server says it became this
+				// step's label. A model that writes something substantial and then
+				// calls a tool — a redrafted email, say — is writing the reply, and
+				// clearing it here threw that work away.
+				if (chunk.type === 'step' && chunk.consumedText) streamText = '';
 				timeline = applyChunk(timeline, chunk);
 			} else if (chunk.type === 'question') {
 				question = { id: chunk.id, prompt: chunk.prompt, options: chunk.options ?? [] };
