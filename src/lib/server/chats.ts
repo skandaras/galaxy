@@ -218,6 +218,32 @@ export function appendMessage(
 	return stored;
 }
 
+/**
+ * Amend a message already written.
+ *
+ * Used for one thing: replacing the stand-in reply a cut-short coding leg
+ * saves with the real leg summary once that arrives. The summary is off the
+ * critical path by design, so it lands after the message is already stored and
+ * on screen — and callers must only ever aim this at a stand-in they wrote
+ * themselves (see TurnSummary.fallbackReply), never at what a model said.
+ */
+export function updateMessage(
+	chatId: string,
+	messageId: string,
+	patch: { content: string }
+): void {
+	const hidden = hiddenChats.get(chatId);
+	if (hidden) {
+		const msg = hidden.messages.find((m) => m.id === messageId);
+		if (msg) msg.content = patch.content;
+		return;
+	}
+	db.update(messages)
+		.set({ content: patch.content })
+		.where(and(eq(messages.id, messageId), eq(messages.chatId, chatId)))
+		.run();
+}
+
 function countMessages(chatId: string): number {
 	return db.select({ id: messages.id }).from(messages).where(eq(messages.chatId, chatId)).all()
 		.length;

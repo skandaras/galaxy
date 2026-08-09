@@ -176,6 +176,7 @@ export const CORE_TASKS = [
 	'skill-optimiser',
 	'ux-audit',
 	'chat-title',
+	'run-summary',
 	'board'
 ] as const;
 export type CoreTask = (typeof CORE_TASKS)[number];

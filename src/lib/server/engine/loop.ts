@@ -53,6 +53,13 @@ export interface TurnSummary {
 	/** Model round-trips used, which is what `maxIterations` actually counts. */
 	steps: number;
 	toolCalls: ToolCallRecord[];
+	/**
+	 * True when the leg produced no closing prose and the saved message is the
+	 * step-label stand-in rather than something the model wrote. The caller uses
+	 * this to replace it with a real summary later — and to know it is safe to,
+	 * since overwriting an actual reply never would be.
+	 */
+	fallbackReply: boolean;
 }
 
 export interface LoopOptions {
@@ -141,15 +148,18 @@ function describeBatch(calls: ToolCall[], tools: Map<string, LoopTool>): string 
  * appended, so something was always there. Now the last iteration's narration
  * has become a step label, and an empty assistant message is a reply the user
  * simply never got.
+ *
+ * `body` starts as the last step label and is rewritten to the leg summary once
+ * that arrives (see driveCodingTurn), which is why this is exported.
  */
-function fallbackReply(stopReason: StopReason, lastLabel: string): string {
+export function fallbackReply(stopReason: StopReason, body: string): string {
 	const why =
 		stopReason === 'cancelled'
 			? 'Stopped before finishing.'
 			: stopReason === 'budget'
 				? 'Stopped by the spend cap before finishing.'
 				: 'Ran out of steps before finishing.';
-	return `${why} Last thing I was doing:\n\n${lastLabel}`;
+	return `${why}\n\n${body}`;
 }
 
 /**
@@ -493,7 +503,13 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		}
 	}
 
-	const summary: TurnSummary = { stopReason, steps, toolCalls: toolCallRecords };
+	const usedFallback = !assistantText.trim() && !!lastStepLabel;
+	const summary: TurnSummary = {
+		stopReason,
+		steps,
+		toolCalls: toolCallRecords,
+		fallbackReply: usedFallback
+	};
 	if (stopReason === 'budget') {
 		pushChunk(job, {
 			type: 'notice',
@@ -505,10 +521,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	// message is a reply the user simply never got. A run that called nothing
 	// and still came back empty is left alone: that is a genuine empty answer,
 	// and run-history reports it as one (see lastReplyWasEmpty).
-	const finalText =
-		assistantText.trim() || !lastStepLabel
-			? assistantText
-			: fallbackReply(stopReason, lastStepLabel);
+	const finalText = usedFallback ? fallbackReply(stopReason, lastStepLabel) : assistantText;
 	const messageId = opts.onDone(finalText, usage, choice, summary);
 	logUsage(opts, choice.model.modelKey, usage, 'ok', choice);
 	emitEvent(
