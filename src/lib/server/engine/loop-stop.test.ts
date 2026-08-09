@@ -2,6 +2,12 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '$lib/server/db';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import type { ChatRequest, StreamEvent, ToolCall } from '$lib/server/providers/types';
+import {
+	applyChunk,
+	isTimelineChunk,
+	type TimelineChunk,
+	type TimelineItem
+} from '$lib/run-timeline';
 import { cancelJob, createJob, type JobChunk } from './jobs';
 import { runAgentLoop, type LoopTool, type TurnSummary } from './loop';
 
@@ -187,6 +193,23 @@ describe('step chunks', () => {
 			// Name-matching mispairs the moment two calls to one tool overlap.
 			expect(t.callId).toBe('c0');
 		}
+	});
+
+	it('replays into the same timeline a live client built', async () => {
+		// The real cold-replay path: subscribeJob hands a reconnecting client the
+		// job's entire chunk history, so folding it twice from empty has to land
+		// exactly where folding it once did.
+		const { chunks } = await run({
+			choice: scriptedChoice({ toolRounds: 3, narrate: true }),
+			maxIterations: 20
+		});
+		const timeline = chunks.filter(isTimelineChunk);
+		const fold = (cs: TimelineChunk[]) =>
+			cs.reduce<TimelineItem[]>((items, c) => applyChunk(items, c), []);
+
+		const live = fold(timeline);
+		expect(fold([...timeline, ...timeline])).toEqual(live);
+		expect(live.filter((i) => i.kind === 'step')).toHaveLength(3);
 	});
 
 	it('marks a step failed when a call inside it fails', async () => {
