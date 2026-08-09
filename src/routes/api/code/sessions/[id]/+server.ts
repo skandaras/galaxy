@@ -4,11 +4,15 @@ import { requireCoder } from '$lib/server/api';
 import { getChat, getMessages } from '$lib/server/chats';
 import { destroySession, getSession, setSessionMode } from '$lib/server/engine/coding/session';
 import { findRunningJobForChat } from '$lib/server/engine/jobs';
+import { resolveOpened } from '$lib/server/notifications';
 
 export const GET: RequestHandler = ({ locals, params }) => {
 	const user = requireCoder(locals);
 	const session = getSession(params.id, user.id);
 	if (!session) error(404, 'Session not found');
+	// Opening the session clears whatever alert sent you here — same rule as a
+	// chat, and a coding session is a chat underneath.
+	resolveOpened(user.id, session.chatId);
 	return json({
 		// modelId lives on the chat row, not the code session, but the client
 		// wants it alongside the rest of the session state.

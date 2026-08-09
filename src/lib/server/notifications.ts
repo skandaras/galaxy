@@ -151,8 +151,54 @@ export function resolveEntity(entityId: string, userId?: string): number {
 		.where(and(eq(notifications.entityId, entityId), isNull(notifications.readAt)))
 		.all()
 		.filter((r) => !userId || r.userId === userId);
-	if (!rows.length) return 0;
+	return clear(rows);
+}
 
+/**
+ * Kinds that arriving does not settle, because something is still owed.
+ *
+ * A question is the whole of this list: an agent parked waiting on an answer
+ * is still parked after you have glanced at the chat, and dropping the badge
+ * there would quietly retire the one alert that means work is blocked. Those
+ * clear when the question is answered — see resolveEntity in ask-user.ts.
+ */
+const NEEDS_ACTION: NotificationKind[] = ['question'];
+
+/**
+ * Clear whatever was pointing someone at a place they have now opened.
+ *
+ * Reading the bell was the only thing that cleared it, so opening the chat an
+ * alert was about left the badge still asking for attention that had already
+ * been given — and the fastest way to teach someone to ignore a bell is to
+ * leave it ringing after they have answered it.
+ *
+ * Matches a notification's `entityId` *or* its `link`, because the link is the
+ * notification's own statement of where it was sending you: a failed turn is
+ * filed under its job id but points at the chat. Ids here are uuids, so a
+ * substring match on the link cannot collide.
+ */
+export function resolveOpened(userId: string, ...ids: (string | null | undefined)[]): number {
+	const wanted = ids.filter((id): id is string => Boolean(id));
+	if (!wanted.length) return 0;
+	const rows = db
+		.select({
+			id: notifications.id,
+			userId: notifications.userId,
+			kind: notifications.kind,
+			entityId: notifications.entityId,
+			link: notifications.link
+		})
+		.from(notifications)
+		.where(and(eq(notifications.userId, userId), isNull(notifications.readAt)))
+		.all()
+		.filter((r) => !NEEDS_ACTION.includes(r.kind))
+		.filter((r) => wanted.some((id) => r.entityId === id || (r.link && r.link.includes(id))));
+	return clear(rows);
+}
+
+/** Mark a set of rows read and tell every open tab that owns one. */
+function clear(rows: { id: string; userId: string }[]): number {
+	if (!rows.length) return 0;
 	for (const r of rows) {
 		db.update(notifications).set({ readAt: new Date() }).where(eq(notifications.id, r.id)).run();
 	}

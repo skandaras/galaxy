@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
 import { deleteCard, getCard, updateCard } from '$lib/server/boards';
 import { CARD_PRIORITIES, type CardPriority } from '$lib/server/db/schema';
+import { resolveOpened } from '$lib/server/notifications';
 
 const priority = (v: unknown): CardPriority | undefined =>
 	CARD_PRIORITIES.includes(v as CardPriority) ? (v as CardPriority) : undefined;
@@ -11,6 +12,9 @@ export const GET: RequestHandler = ({ locals, params }) => {
 	const user = requireUser(locals);
 	const detail = getCard(params.id, user.id);
 	if (!detail) error(404, 'Card not found');
+	// Opening the card is dealing with the alert that pointed at it — whether
+	// that was an assignment or an agent finishing with it.
+	resolveOpened(user.id, params.id);
 	return json(detail);
 };
 
