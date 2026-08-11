@@ -136,9 +136,33 @@ export function demuxDockerLogs(buf: Buffer): { stdout: string; stderr: string }
 
 let cached: CommandExecutor | null = null;
 
+/**
+ * Which executor `CODING_EXECUTOR` names, or a refusal.
+ *
+ * An unrecognised value used to fall through to the local executor, which runs
+ * the agent's bash *inside the app container* — with SECRET_KEY and the
+ * database in reach. Both compose services set `docker`, so a typo there was a
+ * silent un-sandboxing with nothing anywhere to say so. The one safe reading of
+ * "I asked for a sandbox" is not "never mind then", so this throws and the
+ * container fails to start.
+ *
+ * Unset still means local: that is the dev and test default, and it is chosen
+ * by omission rather than mistyped.
+ */
+export function resolveExecutorKind(raw: string | undefined): 'local' | 'docker' {
+	const kind = raw || 'local';
+	if (kind !== 'local' && kind !== 'docker') {
+		throw new Error(
+			`CODING_EXECUTOR must be "local" or "docker", got ${JSON.stringify(kind)}. ` +
+				'Refusing to start rather than silently running agent commands unsandboxed.'
+		);
+	}
+	return kind;
+}
+
 export function getExecutor(): CommandExecutor {
 	if (cached) return cached;
-	const kind = env.CODING_EXECUTOR || 'local';
+	const kind = resolveExecutorKind(env.CODING_EXECUTOR);
 	if (kind === 'docker') {
 		const apiUrl = env.DOCKER_API_URL;
 		if (!apiUrl) throw new Error('CODING_EXECUTOR=docker requires DOCKER_API_URL');
