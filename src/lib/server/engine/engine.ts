@@ -20,6 +20,7 @@ import { buildContext } from './context';
 import { maybeCompact } from './compaction';
 import { maybeTitleChat, nameThisChatNote, setChatTitleTool } from './chat-title';
 import { createJob, failJob, type LiveJob } from './jobs';
+import { chatMaxSteps } from './limits';
 import { runAgentLoop, type LoopTool } from './loop';
 import { previousRunNote, runHistoryTool } from './run-history';
 import { askUserTool } from './ask-user';
@@ -30,8 +31,6 @@ import { bootstrapContext, knowledgeTools } from './tools/knowledge';
 import { mcpLoopTools } from './tools/mcp';
 import { applyToolPolicy } from './tools/registry';
 import { webSearchConfigured, webSearchTool } from './tools/web-search';
-
-const MAX_TOOL_ITERATIONS = 6;
 
 export interface TurnOptions {
 	chatId: string;
@@ -143,7 +142,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		primary: choice,
 		backup,
 		tools: activeTools,
-		maxIterations: MAX_TOOL_ITERATIONS,
+		maxIterations: chatMaxSteps(),
 		buildMessages: () =>
 			buildContext({
 				systemPrompt: fullSystemPrompt,

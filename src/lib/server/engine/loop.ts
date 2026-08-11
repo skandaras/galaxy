@@ -106,6 +106,32 @@ export interface LoopOptions {
 /** How often the budget is re-checked mid-run, in model round-trips. */
 const BUDGET_CHECK_EVERY = 4;
 
+/** Round-trips left when the model is told to start landing the turn. */
+const WRAP_UP_AT = 2;
+
+/**
+ * What the model is told about its own budget.
+ *
+ * The turn cap counts *model round-trips*, not tool calls — a single round-trip
+ * can carry as many calls as the model asks for, and the loop executes all of
+ * them. Nothing said so, so a model fetching one URL per turn spent the whole
+ * budget on a handful of pages and stopped with nothing to show. Saying it is
+ * worth more than raising the cap.
+ */
+export function turnBudgetNote(maxIterations: number): string {
+	return [
+		'',
+		`[Turn budget: this reply may take up to ${maxIterations} model turns]`,
+		'One turn can call several tools at once, and they all run before you are asked again. Batch independent calls — every URL you need, every file you want to read — into a single turn rather than spending a turn on each.',
+		'If the work will not fit, answer with what you have and say plainly what you could not check.'
+	].join('\n');
+}
+
+/** Pushed into the transcript near the cap, so it lands rather than stops. */
+export function wrapUpNote(left: number): string {
+	return `[${left} model turn${left === 1 ? '' : 's'} left in this reply. Make any last tool calls now, in this one turn, then answer with what you have and say what you could not check.]`;
+}
+
 /** A step label is a glance, not a sentence to read. */
 const STEP_LABEL_MAX = 100;
 
@@ -396,6 +422,15 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	const toolDefs: ToolDef[] = choice.model.supportsTools ? opts.tools.map((t) => t.def) : [];
 	const toolByName = new Map(opts.tools.map((t) => [t.def.name, t]));
 	const messages = opts.buildMessages();
+	// Appended here rather than by each caller: the loop owns the budget, so it
+	// is the only thing that can describe it accurately. Only worth saying when
+	// there are tools to batch.
+	if (toolDefs.length && messages[0]?.role === 'system' && typeof messages[0].content === 'string') {
+		messages[0] = {
+			...messages[0],
+			content: messages[0].content + turnBudgetNote(opts.maxIterations)
+		};
+	}
 
 	let assistantText = '';
 	let usage: Usage | null = null;
@@ -547,6 +582,12 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			stopReason = 'cancelled';
 			break;
 		}
+
+		// Near the cap, say so. Without this the budget simply runs out mid-chain
+		// and the turn ends holding an unfinished answer; with it the model gets
+		// one clear chance to land.
+		const left = opts.maxIterations - 1 - iteration;
+		if (left === WRAP_UP_AT) messages.push({ role: 'user', content: wrapUpNote(left) });
 
 		// Tool results are re-sent on every later iteration, so a long run has to
 		// shed the oldest ones or its own request eventually stalls the call.

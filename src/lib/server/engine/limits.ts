@@ -43,3 +43,11 @@ export const toolResultMaxChars = () => num('TOOL_RESULT_MAX_CHARS', 30_000);
  * nothing in hand at the point it should have been committing.
  */
 export const codingMaxSteps = () => num('CODING_MAX_STEPS', 50);
+
+/**
+ * Model round-trips one chat turn may take. Six was hardcoded, which is two
+ * pages read and an answer — a question needing four sources ran out with
+ * nothing to show. Raising it helps, but the real economy is that a round-trip
+ * can carry many tool calls at once; see the turn-budget note in loop.ts.
+ */
+export const chatMaxSteps = () => num('CHAT_MAX_STEPS', 12);
