@@ -97,7 +97,8 @@ async function run(opts: {
 		tools: opts.tools ?? [readTool],
 		maxIterations: opts.maxIterations,
 		budgetBlocked: opts.budgetBlocked,
-		buildMessages: () => [],
+		// A real system message, so the loop has somewhere to put the turn budget.
+		buildMessages: () => [{ role: 'system', content: 'You are a test agent.' }],
 		onDone: (t, _u, _c, s) => {
 			summary = s;
 			text = t;
@@ -162,6 +163,127 @@ describe('turn stop reasons', () => {
 			cancelAfterMs: 5
 		});
 		expect(summary?.stopReason).toBe('cancelled');
+	});
+});
+
+/**
+ * The browser rebuilds a reply by concatenating `delta` chunks and commits its
+ * own copy. So anything the server saves that it never streamed is a reply the
+ * user cannot see until the conversation is re-read — which is exactly how a
+ * cut-short turn came to show as an empty message.
+ */
+describe('everything saved was streamed', () => {
+	const streamed = (chunks: JobChunk[]) =>
+		chunks
+			.filter((c): c is Extract<JobChunk, { type: 'delta' }> => c.type === 'delta')
+			.map((c) => c.text)
+			.join('');
+
+	it('holds for a turn that finished on its own', async () => {
+		const { chunks, text } = await run({
+			choice: scriptedChoice({ toolRounds: 2, narrate: true }),
+			maxIterations: 20
+		});
+		// Narration is streamed and then consumed as a step label, so the browser
+		// is told to drop it — the tail is what remains, and it is the reply.
+		expect(streamed(chunks).endsWith(text ?? '')).toBe(true);
+	});
+
+	it('holds for a turn cut off by the step cap', async () => {
+		const { chunks, text } = await run({
+			choice: scriptedChoice({ toolRounds: 0, neverStops: true, narrate: true }),
+			maxIterations: 3
+		});
+		expect(text).toContain('Ran out of steps');
+		// The regression: this stand-in was assembled, not generated, so nothing
+		// streamed it and the browser had nothing to commit.
+		expect(streamed(chunks)).toContain(text ?? '');
+	});
+
+	it('holds for a turn the user stopped', async () => {
+		const { chunks, text } = await run({
+			choice: scriptedChoice({ toolRounds: 0, neverStops: true, narrate: true }),
+			maxIterations: 50,
+			cancelAfterMs: 5
+		});
+		expect(streamed(chunks)).toContain(text ?? '');
+	});
+});
+
+describe('the done chunk', () => {
+	const done = (chunks: JobChunk[]) => chunks.find((c) => c.type === 'done');
+
+	it('says how the run ended, so the page can offer to continue', async () => {
+		const finished = await run({ choice: scriptedChoice({ toolRounds: 1 }), maxIterations: 20 });
+		expect(done(finished.chunks)).toMatchObject({ stopReason: 'complete' });
+
+		const capped = await run({
+			choice: scriptedChoice({ toolRounds: 0, neverStops: true }),
+			maxIterations: 2
+		});
+		expect(done(capped.chunks)).toMatchObject({ stopReason: 'exhausted' });
+	});
+
+	it('reports a stop as cancelled, alongside the existing stopped flag', async () => {
+		const { chunks } = await run({
+			choice: scriptedChoice({ toolRounds: 0, neverStops: true }),
+			maxIterations: 50,
+			cancelAfterMs: 5
+		});
+		expect(done(chunks)).toMatchObject({ stopped: true, stopReason: 'cancelled' });
+	});
+});
+
+describe('the turn budget the model is told about', () => {
+	/** The system message the loop actually sent, not the one it was handed. */
+	async function systemSent(maxIterations: number, tools = [readTool]) {
+		let seen = '';
+		const choice = scriptedChoice({ toolRounds: 0 });
+		const inner = choice.adapter.stream.bind(choice.adapter);
+		choice.adapter.stream = async function* (req: ChatRequest) {
+			const first = req.messages[0];
+			if (first?.role === 'system' && typeof first.content === 'string') seen = first.content;
+			return yield* inner(req);
+		} as typeof choice.adapter.stream;
+		await run({ choice, maxIterations, tools });
+		return seen;
+	}
+
+	it('states the cap and that a turn can carry several calls', async () => {
+		// The economy that matters: the cap counts round-trips, and one
+		// round-trip runs as many tools as the model asks for.
+		const system = await systemSent(12);
+		expect(system).toContain('up to 12 model turns');
+		expect(system).toContain('several tools at once');
+	});
+
+	it('says nothing when there are no tools to batch', async () => {
+		expect(await systemSent(12, [])).not.toContain('Turn budget');
+	});
+
+	it('asks the model to land the turn as the cap approaches', async () => {
+		// Without this the budget simply runs out mid-chain and the turn ends
+		// holding an unfinished answer.
+		const notes: string[] = [];
+		const choice = scriptedChoice({ toolRounds: 0, neverStops: true });
+		const inner = choice.adapter.stream.bind(choice.adapter);
+		choice.adapter.stream = async function* (req: ChatRequest) {
+			for (const m of req.messages) {
+				if (m.role === 'user' && typeof m.content === 'string' && m.content.includes('turns left')) {
+					if (!notes.includes(m.content)) notes.push(m.content);
+				}
+			}
+			return yield* inner(req);
+		} as typeof choice.adapter.stream;
+
+		await run({ choice, maxIterations: 6 });
+		expect(notes).toHaveLength(1);
+		expect(notes[0]).toContain('2 model turns left');
+	});
+
+	it('does not nudge a run too short to reach the threshold', async () => {
+		const { chunks } = await run({ choice: scriptedChoice({ toolRounds: 0 }), maxIterations: 1 });
+		expect(chunks.some((c) => c.type === 'notice' && c.text.includes('turns left'))).toBe(false);
 	});
 });
 

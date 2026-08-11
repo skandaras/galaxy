@@ -11,6 +11,7 @@
 	import {
 		applyChunk,
 		itemsFromTrace,
+		unfinishedNote,
 		type MessageTrace,
 		type TimelineItem
 	} from '$lib/run-timeline';
@@ -104,6 +105,13 @@
 	 * thing from an agent's steps, and they render as one.
 	 */
 	let timeline = $state<TimelineItem[]>([]);
+	/**
+	 * How the last turn ended, when that was not "it finished". Chat never had
+	 * any signal for this: the "ran out of steps" notice is pushed by the coding
+	 * driver, so a chat turn that spent its whole budget fetching pages simply
+	 * stopped with no explanation.
+	 */
+	let lastStopReason = $state<string | null>(null);
 	let stages = $state<{ name: string; detail?: string }[]>([]);
 	let notices = $state<string[]>([]);
 	let errorBanner = $state<string | null>(null);
@@ -253,8 +261,13 @@
 		await selectChat(chat.id);
 	}
 
-	async function send() {
-		const content = input.trim();
+	/**
+	 * `text` is an override used by the Continue button; it must not touch the
+	 * user's draft, which may hold a half-written follow-up.
+	 */
+	async function send(text?: string) {
+		const override = text !== undefined;
+		const content = (text ?? input).trim();
 		if ((!content && !pendingFiles.length && !uploadedRefs.length) || streaming) return;
 		errorBanner = null;
 
@@ -310,10 +323,12 @@
 				attachments: attachments.length ? attachments : null
 			}
 		];
-		input = '';
 		uploadedRefs = [];
-		clearDraft(activeKey);
-		clearDraft(NEW_KEY);
+		if (!override) {
+			input = '';
+			clearDraft(activeKey);
+			clearDraft(NEW_KEY);
+		}
 		void scroll.toBottom('auto');
 		const { jobId } = await res.json();
 		attachStream(jobId);
@@ -339,6 +354,7 @@
 		streamText = '';
 		streamModel = '';
 		timeline = [];
+		lastStopReason = null;
 		stages = [];
 		notices = [];
 		question = null;
@@ -370,7 +386,9 @@
 				// which is the only one the auto-titler acts on.
 				const chat = currentChat;
 				const wasFirstTurn = !messages.some((m) => m.role === 'assistant');
+				lastStopReason = chunk.stopReason ?? null;
 				finalizeStream();
+				if (chat) void reconcile(chat.id);
 				if (chat && wasFirstTurn && !chat.titleCustom) void pickUpAutoTitle(chat.id);
 			}
 			else if (chunk.type === 'error') {
@@ -432,6 +450,24 @@
 		} else if (!answered) {
 			errorBanner = 'That run ended without a reply. Check the Observatory for the reason.';
 		}
+	}
+
+	/**
+	 * Re-read the thread once a turn ends.
+	 *
+	 * The browser rebuilds the reply from deltas and commits its own copy, which
+	 * is right until the server's version differs. It stays on screen until this
+	 * lands and stands if it fails, so this can only improve on it — same
+	 * reconciliation `recoverStream` does on a dropped connection, on the
+	 * success path.
+	 */
+	async function reconcile(chatId: string) {
+		const res = await fetch(`/api/chats/${chatId}`).catch(() => null);
+		if (!res?.ok) return;
+		const data = await res.json();
+		// The user may have switched chats while this was in flight.
+		if (currentChat?.id !== chatId) return;
+		messages = data.messages;
 	}
 
 	function appendLocalAssistant(content: string, modelKey: string) {
@@ -832,6 +868,12 @@
 					{/if}
 				</div>
 			{/if}
+			{#if unfinishedNote(lastStopReason) && !streaming}
+				<div class="run-ended">
+					<span>{unfinishedNote(lastStopReason)}</span>
+					<button class="chip" onclick={() => send('continue')}>Continue</button>
+				</div>
+			{/if}
 		</div>
 
 		<footer class="composer">
@@ -890,7 +932,7 @@
 				{:else}
 					<button
 						class="btn send"
-						onclick={send}
+						onclick={() => send()}
 						disabled={!canSend}
 						title={canSend ? 'Send message' : 'Type a message or attach a file first'}
 						aria-label="Send message">➤</button
@@ -1201,6 +1243,18 @@
 		color: var(--fg-dim);
 		font-size: 0.8rem;
 		animation: pulse 1.4s ease-in-out infinite;
+	}
+	/* Stays put after the turn ends. Chat had no signal at all for a turn that
+	   ran out of steps — it just stopped. */
+	.run-ended {
+		display: flex;
+		align-items: center;
+		gap: 0.7rem;
+		flex-wrap: wrap;
+		color: var(--fg-dim);
+		font-size: 0.75rem;
+		border-left: 2px solid var(--border);
+		padding: 0.2rem 0 0.2rem 0.6rem;
 	}
 	/* What the agent did, kept with the reply and folded away. */
 	.past-run {

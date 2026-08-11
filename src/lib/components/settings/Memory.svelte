@@ -98,6 +98,12 @@
 
 	<article class="card">
 		<h3>What it remembers {active.length ? `(${active.length})` : ''}</h3>
+		<p class="hint">
+			<strong>Archive</strong> is how you say "not that" — it leaves the observation out of every
+			agent's context and tells the next audit never to record it again. <strong>Delete</strong>
+			erases it outright; since the activity it came from is still there, a later audit can
+			record the same thing afresh.
+		</p>
 		<table>
 			<tbody>
 				{#each active as item (item.id)}
@@ -105,8 +111,16 @@
 						<td class="kind">{item.kind}</td>
 						<td>{item.content}</td>
 						<td class="actions">
-							<button class="btn" onclick={() => act(item, 'PATCH')}>Archive</button>
-							<button class="btn danger" onclick={() => act(item, 'DELETE')}>Delete</button>
+							<button
+								class="btn"
+								title="Drops it from every agent's context and stops it being recorded again."
+								onclick={() => act(item, 'PATCH')}>Archive</button
+							>
+							<button
+								class="btn danger"
+								title="Erases it. The next audit could record the same thing again — archive instead if you never want it back."
+								onclick={() => act(item, 'DELETE')}>Delete</button
+							>
 						</td>
 					</tr>
 				{:else}
@@ -121,7 +135,7 @@
 
 		{#if archived.length}
 			<details>
-				<summary>{archived.length} archived</summary>
+				<summary>{archived.length} archived — kept out of context, and never recorded again</summary>
 				<table>
 					<tbody>
 						{#each archived as item (item.id)}
@@ -129,7 +143,11 @@
 								<td class="kind">{item.kind}</td>
 								<td>{item.content}</td>
 								<td class="actions">
-									<button class="btn danger" onclick={() => act(item, 'DELETE')}>Delete</button>
+									<button
+										class="btn danger"
+										title="Erases it. The next audit could record the same thing again — archiving is what makes that stick."
+										onclick={() => act(item, 'DELETE')}>Delete</button
+									>
 								</td>
 							</tr>
 						{/each}
