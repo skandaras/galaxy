@@ -13,6 +13,7 @@
 		applyChunk,
 		isTimelineChunk,
 		itemsFromTrace,
+		unfinishedNote,
 		type MessageTrace,
 		type TimelineItem
 	} from '$lib/run-timeline';
@@ -102,6 +103,12 @@
 	let streamModel = $state('');
 	/** Steps, stages and notices for the run in flight, in the order they arrived. */
 	let timeline = $state<TimelineItem[]>([]);
+	/**
+	 * How the last run ended, when that was not "it finished". Held in page
+	 * state rather than on the message: it describes the run, and it is gone on
+	 * a reload, where the Observatory is the record.
+	 */
+	let lastStopReason = $state<string | null>(null);
 	let errorBanner = $state<string | null>(null);
 	let diffText = $state<string | null>(null);
 	let source: EventSource | null = null;
@@ -295,6 +302,7 @@
 		streamText = '';
 		streamModel = '';
 		timeline = [];
+		lastStopReason = null;
 		question = null;
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
@@ -317,7 +325,12 @@
 				question = { id: chunk.id, prompt: chunk.prompt, options: chunk.options ?? [] };
 			} else if (chunk.type === 'answer') {
 				if (question?.id === chunk.id) question = null;
-			} else if (chunk.type === 'done') finalize();
+			} else if (chunk.type === 'done') {
+				lastStopReason = chunk.stopReason ?? null;
+				const chatId = current?.chatId;
+				finalize();
+				if (chatId) void reconcile(chatId);
+			}
 			else if (chunk.type === 'error') {
 				errorBanner = chunk.message;
 				finalize(false);
@@ -367,6 +380,26 @@
 		} else if (!answered) {
 			errorBanner = 'That run ended without a reply. Check the Observatory for the reason.';
 		}
+	}
+
+	/**
+	 * Re-read the thread once a run ends.
+	 *
+	 * The browser rebuilds a reply from deltas and commits its own copy, which
+	 * is right until the server's version differs — and on a coding turn it
+	 * routinely does. A run that auto-continues saves one message per leg with
+	 * a "continue from where you left off" message between them, and a leg
+	 * summary rewrites a stand-in reply seconds after the fact. The local commit
+	 * stays on screen until this lands, and stands if it fails, so there is no
+	 * flicker and no worse-than-before.
+	 */
+	async function reconcile(chatId: string) {
+		const res = await fetch(`/api/code/sessions/${chatId}`).catch(() => null);
+		if (!res?.ok) return;
+		const data = await res.json();
+		// The user may have switched sessions while this was in flight.
+		if (current?.chatId !== chatId) return;
+		messages = data.messages.filter((m: Msg) => m.role !== 'tool');
 	}
 
 	function appendLocalAssistant(content: string, modelKey: string) {
@@ -650,6 +683,12 @@
 						{:else if !timeline.length}
 							<span class="thinking">{streamModel || '…'} is working</span>
 						{/if}
+					</div>
+				{/if}
+				{#if unfinishedNote(lastStopReason) && !streaming}
+					<div class="run-ended">
+						<span>{unfinishedNote(lastStopReason)}</span>
+						<button class="chip" onclick={() => send('continue')}>Continue</button>
 					</div>
 				{/if}
 				{#if current.mode === 'plan' && lastAssistantExists && !streaming}
@@ -1054,6 +1093,18 @@
 		align-items: center;
 		gap: 0.7rem;
 		padding: 0.4rem 0;
+	}
+	/* Stays put after the run ends, unlike the notice it replaces — which lived
+	   in the timeline and was cleared at exactly the moment it mattered. */
+	.run-ended {
+		display: flex;
+		align-items: center;
+		gap: 0.7rem;
+		flex-wrap: wrap;
+		color: var(--fg-dim);
+		font-size: 0.75rem;
+		border-left: 2px solid var(--border);
+		padding: 0.2rem 0 0.2rem 0.6rem;
 	}
 
 	.composer {

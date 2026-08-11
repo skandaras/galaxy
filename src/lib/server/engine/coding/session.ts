@@ -28,7 +28,13 @@ import { completeJob, createJob, failJob, pushChunk, type LiveJob } from '../job
 import { maybeCompact } from '../compaction';
 import { buildContext } from '../context';
 import { codingMaxSteps } from '../limits';
-import { fallbackReply, runAgentLoop, type LoopTool, type TurnSummary } from '../loop';
+import {
+	fallbackReply,
+	runAgentLoop,
+	type LoopTool,
+	type StopReason,
+	type TurnSummary
+} from '../loop';
 import { previousRunNote, runHistoryTool } from '../run-history';
 import { summariseLeg, withDeadline } from '../run-summary';
 import { webSearchConfigured, webSearchTool } from '../tools/web-search';
@@ -248,6 +254,9 @@ async function driveCodingTurn(opts: {
 	const { job, session } = opts;
 	const coding = getSetting<CodingSettings>('coding', DEFAULT_CODING);
 	let lastMessageId: string | undefined;
+	// How the turn as a whole ended, which is how its last leg ended — several
+	// legs can be exhausted on the way to one that finishes.
+	let lastStopReason: StopReason | undefined;
 
 	for (let leg = 1; ; leg++) {
 		pushChunk(job, { type: 'stage', name: 'working', detail: `leg ${leg}` });
@@ -255,6 +264,7 @@ async function driveCodingTurn(opts: {
 		lastMessageId = messageId ?? lastMessageId;
 		// No summary means the loop failed and already failed the job.
 		if (!summary) return;
+		lastStopReason = summary.stopReason;
 
 		// Started here and deliberately not awaited: the git snapshot below is
 		// several subprocess round-trips, which is free time for a cheap model.
@@ -345,7 +355,7 @@ async function driveCodingTurn(opts: {
 		});
 	}
 
-	completeJob(job, lastMessageId);
+	completeJob(job, lastMessageId, lastStopReason);
 }
 
 /**

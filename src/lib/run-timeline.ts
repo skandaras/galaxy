@@ -164,6 +164,23 @@ export function applyChunk(items: TimelineItem[], chunk: TimelineChunk): Timelin
 	return next;
 }
 
+/**
+ * How a run ended, for the line shown under the thread once it has — or null
+ * when it simply finished and there is nothing to say.
+ *
+ * This exists because the only signal an unfinished run gave was a `notice`,
+ * and a notice is a live progress message: on the code page it now lives in
+ * the timeline and goes when the timeline is cleared, and chat never raised
+ * one at all — a chat turn that spent its whole step budget fetching pages
+ * just stopped, with no explanation anywhere.
+ */
+export function unfinishedNote(stopReason: string | undefined | null): string | null {
+	if (stopReason === 'exhausted') return 'That run used up its step budget before finishing.';
+	if (stopReason === 'budget') return 'That run was cut off partway through by the spend cap.';
+	if (stopReason === 'cancelled') return 'You stopped that run.';
+	return null;
+}
+
 /** Render a finished run's stored trace as timeline items. */
 export function itemsFromTrace(trace: MessageTrace | null | undefined): TimelineItem[] {
 	return (trace?.steps ?? []).map((s) => ({

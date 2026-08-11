@@ -313,7 +313,9 @@ async function runResearch(
 		},
 		{ persist }
 	);
-	completeJob(job, saved.id);
+	// Research runs its own pipeline rather than the agent loop, and reaching
+	// here means it synthesised an answer.
+	completeJob(job, saved.id, 'complete');
 }
 
 /** Planner budget. The retry is for reasoning models, which spend the first

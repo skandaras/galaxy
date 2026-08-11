@@ -165,6 +165,74 @@ describe('turn stop reasons', () => {
 	});
 });
 
+/**
+ * The browser rebuilds a reply by concatenating `delta` chunks and commits its
+ * own copy. So anything the server saves that it never streamed is a reply the
+ * user cannot see until the conversation is re-read — which is exactly how a
+ * cut-short turn came to show as an empty message.
+ */
+describe('everything saved was streamed', () => {
+	const streamed = (chunks: JobChunk[]) =>
+		chunks
+			.filter((c): c is Extract<JobChunk, { type: 'delta' }> => c.type === 'delta')
+			.map((c) => c.text)
+			.join('');
+
+	it('holds for a turn that finished on its own', async () => {
+		const { chunks, text } = await run({
+			choice: scriptedChoice({ toolRounds: 2, narrate: true }),
+			maxIterations: 20
+		});
+		// Narration is streamed and then consumed as a step label, so the browser
+		// is told to drop it — the tail is what remains, and it is the reply.
+		expect(streamed(chunks).endsWith(text ?? '')).toBe(true);
+	});
+
+	it('holds for a turn cut off by the step cap', async () => {
+		const { chunks, text } = await run({
+			choice: scriptedChoice({ toolRounds: 0, neverStops: true, narrate: true }),
+			maxIterations: 3
+		});
+		expect(text).toContain('Ran out of steps');
+		// The regression: this stand-in was assembled, not generated, so nothing
+		// streamed it and the browser had nothing to commit.
+		expect(streamed(chunks)).toContain(text ?? '');
+	});
+
+	it('holds for a turn the user stopped', async () => {
+		const { chunks, text } = await run({
+			choice: scriptedChoice({ toolRounds: 0, neverStops: true, narrate: true }),
+			maxIterations: 50,
+			cancelAfterMs: 5
+		});
+		expect(streamed(chunks)).toContain(text ?? '');
+	});
+});
+
+describe('the done chunk', () => {
+	const done = (chunks: JobChunk[]) => chunks.find((c) => c.type === 'done');
+
+	it('says how the run ended, so the page can offer to continue', async () => {
+		const finished = await run({ choice: scriptedChoice({ toolRounds: 1 }), maxIterations: 20 });
+		expect(done(finished.chunks)).toMatchObject({ stopReason: 'complete' });
+
+		const capped = await run({
+			choice: scriptedChoice({ toolRounds: 0, neverStops: true }),
+			maxIterations: 2
+		});
+		expect(done(capped.chunks)).toMatchObject({ stopReason: 'exhausted' });
+	});
+
+	it('reports a stop as cancelled, alongside the existing stopped flag', async () => {
+		const { chunks } = await run({
+			choice: scriptedChoice({ toolRounds: 0, neverStops: true }),
+			maxIterations: 50,
+			cancelAfterMs: 5
+		});
+		expect(done(chunks)).toMatchObject({ stopped: true, stopReason: 'cancelled' });
+	});
+});
+
 describe('step chunks', () => {
 	const steps = (chunks: JobChunk[]) => chunks.filter((c) => c.type === 'step');
 	const tools = (chunks: JobChunk[]) => chunks.filter((c) => c.type === 'tool');

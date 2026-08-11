@@ -317,7 +317,7 @@ function finishCancelled(opts: LoopOptions): void {
 		},
 		{ persist: opts.persist }
 	);
-	completeJob(opts.job);
+	completeJob(opts.job, undefined, 'cancelled');
 }
 
 /**
@@ -591,6 +591,12 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	// and still came back empty is left alone: that is a genuine empty answer,
 	// and run-history reports it as one (see lastReplyWasEmpty).
 	const finalText = usedFallback ? fallbackReply(stopReason, lastStepLabel) : assistantText;
+	// Everything saved must have been streamed. This stand-in was assembled here
+	// rather than generated, so without this push the browser — which rebuilds
+	// the reply from deltas — has nothing to commit and shows an empty answer
+	// until the conversation is re-read. Safe to append: a fallback only happens
+	// when assistantText is empty, so the client's buffer is empty too.
+	if (usedFallback) pushChunk(job, { type: 'delta', text: finalText });
 	const messageId = opts.onDone(finalText, usage, choice, summary);
 	logUsage(opts, choice.model.modelKey, usage, 'ok', choice);
 	emitEvent(
@@ -605,7 +611,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		},
 		{ persist }
 	);
-	if (opts.autoComplete !== false) completeJob(job, messageId || undefined);
+	if (opts.autoComplete !== false) completeJob(job, messageId || undefined, stopReason);
 }
 
 /** `ok` is false for a failed call, so its step can be marked failed too. */

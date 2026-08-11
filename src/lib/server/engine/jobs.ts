@@ -3,6 +3,9 @@ import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { jobs } from '$lib/server/db/schema';
 import { notify } from '$lib/server/notifications';
+// Type-only, so the cycle with loop.ts (which imports this module's functions)
+// is erased at build time.
+import type { StopReason } from './loop';
 
 export type JobChunk =
 	| { type: 'meta'; model: string }
@@ -44,7 +47,10 @@ export type JobChunk =
 	// re-open a question that has already been dealt with.
 	| { type: 'question'; id: string; prompt: string; options: string[] }
 	| { type: 'answer'; id: string; text: string }
-	| { type: 'done'; messageId?: string; stopped?: boolean }
+	// `stopped` says the user pressed stop; `stopReason` says why the run ended
+	// at all, which is the only way the browser can tell a finished answer from
+	// one that ran out of steps and needs picking up.
+	| { type: 'done'; messageId?: string; stopped?: boolean; stopReason?: StopReason }
 	| { type: 'error'; message: string };
 
 export interface LiveJob {
@@ -108,12 +114,17 @@ export function pushChunk(job: LiveJob, chunk: JobChunk): void {
 	for (const sub of job.subscribers) sub(chunk);
 }
 
-export function completeJob(job: LiveJob, messageId?: string): void {
+export function completeJob(job: LiveJob, messageId?: string, stopReason?: StopReason): void {
 	// A run the user stopped still finishes normally — the partial reply is kept
 	// — but it is recorded as cancelled rather than done.
 	const stopped = job.controller.signal.aborted;
 	job.status = stopped ? 'cancelled' : 'done';
-	pushChunk(job, { type: 'done', messageId, ...(stopped ? { stopped: true } : {}) });
+	pushChunk(job, {
+		type: 'done',
+		messageId,
+		...(stopped ? { stopped: true } : {}),
+		...(stopReason ? { stopReason } : {})
+	});
 	persistFinal(job, stopped ? 'Stopped by user' : null);
 }
 
