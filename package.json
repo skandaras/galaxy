@@ -11,7 +11,8 @@
     "start": "node build",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "test:ui": "node scripts/smoke-ui.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -32,6 +33,7 @@
     "@types/node": "^22.0.0",
     "@types/web-push": "^3.6.4",
     "drizzle-kit": "^0.31.0",
+    "playwright": "^1.62.1",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "^5.6.0",

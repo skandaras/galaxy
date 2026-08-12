@@ -6,9 +6,19 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A second push to the same branch makes the first one's answer irrelevant.
+# Never cancel main, though: docker-dev hangs off it, and a cancelled run
+# there leaves :dev stale with nothing saying so.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The suites below are minutes; anything approaching this is wedged, and
+    # without a cap a wedged job holds a runner for six hours.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -19,8 +29,28 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run build
+
       - name: End-to-end smoke (promotion gate)
         run: bash scripts/smoke-e2e.sh
+
+      # Only chromium, and only the browser: --with-deps would pull a desktop
+      # stack we have no use for on a headless runner.
+      - name: Install Chromium for the browser smoke
+        run: npx playwright install chromium
+      - name: Browser smoke (promotion gate)
+        run: npm run test:ui
+
+      # Screenshots are the whole point of a browser failure: a bounding-box
+      # assertion tells you what moved, the picture tells you what it looks
+      # like. Kept only when something failed.
+      - name: Keep the screenshots from a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
 
   docker-dev:
     # Every green build of main becomes the :dev image; promotion to :stable
@@ -36,6 +66,7 @@ jobs:
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
@@ -63,6 +94,7 @@ jobs:
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
