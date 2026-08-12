@@ -24,6 +24,37 @@
 	let items = $state<Notification[]>([]);
 	let unread = $state(0);
 	let open = $state(false);
+	let bellEl = $state<HTMLElement | null>(null);
+	/**
+	 * Where to pin the panel, in viewport coordinates.
+	 *
+	 * It has to be `fixed` rather than absolutely placed inside the nav: the
+	 * pane is a scroll container (`overflow-y: auto`), which clips a child that
+	 * sticks out sideways — so the panel was being sliced down the middle and
+	 * the Mark-all-read button was off-screen entirely.
+	 */
+	let at = $state({ left: 0, bottom: 0, width: 0 });
+
+	const PANEL_WIDTH = 360;
+	const MARGIN = 8;
+
+	function place() {
+		const rect = bellEl?.getBoundingClientRect();
+		if (!rect) return;
+		const width = Math.min(PANEL_WIDTH, window.innerWidth - MARGIN * 2);
+		at = {
+			// Clamped to the viewport so a narrow window shifts it left rather
+			// than pushing it off the edge.
+			left: Math.max(MARGIN, Math.min(rect.left, window.innerWidth - width - MARGIN)),
+			bottom: Math.max(MARGIN, window.innerHeight - rect.top + 6),
+			width
+		};
+	}
+
+	function toggle() {
+		open = !open;
+		if (open) place();
+	}
 
 	onMount(() => {
 		void load();
@@ -77,7 +108,11 @@
 	});
 
 	const ago = (ts: number) => {
-		const mins = Math.round((Date.now() - ts) / 60000);
+		// Coerced rather than trusted: the API sends epoch ms, but a stale tab
+		// mid-deploy can still be holding the ISO strings that produced "NaNd".
+		const at = typeof ts === 'number' ? ts : Date.parse(String(ts));
+		if (!Number.isFinite(at)) return '';
+		const mins = Math.round((Date.now() - at) / 60000);
 		if (mins < 1) return 'just now';
 		if (mins < 60) return `${mins}m ago`;
 		const hrs = Math.round(mins / 60);
@@ -85,12 +120,14 @@
 	};
 </script>
 
-<div class="bell-wrap">
+<svelte:window onresize={() => open && place()} />
+
+<div class="bell-wrap" bind:this={bellEl}>
 	<button
 		class="bell"
 		class:has-unread={unread > 0}
 		aria-label={unread ? `${unread} unread notifications` : 'Notifications'}
-		onclick={() => (open = !open)}
+		onclick={toggle}
 	>
 		<span class="glyph">◔</span>
 		<span class="label">Alerts</span>
@@ -98,10 +135,20 @@
 	</button>
 
 	{#if open}
-		<div class="panel">
+		<!-- Click-away and reposition-on-resize, so a fixed panel cannot be left
+		     stranded away from the button it belongs to. -->
+		<div
+			class="scrim"
+			role="presentation"
+			onclick={() => (open = false)}
+			onkeydown={(e) => e.key === 'Escape' && (open = false)}
+		></div>
+		<div class="panel" style={`left:${at.left}px; bottom:${at.bottom}px; width:${at.width}px`}>
 			<header>
 				<span>Notifications</span>
-				{#if unread > 0}<button class="clear" onclick={clearAll}>Mark all read</button>{/if}
+				<button class="clear" disabled={unread === 0} onclick={clearAll}>
+					{unread === 0 ? 'All read' : 'Mark all as read'}
+				</button>
 			</header>
 			<ul>
 				{#each items as n (n.id)}
@@ -162,24 +209,35 @@
 		min-width: 1rem;
 		text-align: center;
 	}
+	/* Catches the click that dismisses the panel. Transparent, but it has to be
+	   under the panel and over everything else. */
+	.scrim {
+		position: fixed;
+		inset: 0;
+		z-index: 60;
+	}
+	/* Fixed, not absolute: the nav pane scrolls, and a scroll container clips
+	   any child that overflows it sideways. Coordinates come from the button's
+	   own rect (see place()), so it stays anchored without being contained. */
 	.panel {
-		position: absolute;
-		bottom: 100%;
-		left: 0;
-		width: 20rem;
-		max-height: 24rem;
+		position: fixed;
+		max-height: min(28rem, 70vh);
 		overflow-y: auto;
 		background: var(--bg-pane);
 		border: 1px solid var(--border);
 		border-radius: 8px;
 		box-shadow: 0 6px 20px rgb(0 0 0 / 0.4);
-		z-index: 50;
-		margin-bottom: 0.3rem;
+		z-index: 61;
 	}
+	/* The list scrolls under it, so the action stays reachable at fifty alerts. */
 	header {
+		position: sticky;
+		top: 0;
+		background: var(--bg-pane);
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		gap: 0.6rem;
 		padding: 0.5rem 0.6rem;
 		border-bottom: 1px solid var(--border);
 		font-size: 0.65rem;
@@ -188,14 +246,25 @@
 		color: var(--accent);
 	}
 	.clear {
+		flex-shrink: 0;
 		background: none;
-		border: none;
+		border: 1px solid var(--border);
+		border-radius: 4px;
 		color: var(--fg-dim);
 		font-family: inherit;
 		font-size: 0.62rem;
+		padding: 0.2rem 0.45rem;
 		cursor: pointer;
 		text-transform: none;
 		letter-spacing: normal;
+	}
+	.clear:hover:not(:disabled) {
+		color: var(--accent);
+		border-color: var(--accent);
+	}
+	.clear:disabled {
+		opacity: 0.45;
+		cursor: default;
 	}
 	ul {
 		list-style: none;

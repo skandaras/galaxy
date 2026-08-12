@@ -7,6 +7,24 @@ import { sendPush } from '$lib/server/push';
 
 export type Notification = typeof notifications.$inferSelect;
 
+/** A notification as the browser receives it. */
+export interface WireNotification extends Omit<Notification, 'createdAt' | 'readAt'> {
+	createdAt: number;
+	readAt: number | null;
+}
+
+/**
+ * Timestamps go over the wire as epoch milliseconds, matching every other API
+ * here (see rowToMeta in chats.ts).
+ *
+ * Without this the raw row is serialised and a Date becomes an ISO string, so
+ * the bell's `Date.now() - createdAt` produced NaN and every notification was
+ * stamped "NaNd ago".
+ */
+export function toWire(n: Notification): WireNotification {
+	return { ...n, createdAt: n.createdAt.getTime(), readAt: n.readAt?.getTime() ?? null };
+}
+
 const bus = new EventEmitter();
 bus.setMaxListeners(100);
 
