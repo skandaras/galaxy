@@ -6,9 +6,31 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 DATA=$(mktemp -d)
-MOCK_PORT=39900
-APP_PORT=39901
+# Below the ephemeral range (/proc/sys/net/ipv4/ip_local_port_range, normally
+# 32768-60999). These used to be 3990x, inside it — so the kernel could hand
+# one of them to an outbound connection as its source port, and the next
+# server to start died with EADDRINUSE. It bit the third and fourth servers
+# most often, because by then the run has made a few hundred connections.
+MOCK_PORT=18900
+APP_PORT=18901
 FAIL=0
+
+# Fail loudly and immediately when a server does not come up. A fixed sleep
+# meant the first request got an empty reply and the run collapsed several
+# checks later in `JSON.parse`, pointing at nothing.
+wait_for() { # wait_for <label> <url> [--any]
+  local label=$1 url=$2 flag=${3:-}
+  for _ in $(seq 1 80); do
+    if [ "$flag" = --any ]; then
+      curl -s -o /dev/null --max-time 2 "$url" && return 0
+    else
+      curl -sf -o /dev/null --max-time 2 "$url" && return 0
+    fi
+    sleep 0.25
+  done
+  echo "SMOKE FAILED: $label never came up at $url"
+  exit 1
+}
 
 node scripts/mock-provider.mjs $MOCK_PORT &
 MOCK_PID=$!
@@ -17,7 +39,8 @@ MOCK_PID=$!
 AUTH_MODE=dev DEV_USER=smoke DATA_DIR=$DATA PORT=$APP_PORT CODING_EXECUTOR=local ALLOW_PRIVATE_RESEARCH_FETCH=1 node build &
 APP_PID=$!
 trap 'kill $MOCK_PID $APP_PID 2>/dev/null; rm -rf $DATA' EXIT
-sleep 3
+wait_for "the mock provider" "http://127.0.0.1:$MOCK_PORT/" --any
+wait_for "the app" "http://127.0.0.1:$APP_PORT/healthz"
 
 api() { curl -sf -H 'content-type: application/json' "$@"; }
 B=http://127.0.0.1:$APP_PORT
@@ -322,12 +345,12 @@ check "manifest served" "$(curl -s -o /dev/null -w '%{http_code}' $B/manifest.we
 # second instance runs in authelia mode against the same data dir and is driven
 # with Remote-User headers (same technique as the M0 auth checks).
 # ---------------------------------------------------------------------------
-MU_PORT=39902
+MU_PORT=18902
 AUTH_MODE=authelia TRUSTED_PROXY_IPS=127.0.0.1 ADMIN_GROUP=galaxy-admins \
   DATA_DIR=$DATA PORT=$MU_PORT CODING_EXECUTOR=local ALLOW_PRIVATE_RESEARCH_FETCH=1 node build &
 MU_PID=$!
 trap 'kill $MOCK_PID $APP_PID $MU_PID 2>/dev/null; rm -rf $DATA' EXIT
-sleep 3
+wait_for "the multi-user instance" "http://127.0.0.1:$MU_PORT/healthz"
 M=http://127.0.0.1:$MU_PORT
 as() { # as <user> <curl args...>
   local u=$1; shift
@@ -628,12 +651,12 @@ check "bob sees none of alice's devices" "$(as bob $M/api/push/subscriptions | j
 # tiny step budget, which is process-wide, so this runs as its own instance on
 # its own data dir rather than disturbing the one above.
 # ---------------------------------------------------------------------------
-LEG_PORT=39903
+LEG_PORT=18903
 LEG_DATA=$(mktemp -d)
 AUTH_MODE=dev DEV_USER=smoke DATA_DIR=$LEG_DATA PORT=$LEG_PORT CODING_EXECUTOR=local CODING_MAX_STEPS=3 node build &
 LEG_PID=$!
 trap 'kill $MOCK_PID $APP_PID $MU_PID $LEG_PID 2>/dev/null; rm -rf $DATA $LEG_DATA' EXIT
-sleep 3
+wait_for "the step-limit instance" "http://127.0.0.1:$LEG_PORT/healthz"
 L=http://127.0.0.1:$LEG_PORT
 
 LPROV=$(api -X POST $L/api/admin/providers -d "{\"kind\":\"openai-compatible\",\"name\":\"mock\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/v1\"}" | jqn .id)
