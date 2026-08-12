@@ -462,7 +462,7 @@
 				     pointer-events:none matters: elementFromPoint has to see the
 				     lane underneath, not this. -->
 				<div
-					class="ghost"
+					class="drag-ghost"
 					class:returning={drag.returning}
 					style={`width:${drag.size.w}px; height:${drag.size.h}px; transform:translate(${
 						drag.returning ? drag.origin.x : drag.at.x - drag.grab.x
@@ -615,7 +615,11 @@
 	/* The card under the pointer. Fixed and transform-positioned so following
 	   the pointer costs no layout, and pointer-events:none so elementFromPoint
 	   sees the lane underneath rather than this. */
-	.ghost {
+	/* Named for what it is, not just "ghost": this component already had a
+	   .btn.ghost variant, and the bare .ghost selector matched it too — which
+	   pinned the board's Configure link to the top-left corner of the window,
+	   on top of the sidebar. */
+	.drag-ghost {
 		position: fixed;
 		top: 0;
 		left: 0;
@@ -636,7 +640,7 @@
 	}
 	/* A refused drop slides home instead of vanishing, so it is clear nothing
 	   was moved. */
-	.ghost.returning {
+	.drag-ghost.returning {
 		transition: transform 0.18s ease-out;
 		opacity: 0.6;
 	}
