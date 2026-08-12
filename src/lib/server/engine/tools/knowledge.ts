@@ -7,6 +7,7 @@ import {
 	saveDoc,
 	searchDocs
 } from '$lib/server/library';
+import { toolResultMaxChars } from '../limits';
 import { memoryDigest } from '../memory';
 import { boardsDigest } from './boards';
 
@@ -21,7 +22,7 @@ export function bootstrapContext(userId: string): string {
 		'[Available skills — load the full instructions with skill_load when one applies]',
 		skillIndexText(),
 		'',
-		'[Library — docs you can see: your own plus anything shared. Read with library_read, search with library_search, save durable knowledge with library_write]',
+		'[Library index — titles only, grouped by folder. These are the docs you can see: your own plus anything shared. This is a catalogue, not their contents: search inside them with library_search, open one with library_read, save durable knowledge with library_write]',
 		libraryDigest(userId),
 		'',
 		'[Task boards — yours plus any shared with you. Read them with board_read, one card in full with card_read]',
@@ -61,7 +62,10 @@ export function knowledgeTools(userId: string): LoopTool[] {
 		{
 			def: {
 				name: 'library_search',
-				description: 'Full-text search across the Library documents.',
+				description:
+					'Search inside the Library. Matches on document titles and full text, and returns ' +
+					'the matching fragments with their document ids — not whole documents. Use this ' +
+					'to find which doc holds something, then library_read to open it.',
 				parameters: {
 					type: 'object',
 					properties: { query: { type: 'string' } },
@@ -72,9 +76,7 @@ export function knowledgeTools(userId: string): LoopTool[] {
 			execute: async (a) => {
 				const results = searchDocs(String(a.query ?? ''), userId);
 				if (!results.length) return 'No matches.';
-				return results
-					.map((r) => `- ${r.title} (id: ${r.id}): ${r.match}`)
-					.join('\n');
+				return results.map((r) => `- ${r.title} (id: ${r.id}): ${r.match}`).join('\n');
 			}
 		},
 		{
@@ -93,7 +95,13 @@ export function knowledgeTools(userId: string): LoopTool[] {
 				const meta = findDocByTitle(ref, userId);
 				const doc = meta ? getDoc(meta.id, userId) : getDoc(ref, userId);
 				if (!doc) throw new Error(`No Library doc matching "${ref}"`);
-				return doc.body.slice(0, 60_000);
+				// Held to the same per-call budget as a file read in a coding turn.
+				// A hardcoded 60k could put twice the whole tool budget into context
+				// from one call, and every later iteration re-sent it.
+				const cap = toolResultMaxChars();
+				return doc.body.length > cap
+					? `${doc.body.slice(0, cap)}\n\n[truncated at ${cap} characters — search this doc for the part you need]`
+					: doc.body;
 			}
 		},
 		{

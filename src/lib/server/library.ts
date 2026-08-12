@@ -213,15 +213,37 @@ function uniqueSlug(base: string): string {
 	return candidate;
 }
 
-/** Compact digest of the whole Library for the agent context bootstrap. */
-export function libraryDigest(userId: string, maxDocs = 30): string {
+/**
+ * Index of the Library for the agent context bootstrap: what exists, not what
+ * it says.
+ *
+ * This block is prepended to *every* chat and coding turn, so its cost is paid
+ * on each one. It used to carry a 120-character snippet of every document —
+ * around 5,000 characters of body text per turn at thirty docs, almost none of
+ * it relevant to the question being asked, and it grew with the shelf.
+ *
+ * Titles and folders are enough to decide what to open; library_search reads
+ * the content properly, matching on title and body, and returns only the
+ * matching fragments.
+ */
+export function libraryDigest(userId: string, maxDocs = 40): string {
 	const docs = listDocs(userId);
 	if (!docs.length) return '(library is empty)';
-	const lines = docs
-		.slice(0, maxDocs)
-		.map((d) => `- ${d.title}${d.author === 'agent' ? ' [agent]' : ''}: ${d.snippet.slice(0, 120)}`);
-	if (docs.length > maxDocs) {
-		lines.push(`…and ${docs.length - maxDocs} more — use library_search to find them.`);
+
+	// Grouped, because a folder is a strong hint about what a doc is for and
+	// costs a line per group rather than a line per doc.
+	const byFolder = new Map<string, string[]>();
+	for (const d of docs.slice(0, maxDocs)) {
+		const key = d.folder || '';
+		const label = `${d.title}${d.author === 'agent' ? ' [agent]' : ''}`;
+		byFolder.set(key, [...(byFolder.get(key) ?? []), label]);
 	}
+
+	const lines = [...byFolder.entries()]
+		.sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
+		.map(([folder, titles]) => `- ${folder || 'Unfiled'}: ${titles.join(' · ')}`);
+
+	if (docs.length > maxDocs) lines.push(`…and ${docs.length - maxDocs} more.`);
+	lines.push('Use library_search to search their contents, library_read to open one.');
 	return lines.join('\n');
 }
