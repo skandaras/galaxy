@@ -73,7 +73,7 @@
 		z-index: 1;
 	}
 	.pane {
-		width: 230px;
+		width: 260px;
 		flex-shrink: 0;
 		background: var(--bg-pane);
 		border-right: 1px solid var(--border);

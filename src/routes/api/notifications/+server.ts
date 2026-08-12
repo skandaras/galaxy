@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
-import { listNotifications, markAllRead, unreadCount } from '$lib/server/notifications';
+import { listNotifications, markAllRead, toWire, unreadCount } from '$lib/server/notifications';
 
 export const GET: RequestHandler = ({ locals, url }) => {
 	const user = requireUser(locals);
@@ -9,7 +9,7 @@ export const GET: RequestHandler = ({ locals, url }) => {
 		notifications: listNotifications(user.id, {
 			unreadOnly: url.searchParams.get('unread') === '1',
 			limit: Number(url.searchParams.get('limit')) || 50
-		}),
+		}).map(toWire),
 		unread: unreadCount(user.id)
 	});
 };

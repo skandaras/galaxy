@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import CardDetail from '$lib/components/boards/CardDetail.svelte';
 	import { PRIORITY_MARK, type Board, type BoardView, type Card } from '$lib/board-types';
+	import { dropIndex, isNoOp, movedBeyond, type CardBox } from '$lib/board-drag';
 
 	/**
 	 * Which projects are showing. Hiding one only hides its cards from this
@@ -17,8 +18,38 @@
 	let selectedId = $state<string | null>(null);
 	let openCardId = $state<string | null>(null);
 	let showArchive = $state(false);
-	let draggingId = $state<string | null>(null);
-	let dropLane = $state<string | null>(null);
+	/**
+	 * A card in flight.
+	 *
+	 * Press-and-hold rather than the browser's own drag-and-drop: HTML5 DnD
+	 * starts on the first pixel of movement (so a board is hard to scroll and a
+	 * card hard to click), gives no control over the ghost, and cannot animate
+	 * a rejected drop back to where it came from.
+	 */
+	interface DragState {
+		id: string;
+		title: string;
+		from: { laneId: string; index: number };
+		/** Pointer offset inside the card, so the ghost sits under the grab point. */
+		grab: { x: number; y: number };
+		size: { w: number; h: number };
+		at: { x: number; y: number };
+		/** Where it started, for the snap-back animation. */
+		origin: { x: number; y: number };
+		target: { laneId: string; index: number } | null;
+		returning: boolean;
+	}
+
+	const HOLD_MS = 180;
+	const MOVE_TOLERANCE = 8;
+
+	let drag = $state<DragState | null>(null);
+	/** Press that has not yet become a drag: still a click until the hold fires. */
+	let pending: { card: Card; laneId: string; index: number; x: number; y: number; el: HTMLElement } | null =
+		null;
+	let holdTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Set when a gesture became a drag, so the click that follows is ignored. */
+	let justDragged = false;
 	let newCardLane = $state<string | null>(null);
 	let newCardTitle = $state('');
 	let error = $state<string | null>(null);
@@ -146,12 +177,126 @@
 		await goto(`/chat?chat=${chatId}`);
 	}
 
-	function onDrop(laneId: string) {
-		const id = draggingId;
-		draggingId = null;
-		dropLane = null;
-		if (id) void moveTo(id, laneId);
+	// --- press and hold to drag a card ---------------------------------------
+
+	function onCardPointerDown(e: PointerEvent, card: Card, laneId: string, index: number) {
+		// The selects inside a card are controls in their own right, and a
+		// secondary click is never a drag.
+		if (e.button !== 0 || (e.target as HTMLElement).closest('select, input, textarea, a')) return;
+		// Cleared here rather than in openCard: a drag that ends over another lane
+		// produces no click at all, and the flag would swallow the next one.
+		justDragged = false;
+		pending = { card, laneId, index, x: e.clientX, y: e.clientY, el: e.currentTarget as HTMLElement };
+		holdTimer = setTimeout(beginDrag, HOLD_MS);
+		window.addEventListener('pointermove', onPointerMove, { passive: false });
+		window.addEventListener('pointerup', onPointerUp);
+		window.addEventListener('pointercancel', abandon);
 	}
+
+	function beginDrag() {
+		if (!pending) return;
+		const rect = pending.el.getBoundingClientRect();
+		drag = {
+			id: pending.card.id,
+			title: pending.card.title,
+			from: { laneId: pending.laneId, index: pending.index },
+			grab: { x: pending.x - rect.left, y: pending.y - rect.top },
+			size: { w: rect.width, h: rect.height },
+			at: { x: pending.x, y: pending.y },
+			origin: { x: rect.left, y: rect.top },
+			target: { laneId: pending.laneId, index: pending.index },
+			returning: false
+		};
+		justDragged = true;
+	}
+
+	function onPointerMove(e: PointerEvent) {
+		if (!drag) {
+			// Still deciding. Movement before the hold fires means the person is
+			// clicking or scrolling, not dragging.
+			if (pending && movedBeyond(pending, { x: e.clientX, y: e.clientY }, MOVE_TOLERANCE)) abandon();
+			return;
+		}
+		// Holds the page still under a finger once the drag is real.
+		e.preventDefault();
+		drag.at = { x: e.clientX, y: e.clientY };
+		drag.target = targetAt(e.clientX, e.clientY);
+	}
+
+	/** Which lane and slot the pointer is over, or null if it is over neither. */
+	function targetAt(x: number, y: number): { laneId: string; index: number } | null {
+		const laneEl = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-lane]');
+		if (!laneEl?.dataset.lane || !drag) return null;
+		const boxes: CardBox[] = [...laneEl.querySelectorAll<HTMLElement>('[data-card]')].map((el) => {
+			const r = el.getBoundingClientRect();
+			return { id: el.dataset.card ?? '', top: r.top, bottom: r.bottom };
+		});
+		return { laneId: laneEl.dataset.lane, index: dropIndex(boxes, y, drag.id) };
+	}
+
+	function onPointerUp() {
+		if (!drag) return abandon();
+		const { id, from, target } = drag;
+		detach();
+		if (!target || isNoOp(from, target)) {
+			// Nowhere to land, or nowhere new: animate home rather than blinking.
+			drag = { ...drag, returning: true, target: null };
+			setTimeout(() => (drag = null), 180);
+			return;
+		}
+		drag = null;
+		void moveTo(id, target.laneId, target.index);
+	}
+
+	/** Give up on the gesture entirely — a scroll, a cancelled touch, Escape. */
+	function abandon() {
+		detach();
+		if (drag) {
+			drag = { ...drag, returning: true, target: null };
+			setTimeout(() => (drag = null), 180);
+		}
+	}
+
+	function detach() {
+		clearTimeout(holdTimer);
+		pending = null;
+		window.removeEventListener('pointermove', onPointerMove);
+		window.removeEventListener('pointerup', onPointerUp);
+		window.removeEventListener('pointercancel', abandon);
+	}
+
+	/** Opening a card must not fire on the click that ends a drag. */
+	function openCard(id: string) {
+		if (justDragged) {
+			justDragged = false;
+			return;
+		}
+		openCardId = id;
+	}
+
+	const showDropLine = (laneId: string, index: number) =>
+		!!drag && !drag.returning && drag.target?.laneId === laneId && drag.target.index === index;
+
+	/**
+	 * A lane's cards, each tagged with the slot it occupies once the dragged
+	 * card is discounted — which is the space `dropIndex` counts in and the
+	 * server splices into, so the drop line lands where the card will.
+	 *
+	 * The dragged card stays in the list, dimmed. Taking it out reflowed the
+	 * lane under the pointer mid-drag, which moved the very card you were
+	 * aiming at and made a short lane jump as you picked something up.
+	 */
+	const laneRows = (laneId: string) => {
+		let slot = 0;
+		return cardsIn(laneId).map((card) => {
+			const lifted = !!drag && !drag.returning && card.id === drag.id;
+			return { card, lifted, slot: lifted ? -1 : slot++ };
+		});
+	};
+
+	/** Slots in a lane once the dragged card is discounted. */
+	const slotCount = (laneId: string) =>
+		cardsIn(laneId).filter((c) => !(drag && !drag.returning && c.id === drag.id)).length;
 
 	const cardsIn = (laneId: string) =>
 		(view?.cards ?? [])
@@ -163,6 +308,8 @@
 		id ? (view?.members.find((m) => m.userId === id)?.username ?? '') : '';
 	const when = (ts: number | null) => (ts ? new Date(ts).toLocaleDateString() : '');
 </script>
+
+<svelte:window onkeydown={(e) => e.key === 'Escape' && drag && abandon()} />
 
 <div class="boards">
 	<header class="bar">
@@ -232,30 +379,23 @@
 						class="lane"
 						role="group"
 						aria-label={lane.name}
-						class:over={dropLane === lane.id}
-						ondragover={(e) => {
-							e.preventDefault();
-							dropLane = lane.id;
-						}}
-						ondragleave={() => dropLane === lane.id && (dropLane = null)}
-						ondrop={(e) => {
-							e.preventDefault();
-							onDrop(lane.id);
-						}}
+						data-lane={lane.id}
+						class:over={drag?.target?.laneId === lane.id && !drag.returning}
 					>
 						<h3>{lane.name} <span class="count">{cardsIn(lane.id).length}</span></h3>
 
-						{#each cardsIn(lane.id) as card (card.id)}
+						{#each laneRows(lane.id) as row (row.card.id)}
+							{@const card = row.card}
+							{#if showDropLine(lane.id, row.slot)}<div class="drop-line"></div>{/if}
 							<article
 								class="card"
 								class:projected={!!projectOf(card)}
+								class:lifted={row.lifted}
 								style={`--project:${projectOf(card)?.colour ?? 'transparent'}`}
-								class:dragging={draggingId === card.id}
-								draggable="true"
-								ondragstart={() => (draggingId = card.id)}
-								ondragend={() => (draggingId = null)}
+								data-card={card.id}
+								onpointerdown={(e) => onCardPointerDown(e, card, lane.id, row.slot)}
 							>
-								<button class="card-face" onclick={() => (openCardId = card.id)}>
+								<button class="card-face" onclick={() => openCard(card.id)}>
 									<span class="card-title">{card.title}</span>
 									{#if card.priority !== 'none'}
 										<span class="prio" data-p={card.priority}>{PRIORITY_MARK[card.priority]}</span>
@@ -277,7 +417,8 @@
 										<span class="who">{memberName(card.assignedTo)}</span>
 									{/if}
 								</div>
-								<!-- Touch has no drag: the lane menu is how a card moves on a phone. -->
+								<!-- Kept alongside dragging, not replaced by it: this is the
+								     keyboard route, and the reliable one on a phone. -->
 								<select
 									class="lane-move"
 									value={card.laneId}
@@ -290,6 +431,7 @@
 								</select>
 							</article>
 						{/each}
+						{#if showDropLine(lane.id, slotCount(lane.id))}<div class="drop-line"></div>{/if}
 
 						{#if newCardLane === lane.id}
 							<input
@@ -314,6 +456,21 @@
 					</section>
 				{/each}
 			</div>
+
+			{#if drag}
+				<!-- Follows the pointer, or slides home when a drop is refused.
+				     pointer-events:none matters: elementFromPoint has to see the
+				     lane underneath, not this. -->
+				<div
+					class="ghost"
+					class:returning={drag.returning}
+					style={`width:${drag.size.w}px; height:${drag.size.h}px; transform:translate(${
+						drag.returning ? drag.origin.x : drag.at.x - drag.grab.x
+					}px, ${drag.returning ? drag.origin.y : drag.at.y - drag.grab.y}px)`}
+				>
+					{drag.title}
+				</div>
+			{/if}
 
 			{#if openCardId}
 				<CardDetail
@@ -436,8 +593,52 @@
 		padding: 0.45rem 0.5rem;
 		margin-bottom: 0.45rem;
 	}
-	.card.dragging {
-		opacity: 0.45;
+	/* Press and hold, so a press that is going to become a drag should not also
+	   start a text selection. */
+	.card {
+		user-select: none;
+		-webkit-user-select: none;
+	}
+	/* Left in place so the lane keeps its shape while the ghost is out. */
+	.card.lifted {
+		opacity: 0.3;
+	}
+	/* Where the card would land. Sized to leave the gap the card will fill, so
+	   the lane doesn't jump when it lands. */
+	.drop-line {
+		height: 2px;
+		background: var(--accent);
+		border-radius: 2px;
+		margin: 0 0 0.45rem;
+		box-shadow: 0 0 6px var(--accent);
+	}
+	/* The card under the pointer. Fixed and transform-positioned so following
+	   the pointer costs no layout, and pointer-events:none so elementFromPoint
+	   sees the lane underneath rather than this. */
+	.ghost {
+		position: fixed;
+		top: 0;
+		left: 0;
+		z-index: 40;
+		pointer-events: none;
+		box-sizing: border-box;
+		background: var(--bg);
+		border: 1px solid var(--accent);
+		border-radius: 6px;
+		padding: 0.45rem 0.5rem;
+		font-size: 0.78rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+		transform-origin: top left;
+		opacity: 0.95;
+	}
+	/* A refused drop slides home instead of vanishing, so it is clear nothing
+	   was moved. */
+	.ghost.returning {
+		transition: transform 0.18s ease-out;
+		opacity: 0.6;
 	}
 	/* The project reads as the card's edge, so a board is scannable by colour
 	   without a label on every card. */

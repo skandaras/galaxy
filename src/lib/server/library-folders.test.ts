@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
 import { libraryDocs } from '$lib/server/db/schema';
-import { cleanFolder, getDoc, listFolders, saveDoc } from './library';
+import { cleanFolder, getDoc, libraryDigest, listFolders, saveDoc, searchDocs } from './library';
 
 const ALICE = 'user-alice';
 const BOB = 'user-bob';
@@ -68,6 +68,49 @@ describe('filing a doc', () => {
 		const base = { id: doc.id, title: 'Roast potatoes', body: 'b', author: 'user' as const, ownerId: ALICE };
 		expect(saveDoc({ ...base, folder: 'Food' }).folder).toBe('Food');
 		expect(saveDoc({ ...base, folder: '' }).folder).toBe('');
+	});
+});
+
+describe('what reaches an agent', () => {
+	const SECRET = 'ZEPHYR-MARKER-9';
+
+	it('puts titles in the digest but never their contents', () => {
+		// The digest is prepended to every chat and coding turn, so body text in
+		// it is paid for on all of them and is almost never what was asked about.
+		saveDoc({
+			title: 'Roast potatoes',
+			body: `Method: ${SECRET} and plenty of goose fat.`,
+			author: 'user',
+			ownerId: ALICE,
+			folder: 'Recipes'
+		});
+		const digest = libraryDigest(ALICE);
+		expect(digest).toContain('Roast potatoes');
+		expect(digest).toContain('Recipes');
+		expect(digest).not.toContain(SECRET);
+	});
+
+	it('finds that content by search instead, returning fragments not documents', () => {
+		const body = `${'filler words here. '.repeat(200)} Method: ${SECRET}. ${'more filler. '.repeat(200)}`;
+		saveDoc({ title: 'Roast potatoes', body, author: 'user', ownerId: ALICE });
+
+		const hits = searchDocs(SECRET, ALICE);
+		expect(hits).toHaveLength(1);
+		expect(hits[0].title).toBe('Roast potatoes');
+		expect(hits[0].match).toContain(SECRET);
+		// The point of the whole arrangement: the match is an excerpt, so a long
+		// document costs a line to search rather than its full length.
+		expect(hits[0].match.length).toBeLessThan(body.length / 10);
+	});
+
+	it('searches titles as well as bodies', () => {
+		saveDoc({ title: 'Quarterly budget', body: 'nothing relevant', author: 'user', ownerId: ALICE });
+		expect(searchDocs('Quarterly', ALICE).map((d) => d.title)).toEqual(['Quarterly budget']);
+	});
+
+	it('keeps one person’s docs out of another’s digest', () => {
+		saveDoc({ title: 'Bobs private', body: 'x', author: 'user', ownerId: BOB, folder: 'Bob' });
+		expect(libraryDigest(ALICE)).not.toContain('Bobs private');
 	});
 });
 
