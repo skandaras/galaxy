@@ -1,0 +1,342 @@
+/**
+ * Browser smoke: the things HTTP 200 cannot tell you.
+ *
+ * scripts/smoke-e2e.sh proves the API and the engine work. It cannot see a
+ * page that renders blank because hydration threw, a control that has drifted
+ * on top of another, or an interaction that never fires — and every UI bug
+ * this project has actually shipped was one of those three.
+ *
+ *   node scripts/smoke-ui.mjs      (requires `npm run build` first)
+ *
+ * Runs the app in authelia mode so there are two real identities, which is
+ * what lets one of them raise a notification the other has to look at.
+ */
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
+import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const SHOTS = 'test-results';
+const ALICE = 'alice';
+const BOB = 'bob';
+
+const fail = [];
+const check = (label, actual, expected = true) => {
+	const ok = JSON.stringify(actual) === JSON.stringify(expected);
+	console.log(
+		`${ok ? 'ok:' : 'FAIL:'} ${label}${ok ? '' : ` — got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`}`
+	);
+	if (!ok) fail.push(label);
+};
+
+const as = async (user, path, init = {}) => {
+	const res = await fetch(B + path, {
+		...init,
+		headers: { 'content-type': 'application/json', 'Remote-User': user, ...(init.headers ?? {}) }
+	});
+	if (!res.ok) throw new Error(`${init.method ?? 'GET'} ${path} as ${user} -> ${res.status}`);
+	return res.json();
+};
+
+/**
+ * Claim a port nothing else is on, from a band below the ephemeral range.
+ *
+ * A fixed port is how this suite once tested a *previous* run's leftover
+ * server: the spawn lost the bind, died unnoticed, and the health check found
+ * the old process still answering with stale data. Every assertion after that
+ * was measuring the wrong thing.
+ */
+async function freePort(from = 18904, to = 18960) {
+	for (let port = from; port <= to; port++) {
+		const free = await new Promise((resolve) => {
+			const probe = createServer();
+			probe.once('error', () => resolve(false));
+			probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(true)));
+		});
+		if (free) return port;
+	}
+	throw new Error(`no free port between ${from} and ${to}`);
+}
+
+const PORT = await freePort();
+const B = `http://127.0.0.1:${PORT}`;
+
+const dataDir = mkdtempSync(join(tmpdir(), 'galaxy-ui-'));
+mkdirSync(SHOTS, { recursive: true });
+const app = spawn('node', ['build'], {
+	env: {
+		...process.env,
+		AUTH_MODE: 'authelia',
+		TRUSTED_PROXY_IPS: '127.0.0.1',
+		ADMIN_GROUP: 'galaxy-admins',
+		DATA_DIR: dataDir,
+		PORT: String(PORT),
+		CODING_EXECUTOR: 'local'
+	},
+	stdio: ['ignore', 'pipe', 'pipe']
+});
+let appLog = '';
+let appExited = false;
+app.stdout.on('data', (d) => (appLog += d));
+app.stderr.on('data', (d) => (appLog += d));
+app.on('exit', (code) => (appExited = code ?? true));
+
+const cleanup = () => {
+	app.kill();
+	rmSync(dataDir, { recursive: true, force: true });
+};
+process.on('exit', cleanup);
+
+async function waitForApp() {
+	for (let i = 0; i < 80; i++) {
+		// Our own process dying is the failure, whoever else may be answering.
+		if (appExited !== false) {
+			console.log(`SMOKE-UI FAILED: the app exited before serving\n${appLog}`);
+			process.exit(1);
+		}
+		try {
+			if ((await fetch(`${B}/healthz`)).ok) return;
+		} catch {
+			/* not up yet */
+		}
+		await new Promise((r) => setTimeout(r, 250));
+	}
+	console.log(`SMOKE-UI FAILED: the app never came up at ${B}\n${appLog}`);
+	process.exit(1);
+}
+
+await waitForApp();
+
+// --- fixture --------------------------------------------------------------
+// Bob shares a board with Alice and hands her a card, so Alice has real
+// notifications to open. Nothing here writes to the database directly: this
+// has to keep working through the same API the app uses.
+const alicesBoard = await as(ALICE, '/api/boards', {
+	method: 'POST',
+	body: JSON.stringify({ name: 'Alice board' })
+});
+const view = await as(ALICE, `/api/boards/${alicesBoard.id}`);
+const [laneA, laneB] = view.lanes;
+for (const title of ['alpha', 'bravo', 'charlie']) {
+	await as(ALICE, `/api/boards/${alicesBoard.id}/cards`, {
+		method: 'POST',
+		body: JSON.stringify({ title, laneId: laneA.id })
+	});
+}
+
+const bobsBoard = await as(BOB, '/api/boards', {
+	method: 'POST',
+	body: JSON.stringify({ name: 'Shared by Bob' })
+});
+await as(BOB, `/api/boards/${bobsBoard.id}/members`, {
+	method: 'POST',
+	body: JSON.stringify({ username: ALICE })
+});
+const card = await as(BOB, `/api/boards/${bobsBoard.id}/cards`, {
+	method: 'POST',
+	body: JSON.stringify({ title: 'Take the bins out' })
+});
+
+const asAdmin = (path, init = {}) =>
+	as('root', path, { ...init, headers: { 'Remote-Groups': 'galaxy-admins', ...(init.headers ?? {}) } });
+
+const users = await asAdmin('/api/admin/users');
+const aliceId = users.find((u) => u.username === ALICE).id;
+await as(BOB, `/api/cards/${card.id}`, {
+	method: 'PATCH',
+	body: JSON.stringify({ assignedTo: aliceId })
+});
+// Coding is a per-user grant. Without it /code legitimately 403s on the repo
+// list, which is correct behaviour and tells us nothing — grant it so the
+// page under test is the one a coder actually sees.
+await asAdmin('/api/admin/users', {
+	method: 'PATCH',
+	body: JSON.stringify({ id: aliceId, canCode: true })
+});
+
+/** Card titles per lane, in board order — read back from the API, not the DOM. */
+const layout = async () => {
+	const v = await as(ALICE, `/api/boards/${alicesBoard.id}`);
+	const of = (laneId) =>
+		v.cards
+			.filter((c) => c.laneId === laneId)
+			.sort((a, b) => a.position - b.position)
+			.map((c) => c.title);
+	return { a: of(laneA.id), b: of(laneB.id) };
+};
+
+// --- browser --------------------------------------------------------------
+// CI runs `npx playwright install chromium`, so the default resolution is
+// right there. GALAXY_CHROMIUM_PATH is for a machine that already has a
+// browser Playwright did not put there, and whose build number therefore will
+// not match the one this version expects.
+const browser = await chromium.launch({
+	executablePath: process.env.GALAXY_CHROMIUM_PATH || undefined
+});
+const context = await browser.newContext({
+	viewport: { width: 1400, height: 900 },
+	extraHTTPHeaders: { 'Remote-User': ALICE }
+});
+const page = await context.newPage();
+
+/** Anything the console or an uncaught throw says, per page. */
+let problems = [];
+page.on('pageerror', (e) => problems.push(`uncaught: ${e.message}`));
+page.on('console', (m) => {
+	if (m.type() === 'error') problems.push(`console: ${m.text()}`);
+});
+
+const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
+
+// 1. Every page renders, and renders quietly. A page that throws during
+//    hydration still answers 200, so the bash smoke calls it healthy.
+for (const path of ['/chat', '/code', '/boards', '/library', '/settings', '/observatory']) {
+	problems = [];
+	// Not networkidle: the app holds SSE streams open (notifications, the
+	// Observatory feed), so the network is never idle and every goto would sit
+	// there until it timed out.
+	await page.goto(B + path);
+	await page.locator('aside.pane').waitFor();
+	await page.waitForTimeout(500);
+	check(`${path} renders without errors`, problems, []);
+	const body = await page.locator('body').boundingBox();
+	check(`${path} draws something`, (body?.height ?? 0) > 100);
+}
+
+// 2. Nothing covers the brand. This is the general form of a control escaping
+//    its container onto the sidebar — the shape of every layout bug so far.
+{
+	await page.goto(`${B}/boards`);
+	await page.locator('.brand').waitFor();
+	const brand = await page.locator('.brand').boundingBox();
+	const covering = await page.evaluate(
+		({ x, y }) => {
+			const el = document.elementFromPoint(x, y);
+			return el?.closest('.brand') ? null : (el?.className?.toString?.() ?? el?.tagName ?? 'unknown');
+		},
+		{ x: brand.x + brand.width / 2, y: brand.y + brand.height / 2 }
+	);
+	if (covering) await shot('brand-covered');
+	check('nothing is floating over the brand', covering, null);
+}
+
+// 3. The alerts panel. It lives inside a scrolling pane, so the thing worth
+//    asserting is that it is not clipped by it.
+{
+	await page.locator('.bell').click();
+	await page.waitForSelector('.panel');
+	const panel = await page.locator('.panel').boundingBox();
+	const pane = await page.locator('aside.pane').boundingBox();
+	check('the alerts panel is wider than the pane', panel.width > pane.width);
+	check('and is not clipped by it', panel.x + panel.width > pane.x + pane.width);
+
+	const titles = await page.locator('.panel .title').allTextContents();
+	check('it lists what needs looking at', titles.length > 0);
+	const whens = await page.locator('.panel .when').allTextContents();
+	check('timestamps are readable', whens.some((w) => /ago|just now/.test(w)));
+	check('and none are NaN', whens.some((w) => w.includes('NaN')), false);
+
+	check('mark all as read is reachable', await page.locator('.panel .clear').isVisible());
+	await shot('alerts-panel');
+	await page.locator('.panel .clear').click();
+	await page.waitForTimeout(500);
+	check('clearing empties the badge', await page.locator('.bell .count').count(), 0);
+	await page.keyboard.press('Escape');
+}
+
+// 4. Dragging cards. Press and hold, because that is what the UI asks for.
+{
+	await page.goto(`${B}/boards`);
+	const picker = page.locator('header.bar select').first();
+	await picker.waitFor();
+	await picker.selectOption({ label: 'Alice board' });
+
+	/**
+	 * Wait for a lane to hold exactly `n` cards.
+	 *
+	 * Alice can see two boards and the page opens whichever the API lists
+	 * first, so "any card is on screen" is not enough — and every move
+	 * re-reads the board, so measuring too early takes coordinates from a DOM
+	 * that is about to be replaced. That is what made this drag miss.
+	 */
+	const settled = async (laneId, n) => {
+		try {
+			await page.waitForFunction(
+				({ id, n }) => document.querySelectorAll(`[data-lane="${id}"] [data-card]`).length === n,
+				{ id: laneId, n },
+				{ timeout: 15_000 }
+			);
+		} catch {
+			// A bare timeout says nothing. Report what was on screen instead.
+			const seen = await page.locator('[data-lane]').evaluateAll((els) =>
+				els.map((e) => `${e.dataset.lane}:${e.querySelectorAll('[data-card]').length}`)
+			);
+			const board = await page.locator('header.bar select').first().inputValue();
+			await shot('board-not-settled');
+			throw new Error(
+				`lane ${laneId} never held ${n} cards. board=${board} lanes=${JSON.stringify(seen)}`
+			);
+		}
+	};
+	await settled(laneA.id, 3);
+
+	const boxOf = async (title) =>
+		page.locator('article.card', { hasText: title }).first().boundingBox();
+
+	async function press(title, to) {
+		const box = await boxOf(title);
+		await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+		await page.mouse.down();
+		await page.waitForTimeout(300); // past the hold threshold
+		// Stepped, because one jump can skip every hover calculation.
+		for (let i = 1; i <= 6; i++) {
+			await page.mouse.move(
+				box.x + box.width / 2 + ((to.x - box.x - box.width / 2) * i) / 6,
+				box.y + box.height / 2 + ((to.y - box.y - box.height / 2) * i) / 6
+			);
+			await page.waitForTimeout(25);
+		}
+	}
+
+	// Reorder inside a lane.
+	const charlie = await boxOf('charlie');
+	await press('alpha', { x: charlie.x + charlie.width / 2, y: charlie.y + charlie.height - 2 });
+	check('a drop line shows where it will land', await page.locator('.drop-line').count(), 1);
+	await shot('drag-in-flight');
+	await page.mouse.up();
+	await settled(laneA.id, 3);
+	check('reordered within its lane', (await layout()).a, ['bravo', 'charlie', 'alpha']);
+
+	// Move to another lane.
+	const lb = await page.locator(`[data-lane="${laneB.id}"]`).boundingBox();
+	await press('bravo', { x: lb.x + lb.width / 2, y: lb.y + 60 });
+	await page.mouse.up();
+	await settled(laneB.id, 1);
+	const moved = await layout();
+	check('moved into another lane', moved.b, ['bravo']);
+	check('and left the one it came from', moved.a, ['charlie', 'alpha']);
+
+	// Released over nothing: unchanged.
+	const before = await layout();
+	await press('charlie', { x: 30, y: 880 });
+	await page.mouse.up();
+	await page.waitForTimeout(500);
+	check('a drop outside every lane changes nothing', await layout(), before);
+
+	// And a plain click still opens a card rather than being eaten by the drag.
+	await page.locator('article.card', { hasText: 'charlie' }).first().click();
+	await page.waitForTimeout(400);
+	check('a click still opens the card', await page.locator('.card-detail, dialog, aside').count() > 0);
+}
+
+if (fail.length) await shot('final-state');
+await browser.close();
+
+if (fail.length) {
+	console.log(`\nSMOKE-UI FAILED: ${fail.join(', ')}`);
+	process.exit(1);
+}
+console.log('\nSMOKE-UI PASSED');
+process.exit(0);
