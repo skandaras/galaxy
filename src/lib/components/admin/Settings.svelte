@@ -6,7 +6,8 @@
 		baseUrl: '',
 		maxResults: 5,
 		timeoutMs: 10000,
-		maxSearchesPerTurn: 4
+		maxSearchesPerTurn: 4,
+		defaultLanguage: ''
 	});
 	let compaction = $state({ ratio: 0.7, keepRecent: 8 });
 	let budget = $state({ enabled: false, limitUsd: 25, period: 'month' });
@@ -19,7 +20,9 @@
 		maxPages: 6,
 		maxTokens: 2048,
 		timeoutMs: 20000,
-		iterationCap: 1
+		iterationCap: 1,
+		maxSearchesPerRun: 8,
+		extraLanguages: ''
 	});
 	let coding = $state({ autoCheckpoint: true, autoContinue: true, maxLegs: 3 });
 	let retention = $state({ eventDays: 60, usageDays: 400, uxIdeaDays: 14 });
@@ -217,10 +220,22 @@
 				searches per turn
 				<input type="number" min="1" max="20" bind:value={websearch.maxSearchesPerTurn} />
 			</label>
+			<label>
+				default language
+				<input bind:value={websearch.defaultLanguage} placeholder="auto" />
+			</label>
 		</div>
 		<p class="hint">
-			<strong>Searches per turn</strong> caps how many live searches one reply may make. Repeats of
-			a query already run in the same turn are answered from memory and don't count against it.
+			<strong>Searches per turn</strong> caps how many live searches one reply may make, and the
+			allowance is per request — a new message always starts with a full one. Repeats of a query
+			already run in the same turn are answered from memory and don't count against it.
+		</p>
+		<p class="hint">
+			<strong>Default language</strong> is a BCP-47 code (<code>de</code>, <code>ja</code>,
+			<code>pt-br</code>) used when a search doesn't name one; leave it blank for no constraint.
+			Agents can set the language per search regardless, and should — the query's own wording
+			matters as much as the setting. Tavily has no language parameter, so results there are
+			steered by the query alone.
 		</p>
 		<p class="hint">
 			The fallback is used only when the primary <em>fails</em> — blocked, unreachable or
@@ -263,8 +278,16 @@
 				<input type="number" min="1" max="10" bind:value={research.maxQueries} />
 			</label>
 			<label>
-				max pages read
+				max pages per round
 				<input type="number" min="1" max="20" bind:value={research.maxPages} />
+			</label>
+			<label>
+				searches per run
+				<input type="number" min="1" max="40" bind:value={research.maxSearchesPerRun} />
+			</label>
+			<label>
+				also search in
+				<input bind:value={research.extraLanguages} placeholder="de, ja" />
 			</label>
 			<label>
 				synthesis max tokens

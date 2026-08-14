@@ -51,6 +51,13 @@ export interface WebSearchSettings {
 	 * model that isn't finding what it wants will keep rephrasing.
 	 */
 	maxSearchesPerTurn: number;
+	/**
+	 * BCP-47 code the search provider is biased towards when a call doesn't name
+	 * one, e.g. 'de' or 'pt-br'. Empty means no constraint, which is the right
+	 * default: the engines infer language from the query, and pinning one
+	 * globally would quietly narrow every search on the platform.
+	 */
+	defaultLanguage?: string;
 }
 
 export const DEFAULT_WEB_SEARCH: WebSearchSettings = {
@@ -58,7 +65,8 @@ export const DEFAULT_WEB_SEARCH: WebSearchSettings = {
 	fallbackProvider: 'none',
 	maxResults: 5,
 	timeoutMs: 10_000,
-	maxSearchesPerTurn: 4
+	maxSearchesPerTurn: 4,
+	defaultLanguage: ''
 };
 
 export interface FetchSettings {
@@ -92,10 +100,25 @@ export interface ResearchSettings {
 	provider: 'inherit' | 'duckduckgo' | 'searxng';
 	baseUrl?: string;
 	maxQueries: number;
+	/** Pages read per round, not per run — a run does `iterationCap + 1` rounds. */
 	maxPages: number;
 	maxTokens: number;
 	timeoutMs: number;
 	iterationCap: number;
+	/**
+	 * Searches one research run may make in total, across every round.
+	 *
+	 * The pipeline was bounded only by `maxQueries × (iterationCap + 1)` falling
+	 * out of the loop shape. Stating it means the ceiling is visible, adjustable,
+	 * and demonstrably reset for each new request.
+	 */
+	maxSearchesPerRun: number;
+	/**
+	 * Languages the planner is told to also search in, as a comma-separated list
+	 * of BCP-47 codes. Empty leaves the choice to the model, which will use the
+	 * question's own language.
+	 */
+	extraLanguages?: string;
 }
 
 export const DEFAULT_RESEARCH: ResearchSettings = {
@@ -104,7 +127,11 @@ export const DEFAULT_RESEARCH: ResearchSettings = {
 	maxPages: 6,
 	maxTokens: 2048,
 	timeoutMs: 20_000,
-	iterationCap: 1
+	iterationCap: 1,
+	// Matches what the loop already allowed, so this is a statement of current
+	// behaviour rather than a new restriction.
+	maxSearchesPerRun: 8,
+	extraLanguages: ''
 };
 
 export interface CodingSettings {
