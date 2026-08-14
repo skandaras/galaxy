@@ -144,37 +144,52 @@ export function startCodingTurn(opts: {
 	// and must not start describing this turn's own legs partway through.
 	const priorRun = previousRunNote(chat.id);
 	const searchCfg = getSetting<WebSearchSettings>('websearch', DEFAULT_WEB_SEARCH);
-	// Built per turn, exactly as chat does it: the tool keeps a per-turn memo
-	// and search budget in its closure.
-	const searchTools: LoopTool[] =
-		opts.webSearch && webSearchConfigured(searchCfg) ? [webSearchTool(searchCfg)] : [];
-	const tools = applyToolPolicy(
-		[
-			...codingTools({
-				workspaceRel: session.workspaceRel,
-				mode: session.mode,
-				repoUrl: session.repoUrl
-			}),
-			...knowledgeTools(opts.userId),
-			...attachmentTools(chat.id),
-			// Reading a linked spec, an upstream README or an API doc is safe in
-			// plan mode as well as implement — it changes nothing in the repo.
-			fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH)),
-			runHistoryTool(chat.id),
-			// A coding task often is a card; reading the board is how the agent
-			// finds out what it was actually asked for.
-			...boardTools(opts.userId),
-			askUserTool(job),
-			...searchTools,
-			...mcpLoopTools('coding')
-		],
-		'coding'
-	);
+	/**
+	 * Assembled per leg, not per turn.
+	 *
+	 * The search tool and fetch_url carry their per-turn memo and budget in a
+	 * closure, so building them once and sharing them across an auto-continued
+	 * turn meant leg 3 inherited a budget leg 1 had already spent — and a leg
+	 * starts precisely because the model ran out of steps mid-task, which is
+	 * when it most needs to look something up. Each leg is a fresh model turn
+	 * and gets a fresh allowance; the tool says "leg" rather than "request" so
+	 * the wording matches what the model actually has.
+	 *
+	 * Everything here is cheap to rebuild — DB reads and closures, no
+	 * connections — and re-reading the tool policy each leg means an admin
+	 * change takes effect at the next one rather than mid-turn.
+	 */
+	const buildTools = (): LoopTool[] =>
+		applyToolPolicy(
+			[
+				...codingTools({
+					workspaceRel: session.workspaceRel,
+					mode: session.mode,
+					repoUrl: session.repoUrl
+				}),
+				...knowledgeTools(opts.userId),
+				...attachmentTools(chat.id),
+				// Reading a linked spec, an upstream README or an API doc is safe in
+				// plan mode as well as implement — it changes nothing in the repo.
+				fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH)),
+				runHistoryTool(chat.id),
+				// A coding task often is a card; reading the board is how the agent
+				// finds out what it was actually asked for.
+				...boardTools(opts.userId),
+				askUserTool(job),
+				...(opts.webSearch && webSearchConfigured(searchCfg)
+					? [webSearchTool(searchCfg, { scope: 'leg' })]
+					: []),
+				...mcpLoopTools('coding')
+			],
+			'coding'
+		);
 
 	/** One pass of the agent loop. Resolves with how it ended. */
 	const runLeg = async (): Promise<{ summary: TurnSummary | null; messageId?: string }> => {
 		let summary: TurnSummary | null = null;
 		let messageId: string | undefined;
+		const tools = buildTools();
 		await runAgentLoop({
 			job,
 			task: 'coding',

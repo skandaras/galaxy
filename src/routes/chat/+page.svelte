@@ -117,6 +117,8 @@
 	let stages = $state<{ name: string; detail?: string }[]>([]);
 	let notices = $state<string[]>([]);
 	let errorBanner = $state<string | null>(null);
+	/** Set when a send was refused because another run holds this chat. */
+	let blockingJobId = $state<string | null>(null);
 	let savedDocId = $state<string | null>(null);
 	let source: EventSource | null = null;
 	/**
@@ -200,6 +202,10 @@
 		stashDraft();
 		closeStream();
 		errorBanner = null;
+		blockingJobId = null;
+		// Deep research is a decision about one message, not a mode the session
+		// stays in — opening another conversation must not inherit it armed.
+		deepResearch = false;
 		const res = await fetch(`/api/chats/${id}`);
 		if (!res.ok) return;
 		const data = await res.json();
@@ -273,6 +279,9 @@
 		if (!res.ok) {
 			const err = await res.json().catch(() => ({ message: res.statusText }));
 			errorBanner = err.message ?? 'Failed to send';
+			// A chat blocked by a run that will not end is only fixable by stopping
+			// that run, so offer it here rather than leaving a dead end.
+			blockingJobId = res.status === 409 && err.jobId ? err.jobId : null;
 			// uploadedRefs deliberately survives so a retry reuses the uploads.
 			return;
 		}
@@ -294,6 +303,7 @@
 		}
 		void scroll.toBottom('auto');
 		const { jobId } = await res.json();
+		researchRunning = deepResearch;
 		attachStream(jobId);
 	}
 
@@ -306,6 +316,24 @@
 		stopping = true;
 		await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST' }).catch(() => {});
 	}
+
+	/** Stop the run that refused this send, so the chat is usable again. */
+	async function stopBlockingRun() {
+		const jobId = blockingJobId;
+		if (!jobId) return;
+		blockingJobId = null;
+		await fetch(`/api/jobs/${jobId}/cancel`, { method: 'POST' }).catch(() => {});
+		errorBanner = 'Stopping that run — try sending again in a moment.';
+	}
+
+	/**
+	 * Whether the run now streaming is a research run.
+	 *
+	 * Captured at send rather than read at completion, because the toggle can be
+	 * flipped while the run streams and it is the run that finished, not the
+	 * button's current state, that decides whether to clear it.
+	 */
+	let researchRunning = $state(false);
 
 	/** `carriedRecoveries` keeps the reconnect budget across a reattach. */
 	function attachStream(jobId: string, carriedRecoveries = 0) {
@@ -350,12 +378,27 @@
 				const chat = currentChat;
 				const wasFirstTurn = !messages.some((m) => m.role === 'assistant');
 				lastStopReason = chunk.stopReason ?? null;
+				// Deep research is a per-run choice, not a mode: leaving it armed
+				// sent every following message down the research pipeline, which is
+				// slow and expensive and was never asked for.
+				if (researchRunning) {
+					researchRunning = false;
+					deepResearch = false;
+					notices = [
+						...notices,
+						'Deep research finished — the toggle is off. Turn it back on for another research run.'
+					];
+				}
 				finalizeStream();
 				if (chat) void reconcile(chat.id);
 				if (chat && wasFirstTurn && !chat.titleCustom) void pickUpAutoTitle(chat.id);
 			}
 			else if (chunk.type === 'error') {
 				errorBanner = chunk.message;
+				// A failed research run leaves the toggle on — the work did not
+				// happen, so retrying should not need it switched back — but the
+				// flag must not survive to clear the toggle after some later run.
+				researchRunning = false;
 				finalizeStream(false);
 			}
 		};
@@ -757,7 +800,12 @@
 
 	<section class="thread-area">
 		{#if errorBanner}
-			<div class="banner error">{errorBanner}</div>
+			<div class="banner error">
+				{errorBanner}
+				{#if blockingJobId}
+					<button class="banner-action" onclick={stopBlockingRun}>Stop it</button>
+				{/if}
+			</div>
 		{/if}
 		{#each notices as notice (notice)}
 			<div class="banner">{notice}</div>
@@ -1094,6 +1142,17 @@
 	}
 	.banner.error {
 		color: var(--danger);
+	}
+	.banner-action {
+		background: transparent;
+		border: 1px solid currentColor;
+		border-radius: var(--radius);
+		color: inherit;
+		font-family: inherit;
+		font-size: 0.7rem;
+		padding: 0.1rem 0.5rem;
+		margin-left: 0.5rem;
+		cursor: pointer;
 	}
 	.thread {
 		flex: 1;

@@ -7,8 +7,11 @@ import {
 	completeJob,
 	createJob,
 	failJob,
+	findRunningJobForChat,
 	isCancellation,
+	jobAgeMinutes,
 	JobCancelledError,
+	RUNNING_JOB_MAX_MS,
 	subscribeJob,
 	type JobChunk
 } from './jobs';
@@ -108,5 +111,47 @@ describe('completeJob after a cancel', () => {
 		const row = db.select().from(jobs).where(eq(jobs.id, job.id)).get()!;
 		expect(row.status).toBe('error');
 		expect(job.status).toBe('error');
+	});
+});
+
+describe('findRunningJobForChat', () => {
+	/** A distinct chat per test: `live` is module state shared across this file. */
+	const jobFor = (chatId: string, task = 'chat') =>
+		createJob({ chatId, userId: 'u1', task, persist: false });
+
+	it('reports the run that is holding a chat', () => {
+		const job = jobFor('watchdog-a');
+		expect(findRunningJobForChat('watchdog-a')?.id).toBe(job.id);
+	});
+
+	it('ignores a job that has already finished', () => {
+		const job = jobFor('watchdog-b');
+		completeJob(job);
+		expect(findRunningJobForChat('watchdog-b')).toBeNull();
+	});
+
+	it('fails a job that has been running too long instead of reporting it', () => {
+		// A job only leaves `running` via completeJob/failJob, so one that neither
+		// finishes nor throws — an ask_user nobody answered — used to refuse every
+		// later message in that chat until the process restarted.
+		const job = jobFor('watchdog-c', 'deep-research');
+		const later = Date.now() + RUNNING_JOB_MAX_MS + 1;
+		expect(findRunningJobForChat('watchdog-c', later)).toBeNull();
+		expect(job.status).toBe('error');
+		// And it says why, so the chat is not just silently unblocked.
+		expect(job.chunks.at(-1)).toMatchObject({ type: 'error' });
+	});
+
+	it('leaves a long-but-not-abandoned run alone', () => {
+		const job = jobFor('watchdog-d');
+		const later = Date.now() + RUNNING_JOB_MAX_MS - 1000;
+		expect(findRunningJobForChat('watchdog-d', later)?.id).toBe(job.id);
+		expect(job.status).toBe('running');
+	});
+
+	it('reports the age in whole minutes for the message the user sees', () => {
+		const job = jobFor('watchdog-e');
+		expect(jobAgeMinutes(job, job.createdAt)).toBe(0);
+		expect(jobAgeMinutes(job, job.createdAt + 14 * 60_000)).toBe(14);
 	});
 });
