@@ -2,9 +2,17 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { db, runMigrations } from '$lib/server/db';
 import { memoryItems, skillCandidates } from '$lib/server/db/schema';
-import { archiveMemoryItem, decideCandidate, listCandidates, memoryDigest } from './memory';
+import {
+	applyConsolidation,
+	archiveMemoryItem,
+	decideCandidate,
+	listCandidates,
+	listMemoryItems,
+	memoryDigest
+} from './memory';
 
 const ALICE = 'user-alice';
+const BOB = 'user-bob';
 
 beforeAll(() => {
 	runMigrations();
@@ -87,5 +95,130 @@ describe('a decided skill candidate', () => {
 		const id = propose('tidy-inbox');
 		expect(decideCandidate(id, false)).not.toBeNull();
 		expect(decideCandidate(id, true)).toBeNull();
+	});
+});
+
+describe('applyConsolidation', () => {
+	const active = (userId = ALICE) =>
+		listMemoryItems(userId)
+			.filter((m) => m.status === 'active')
+			.map((m) => m.content);
+
+	it('replaces the originals with the merged line', () => {
+		const a = remember('Prefers concise replies');
+		const b = remember('Likes short answers');
+		const keep = remember('Runs Ubuntu 24.04');
+
+		const res = applyConsolidation(ALICE, {
+			merged: [{ kind: 'preference', content: 'Prefers short, concise replies', replaces: [a, b] }],
+			drop: []
+		});
+
+		expect(res).toEqual({ merged: 1, removed: 2 });
+		expect(active().sort()).toEqual(['Prefers short, concise replies', 'Runs Ubuntu 24.04']);
+		expect(listMemoryItems(ALICE).find((m) => m.id === keep)).toBeTruthy();
+	});
+
+	it('deletes the originals rather than archiving them', () => {
+		// Load-bearing: runMemory shows archived items to the model as "never
+		// extract these again, in any wording". Archiving the originals would
+		// teach the next audit to suppress the merged rewording too, and the
+		// consolidation would quietly undo itself.
+		const a = remember('Prefers concise replies');
+		const b = remember('Likes short answers');
+		applyConsolidation(ALICE, {
+			merged: [{ kind: 'preference', content: 'Prefers short replies', replaces: [a, b] }],
+			drop: []
+		});
+		const archived = listMemoryItems(ALICE).filter((m) => m.status === 'archived');
+		expect(archived).toEqual([]);
+	});
+
+	it('marks the survivors as coming from a consolidation', () => {
+		const a = remember('one');
+		const b = remember('two');
+		applyConsolidation(ALICE, {
+			merged: [{ kind: 'fact', content: 'one and two', replaces: [a, b] }],
+			drop: []
+		});
+		expect(listMemoryItems(ALICE)[0].source).toMatch(/^memory-consolidate /);
+	});
+
+	it('ignores ids belonging to someone else', () => {
+		const mine = remember('mine one');
+		const alsoMine = remember('mine two');
+		const theirs = remember('Bob is a Vim user', BOB);
+
+		applyConsolidation(ALICE, {
+			merged: [{ kind: 'fact', content: 'merged', replaces: [mine, alsoMine, theirs] }],
+			drop: [theirs]
+		});
+
+		// Bob's memory is untouched, and never fed into Alice's merged line.
+		expect(active(BOB)).toEqual(['Bob is a Vim user']);
+		expect(active()).toEqual(['merged']);
+	});
+
+	it('drops redundant items outright', () => {
+		const a = remember('duplicate');
+		remember('duplicate');
+		applyConsolidation(ALICE, { merged: [], drop: [a] });
+		expect(active()).toEqual(['duplicate']);
+	});
+
+	it('will not insert a merged line whose originals are all gone', () => {
+		// Otherwise a stale plan replayed against a changed list adds a memory
+		// instead of combining two.
+		remember('kept');
+		applyConsolidation(ALICE, {
+			merged: [{ kind: 'fact', content: 'invented', replaces: ['no-such-id'] }],
+			drop: []
+		});
+		expect(active()).toEqual(['kept']);
+	});
+
+	it('never lets two merges claim the same original', () => {
+		const a = remember('one');
+		const b = remember('two');
+		const res = applyConsolidation(ALICE, {
+			merged: [
+				{ kind: 'fact', content: 'first', replaces: [a, b] },
+				{ kind: 'fact', content: 'second', replaces: [a, b] }
+			],
+			drop: []
+		});
+		expect(res.merged).toBe(1);
+		expect(active()).toEqual(['first']);
+	});
+
+	it('caps runaway content rather than storing it', () => {
+		const a = remember('one');
+		const b = remember('two');
+		applyConsolidation(ALICE, {
+			merged: [{ kind: 'fact', content: 'x'.repeat(5000), replaces: [a, b] }],
+			drop: []
+		});
+		expect(active()[0].length).toBe(1000);
+	});
+
+	it('falls back to a valid kind for one it does not recognise', () => {
+		const a = remember('one');
+		const b = remember('two');
+		applyConsolidation(ALICE, {
+			merged: [
+				{ kind: 'nonsense' as unknown as 'fact', content: 'merged', replaces: [a, b] }
+			],
+			drop: []
+		});
+		expect(listMemoryItems(ALICE)[0].kind).toBe('fact');
+	});
+
+	it('does nothing at all for an empty plan', () => {
+		remember('untouched');
+		expect(applyConsolidation(ALICE, { merged: [], drop: [] })).toEqual({
+			merged: 0,
+			removed: 0
+		});
+		expect(active()).toEqual(['untouched']);
 	});
 });

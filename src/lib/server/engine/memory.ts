@@ -106,7 +106,14 @@ export function decideCandidate(id: string, approve: boolean): SkillCandidate | 
  * that user's own items — this is what keeps one person's observations out of
  * another person's system prompt.
  */
-export function memoryDigest(userId: string, maxItems = 20): string {
+/**
+ * Active memories carried into a system prompt. Surfaced so Settings → Memory
+ * can show what is actually in context rather than only what is stored — the
+ * gap between the two is the thing worth watching as the list grows.
+ */
+export const MEMORY_DIGEST_MAX_ITEMS = 20;
+
+export function memoryDigest(userId: string, maxItems = MEMORY_DIGEST_MAX_ITEMS): string {
 	const items = listMemoryItems(userId).filter((m) => m.status === 'active');
 	if (!items.length) return '';
 	const lines = items.slice(0, maxItems).map((m) => `- (${m.kind}) ${m.content}`);
@@ -397,6 +404,232 @@ export async function runMemory(
 		});
 		return { ran: false, reason: String(err) };
 	}
+}
+
+/** Fewer than this and there is nothing worth a model call to merge. */
+const MIN_ITEMS_TO_CONSOLIDATE = 3;
+
+/** One merged line and the items it stands in for. */
+export interface ConsolidationMerge {
+	kind: MemoryItem['kind'];
+	content: string;
+	/** Ids of the active items this replaces. */
+	replaces: string[];
+}
+
+export interface ConsolidationPlan {
+	merged: ConsolidationMerge[];
+	/** Ids to drop outright — exact duplicates with nothing to carry forward. */
+	drop: string[];
+}
+
+export interface ConsolidationProposal extends ConsolidationPlan {
+	/** Active items before, and how many there would be after applying. */
+	before: number;
+	after: number;
+}
+
+/**
+ * Propose a tidier memory list. Reads only — nothing is written until
+ * applyConsolidation is called with a plan the user has actually seen.
+ *
+ * The audit only ever adds, and its instinct is to record whatever it found
+ * rather than what is worth knowing, so the list grows and every chat and
+ * coding turn pays for it in the system prompt. This is the counterweight.
+ *
+ * Reuses the memory task's own model and system prompt: it is the same agent
+ * looking at its own output, so it needs no config of its own.
+ */
+export async function consolidateMemory(
+	userId: string
+): Promise<{ ran: boolean; reason?: string; proposal?: ConsolidationProposal }> {
+	const active = listMemoryItems(userId).filter((m) => m.status === 'active');
+	if (active.length < MIN_ITEMS_TO_CONSOLIDATE) {
+		return { ran: false, reason: `only ${active.length} active memories — nothing to merge yet` };
+	}
+	if (getBudgetStatus().blocked) return { ran: false, reason: 'budget cap reached' };
+
+	const cfg = getTaskConfig('memory');
+	const choice = pickModel(cfg?.primaryModelId ?? null);
+	if (!choice) return { ran: false, reason: 'no model configured' };
+
+	// Indices, not ids: shorter to emit, and a model cannot invent one that maps
+	// to somebody's real row. They are resolved back here.
+	const numbered = active.map((m, i) => `[${i + 1}] (${m.kind}) ${m.content}`).join('\n');
+	const startedAt = Date.now();
+
+	try {
+		const { text, usage } = await choice.adapter.complete(
+			{
+				modelKey: choice.model.modelKey,
+				messages: [
+					{ role: 'system', content: cfg?.systemPrompt ?? '' },
+					{
+						role: 'user',
+						content: [
+							'MEMORY-CONSOLIDATE: Below is everything currently remembered about one user. It is injected into the system prompt of every chat and coding turn, so length has a real cost. Combine what overlaps and drop what is redundant.',
+							'Rules:',
+							'- Never introduce a fact that is not already in the list. You are merging wording, not inferring.',
+							'- Never merge two items that contradict each other. Keep the later one and leave the other alone.',
+							'- Keep specifics: names, numbers, versions, dates, tool and file names. A merge that loses them is worse than no merge.',
+							'- Merge only genuine overlap. Two unrelated preferences stay two items.',
+							'- Leave anything that is already concise and distinct out of your answer entirely; untouched items are kept.',
+							'Reply with ONLY a JSON object: {"merged":[{"kind":"preference|pattern|fact","content":"…","replaces":[1,4]}],"redundant":[7]}',
+							'"replaces" lists the numbers the merged line stands in for. "redundant" lists numbers to delete outright — use it only for exact duplicates of something else in the list.',
+							`--- MEMORIES (${active.length}) ---`,
+							numbered
+						].join('\n\n')
+					}
+				],
+				maxTokens: 2048
+			},
+			AbortSignal.timeout(120_000)
+		);
+
+		const parsed = extractJson(text);
+		const at = (n: unknown) =>
+			typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= active.length
+				? active[n - 1].id
+				: null;
+
+		const claimed = new Set<string>();
+		const merged: ConsolidationMerge[] = [];
+		for (const m of Array.isArray(parsed?.merged) ? parsed.merged.slice(0, MAX_MERGED) : []) {
+			const content = typeof m?.content === 'string' ? m.content.trim().slice(0, 1000) : '';
+			if (!content) continue;
+			// An id already spoken for by an earlier merge is dropped from this
+			// one: two merged lines both claiming the same original would delete
+			// it once and leave the second line unsupported.
+			const replaces = (Array.isArray(m.replaces) ? m.replaces : [])
+				.map(at)
+				.filter((id: string | null): id is string => Boolean(id) && !claimed.has(id!));
+			if (replaces.length < 2) continue; // a "merge" of one item is a reword
+			for (const id of replaces) claimed.add(id);
+			merged.push({
+				kind: ['preference', 'pattern', 'fact'].includes(m.kind) ? m.kind : 'fact',
+				content,
+				replaces
+			});
+		}
+
+		const drop = (Array.isArray(parsed?.redundant) ? parsed.redundant : [])
+			.map(at)
+			.filter((id: string | null): id is string => Boolean(id) && !claimed.has(id!));
+		for (const id of drop) claimed.add(id);
+
+		const proposal: ConsolidationProposal = {
+			merged,
+			drop,
+			before: active.length,
+			after: active.length - claimed.size + merged.length
+		};
+
+		logMemoryUsage(choice.model.modelKey, usage, 'ok', userId);
+		emitEvent({
+			userId,
+			task: 'memory',
+			type: 'job',
+			name: 'memory.consolidate',
+			status: 'ok',
+			durationMs: Date.now() - startedAt,
+			detail: { before: proposal.before, after: proposal.after, merges: merged.length }
+		});
+		return { ran: true, proposal };
+	} catch (err) {
+		logMemoryUsage(choice.model.modelKey, null, 'error', userId);
+		emitEvent({
+			userId,
+			task: 'memory',
+			type: 'job',
+			name: 'memory.consolidate',
+			status: 'error',
+			durationMs: Date.now() - startedAt,
+			detail: { error: String(err) }
+		});
+		return { ran: false, reason: String(err) };
+	}
+}
+
+const MAX_MERGED = 50;
+
+/**
+ * Apply a consolidation the user approved.
+ *
+ * Superseded originals are **deleted, not archived**. Archiving is the user's
+ * "never record this again" signal, and runMemory feeds archived items to the
+ * model as exactly that — so archiving the originals here would teach the next
+ * audit to suppress the merged rewording too, and the consolidation would
+ * quietly undo itself.
+ *
+ * Every id is checked against this user's own active items, so a plan that has
+ * been tampered with in the browser can only ever affect that user's rows.
+ */
+export function applyConsolidation(
+	userId: string,
+	plan: ConsolidationPlan
+): { merged: number; removed: number } {
+	const active = new Map(
+		listMemoryItems(userId)
+			.filter((m) => m.status === 'active')
+			.map((m) => [m.id, m])
+	);
+
+	const removing = new Set<string>();
+	const inserts: ConsolidationMerge[] = [];
+	for (const m of (plan.merged ?? []).slice(0, MAX_MERGED)) {
+		const content = String(m?.content ?? '').trim().slice(0, 1000);
+		const replaces = (Array.isArray(m?.replaces) ? m.replaces : []).filter(
+			(id: unknown): id is string => typeof id === 'string' && active.has(id) && !removing.has(id)
+		);
+		// Nothing left to replace means the originals are already gone — inserting
+		// the merged line anyway would add a memory rather than combine two.
+		if (!content || !replaces.length) continue;
+		for (const id of replaces) removing.add(id);
+		inserts.push({
+			kind: ['preference', 'pattern', 'fact'].includes(m.kind as string)
+				? (m.kind as MemoryItem['kind'])
+				: 'fact',
+			content,
+			replaces
+		});
+	}
+	for (const id of plan.drop ?? []) {
+		if (typeof id === 'string' && active.has(id)) removing.add(id);
+	}
+
+	const source = `memory-consolidate ${new Date().toISOString()}`;
+	// One transaction: a half-applied consolidation would leave the merged line
+	// alongside the items it was meant to replace, i.e. duplicates.
+	db.transaction((tx) => {
+		for (const m of inserts) {
+			tx.insert(memoryItems)
+				.values({
+					id: randomUUID(),
+					userId,
+					kind: m.kind,
+					content: m.content,
+					source,
+					status: 'active',
+					createdAt: new Date()
+				})
+				.run();
+		}
+		for (const id of removing) {
+			tx.delete(memoryItems)
+				.where(and(eq(memoryItems.id, id), eq(memoryItems.userId, userId)))
+				.run();
+		}
+	});
+
+	emitEvent({
+		userId,
+		task: 'memory',
+		type: 'job',
+		name: 'memory.consolidate.apply',
+		status: 'ok',
+		detail: { merged: inserts.length, removed: removing.size }
+	});
+	return { merged: inserts.length, removed: removing.size };
 }
 
 /**
