@@ -21,9 +21,17 @@
 ></div>
 
 <style>
-	/* The divider doubles as the drag handle: a 1px border with a wider
-	   invisible grab area, so it is hittable without looking like a gutter. */
+	/* The divider doubles as the drag handle: a 1px visible line with a wider
+	   invisible grab area, so it is hittable without looking like a gutter.
+
+	   The negative margin is what pulls the next pane across the grab area, and
+	   without a stacking context that pane wins hit-testing — leaving about one
+	   real pixel to aim at, rather than the five this is asking for. Raising the
+	   handle costs nothing visually (the line is a content-box background) and
+	   is the difference between a handle you can grab and one you can't. */
 	.resizer {
+		position: relative;
+		z-index: 1;
 		flex: 0 0 5px;
 		margin-right: -4px;
 		background: var(--border);
