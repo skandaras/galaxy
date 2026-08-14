@@ -156,7 +156,7 @@
 <style>
 	h3 {
 		font-size: 0.75rem;
-		color: var(--accent);
+		color: var(--heading);
 		letter-spacing: 0.2em;
 		text-transform: uppercase;
 		margin: 1.1rem 0 0.3rem;
@@ -229,7 +229,7 @@
 		flex-direction: column;
 		gap: 0.25rem;
 		font-size: 0.68rem;
-		color: var(--fg-dim);
+		color: var(--label);
 	}
 	label.wide {
 		grid-column: span 2;

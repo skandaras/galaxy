@@ -190,7 +190,7 @@
 		font-size: 0.78rem;
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
-		color: var(--accent);
+		color: var(--heading);
 	}
 	.hint {
 		font-size: 0.72rem;

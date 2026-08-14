@@ -134,7 +134,7 @@
 		font-size: 0.85rem;
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
-		color: var(--accent);
+		color: var(--heading);
 	}
 	.model-row {
 		display: flex;
@@ -143,7 +143,7 @@
 	}
 	label {
 		font-size: 0.7rem;
-		color: var(--fg-dim);
+		color: var(--label);
 		display: flex;
 		align-items: center;
 		gap: 0.35rem;

@@ -47,7 +47,10 @@
 	}
 	pre {
 		margin: 0;
-		color: var(--accent);
+		/* Falls back to the accent, which is what this was pinned to before the
+		   backdrop had a colour of its own — so a theme saved without one is
+		   unchanged. */
+		color: var(--galaxy, var(--accent));
 		opacity: 0.16;
 		font-size: clamp(8px, 1.1vw, 14px);
 		line-height: 1.25;

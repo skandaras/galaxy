@@ -162,7 +162,7 @@
 	}
 	h3 {
 		font-size: 0.75rem;
-		color: var(--fg-dim);
+		color: var(--heading);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		margin: 1.1rem 0 0.4rem;

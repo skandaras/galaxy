@@ -318,7 +318,7 @@
 		flex-direction: column;
 		gap: 0.2rem;
 		font-size: 0.66rem;
-		color: var(--fg-dim);
+		color: var(--label);
 	}
 	label.block {
 		margin-top: 0.8rem;
@@ -345,7 +345,7 @@
 		font-size: 0.66rem;
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
-		color: var(--accent);
+		color: var(--heading);
 	}
 	.file {
 		display: flex;

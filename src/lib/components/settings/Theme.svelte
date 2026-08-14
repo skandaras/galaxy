@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
-	import type { Theme } from '$lib/theme';
+	import { contrastGrade, contrastRatio, type Theme } from '$lib/theme';
 
 	let draft = $state<Theme | null>(null);
 	let presets = $state<Record<string, Theme>>({});
@@ -25,6 +25,9 @@
 		root.style.setProperty('--bg-pane', draft.bgPane);
 		root.style.setProperty('--fg', draft.fg);
 		root.style.setProperty('--fg-dim', draft.fgDim);
+		root.style.setProperty('--heading', draft.heading);
+		root.style.setProperty('--label', draft.label);
+		root.style.setProperty('--galaxy', draft.galaxyColor);
 		root.style.setProperty('--accent', draft.accent);
 		root.style.setProperty('--border', draft.border);
 		root.style.setProperty('--danger', draft.danger);
@@ -113,15 +116,31 @@
 		(ev.target as HTMLInputElement).value = '';
 	}
 
-	const colorFields: { key: keyof Theme; label: string }[] = [
-		{ key: 'bg', label: 'background' },
-		{ key: 'bgPane', label: 'panels' },
-		{ key: 'fg', label: 'text' },
-		{ key: 'fgDim', label: 'dim text' },
-		{ key: 'accent', label: 'accent' },
-		{ key: 'border', label: 'borders' },
-		{ key: 'danger', label: 'danger' }
+	/**
+	 * `on` is the surface each colour is actually read against, so the contrast
+	 * figure describes where the colour is really used: page-level text sits on
+	 * `bg`, everything inside a card or panel on `bgPane`. Backgrounds themselves
+	 * have nothing to be measured against, hence the null.
+	 */
+	const colorFields: { key: keyof Theme; label: string; on: 'bg' | 'bgPane' | null }[] = [
+		{ key: 'bg', label: 'background', on: null },
+		{ key: 'bgPane', label: 'panels', on: null },
+		{ key: 'heading', label: 'titles', on: 'bgPane' },
+		{ key: 'fg', label: 'body text', on: 'bg' },
+		{ key: 'label', label: 'field labels', on: 'bgPane' },
+		{ key: 'fgDim', label: 'dim text', on: 'bg' },
+		{ key: 'accent', label: 'accent', on: 'bg' },
+		{ key: 'border', label: 'borders', on: null },
+		{ key: 'danger', label: 'danger', on: 'bgPane' }
 	];
+
+	/** Ratio and grade for one field, or null when it has no meaningful backdrop. */
+	function contrast(field: { key: keyof Theme; on: 'bg' | 'bgPane' | null }) {
+		if (!draft || !field.on) return null;
+		const ratio = contrastRatio(draft[field.key] as string, draft[field.on]);
+		if (!ratio) return null; // unparseable — say nothing rather than "fail"
+		return { ratio, grade: contrastGrade(ratio) };
+	}
 </script>
 
 <div class="theme-section">
@@ -172,10 +191,24 @@
 
 		<section class="card">
 			<h3>Colours</h3>
+			<p class="hint">
+				Titles, body text and field labels are separate colours, so the palette can be changed
+				without dragging every heading's readability along with it. The badge is the WCAG
+				contrast ratio against the surface each colour sits on — aim for <strong>AA</strong> or
+				better on anything you have to read.
+			</p>
 			<div class="grid">
 				{#each colorFields as f (f.key)}
+					{@const c = contrast(f)}
 					<label>
-						{f.label}
+						<span class="field-head">
+							{f.label}
+							{#if c}
+								<span class="contrast {c.grade}" title="Contrast against {f.on === 'bg' ? 'the page background' : 'the panel background'}">
+									{c.ratio.toFixed(1)}:1 {c.grade === 'AA-large' ? 'AA large only' : c.grade}
+								</span>
+							{/if}
+						</span>
 						<span class="color-pair">
 							<input type="color" bind:value={draft[f.key] as string} />
 							<input class="hex" bind:value={draft[f.key] as string} />
@@ -248,6 +281,13 @@
 					<input type="checkbox" bind:checked={draft.galaxyAnimate} disabled={!draft.galaxyBg} />
 					slowly rotate the galaxy
 				</label>
+				<label class:disabled={!draft.galaxyBg}>
+					galaxy characters
+					<span class="color-pair">
+						<input type="color" bind:value={draft.galaxyColor} disabled={!draft.galaxyBg} />
+						<input class="hex" bind:value={draft.galaxyColor} disabled={!draft.galaxyBg} />
+					</span>
+				</label>
 			</div>
 		</section>
 
@@ -277,7 +317,7 @@
 		font-size: 0.75rem;
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
-		color: var(--fg-dim);
+		color: var(--heading);
 	}
 	.preset-row {
 		display: flex;
@@ -344,7 +384,7 @@
 		flex-direction: column;
 		gap: 0.3rem;
 		font-size: 0.7rem;
-		color: var(--fg-dim);
+		color: var(--label);
 	}
 	label.wide {
 		grid-column: 1 / -1;
@@ -354,8 +394,34 @@
 		align-items: center;
 		gap: 0.45rem;
 	}
-	label.row.disabled {
+	label.row.disabled,
+	label.disabled {
 		opacity: 0.45;
+	}
+	.field-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 0.4rem;
+	}
+	/* Graded rather than pass/fail: a heading at 3.5:1 is legible at heading size
+	   and not at body size, and flattening that to "fail" would push people away
+	   from palettes that are actually fine where the colour is used. */
+	.contrast {
+		font-size: 0.6rem;
+		letter-spacing: 0.04em;
+		white-space: nowrap;
+		opacity: 0.85;
+	}
+	.contrast.AAA,
+	.contrast.AA {
+		color: var(--accent);
+	}
+	.contrast.AA-large {
+		color: var(--fg-dim);
+	}
+	.contrast.fail {
+		color: var(--danger);
 	}
 	.color-pair {
 		display: flex;
