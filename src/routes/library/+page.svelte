@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
+	import PaneResizer from '$lib/components/PaneResizer.svelte';
 
 	interface Doc {
 		id: string;
@@ -51,6 +53,17 @@
 	let preview = $state(false);
 	let saved = $state(false);
 	let listOpen = $state(false);
+
+	/**
+	 * Width of the document list, draggable by the divider. The floor keeps the
+	 * folder headings and the two-line document rows readable.
+	 */
+	const listPane = createResizablePane({
+		key: 'galaxy:library-list-width',
+		min: 220,
+		max: 500,
+		initial: 290
+	});
 
 	onMount(load);
 
@@ -140,7 +153,7 @@
 <div class="lib-shell">
 	<button class="list-toggle" onclick={() => (listOpen = !listOpen)} aria-label="Toggle list">☰</button>
 
-	<aside class="doc-list" class:open={listOpen}>
+	<aside class="doc-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
 		<div class="list-actions">
 			<!-- Wrapped, or the click event arrives as the folder to file it under. -->
 			<button class="btn primary" onclick={() => startNew()}>+ New doc</button>
@@ -207,6 +220,8 @@
 		{/if}
 	</aside>
 
+	<PaneResizer pane={listPane} label="Resize the document list" />
+
 	<section class="editor">
 		<header>
 			<input class="title" placeholder="Document title" bind:value={title} />
@@ -265,9 +280,10 @@
 		min-width: 0;
 	}
 	.doc-list {
-		width: 290px;
+		/* Set from the drag handle and remembered per browser — see PaneResizer,
+		   which also draws the dividing line this used to carry as a border. */
+		width: var(--list-width, 290px);
 		flex-shrink: 0;
-		border-right: 1px solid var(--border);
 		padding: 0.75rem;
 		box-sizing: border-box;
 		overflow-y: auto;
@@ -538,6 +554,9 @@
 		}
 		.doc-list {
 			position: fixed;
+			/* Beats the inline --list-width: this is a slide-over sheet here, not
+			   a resizable column. */
+			width: auto;
 			inset: 0 25% 0 0;
 			background: var(--bg-pane);
 			z-index: 20;

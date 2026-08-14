@@ -7,7 +7,9 @@
 	import { autoresize } from '$lib/autoresize';
 	import { hasFinePointer } from '$lib/pointer';
 	import { copyText } from '$lib/clipboard';
+	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import AskSheet from '$lib/components/AskSheet.svelte';
+	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
 	import {
 		applyChunk,
@@ -68,6 +70,17 @@
 	let current = $state<Session | null>(null);
 	let messages = $state<Msg[]>([]);
 	let listOpen = $state(false);
+
+	/**
+	 * Width of the session list, draggable by the divider. Session titles are
+	 * repo-and-branch shaped and ran out of room at the old fixed 250px.
+	 */
+	const listPane = createResizablePane({
+		key: 'galaxy:code-list-width',
+		min: 200,
+		max: 460,
+		initial: 250
+	});
 
 	// new session form
 	let creating = $state(false);
@@ -562,7 +575,7 @@
 		☰
 	</button>
 
-	<aside class="session-list" class:open={listOpen}>
+	<aside class="session-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
 		<button class="btn primary wide" onclick={() => ((creating = true), (current = null))}>
 			+ New session
 		</button>
@@ -577,6 +590,8 @@
 			{/each}
 		</ul>
 	</aside>
+
+	<PaneResizer pane={listPane} label="Resize the session list" />
 
 	<section class="work-area">
 		<!-- Notices used to stack here as full-width banners, detached in space and
@@ -827,9 +842,10 @@
 		min-width: 0;
 	}
 	.session-list {
-		width: 250px;
+		/* Set from the drag handle and remembered per browser — see PaneResizer,
+		   which also draws the dividing line this used to carry as a border. */
+		width: var(--list-width, 250px);
 		flex-shrink: 0;
-		border-right: 1px solid var(--border);
 		padding: 0.75rem;
 		box-sizing: border-box;
 		overflow-y: auto;
@@ -915,7 +931,7 @@
 	.new-session h2 {
 		font-size: 0.9rem;
 		letter-spacing: 0.25em;
-		color: var(--accent);
+		color: var(--heading);
 		margin: 0;
 	}
 	.new-session label {
@@ -1256,6 +1272,9 @@
 		}
 		.session-list {
 			position: fixed;
+			/* Beats the inline --list-width: this is a slide-over sheet here, not
+			   a resizable column. */
+			width: auto;
 			inset: 0 30% 0 0;
 			background: var(--bg-pane);
 			z-index: 20;
