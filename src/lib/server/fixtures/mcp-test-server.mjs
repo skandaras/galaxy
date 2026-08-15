@@ -33,6 +33,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 				properties: { name: { type: 'string', description: 'Env var name' } },
 				required: ['name']
 			}
+		},
+		{
+			name: 'die',
+			description:
+				'Complain on stderr and exit without answering, the way a real server does when its API token is rejected or a read exhausts its memory.',
+			inputSchema: { type: 'object', properties: {} }
 		}
 	]
 }));
@@ -40,6 +46,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
 	if (req.params.name === 'explode') {
 		return { content: [{ type: 'text', text: 'boom' }], isError: true };
+	}
+	// Dies without answering. The client only sees the pipe close — the reason
+	// exists solely on stderr, which is the whole point of capturing it.
+	if (req.params.name === 'die') {
+		process.stderr.write('Error: 403 Forbidden — token cannot reach this file\n');
+		// Give the write a tick to reach the parent before the process goes.
+		setTimeout(() => process.exit(1), 10);
+		return new Promise(() => {});
 	}
 	if (req.params.name === 'echo_env') {
 		const name = req.params.arguments?.name ?? '';

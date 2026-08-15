@@ -175,10 +175,15 @@ describe('against a real MCP server', () => {
 	it('discovers tools and caches them', async () => {
 		const server = addFixtureServer();
 		const result = await syncServer(server.id);
-		expect(result).toMatchObject({ ok: true, toolCount: 3 });
+		expect(result).toMatchObject({ ok: true, toolCount: 4 });
 
 		const cached = listServerTools(server.id).map((t) => t.name).sort();
-		expect(cached).toEqual(['weather__echo_env', 'weather__explode', 'weather__get_forecast']);
+		expect(cached).toEqual([
+			'weather__die',
+			'weather__echo_env',
+			'weather__explode',
+			'weather__get_forecast'
+		]);
 
 		const forecast = listServerTools(server.id).find((t) => t.remoteName === 'get_forecast')!;
 		expect(forecast.description).toBe('Return a fake forecast for a city.');
@@ -218,6 +223,7 @@ describe('against a real MCP server', () => {
 			.run();
 		await syncServer(server.id);
 		expect(listServerTools(server.id).map((t) => t.remoteName).sort()).toEqual([
+			'die',
 			'echo_env',
 			'explode',
 			'get_forecast'
@@ -249,7 +255,7 @@ describe('against a real MCP server', () => {
 		await syncServer(server.id);
 		updateServer(server.id, { tasks: ['coding'] });
 		expect(mcpLoopTools('chat')).toHaveLength(0);
-		expect(mcpLoopTools('coding')).toHaveLength(3);
+		expect(mcpLoopTools('coding')).toHaveLength(4);
 	});
 
 	it('passes stored env vars through to the stdio child process', async () => {
@@ -262,6 +268,48 @@ describe('against a real MCP server', () => {
 		// confirms the child sees its own env, not a leaked copy of everything
 		// Galaxy was launched with.
 		await expect(tool.execute({ name: 'NOT_A_REAL_VAR_xyz' })).resolves.toBe('(no output)');
+	});
+
+	it('explains a server that dies mid-call instead of just "Connection closed"', async () => {
+		// The bug this pins: stderr was captured into a local in connect() and
+		// only read if the *handshake* failed. A child that died after that —
+		// rejected token, a file the token cannot reach, a read big enough to
+		// exhaust its memory — closed the pipe, and every one of those causes
+		// arrived as the same bare "MCP error -32000: Connection closed".
+		const server = addFixtureServer({ name: 'Figma (read)' });
+		expect((await syncServer(server.id)).ok).toBe(true);
+
+		const die = mcpLoopTools('chat').find((t) => t.def.name.endsWith('__die'))!;
+		await expect(die.execute({})).rejects.toThrow(/403 Forbidden — token cannot reach this file/);
+
+		// And the admin panel gets the same reason, not the shrug.
+		const row = db.select().from(mcpServers).where(eq(mcpServers.id, server.id)).get()!;
+		expect(row.lastError).toMatch(/403 Forbidden/);
+		expect(row.lastError).not.toBe('MCP error -32000: Connection closed');
+	});
+
+	it('still names the server, so a failure says which one it was', async () => {
+		const server = addFixtureServer({ name: 'Figma (read)' });
+		await syncServer(server.id);
+		const die = mcpLoopTools('chat').find((t) => t.def.name.endsWith('__die'))!;
+		await expect(die.execute({})).rejects.toThrow(/^Figma \(read\): /);
+	});
+
+	it('does not attribute one child\'s last words to the next one', async () => {
+		// A reconnect gets a fresh child; carrying the old tail over would
+		// explain a new failure with an old server's complaint.
+		const server = addFixtureServer();
+		await syncServer(server.id);
+		const tools = mcpLoopTools('chat');
+		await expect(tools.find((t) => t.def.name.endsWith('__die'))!.execute({})).rejects.toThrow(
+			/403 Forbidden/
+		);
+
+		// The dead child is gone; the next call reconnects and works normally.
+		const forecast = mcpLoopTools('chat').find((t) => t.def.name.endsWith('__get_forecast'))!;
+		expect(await forecast.execute({ city: 'Wellington' })).toContain('Forecast for Wellington');
+		const row = db.select().from(mcpServers).where(eq(mcpServers.id, server.id)).get()!;
+		expect(row.lastError).toMatch(/403 Forbidden/); // recorded, but not re-raised
 	});
 
 	it('removes cached tools when the server is deleted', async () => {
