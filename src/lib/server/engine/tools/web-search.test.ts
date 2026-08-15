@@ -137,3 +137,101 @@ describe('runWebSearch failover', () => {
 		).rejects.toThrow(SearchProviderError);
 	});
 });
+
+describe('runWebSearch language', () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	const cfg = (over: Partial<WebSearchSettings>): WebSearchSettings => ({
+		...DEFAULT_WEB_SEARCH,
+		...over
+	});
+
+	/** Capture the URL and init the provider was called with. */
+	function captureFetch(body: unknown) {
+		const calls: { url: string; init: RequestInit | undefined }[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init });
+				return new Response(typeof body === 'string' ? body : JSON.stringify(body), {
+					status: 200,
+					headers: {
+						'content-type': typeof body === 'string' ? 'text/html' : 'application/json'
+					}
+				});
+			})
+		);
+		return calls;
+	}
+
+	it('sends SearXNG its language parameter', async () => {
+		const calls = captureFetch({ results: [] });
+		await runWebSearch('Bundestag', cfg({ provider: 'searxng', baseUrl: 'http://s:8080' }), 'de');
+		expect(calls[0].url).toContain('&language=de');
+	});
+
+	it('splits a region tag into Brave search_lang and country', async () => {
+		const calls = captureFetch({ web: { results: [] } });
+		await runWebSearch('camara', cfg({ provider: 'brave', apiKeyEnc: undefined }), 'pt-br');
+		expect(calls[0].url).toContain('search_lang=pt');
+		expect(calls[0].url).toContain('country=BR');
+	});
+
+	it('sends only search_lang for a bare language', async () => {
+		const calls = captureFetch({ web: { results: [] } });
+		await runWebSearch('Bundestag', cfg({ provider: 'brave' }), 'de');
+		expect(calls[0].url).toContain('search_lang=de');
+		expect(calls[0].url).not.toContain('country=');
+	});
+
+	it("puts DuckDuckGo's region-language pair in the form body", async () => {
+		const calls = captureFetch(RESULTS_PAGE);
+		await runWebSearch('Bundestag', cfg({ provider: 'duckduckgo' }), 'de');
+		expect(String(calls[0].init?.body)).toContain('kl=de-de');
+	});
+
+	it('omits the parameter entirely when no language is asked for', async () => {
+		const calls = captureFetch({ results: [] });
+		await runWebSearch('anything', cfg({ provider: 'searxng', baseUrl: 'http://s:8080' }));
+		expect(calls[0].url).not.toContain('language=');
+	});
+
+	it('applies the configured default when a call names no language', async () => {
+		const calls = captureFetch({ results: [] });
+		await runWebSearch(
+			'anything',
+			cfg({ provider: 'searxng', baseUrl: 'http://s:8080', defaultLanguage: 'ja' })
+		);
+		expect(calls[0].url).toContain('&language=ja');
+	});
+
+	it('reports that Tavily could not apply the language', async () => {
+		// Tavily's API has no language parameter; the outcome has to say so, or
+		// off-language results look like the tool ignoring the request.
+		captureFetch({ results: [] });
+		const outcome = await runWebSearch('Bundestag', cfg({ provider: 'tavily' }), 'de');
+		expect(outcome.language).toBe('de');
+		expect(outcome.languageApplied).toBe(false);
+	});
+
+	it('reports it applied for a provider that can', async () => {
+		captureFetch({ results: [] });
+		const outcome = await runWebSearch(
+			'Bundestag',
+			cfg({ provider: 'searxng', baseUrl: 'http://s:8080' }),
+			'de'
+		);
+		expect(outcome.languageApplied).toBe(true);
+	});
+
+	it('never lets an unvalidated language reach the query string', async () => {
+		const calls = captureFetch({ results: [] });
+		await runWebSearch(
+			'x',
+			cfg({ provider: 'searxng', baseUrl: 'http://s:8080' }),
+			'de&safesearch=off'
+		);
+		expect(calls[0].url).not.toContain('safesearch');
+		expect(calls[0].url).not.toContain('language=');
+	});
+});

@@ -25,7 +25,7 @@ import {
 	type LiveJob
 } from './jobs';
 import { streamWithIdleTimeout } from './loop';
-import { runWebSearch, type SearchResult } from './tools/web-search';
+import { normaliseLanguage, runWebSearch, type SearchResult } from './tools/web-search';
 
 interface Evidence {
 	n: number;
@@ -118,9 +118,15 @@ async function runResearch(
 
 	pushChunk(job, { type: 'meta', model: choice.model.displayName });
 
+	// Every limit this run observes is created here, so they are unambiguously
+	// per request: a second research run gets a new allowance, a new round
+	// counter and a new evidence set.
+	const allowance = searchAllowance(Math.max(1, cfg.maxSearchesPerRun ?? cfg.maxQueries));
+	const defaultLanguage = normaliseLanguage(searchCfg.defaultLanguage);
+
 	// 1. Plan search queries
 	pushChunk(job, { type: 'stage', name: 'planning' });
-	const plan = await planQueries(choice, systemPrompt, opts.content, cfg, track);
+	const plan = await planQueries(choice, systemPrompt, opts.content, cfg, track, defaultLanguage);
 	const queries = plan.queries;
 	if (plan.fellBack) {
 		// Searching the raw question is a poor substitute for a real plan, and it
@@ -150,7 +156,7 @@ async function runResearch(
 		// for a stop between stages — the gaps here are whole rounds of searching
 		// and page fetching, which is exactly what a user wants to cut short.
 		if (job.controller.signal.aborted) break;
-		const results = await runSearches(pendingQueries, searchCfg, event);
+		const results = await runSearches(pendingQueries, searchCfg, allowance, event);
 		const fresh = await readPages(results, evidence, cfg, event);
 		pushChunk(job, {
 			type: 'stage',
@@ -160,10 +166,12 @@ async function runResearch(
 		evidence = [...evidence, ...fresh];
 
 		if (round >= cfg.iterationCap || !evidence.length) break;
+		// No point reviewing for follow-ups there is no allowance left to run.
+		if (allowance.used >= allowance.total) break;
 		if (job.controller.signal.aborted) break;
 		round++;
 		pushChunk(job, { type: 'stage', name: 'reviewing' });
-		const more = await reviewEvidence(choice, opts.content, evidence, cfg, track);
+		const more = await reviewEvidence(choice, opts.content, evidence, cfg, track, defaultLanguage);
 		if (!more.length) break;
 		pendingQueries = more;
 		pushChunk(job, { type: 'stage', name: 'searching', detail: `${more.length} follow-ups` });
@@ -325,21 +333,63 @@ const PLAN_TOKENS_RETRY = 4000;
 /** Floor for the synthesis retry, so a small configured cap still gets room. */
 const SYNTHESIS_RETRY_TOKENS = 8000;
 
+/** One planned search: the words to send, and the index to send them to. */
+export interface PlannedQuery {
+	q: string;
+	/** BCP-47 code, or '' for no constraint. */
+	language: string;
+}
+
 export interface PlanOutcome {
-	queries: string[];
+	queries: PlannedQuery[];
 	/** Set when the model produced no usable plan and the question is standing in. */
 	fellBack: 'empty' | 'unparseable' | 'error' | null;
 	reasonedOnly: boolean;
 }
 
-function parseQueries(text: string, max: number): string[] {
+/**
+ * Parse a plan.
+ *
+ * Both shapes are accepted on purpose: the tagged form is what we ask for, and
+ * a bare string is what a model that ignored the format returns. Rejecting the
+ * latter would turn a cosmetic disobedience into a failed plan and send the
+ * pipeline off to search the raw question.
+ */
+export function parseQueries(text: string, max: number, fallbackLanguage = ''): PlannedQuery[] {
 	const start = text.indexOf('{');
 	const end = text.lastIndexOf('}');
 	if (start === -1 || end <= start) return [];
 	const parsed = JSON.parse(text.slice(start, end + 1));
-	return Array.isArray(parsed.queries)
-		? parsed.queries.filter((q: unknown) => typeof q === 'string' && q).slice(0, max)
-		: [];
+	if (!Array.isArray(parsed.queries)) return [];
+	const out: PlannedQuery[] = [];
+	for (const raw of parsed.queries) {
+		if (typeof raw === 'string' && raw.trim()) {
+			out.push({ q: raw.trim(), language: fallbackLanguage });
+		} else if (raw && typeof raw === 'object' && typeof raw.q === 'string' && raw.q.trim()) {
+			out.push({
+				q: raw.q.trim(),
+				language: normaliseLanguage(raw.language) || fallbackLanguage
+			});
+		}
+		if (out.length >= max) break;
+	}
+	return out;
+}
+
+/** The standing instruction about languages, shared by planning and review. */
+function languageBrief(cfg: ResearchSettings): string {
+	const extra = (cfg.extraLanguages ?? '')
+		.split(',')
+		.map((s) => normaliseLanguage(s))
+		.filter(Boolean);
+	return [
+		'Search in whatever language the sources are actually written in. When the question concerns a place, institution, law, company, product or event whose primary sources are not in English, write those queries in the local language and tag them with its code — translated-into-English queries find commentary, not primary sources.',
+		extra.length
+			? `Always include at least one query in each of these languages as well: ${extra.join(', ')}.`
+			: ''
+	]
+		.filter(Boolean)
+		.join(' ');
 }
 
 export async function planQueries(
@@ -347,7 +397,8 @@ export async function planQueries(
 	systemPrompt: string,
 	question: string,
 	cfg: ResearchSettings,
-	track: (u: Usage | null) => void
+	track: (u: Usage | null) => void,
+	defaultLanguage = ''
 ): Promise<PlanOutcome> {
 	const ask = (maxTokens: number) =>
 		choice.adapter.complete(
@@ -357,13 +408,19 @@ export async function planQueries(
 					{ role: 'system', content: systemPrompt },
 					{
 						role: 'user',
-						content: `RESEARCH-PLAN: Produce up to ${cfg.maxQueries} focused web-search queries for researching this question. Reply ONLY with JSON: {"queries":["…"]}\n\nQuestion: ${question}`
+						content: `RESEARCH-PLAN: Produce up to ${cfg.maxQueries} focused web-search queries for researching this question. ${languageBrief(cfg)} Reply ONLY with JSON: {"queries":[{"q":"…","language":"de"}]} — use "" for language when no constraint is wanted.\n\nQuestion: ${question}`
 					}
 				],
 				maxTokens
 			},
 			AbortSignal.timeout(60_000)
 		);
+
+	const asked = (fellBack: PlanOutcome['fellBack'], reasonedOnly: boolean): PlanOutcome => ({
+		queries: [{ q: question, language: defaultLanguage }],
+		fellBack,
+		reasonedOnly
+	});
 
 	try {
 		let res = await ask(PLAN_TOKENS);
@@ -376,35 +433,82 @@ export async function planQueries(
 			track(res.usage);
 		}
 		const reasonedOnly = Boolean(res.reasonedOnly);
-		if (!res.text.trim()) return { queries: [question], fellBack: 'empty', reasonedOnly };
-		const queries = parseQueries(res.text, cfg.maxQueries);
+		if (!res.text.trim()) return asked('empty', reasonedOnly);
+		const queries = parseQueries(res.text, cfg.maxQueries, defaultLanguage);
 		return queries.length
 			? { queries, fellBack: null, reasonedOnly }
-			: { queries: [question], fellBack: 'unparseable', reasonedOnly };
+			: asked('unparseable', reasonedOnly);
 	} catch {
-		return { queries: [question], fellBack: 'error', reasonedOnly: false };
+		return asked('error', false);
 	}
 }
 
+/**
+ * Searches remaining for one research run.
+ *
+ * Created inside `runResearch`, so it is unambiguously per request: a second
+ * research run builds a new one and starts from the full allowance. The
+ * pipeline was already bounded this way by the loop's shape — this makes the
+ * ceiling explicit, adjustable and visible in the Observatory.
+ */
+function searchAllowance(total: number) {
+	let used = 0;
+	return {
+		get used() {
+			return used;
+		},
+		get total() {
+			return total;
+		},
+		/** Claim up to `n` searches, returning how many were actually granted. */
+		take(n: number): number {
+			const granted = Math.max(0, Math.min(n, total - used));
+			used += granted;
+			return granted;
+		}
+	};
+}
+
 async function runSearches(
-	queries: string[],
+	queries: PlannedQuery[],
 	searchCfg: WebSearchSettings,
+	allowance: ReturnType<typeof searchAllowance>,
 	event: (name: string, status: 'ok' | 'error', d: number, detail?: Record<string, unknown>) => void
 ): Promise<SearchResult[]> {
+	const granted = allowance.take(queries.length);
+	if (granted < queries.length) {
+		event('web_search', 'error', 0, {
+			skipped: queries.length - granted,
+			reason: 'research search budget spent',
+			searchBudget: allowance.total,
+			scope: 'research-run'
+		});
+	}
 	const settled = await Promise.allSettled(
-		queries.map(async (q) => {
+		queries.slice(0, granted).map(async ({ q, language }) => {
 			const started = Date.now();
 			try {
-				const outcome = await runWebSearch(q, searchCfg);
+				const outcome = await runWebSearch(q, searchCfg, language);
 				event('web_search', 'ok', Date.now() - started, {
 					query: q,
 					results: outcome.results.length,
 					provider: outcome.provider,
+					searchesUsed: allowance.used,
+					searchBudget: allowance.total,
+					scope: 'research-run',
+					...(language
+						? { language, languageApplied: outcome.languageApplied !== false }
+						: {}),
 					...(outcome.failedOver ? { failedOver: outcome.failedOver } : {})
 				});
 				return outcome.results;
 			} catch (err) {
-				event('web_search', 'error', Date.now() - started, { query: q, error: String(err) });
+				event('web_search', 'error', Date.now() - started, {
+					query: q,
+					error: String(err),
+					scope: 'research-run',
+					...(language ? { language } : {})
+				});
 				return [] as SearchResult[];
 			}
 		})
@@ -446,8 +550,9 @@ async function reviewEvidence(
 	question: string,
 	evidence: Evidence[],
 	cfg: ResearchSettings,
-	track: (u: Usage | null) => void
-): Promise<string[]> {
+	track: (u: Usage | null) => void,
+	defaultLanguage = ''
+): Promise<PlannedQuery[]> {
 	try {
 		const { text, usage } = await choice.adapter.complete(
 			{
@@ -455,19 +560,22 @@ async function reviewEvidence(
 				messages: [
 					{
 						role: 'user',
-						content: `RESEARCH-REVIEW: Given the question "${question}" and these source titles:\n${evidence.map((e) => `[${e.n}] ${e.title}`).join('\n')}\n\nIs the evidence sufficient? Reply ONLY JSON: {"sufficient":true} or {"sufficient":false,"more_queries":["…"]}`
+						content: `RESEARCH-REVIEW: Given the question "${question}" and these source titles:\n${evidence.map((e) => `[${e.n}] ${e.title}`).join('\n')}\n\nIs the evidence sufficient? ${languageBrief(cfg)} Reply ONLY JSON: {"sufficient":true} or {"sufficient":false,"more_queries":[{"q":"…","language":"de"}]}`
 					}
 				],
-				maxTokens: 200
+				maxTokens: 300
 			},
 			AbortSignal.timeout(60_000)
 		);
 		track(usage);
 		const parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
 		if (parsed.sufficient) return [];
-		return Array.isArray(parsed.more_queries)
-			? parsed.more_queries.filter((q: unknown) => typeof q === 'string').slice(0, cfg.maxQueries)
-			: [];
+		// Same tolerance as the planner: follow-ups may come back as bare strings.
+		return parseQueries(
+			JSON.stringify({ queries: parsed.more_queries ?? [] }),
+			cfg.maxQueries,
+			defaultLanguage
+		);
 	} catch {
 		return [];
 	}

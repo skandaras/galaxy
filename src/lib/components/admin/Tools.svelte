@@ -406,14 +406,14 @@
 <style>
 	h3 {
 		font-size: 0.75rem;
-		color: var(--accent);
+		color: var(--heading);
 		letter-spacing: 0.2em;
 		text-transform: uppercase;
 		margin: 1.4rem 0 0.3rem;
 	}
 	h4 {
 		font-size: 0.7rem;
-		color: var(--fg-dim);
+		color: var(--heading);
 		letter-spacing: 0.12em;
 		text-transform: uppercase;
 		margin: 0.9rem 0 0.2rem;
@@ -582,7 +582,7 @@
 		flex-direction: column;
 		gap: 0.2rem;
 		font-size: 0.7rem;
-		color: var(--fg-dim);
+		color: var(--label);
 	}
 	label.inline {
 		flex-direction: row;

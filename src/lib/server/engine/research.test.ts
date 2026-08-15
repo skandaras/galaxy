@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import type { CompletionResult } from '$lib/server/providers/types';
 import { DEFAULT_RESEARCH } from '$lib/server/settings';
-import { assertPublicHttpUrl, htmlToText, planQueries } from './research';
+import { assertPublicHttpUrl, htmlToText, parseQueries, planQueries } from './research';
 
 describe('assertPublicHttpUrl', () => {
 	it('blocks loopback, private and link-local targets', () => {
@@ -80,7 +80,14 @@ describe('planQueries', () => {
 			cfg,
 			() => {}
 		);
-		expect(out).toEqual({ queries: ['a', 'b'], fellBack: null, reasonedOnly: false });
+		expect(out).toEqual({
+			queries: [
+				{ q: 'a', language: '' },
+				{ q: 'b', language: '' }
+			],
+			fellBack: null,
+			reasonedOnly: false
+		});
 	});
 
 	it('retries with more room when the model spent its budget reasoning', async () => {
@@ -93,20 +100,20 @@ describe('planQueries', () => {
 			cfg,
 			() => {}
 		);
-		expect(out.queries).toEqual(['x', 'y', 'z']);
+		expect(out.queries.map((q) => q.q)).toEqual(['x', 'y', 'z']);
 		expect(out.fellBack).toBeNull();
 	});
 
 	it('reports the fallback rather than silently searching the question', async () => {
 		const out = await planQueries(choiceOf(reasonedOut), '', 'question?', cfg, () => {});
-		expect(out.queries).toEqual(['question?']);
+		expect(out.queries).toEqual([{ q: 'question?', language: '' }]);
 		expect(out.fellBack).toBe('empty');
 		expect(out.reasonedOnly).toBe(true);
 	});
 
 	it('flags unparseable output separately from an empty one', async () => {
 		const out = await planQueries(choiceOf(ok('sure! here you go')), '', 'question?', cfg, () => {});
-		expect(out.queries).toEqual(['question?']);
+		expect(out.queries).toEqual([{ q: 'question?', language: '' }]);
 		expect(out.fellBack).toBe('unparseable');
 	});
 
@@ -123,5 +130,94 @@ describe('planQueries', () => {
 			}
 		);
 		expect(total).toBe(14);
+	});
+
+	it('carries the language the planner tagged each query with', async () => {
+		const out = await planQueries(
+			choiceOf(
+				ok('{"queries":[{"q":"Bundestag Sitzung","language":"de"},{"q":"german parliament","language":""}]}')
+			),
+			'',
+			'question?',
+			cfg,
+			() => {}
+		);
+		expect(out.queries).toEqual([
+			{ q: 'Bundestag Sitzung', language: 'de' },
+			{ q: 'german parliament', language: '' }
+		]);
+	});
+
+	it('asks the planner to search in the language of the sources', async () => {
+		let prompt = '';
+		const choice = choiceOf(ok('{"queries":["a"]}'));
+		const inner = choice.adapter.complete;
+		choice.adapter.complete = ((req: { messages: { content: string }[] }, signal: AbortSignal) => {
+			prompt = req.messages[req.messages.length - 1].content;
+			return inner(req as never, signal);
+		}) as typeof inner;
+		await planQueries(choice, '', 'Was ist das Bundesverfassungsgericht?', cfg, () => {});
+		expect(prompt).toMatch(/local language/i);
+		expect(prompt).toContain('"language"');
+	});
+
+	it('names the admin-configured extra languages in the brief', async () => {
+		let prompt = '';
+		const choice = choiceOf(ok('{"queries":["a"]}'));
+		const inner = choice.adapter.complete;
+		choice.adapter.complete = ((req: { messages: { content: string }[] }, signal: AbortSignal) => {
+			prompt = req.messages[req.messages.length - 1].content;
+			return inner(req as never, signal);
+		}) as typeof inner;
+		await planQueries(
+			choice,
+			'',
+			'q?',
+			{ ...cfg, extraLanguages: 'de, ja, not-a-language!' },
+			() => {}
+		);
+		expect(prompt).toContain('de, ja');
+		expect(prompt).not.toContain('not-a-language!');
+	});
+});
+
+describe('parseQueries', () => {
+	it('accepts the tagged shape it asks for', () => {
+		expect(parseQueries('{"queries":[{"q":"a","language":"DE"}]}', 4)).toEqual([
+			{ q: 'a', language: 'de' }
+		]);
+	});
+
+	it('still accepts bare strings, so a model that ignores the format works', () => {
+		// Rejecting these would turn cosmetic disobedience into a failed plan and
+		// send the pipeline off to search the raw question instead.
+		expect(parseQueries('{"queries":["a","b"]}', 4)).toEqual([
+			{ q: 'a', language: '' },
+			{ q: 'b', language: '' }
+		]);
+	});
+
+	it('falls back to the configured language for untagged queries', () => {
+		expect(parseQueries('{"queries":["a",{"q":"b","language":"ja"}]}', 4, 'de')).toEqual([
+			{ q: 'a', language: 'de' },
+			{ q: 'b', language: 'ja' }
+		]);
+	});
+
+	it('drops a bogus language rather than passing it to a provider', () => {
+		expect(parseQueries('{"queries":[{"q":"a","language":"de&safe=off"}]}', 4)).toEqual([
+			{ q: 'a', language: '' }
+		]);
+	});
+
+	it('honours the cap and skips empty entries', () => {
+		expect(parseQueries('{"queries":["a","","  ",{"q":""},"b","c"]}', 2)).toEqual([
+			{ q: 'a', language: '' },
+			{ q: 'b', language: '' }
+		]);
+	});
+
+	it('returns nothing for output with no JSON object in it', () => {
+		expect(parseQueries('sure! here you go', 4)).toEqual([]);
 	});
 });

@@ -576,7 +576,7 @@
 		font-size: 0.68rem;
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
-		color: var(--accent);
+		color: var(--heading);
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;

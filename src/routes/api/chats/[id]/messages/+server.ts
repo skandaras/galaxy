@@ -5,13 +5,25 @@ import { getChat } from '$lib/server/chats';
 import { EngineError, startChatTurn } from '$lib/server/engine/engine';
 import { startResearchTurn } from '$lib/server/engine/research';
 import { BudgetExceededError } from '$lib/server/engine/budget';
-import { findRunningJobForChat } from '$lib/server/engine/jobs';
+import { findRunningJobForChat, jobAgeMinutes } from '$lib/server/engine/jobs';
 
 export const POST: RequestHandler = async ({ locals, params, request }) => {
 	const user = requireUser(locals);
 	const chat = getChat(params.id, user.id);
 	if (!chat) error(404, 'Chat not found');
-	if (findRunningJobForChat(chat.id)) error(409, 'A response is already running for this chat');
+	// Name the run that is in the way and how old it is. A bare "already
+	// running" left no way to tell a reply still streaming from one that stalled
+	// half an hour ago, and no way to act on either.
+	const running = findRunningJobForChat(chat.id);
+	if (running) {
+		const mins = jobAgeMinutes(running);
+		error(409, {
+			message: `A ${running.task === 'deep-research' ? 'deep-research run' : 'reply'} started ${mins < 1 ? 'moments' : `${mins} minute${mins === 1 ? '' : 's'}`} ago is still running for this chat.`,
+			jobId: running.id,
+			task: running.task,
+			ageMinutes: mins
+		});
+	}
 
 	const body = await request.json().catch(() => ({}));
 	const content = typeof body.content === 'string' ? body.content.trim() : '';

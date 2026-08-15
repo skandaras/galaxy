@@ -65,8 +65,8 @@
 								{u.canCode ? 'allowed' : 'blocked'}
 							</label>
 						</td>
-						<td class="meta">{when(u.createdAt)}</td>
-						<td class="meta">{when(u.lastSeenAt)}</td>
+						<td class="when">{when(u.createdAt)}</td>
+						<td class="when">{when(u.lastSeenAt)}</td>
 					</tr>
 				{:else}
 					<tr><td colspan="5" class="hint">No users yet.</td></tr>
@@ -93,7 +93,7 @@
 		font-size: 0.78rem;
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
-		color: var(--accent);
+		color: var(--heading);
 	}
 	.hint {
 		font-size: 0.68rem;
@@ -121,10 +121,20 @@
 		color: var(--fg-dim);
 		font-weight: normal;
 	}
+	/* Block, so the email sits on its own line under the username. Only ever on
+	   the span inside a cell — putting it on a <td> is what broke this table. */
 	.meta {
 		color: var(--fg-dim);
 		font-size: 0.68rem;
 		display: block;
+	}
+	/* The timestamp columns are dimmed the same way, but they are cells: a
+	   display:block <td> stops being a table cell, drops out of the column grid
+	   and no longer lines up under its <th>. Colour and size only. */
+	.when {
+		color: var(--fg-dim);
+		font-size: 0.68rem;
+		white-space: nowrap;
 	}
 	.toggle {
 		display: inline-flex;

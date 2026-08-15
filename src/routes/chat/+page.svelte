@@ -6,7 +6,9 @@
 	import { createAutoscroll } from '$lib/autoscroll.svelte';
 	import { autoresize } from '$lib/autoresize';
 	import { hasFinePointer } from '$lib/pointer';
+	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import AskSheet from '$lib/components/AskSheet.svelte';
+	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
 	import {
 		applyChunk,
@@ -115,6 +117,8 @@
 	let stages = $state<{ name: string; detail?: string }[]>([]);
 	let notices = $state<string[]>([]);
 	let errorBanner = $state<string | null>(null);
+	/** Set when a send was refused because another run holds this chat. */
+	let blockingJobId = $state<string | null>(null);
 	let savedDocId = $state<string | null>(null);
 	let source: EventSource | null = null;
 	/**
@@ -127,55 +131,16 @@
 
 	/**
 	 * Width of the chat list, draggable by the divider. Clamped so it can never
-	 * be dragged to nothing or wide enough to squeeze the conversation out, and
-	 * remembered per browser — it's a preference about this screen, not
-	 * something worth a round trip.
+	 * be dragged to nothing or wide enough to squeeze the conversation out.
+	 * The row carries four actions on hover, which at 250px left the title with
+	 * about three legible characters — hence the floor.
 	 */
-	const LIST_MIN = 220;
-	const LIST_MAX = 520;
-	const LIST_DEFAULT = 340;
-	const LIST_KEY = 'galaxy:chat-list-width';
-	let listWidth = $state(LIST_DEFAULT);
-	let dragging = $state(false);
-
-	onMount(() => {
-		const saved = Number(localStorage.getItem(LIST_KEY));
-		if (Number.isFinite(saved) && saved > 0) listWidth = clampWidth(saved);
+	const listPane = createResizablePane({
+		key: 'galaxy:chat-list-width',
+		min: 220,
+		max: 520,
+		initial: 340
 	});
-
-	const clampWidth = (px: number) => Math.min(LIST_MAX, Math.max(LIST_MIN, Math.round(px)));
-
-	function startResize(e: PointerEvent) {
-		e.preventDefault();
-		dragging = true;
-		const handle = e.currentTarget as HTMLElement;
-		// Pointer capture keeps the drag alive over the thread and the composer,
-		// which would otherwise swallow the move events.
-		handle.setPointerCapture(e.pointerId);
-		const startX = e.clientX;
-		const startWidth = listWidth;
-
-		const move = (ev: PointerEvent) => (listWidth = clampWidth(startWidth + ev.clientX - startX));
-		const up = () => {
-			dragging = false;
-			handle.releasePointerCapture(e.pointerId);
-			handle.removeEventListener('pointermove', move);
-			handle.removeEventListener('pointerup', up);
-			localStorage.setItem(LIST_KEY, String(listWidth));
-		};
-		handle.addEventListener('pointermove', move);
-		handle.addEventListener('pointerup', up);
-	}
-
-	/** Keyboard resizing, so the divider isn't mouse-only. */
-	function nudge(e: KeyboardEvent) {
-		const step = e.shiftKey ? 40 : 10;
-		if (e.key === 'ArrowLeft') listWidth = clampWidth(listWidth - step);
-		else if (e.key === 'ArrowRight') listWidth = clampWidth(listWidth + step);
-		else return;
-		e.preventDefault();
-		localStorage.setItem(LIST_KEY, String(listWidth));
-	}
 
 	/** Mirrors the guard at the top of send(), so the button can't look live and do nothing. */
 	const canSend = $derived(
@@ -237,6 +202,10 @@
 		stashDraft();
 		closeStream();
 		errorBanner = null;
+		blockingJobId = null;
+		// Deep research is a decision about one message, not a mode the session
+		// stays in — opening another conversation must not inherit it armed.
+		deepResearch = false;
 		const res = await fetch(`/api/chats/${id}`);
 		if (!res.ok) return;
 		const data = await res.json();
@@ -310,6 +279,9 @@
 		if (!res.ok) {
 			const err = await res.json().catch(() => ({ message: res.statusText }));
 			errorBanner = err.message ?? 'Failed to send';
+			// A chat blocked by a run that will not end is only fixable by stopping
+			// that run, so offer it here rather than leaving a dead end.
+			blockingJobId = res.status === 409 && err.jobId ? err.jobId : null;
 			// uploadedRefs deliberately survives so a retry reuses the uploads.
 			return;
 		}
@@ -331,6 +303,7 @@
 		}
 		void scroll.toBottom('auto');
 		const { jobId } = await res.json();
+		researchRunning = deepResearch;
 		attachStream(jobId);
 	}
 
@@ -343,6 +316,24 @@
 		stopping = true;
 		await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST' }).catch(() => {});
 	}
+
+	/** Stop the run that refused this send, so the chat is usable again. */
+	async function stopBlockingRun() {
+		const jobId = blockingJobId;
+		if (!jobId) return;
+		blockingJobId = null;
+		await fetch(`/api/jobs/${jobId}/cancel`, { method: 'POST' }).catch(() => {});
+		errorBanner = 'Stopping that run — try sending again in a moment.';
+	}
+
+	/**
+	 * Whether the run now streaming is a research run.
+	 *
+	 * Captured at send rather than read at completion, because the toggle can be
+	 * flipped while the run streams and it is the run that finished, not the
+	 * button's current state, that decides whether to clear it.
+	 */
+	let researchRunning = $state(false);
 
 	/** `carriedRecoveries` keeps the reconnect budget across a reattach. */
 	function attachStream(jobId: string, carriedRecoveries = 0) {
@@ -387,12 +378,27 @@
 				const chat = currentChat;
 				const wasFirstTurn = !messages.some((m) => m.role === 'assistant');
 				lastStopReason = chunk.stopReason ?? null;
+				// Deep research is a per-run choice, not a mode: leaving it armed
+				// sent every following message down the research pipeline, which is
+				// slow and expensive and was never asked for.
+				if (researchRunning) {
+					researchRunning = false;
+					deepResearch = false;
+					notices = [
+						...notices,
+						'Deep research finished — the toggle is off. Turn it back on for another research run.'
+					];
+				}
 				finalizeStream();
 				if (chat) void reconcile(chat.id);
 				if (chat && wasFirstTurn && !chat.titleCustom) void pickUpAutoTitle(chat.id);
 			}
 			else if (chunk.type === 'error') {
 				errorBanner = chunk.message;
+				// A failed research run leaves the toggle on — the work did not
+				// happen, so retrying should not need it switched back — but the
+				// flag must not survive to clear the toggle after some later run.
+				researchRunning = false;
 				finalizeStream(false);
 			}
 		};
@@ -722,7 +728,7 @@
 		☰
 	</button>
 
-	<aside class="chat-list" class:open={listOpen} style={`--list-width:${listWidth}px`}>
+	<aside class="chat-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
 		<div class="list-actions">
 			<button class="btn" onclick={() => newChat(false)}>+ New chat</button>
 			<button class="btn ghost" title="Hidden: not stored, invisible to memory" onclick={() => newChat(true)}>
@@ -790,23 +796,16 @@
 		{/if}
 	</aside>
 
-	<div
-		class="resizer"
-		class:dragging
-		role="slider"
-		aria-orientation="vertical"
-		aria-label="Resize the chat list"
-		aria-valuenow={listWidth}
-		aria-valuemin={LIST_MIN}
-		aria-valuemax={LIST_MAX}
-		tabindex="0"
-		onpointerdown={startResize}
-		onkeydown={nudge}
-	></div>
+	<PaneResizer pane={listPane} label="Resize the chat list" />
 
 	<section class="thread-area">
 		{#if errorBanner}
-			<div class="banner error">{errorBanner}</div>
+			<div class="banner error">
+				{errorBanner}
+				{#if blockingJobId}
+					<button class="banner-action" onclick={stopBlockingRun}>Stop it</button>
+				{/if}
+			</div>
 		{/if}
 		{#each notices as notice (notice)}
 			<div class="banner">{notice}</div>
@@ -989,31 +988,12 @@
 		min-width: 0;
 	}
 	.chat-list {
-		/* Set from the drag handle and remembered per browser; the row carries
-		   four actions on hover, which at 250px left the title with about three
-		   legible characters. */
+		/* Set from the drag handle and remembered per browser — see PaneResizer. */
 		width: var(--list-width, 340px);
 		flex-shrink: 0;
 		padding: 0.75rem;
 		box-sizing: border-box;
 		overflow-y: auto;
-	}
-	/* The divider doubles as the drag handle: a 1px border with a wider
-	   invisible grab area, so it is hittable without looking like a gutter. */
-	.resizer {
-		flex: 0 0 5px;
-		margin-right: -4px;
-		background: var(--border);
-		background-clip: content-box;
-		border-right: 4px solid transparent;
-		cursor: col-resize;
-		touch-action: none;
-	}
-	.resizer:hover,
-	.resizer:focus-visible,
-	.resizer.dragging {
-		background-color: var(--accent);
-		outline: none;
 	}
 	.list-toggle {
 		display: none;
@@ -1162,6 +1142,17 @@
 	}
 	.banner.error {
 		color: var(--danger);
+	}
+	.banner-action {
+		background: transparent;
+		border: 1px solid currentColor;
+		border-radius: var(--radius);
+		color: inherit;
+		font-family: inherit;
+		font-size: 0.7rem;
+		padding: 0.1rem 0.5rem;
+		margin-left: 0.5rem;
+		cursor: pointer;
 	}
 	.thread {
 		flex: 1;
@@ -1400,9 +1391,6 @@
 			border: 1px solid var(--border);
 			border-radius: 5px;
 			padding: 0.25rem 0.5rem;
-		}
-		.resizer {
-			display: none;
 		}
 		.chat-list {
 			position: fixed;

@@ -115,7 +115,7 @@
 		margin: 0;
 		font-size: 0.9rem;
 		letter-spacing: 0.3em;
-		color: var(--accent);
+		color: var(--heading);
 	}
 	.filters {
 		display: flex;

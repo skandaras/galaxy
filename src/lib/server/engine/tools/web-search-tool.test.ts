@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WebSearchSettings } from '$lib/server/settings';
 import {
+	ddgRegion,
 	formatSearchResults,
+	memoKey,
+	normaliseLanguage,
 	normaliseQuery,
 	webSearchTool,
 	type SearchOutcome,
@@ -26,11 +29,15 @@ const result = (n: number): SearchResult => ({
 /** Stub provider that records the queries it was actually asked to run. */
 function stubSearch(results: SearchResult[] = [result(1)]) {
 	const calls: string[] = [];
-	const search = vi.fn(async (query: string): Promise<SearchOutcome> => {
-		calls.push(query);
-		return { results, provider: 'searxng' };
-	});
-	return { search, calls };
+	const langs: string[] = [];
+	const search = vi.fn(
+		async (query: string, _cfg: WebSearchSettings, language = ''): Promise<SearchOutcome> => {
+			calls.push(query);
+			langs.push(language);
+			return { results, provider: 'searxng', ...(language ? { language, languageApplied: true } : {}) };
+		}
+	);
+	return { search, calls, langs };
 }
 
 describe('formatSearchResults', () => {
@@ -169,5 +176,158 @@ describe('webSearchTool', () => {
 		const { search } = stubSearch();
 		const tool = webSearchTool(cfg({ maxSearchesPerTurn: 0 }), { search });
 		expect(await tool.execute({ query: 'a' })).toContain('1. Title 1');
+	});
+
+	it('names the request as the scope, and that a new message refills it', async () => {
+		// "this turn" read as a standing prohibition, so a model stopped offering
+		// to look again even on the next message, which does have an allowance.
+		const { search } = stubSearch();
+		const tool = webSearchTool(cfg({ maxSearchesPerTurn: 1 }), { search });
+		await tool.execute({ query: 'a' });
+		const spent = await tool.execute({ query: 'b' });
+		expect(spent).toContain('this request');
+		expect(spent).toMatch(/new message starts a fresh allowance/i);
+	});
+
+	it('tells the model how much allowance is left, so it can pace itself', async () => {
+		const { search } = stubSearch();
+		const tool = webSearchTool(cfg({ maxSearchesPerTurn: 3 }), { search });
+		expect(await tool.execute({ query: 'a' })).toContain('2 more searches available');
+		expect(await tool.execute({ query: 'b' })).toContain('1 more search available');
+		expect(await tool.execute({ query: 'c' })).toContain('last search available');
+	});
+
+	it('passes a requested language through to the provider', async () => {
+		const { search, langs } = stubSearch();
+		const tool = webSearchTool(cfg(), { search });
+		await tool.execute({ query: 'Bundestag', language: 'DE' });
+		expect(langs).toEqual(['de']);
+	});
+
+	it('falls back to the configured default language, and lets a call override it', async () => {
+		const { search, langs } = stubSearch();
+		const tool = webSearchTool(cfg({ defaultLanguage: 'de' }), { search });
+		await tool.execute({ query: 'a' });
+		await tool.execute({ query: 'b', language: 'ja' });
+		expect(langs).toEqual(['de', 'ja']);
+	});
+
+	it('drops a language it cannot validate rather than passing it on', async () => {
+		// This value ends up in a provider's query string and comes from a model.
+		const { search, langs } = stubSearch();
+		const tool = webSearchTool(cfg(), { search });
+		await tool.execute({ query: 'a', language: 'de&safesearch=off' });
+		expect(langs).toEqual(['']);
+	});
+
+	it('keeps the same words in two languages as two searches', async () => {
+		// Keyed on the query alone, the second call was served the first one's
+		// results — the wrong language, reported as a cache hit.
+		const { search } = stubSearch();
+		const tool = webSearchTool(cfg(), { search });
+		await tool.execute({ query: 'parliament', language: 'de' });
+		const second = await tool.execute({ query: 'parliament', language: 'fr' });
+		expect(search).toHaveBeenCalledTimes(2);
+		expect(second).not.toContain('already searched');
+	});
+
+	it('still serves a repeat of the same query and language from memory', async () => {
+		const { search } = stubSearch();
+		const tool = webSearchTool(cfg(), { search });
+		await tool.execute({ query: 'parliament', language: 'de' });
+		expect(await tool.execute({ query: 'Parliament ', language: 'DE' })).toContain(
+			'already searched'
+		);
+		expect(search).toHaveBeenCalledTimes(1);
+	});
+
+	it('reports the language and scope for the Observatory', async () => {
+		const { search } = stubSearch();
+		const tool = webSearchTool(cfg({ maxSearchesPerTurn: 5 }), { search, scope: 'leg' });
+		const meta: Record<string, unknown>[] = [];
+		await tool.execute({ query: 'a', language: 'ja' }, (m) => meta.push(m));
+		expect(meta[0]).toMatchObject({
+			language: 'ja',
+			languageApplied: true,
+			searchBudget: 5,
+			scope: 'leg'
+		});
+	});
+
+	it('says so when the provider cannot filter by language', async () => {
+		// Tavily has no language parameter. Silence here reads as the tool having
+		// ignored the request, so the model retries instead of trusting the words.
+		const search = vi.fn(
+			async (): Promise<SearchOutcome> => ({
+				results: [result(1)],
+				provider: 'tavily',
+				language: 'de',
+				languageApplied: false
+			})
+		);
+		const tool = webSearchTool(cfg({ provider: 'tavily' }), { search });
+		const out = await tool.execute({ query: 'Bundestag', language: 'de' });
+		expect(out).toContain('cannot filter by language');
+		expect(out).toContain('1. Title 1');
+	});
+
+	it('labels a call with its language in the run timeline', () => {
+		const { search } = stubSearch();
+		const tool = webSearchTool(cfg(), { search });
+		expect(tool.describe?.({ query: 'Bundestag', language: 'de' })).toBe('Bundestag [de]');
+		expect(tool.describe?.({ query: 'parliament' })).toBe('parliament');
+	});
+});
+
+describe('normaliseLanguage', () => {
+	it('accepts language and language-region tags, case-insensitively', () => {
+		expect(normaliseLanguage('de')).toBe('de');
+		expect(normaliseLanguage('DE')).toBe('de');
+		expect(normaliseLanguage('pt-BR')).toBe('pt-br');
+		expect(normaliseLanguage('pt_BR')).toBe('pt-br');
+		expect(normaliseLanguage('  ja  ')).toBe('ja');
+	});
+
+	it('rejects anything that could ride into a provider query string', () => {
+		for (const bad of [
+			'de&safesearch=off',
+			'de fr',
+			'../../etc',
+			'e',
+			'englishlanguage',
+			'',
+			null,
+			42,
+			{ toString: () => 'de' }
+		]) {
+			expect(normaliseLanguage(bad), String(bad)).toBe('');
+		}
+	});
+});
+
+describe('ddgRegion', () => {
+	it('flips a BCP-47 tag into DuckDuckGo region-language order', () => {
+		expect(ddgRegion('de')).toBe('de-de');
+		expect(ddgRegion('de-at')).toBe('at-de');
+		expect(ddgRegion('fr')).toBe('fr-fr');
+	});
+
+	it('uses the table for the ones that do not derive', () => {
+		// gb-en is not a thing; uk-en is.
+		expect(ddgRegion('en-gb')).toBe('uk-en');
+		expect(ddgRegion('pt-br')).toBe('br-pt');
+		expect(ddgRegion('ja')).toBe('jp-jp');
+		expect(ddgRegion('en')).toBe('us-en');
+	});
+
+	it('is empty for no language', () => {
+		expect(ddgRegion('')).toBe('');
+	});
+});
+
+describe('memoKey', () => {
+	it('separates the same words in different languages', () => {
+		expect(memoKey('parliament', 'de')).not.toBe(memoKey('parliament', 'fr'));
+		expect(memoKey('  Parliament ', 'de')).toBe(memoKey('parliament', 'de'));
 	});
 });

@@ -193,11 +193,45 @@ export function getLiveJob(id: string): LiveJob | null {
 	return live.get(id) ?? null;
 }
 
-export function findRunningJobForChat(chatId: string): LiveJob | null {
+/**
+ * How long a job may sit in `running` before it is treated as lost.
+ *
+ * A job only leaves `running` through completeJob or failJob, so anything that
+ * neither finishes nor throws holds the chat forever: every later message is
+ * refused with "a response is already running", and the only cure was a
+ * restart. `ask_user` is the honest way in — it parks the turn on a promise
+ * until the browser answers, and a closed tab never answers.
+ *
+ * Comfortably past streamTotalTimeoutMs (30 min), so this only ever catches
+ * runs that are genuinely stuck rather than merely slow.
+ */
+export const RUNNING_JOB_MAX_MS = 45 * 60 * 1000;
+
+/**
+ * The job currently holding this chat, if any.
+ *
+ * A job past the watchdog is failed rather than reported: callers use this to
+ * decide whether to refuse a new message, and a lost job must not be allowed
+ * to refuse them indefinitely.
+ */
+export function findRunningJobForChat(chatId: string, now = Date.now()): LiveJob | null {
 	for (const job of live.values()) {
-		if (job.chatId === chatId && job.status === 'running') return job;
+		if (job.chatId !== chatId || job.status !== 'running') continue;
+		if (now - job.createdAt > RUNNING_JOB_MAX_MS) {
+			failJob(
+				job,
+				'This run was abandoned — it went quiet for over 45 minutes without finishing. Send your message again.'
+			);
+			continue;
+		}
+		return job;
 	}
 	return null;
+}
+
+/** How long the blocking job has been running, for the message the user sees. */
+export function jobAgeMinutes(job: LiveJob, now = Date.now()): number {
+	return Math.max(0, Math.round((now - job.createdAt) / 60_000));
 }
 
 /**

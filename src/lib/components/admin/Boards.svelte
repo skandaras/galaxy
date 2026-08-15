@@ -106,7 +106,7 @@
 		font-size: 0.78rem;
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
-		color: var(--accent);
+		color: var(--heading);
 	}
 	.hint {
 		font-size: 0.68rem;
@@ -125,7 +125,7 @@
 		flex-direction: column;
 		gap: 0.25rem;
 		font-size: 0.7rem;
-		color: var(--fg-dim);
+		color: var(--label);
 	}
 	label.row {
 		flex-direction: row;
