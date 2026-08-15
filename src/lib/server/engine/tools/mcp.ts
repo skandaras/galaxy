@@ -24,6 +24,29 @@ interface Pooled {
 
 const pool = new Map<string, Pooled>();
 
+/** How much of a child's stderr to keep. Enough for a stack, not a logfile. */
+const STDERR_TAIL_CHARS = 2000;
+/**
+ * A dying child's last stderr write and the pipe closing are separate events
+ * with no guaranteed order, so the failure path waits this long for the words
+ * to land before giving up on explaining itself.
+ */
+const STDERR_SETTLE_MS = 50;
+
+/**
+ * Tail of the most recent child's stderr, per server.
+ *
+ * Module-level rather than a local in connect(), which is where it used to
+ * live. A stdio server that dies *after* the handshake — a rejected API token,
+ * an out-of-memory read — closes the pipe, and the client reports only
+ * "MCP error -32000: Connection closed". The one account of why is what the
+ * child printed on its way out, and that was being captured and then dropped
+ * on the floor: connect() consulted it solely when the handshake itself
+ * failed. Keeping it here means a failure at any point can still reach it,
+ * including after disconnect() has torn the pool entry down.
+ */
+const lastStderr = new Map<string, string>();
+
 // --- config ----------------------------------------------------------------
 
 export function listServers(): McpServer[] {
@@ -187,7 +210,8 @@ async function connect(server: McpServer): Promise<Client> {
 
 	const client = new Client({ name: 'galaxy', version: '0.1.0' }, { capabilities: {} });
 
-	let stderrTail = '';
+	// Whatever the previous child said belongs to the previous child.
+	lastStderr.delete(server.id);
 	let transport: StdioClientTransport | StreamableHTTPClientTransport;
 	if (server.transport === 'stdio') {
 		const stdio = new StdioClientTransport({
@@ -206,7 +230,8 @@ async function connect(server: McpServer): Promise<Client> {
 			stderr: 'pipe'
 		});
 		stdio.stderr?.on('data', (chunk: Buffer | string) => {
-			stderrTail = (stderrTail + String(chunk)).slice(-2000);
+			const tail = ((lastStderr.get(server.id) ?? '') + String(chunk)).slice(-STDERR_TAIL_CHARS);
+			lastStderr.set(server.id, tail);
 		});
 		transport = stdio;
 	} else {
@@ -234,7 +259,7 @@ async function connect(server: McpServer): Promise<Client> {
 		);
 	} catch (err) {
 		await transport.close().catch(() => {});
-		const detail = summariseStderr(stderrTail);
+		const detail = await stderrDetail(server.id);
 		// Rethrow as-is when there's nothing to add, so callers keep the
 		// transport's HTTP status — flattening this to a plain Error is what hid
 		// the 401 from explainAuthFailure.
@@ -253,6 +278,27 @@ async function connect(server: McpServer): Promise<Client> {
 
 function messageOf(err: unknown): string {
 	return String(err instanceof Error ? err.message : err);
+}
+
+/** The child's dying words, if it left any. Empty for an HTTP server. */
+async function stderrDetail(id: string): Promise<string> {
+	await new Promise((resolve) => setTimeout(resolve, STDERR_SETTLE_MS));
+	return summariseStderr(lastStderr.get(id) ?? '');
+}
+
+/**
+ * Why a server call failed, in terms an admin can act on.
+ *
+ * "Connection closed" says a stdio child went away and nothing about why —
+ * an expired token, a file the token cannot reach, a payload big enough to
+ * exhaust its memory all look identical. Appending what the child printed is
+ * the difference between a reason and a shrug.
+ */
+async function describeFailure(serverId: string, err: unknown): Promise<string> {
+	const base = explainAuthFailure(err) ?? messageOf(err);
+	const detail = await stderrDetail(serverId);
+	// The handshake path already appends the detail, so don't say it twice.
+	return detail && !base.includes(detail) ? `${base} — ${detail}` : base;
 }
 
 /**
@@ -375,7 +421,7 @@ export async function syncServer(id: string): Promise<SyncResult> {
 			.run();
 		return { ok: true, toolCount: listed.tools.length };
 	} catch (err) {
-		const message = explainAuthFailure(err) ?? messageOf(err);
+		const message = await describeFailure(id, err);
 		disconnect(id);
 		db.update(mcpServers)
 			.set({ status: 'error', lastError: message, lastSyncAt: new Date() })
@@ -444,7 +490,10 @@ async function callRemote(
 		if (result.isError) throw new Error(renderContent(result.content) || 'Tool reported an error');
 		return renderContent(result.content) || '(no output)';
 	} catch (err) {
-		const message = explainAuthFailure(err) ?? messageOf(err);
+		// Read the child's stderr before disconnecting: this is the path where a
+		// server dies mid-call, and its complaint is the only thing that
+		// distinguishes one cause of "Connection closed" from another.
+		const message = await describeFailure(serverId, err);
 		// A dead socket must not be reused on the next call.
 		disconnect(serverId);
 		recordServerError(serverId, message);
