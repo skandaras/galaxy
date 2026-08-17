@@ -92,6 +92,9 @@ export interface GithubSettings {
 	tokenEnc?: string;
 }
 
+/** Hard ceiling on rounds, whatever an admin (or a raw API call) asks for. */
+export const RESEARCH_ROUNDS_MAX = 8;
+
 export interface ResearchSettings {
 	/**
 	 * 'inherit' uses the web-search provider; the others override it for
@@ -99,18 +102,32 @@ export interface ResearchSettings {
 	 */
 	provider: 'inherit' | 'duckduckgo' | 'searxng';
 	baseUrl?: string;
+	/** Queries per round at full effort; lower efforts take a fraction. */
 	maxQueries: number;
-	/** Pages read per round, not per run — a run does `iterationCap + 1` rounds. */
+	/** Pages read per round at full effort, not per run. */
 	maxPages: number;
 	maxTokens: number;
 	timeoutMs: number;
-	iterationCap: number;
+	/**
+	 * Rounds of search → read → consolidate one run may take at `exhaustive`
+	 * effort, including the first. 1 means a single pass with no consolidation.
+	 *
+	 * This is the ceiling; the per-request effort picks a fraction of it.
+	 */
+	maxRounds: number;
+	/**
+	 * @deprecated Pre-effort name, and it counted *extra* rounds rather than
+	 * total: `maxRounds = iterationCap + 1`. Read only by
+	 * `researchRoundCeiling`, so installs saved before the effort control keep
+	 * the depth they configured. Never written back.
+	 */
+	iterationCap?: number;
 	/**
 	 * Searches one research run may make in total, across every round.
 	 *
-	 * The pipeline was bounded only by `maxQueries × (iterationCap + 1)` falling
-	 * out of the loop shape. Stating it means the ceiling is visible, adjustable,
-	 * and demonstrably reset for each new request.
+	 * The pipeline was bounded only by `maxQueries × rounds` falling out of the
+	 * loop shape. Stating it means the ceiling is visible, adjustable, and
+	 * demonstrably reset for each new request.
 	 */
 	maxSearchesPerRun: number;
 	/**
@@ -127,12 +144,62 @@ export const DEFAULT_RESEARCH: ResearchSettings = {
 	maxPages: 6,
 	maxTokens: 2048,
 	timeoutMs: 20_000,
-	iterationCap: 1,
-	// Matches what the loop already allowed, so this is a statement of current
-	// behaviour rather than a new restriction.
-	maxSearchesPerRun: 8,
+	maxRounds: 4,
+	// 4 rounds × 4 queries, so exhaustive effort is bounded by the round count
+	// rather than tripping the run cap halfway through.
+	maxSearchesPerRun: 16,
 	extraLanguages: ''
 };
+
+/**
+ * Total rounds allowed, honouring a legacy `iterationCap` row.
+ *
+ * The two keys do not mean the same thing — `iterationCap` counted rounds
+ * *after* the first — so reading one as the other would quietly lengthen every
+ * run on an install that had tuned it. The `+ 1` is the whole migration.
+ */
+export function researchRoundCeiling(cfg: Partial<ResearchSettings>): number {
+	const explicit = Number(cfg.maxRounds);
+	if (Number.isFinite(explicit) && explicit >= 1) {
+		return Math.min(RESEARCH_ROUNDS_MAX, Math.floor(explicit));
+	}
+	const legacy = Number(cfg.iterationCap);
+	if (Number.isFinite(legacy) && legacy >= 0) {
+		return Math.min(RESEARCH_ROUNDS_MAX, Math.floor(legacy) + 1);
+	}
+	return DEFAULT_RESEARCH.maxRounds;
+}
+
+/**
+ * Clamp every numeric field and fold the legacy key away for good.
+ *
+ * The admin route stores whatever it is handed, so the `min`/`max` attributes
+ * on the settings form were the only thing keeping these in range — and a raw
+ * PUT ignores those entirely. `iterationCap` is deliberately absent from the
+ * result: once a row has been read or written through here it is gone.
+ */
+export function normaliseResearchSettings(raw: Record<string, unknown>): ResearchSettings {
+	const num = (v: unknown, fallback: number, min: number, max: number) => {
+		const n = Number(v);
+		return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.floor(n))) : fallback;
+	};
+	const provider = String(raw.provider);
+	return {
+		provider: (['inherit', 'duckduckgo', 'searxng'] as const).includes(
+			provider as ResearchSettings['provider']
+		)
+			? (provider as ResearchSettings['provider'])
+			: 'inherit',
+		...(typeof raw.baseUrl === 'string' ? { baseUrl: raw.baseUrl } : {}),
+		maxQueries: num(raw.maxQueries, DEFAULT_RESEARCH.maxQueries, 1, 10),
+		maxPages: num(raw.maxPages, DEFAULT_RESEARCH.maxPages, 1, 20),
+		maxTokens: num(raw.maxTokens, DEFAULT_RESEARCH.maxTokens, 256, 200_000),
+		timeoutMs: num(raw.timeoutMs, DEFAULT_RESEARCH.timeoutMs, 2_000, 120_000),
+		maxRounds: researchRoundCeiling(raw as Partial<ResearchSettings>),
+		maxSearchesPerRun: num(raw.maxSearchesPerRun, DEFAULT_RESEARCH.maxSearchesPerRun, 1, 40),
+		extraLanguages: typeof raw.extraLanguages === 'string' ? raw.extraLanguages : ''
+	};
+}
 
 export interface CodingSettings {
 	/**

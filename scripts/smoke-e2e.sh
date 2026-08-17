@@ -231,6 +231,26 @@ RJOB=$(api -X POST $B/api/chats/$RCHAT/messages -d '{"content":"How do nebulae f
 RSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$RJOB/stream)
 check "research stages" "$RSTREAM" '"type":"stage","name":"synthesising"'
 check "research cites evidence" "$RSTREAM" 'FACT-42 confirmed'
+# The loop must actually iterate: consolidate what round one read, then search
+# the gap it named rather than the original breadth again.
+check "research consolidates between rounds" "$RSTREAM" '"name":"consolidating"'
+check "research runs a second, narrowed round" "$RSTREAM" '"name":"searching","detail":"round 2/'
+check "research stops early once evidence suffices" "$RSTREAM" 'Evidence judged sufficient after 2 of 3 rounds'
+check "research reports the brief it built" "$RSTREAM" 'Brief after 2 rounds: 2 findings'
+# The searches themselves are recorded in the Observatory, not on the stream.
+# This is the assertion the whole change exists for: round two searched the gap
+# consolidation named, not the question's original breadth again.
+REVENTS=$(api "$B/api/events?chatId=$RCHAT&limit=200")
+check "narrowed round searches the gap that was named" "$REVENTS" 'nebula helium fraction'
+check "the run records what its rounds cost" "$REVENTS" '"stopCause":"sufficient"'
+
+# Effort scales the round budget within the admin ceiling: quick gets fewer
+# rounds than the balanced default above, off the same settings.
+QCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+QJOB=$(api -X POST $B/api/chats/$QCHAT/messages -d '{"content":"How do nebulae form?","deepResearch":true,"effort":"quick"}' | jqn .jobId)
+QSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$QJOB/stream)
+check "quick effort is announced" "$QSTREAM" '"name":"planning","detail":"quick · up to 2 rounds'
+check "quick effort caps the rounds" "$QSTREAM" '"detail":"round 1/2'
 
 # Deep research against a reasoning model, which spends its token budget
 # thinking and returns nothing on the first attempt. It used to plan one query
@@ -241,7 +261,7 @@ api -X PUT $B/api/admin/task-configs -d "{\"task\":\"deep-research\",\"primaryMo
 PCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
 PJOB=$(api -X POST $B/api/chats/$PCHAT/messages -d '{"content":"How do nebulae form?","deepResearch":true}' | jqn .jobId)
 PSTREAM=$(curl -sN --max-time 90 $B/api/jobs/$PJOB/stream)
-check "reasoning model still gets a real plan" "$PSTREAM" '"name":"searching","detail":"2 queries"'
+check "reasoning model still gets a real plan" "$PSTREAM" '"name":"searching","detail":"round 1/3 · 2 queries"'
 check "reasoning model retries synthesis" "$PSTREAM" 'retrying with more room'
 check "reasoning model produces an answer" "$PSTREAM" 'Thought it through first'
 check "reasoning research is not left empty" "$(api $B/api/chats/$PCHAT | jqn '.messages.at(-1).content')" 'Nebulae form'

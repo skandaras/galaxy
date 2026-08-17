@@ -14,6 +14,7 @@ import {
 	DEFAULT_UX_AUDIT,
 	DEFAULT_WEB_SEARCH,
 	getSetting,
+	normaliseResearchSettings,
 	setSetting
 } from '$lib/server/settings';
 import { emitEvent } from '$lib/server/engine/events';
@@ -45,6 +46,36 @@ const DEFAULTS: Record<string, unknown> = {
 	boards: DEFAULT_BOARDS
 };
 
+/**
+ * Per-key clamping, applied on the way out as well as in.
+ *
+ * On PUT it is the only validation there is — the form's `min`/`max` attributes
+ * do not survive a raw API call. On GET it is what stops a row saved before a
+ * field existed from binding `undefined` into the form, which would then be
+ * written straight back as null.
+ *
+ * A normaliser returns the whole object, so a key that also appears in
+ * SECRET_FIELDS would need its encrypted field carried through explicitly.
+ * None does today.
+ */
+const NORMALISERS: Record<string, (v: Record<string, unknown>) => Record<string, unknown>> = {
+	research: (v) => normaliseResearchSettings(v) as unknown as Record<string, unknown>
+};
+
+/**
+ * Fill a stored or submitted value out to a whole settings object.
+ *
+ * A normaliser is handed the **raw** value rather than one already merged over
+ * the defaults, because merging first hides exactly what it needs to see: a row
+ * written before a field existed would arrive carrying that field's default,
+ * and the migration reading the older key it replaced would never fire. A
+ * normaliser therefore owns its own defaulting; keys without one keep the plain
+ * spread.
+ */
+function fill(key: string, value: Record<string, unknown>): Record<string, unknown> {
+	return NORMALISERS[key]?.(value) ?? { ...(DEFAULTS[key] as object), ...value };
+}
+
 // Fields the UI submits in plaintext that are stored encrypted. An empty
 // string means "keep the existing secret"; null clears it.
 const SECRET_FIELDS: Record<string, { plain: string; enc: string }[]> = {
@@ -56,10 +87,7 @@ export const GET: RequestHandler = ({ locals }) => {
 	requireAdmin(locals);
 	const out: Record<string, unknown> = {};
 	for (const key of KNOWN_KEYS) {
-		const value = { ...(DEFAULTS[key] as object), ...getSetting<object>(key, {}) } as Record<
-			string,
-			unknown
-		>;
+		const value = fill(key, getSetting<object>(key, {}) as Record<string, unknown>);
 		for (const field of SECRET_FIELDS[key] ?? []) {
 			value[`has${cap(field.plain)}`] = Boolean(value[field.enc]);
 			delete value[field.enc];
@@ -77,10 +105,7 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 		error(400, `Unknown settings key: ${key}`);
 	}
 	const existing = getSetting<Record<string, unknown>>(key, {});
-	const incoming = { ...(DEFAULTS[key] as object), ...(body.value ?? {}) } as Record<
-		string,
-		unknown
-	>;
+	const incoming = fill(key, (body.value ?? {}) as Record<string, unknown>);
 
 	for (const field of SECRET_FIELDS[key] ?? []) {
 		const plain = incoming[field.plain];
