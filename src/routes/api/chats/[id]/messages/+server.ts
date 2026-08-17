@@ -2,6 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
 import { getChat } from '$lib/server/chats';
+import { resolveEffort } from '$lib/research-effort';
 import { EngineError, startChatTurn } from '$lib/server/engine/engine';
 import { startResearchTurn } from '$lib/server/engine/research';
 import { BudgetExceededError } from '$lib/server/engine/budget';
@@ -33,7 +34,14 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 
 	try {
 		const job = body.deepResearch
-			? startResearchTurn({ chatId: chat.id, userId: user.id, content, attachments })
+			? startResearchTurn({
+					chatId: chat.id,
+					userId: user.id,
+					content,
+					attachments,
+					// An older client that sends nothing gets the middle setting.
+					effort: resolveEffort(body.effort)
+				})
 			: startChatTurn({
 					chatId: chat.id,
 					userId: user.id,

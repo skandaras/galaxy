@@ -9,7 +9,9 @@
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import AskSheet from '$lib/components/AskSheet.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
+	import ResearchEffort from '$lib/components/ResearchEffort.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
+	import type { ResearchEffort as Effort } from '$lib/research-effort';
 	import {
 		applyChunk,
 		itemsFromTrace,
@@ -33,6 +35,12 @@
 		mime: string;
 		kind?: 'image' | 'document';
 		textChars?: number;
+	}
+	interface ResearchBudget {
+		rounds: number;
+		queriesPerRound: number;
+		pagesPerRound: number;
+		searchBudget: number;
 	}
 	interface Msg {
 		id: string;
@@ -68,6 +76,13 @@
 	let defaultModelId = $state<string>('');
 	let webSearch = $state(true);
 	let deepResearch = $state(false);
+	/**
+	 * How much of the admin's research ceiling this message may spend. Like the
+	 * toggle it arms, this is a decision about one message rather than a mode.
+	 */
+	let researchEffort = $state<Effort>('balanced');
+	/** What each level resolves to, from the server. Null until loaded. */
+	let researchLevels = $state<Record<Effort, ResearchBudget> | null>(null);
 	let pendingFiles = $state<File[]>([]);
 	/**
 	 * Attachments already uploaded for the pending message. Kept so a failed
@@ -115,6 +130,13 @@
 	 */
 	let lastStopReason = $state<string | null>(null);
 	let stages = $state<{ name: string; detail?: string }[]>([]);
+	/**
+	 * A research run at full effort emits a stage per round plus the fixed ones,
+	 * which ran the breadcrumb off the edge of the composer. The round numbers
+	 * live in each stage's detail, so the tail is the part worth showing.
+	 */
+	const VISIBLE_STAGES = 6;
+	const shownStages = $derived(stages.slice(-VISIBLE_STAGES));
 	let notices = $state<string[]>([]);
 	let errorBanner = $state<string | null>(null);
 	/** Set when a send was refused because another run holds this chat. */
@@ -160,6 +182,13 @@
 		defaultModelId = m.defaultModelId ?? models[0]?.id ?? '';
 		selectedModelId = defaultModelId;
 
+		// Only feeds the numbers in the effort popover, so a failure here must not
+		// hold up the page — the control degrades to bare labels.
+		void fetch('/api/research/effort')
+			.then((res) => (res.ok ? res.json() : null))
+			.then((data) => (researchLevels = data?.levels ?? null))
+			.catch(() => (researchLevels = null));
+
 		// ?chat=<id> is how the board hands work over: it starts the turn, then
 		// sends the user here to watch it — including to answer any question the
 		// agent asks, since selectChat reattaches to the running job.
@@ -204,8 +233,10 @@
 		errorBanner = null;
 		blockingJobId = null;
 		// Deep research is a decision about one message, not a mode the session
-		// stays in — opening another conversation must not inherit it armed.
+		// stays in — opening another conversation must not inherit it armed, or
+		// the effort it was armed at.
 		deepResearch = false;
+		researchEffort = 'balanced';
 		const res = await fetch(`/api/chats/${id}`);
 		if (!res.ok) return;
 		const data = await res.json();
@@ -273,6 +304,7 @@
 				modelId: selectedModelId || undefined,
 				webSearch,
 				deepResearch,
+				effort: researchEffort,
 				attachments: attachments.length ? attachments : undefined
 			})
 		});
@@ -384,6 +416,7 @@
 				if (researchRunning) {
 					researchRunning = false;
 					deepResearch = false;
+					researchEffort = 'balanced';
 					notices = [
 						...notices,
 						'Deep research finished — the toggle is off. Turn it back on for another research run.'
@@ -847,11 +880,12 @@
 				<div class="msg assistant">
 					{#if stages.length}
 						<div class="stages">
-							{#each stages as s, i (i)}
-								<span class="stage" class:current={i === stages.length - 1}>
+							{#if stages.length > VISIBLE_STAGES}<span class="stage-sep">…</span>{/if}
+							{#each shownStages as s, i (stages.length - shownStages.length + i)}
+								<span class="stage" class:current={i === shownStages.length - 1}>
 									{s.name}{s.detail ? ` (${s.detail})` : ''}
 								</span>
-								{#if i < stages.length - 1}<span class="stage-sep">→</span>{/if}
+								{#if i < shownStages.length - 1}<span class="stage-sep">→</span>{/if}
 							{/each}
 						</div>
 					{/if}
@@ -964,6 +998,13 @@
 				>
 					🔭 Deep research
 				</button>
+				{#if deepResearch}
+					<ResearchEffort
+						effort={researchEffort}
+						levels={researchLevels}
+						onchange={(next) => (researchEffort = next)}
+					/>
+				{/if}
 				<select class="model-select" bind:value={selectedModelId}>
 					{#if !models.length}
 						<option value="">No models — add a provider in Admin</option>

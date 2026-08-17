@@ -20,8 +20,8 @@
 		maxPages: 6,
 		maxTokens: 2048,
 		timeoutMs: 20000,
-		iterationCap: 1,
-		maxSearchesPerRun: 8,
+		maxRounds: 4,
+		maxSearchesPerRun: 16,
 		extraLanguages: ''
 	});
 	let coding = $state({ autoCheckpoint: true, autoContinue: true, maxLegs: 3 });
@@ -298,10 +298,14 @@
 				<input type="number" min="2000" step="1000" bind:value={research.timeoutMs} />
 			</label>
 			<label>
-				extra rounds
-				<input type="number" min="0" max="3" bind:value={research.iterationCap} />
+				rounds per run
+				<input type="number" min="1" max="8" bind:value={research.maxRounds} />
 			</label>
 		</div>
+		<p class="hint">
+			These are ceilings. The effort control beside the composer's Deep research toggle scales down
+			from them per message — Exhaustive spends the full ceiling.
+		</p>
 		<button class="btn primary" onclick={() => save('research', research)}>
 			{saved === 'research' ? 'Saved ✓' : 'Save'}
 		</button>

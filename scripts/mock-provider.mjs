@@ -130,8 +130,29 @@ const server = createServer(async (req, res) => {
 			let content = 'Mock completion.';
 			if (userText.includes('RESEARCH-PLAN')) {
 				content = JSON.stringify({ queries: ['nebula formation', 'nebula composition'] });
-			} else if (userText.includes('RESEARCH-REVIEW')) {
-				content = JSON.stringify({ sufficient: true });
+			} else if (userText.includes('RESEARCH-CONSOLIDATE')) {
+				// Scripted to exercise the narrowing the loop exists for: the first
+				// round establishes something and names a gap to chase, and the
+				// round after that calls it done. Keyed off the round header in the
+				// prompt, so it works whatever the effort level allows.
+				const first = /RESEARCH-CONSOLIDATE — round 1 of/.test(userText);
+				content = first
+					? JSON.stringify({
+							findings: [{ claim: 'Nebulae form from collapsing molecular clouds', sources: [1] }],
+							gaps: ['what proportion of a nebula is helium'],
+							conflicts: [],
+							sufficient: false,
+							next_queries: [{ q: 'nebula helium fraction', language: '' }]
+						})
+					: JSON.stringify({
+							findings: [
+								{ claim: 'Nebulae form from collapsing molecular clouds', sources: [1] },
+								{ claim: 'Composition is roughly 90% hydrogen, 10% helium', sources: [2] }
+							],
+							gaps: [],
+							conflicts: [],
+							sufficient: true
+						});
 			} else if (userText.includes('MEMORY-AUDIT')) {
 				// Echo a marker drawn from the audited activity so a test can prove
 				// each user's memory came from their own chats and nobody else's.
