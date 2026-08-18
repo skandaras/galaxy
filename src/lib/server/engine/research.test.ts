@@ -35,7 +35,15 @@ import {
 	registrableDomain,
 	roundBudget,
 	shouldStopAfterRound,
+	classifyFetchError,
+	countFailures,
+	decodeBody,
+	isRetryableFetch,
+	jsonLdText,
+	safeFetch,
+	sourceRegister,
 	sourcesFooter,
+	PageFetchError,
 	triagePages,
 	triageResults,
 	type Evidence,
@@ -423,7 +431,7 @@ describe('parseBrief', () => {
 			opts
 		);
 		expect(out?.brief).toEqual({
-			findings: [{ claim: 'A holds', sources: [1, 4] }],
+			findings: [{ claim: 'A holds', sources: [1, 4], support: 'read' }],
 			gaps: ['what about B'],
 			conflicts: ['1 vs 4'],
 			sufficient: false
@@ -434,8 +442,9 @@ describe('parseBrief', () => {
 	it('still accepts a bare-string finding, so a model that ignores the shape works', () => {
 		// Same tolerance parseQueries shows, and for the same reason: cosmetic
 		// disobedience should not cost the whole round.
+		// An uncited claim gets the weaker grade — nothing was read to back it.
 		expect(parseBrief('{"findings":["A holds"],"gaps":[]}', opts)?.brief.findings).toEqual([
-			{ claim: 'A holds', sources: [] }
+			{ claim: 'A holds', sources: [], support: 'snippet' }
 		]);
 	});
 
@@ -449,8 +458,19 @@ describe('parseBrief', () => {
 		const findings = Array.from({ length: 30 }, (_, i) => ({ claim: `claim ${i}`, sources: [] }));
 		const gaps = Array.from({ length: 30 }, (_, i) => `gap ${i}`);
 		const out = parseBrief(JSON.stringify({ findings, gaps }), opts);
-		expect(out?.brief.findings).toHaveLength(12);
+		expect(out?.brief.findings).toHaveLength(16);
 		expect(out?.brief.gaps).toHaveLength(6);
+	});
+
+	it('grades a finding by whether anything backing it was read', () => {
+		// This is the Meeple Mountain failure: a claim resting only on a search
+		// snippet used to be indistinguishable from a read-page claim one round
+		// later, and could harden into an established finding.
+		const graded = parseBrief(
+			'{"findings":[{"claim":"read one","sources":[1]},{"claim":"thin one","sources":[4]}],"gaps":[]}',
+			{ ...opts, knownSources: [1, 4], readSources: [1] }
+		);
+		expect(graded?.brief.findings.map((f) => f.support)).toEqual(['read', 'snippet']);
 	});
 
 	it('clips an over-long claim rather than carrying it whole', () => {
@@ -488,7 +508,7 @@ describe('parseBrief', () => {
 
 describe('mergeBrief', () => {
 	const prior = briefOf({
-		findings: [{ claim: 'A holds', sources: [1] }],
+		findings: [{ claim: 'A holds', sources: [1], support: 'read' }],
 		gaps: ['what about B'],
 		conflicts: ['1 vs 4']
 	});
@@ -504,15 +524,40 @@ describe('mergeBrief', () => {
 		expect(mergeBrief(prior, next({ gaps: ['still B'] }), 2).findings).toEqual(prior.findings);
 	});
 
-	it('does not duplicate a finding the model restated', () => {
-		// Matched case-insensitively, and the round's own wording is what survives.
-		const merged = mergeBrief(prior, next({ findings: [{ claim: 'a holds', sources: [4] }] }), 2);
-		expect(merged.findings).toEqual([{ claim: 'a holds', sources: [4] }]);
+	it('takes the round\'s own wording for a restated finding', () => {
+		const merged = mergeBrief(
+			prior,
+			next({ findings: [{ claim: 'a holds', sources: [4], support: 'read' }] }),
+			2
+		);
+		expect(merged.findings).toEqual([{ claim: 'a holds', sources: [4], support: 'read' }]);
 	});
 
-	it('puts a correction ahead of the stale claim it replaces', () => {
-		const merged = mergeBrief(prior, next({ findings: [{ claim: 'A does not hold', sources: [7] }] }), 2);
-		expect(merged.findings.map((f) => f.claim)).toEqual(['A does not hold', 'A holds']);
+	it('lets a correction replace the stale claim outright', () => {
+		// Under the old merge the two coexisted: a correction is a reword, and
+		// reworded findings were distinct keys, so both reached the answer.
+		const merged = mergeBrief(
+			prior,
+			next({ findings: [{ claim: 'A does not hold', sources: [7], support: 'read' }] }),
+			2
+		);
+		expect(merged.findings.map((f) => f.claim)).toEqual(['A does not hold']);
+	});
+
+	it('treats an omitted finding as withdrawn', () => {
+		// The round is shown the whole prior brief and the source register, so
+		// leaving something out is a decision it made, not one it forgot.
+		const merged = mergeBrief(
+			prior,
+			next({ findings: [{ claim: 'Something else entirely', sources: [2], support: 'read' }] }),
+			2
+		);
+		expect(merged.findings.map((f) => f.claim)).toEqual(['Something else entirely']);
+	});
+
+	it('accumulates conflicts, which stay true whether or not a round repeats them', () => {
+		const merged = mergeBrief(prior, next({ findings: [], conflicts: ['2 vs 7'] }), 2);
+		expect(merged.conflicts).toEqual(['2 vs 7', '1 vs 4']);
 	});
 
 	it('keeps prior gaps when an unfinished round returns none', () => {
@@ -613,10 +658,11 @@ describe('shouldStopAfterRound', () => {
 describe('consolidate', () => {
 	const base = {
 		systemPrompt: 'you are the research agent',
+		asked: 'what changed?',
 		question: 'what changed?',
 		prior: EMPTY_BRIEF,
 		fresh: [source(7)],
-		knownSources: [7],
+		allEvidence: [source(7)],
 		ranQueries: ['first search'],
 		round: 1,
 		rounds: 3,
@@ -630,7 +676,7 @@ describe('consolidate', () => {
 		const out = await consolidate({ ...base, choice: choiceOf(ok(valid)) });
 		expect(out.status).toBe('ok');
 		if (out.status !== 'ok') return;
-		expect(out.brief.findings).toEqual([{ claim: 'A holds', sources: [7] }]);
+		expect(out.brief.findings).toEqual([{ claim: 'A holds', sources: [7], support: 'read' }]);
 		expect(out.queries).toEqual([{ q: 'B', language: '' }]);
 	});
 
@@ -693,7 +739,7 @@ describe('consolidate', () => {
 		await consolidate({
 			...base,
 			choice,
-			prior: briefOf({ findings: [{ claim: 'established earlier', sources: [1] }] }),
+			prior: briefOf({ findings: [{ claim: 'established earlier', sources: [1], support: 'read' }] }),
 			fresh: [source(7, 'the page said something specific')]
 		});
 		expect(prompt()).toContain('the page said something specific');
@@ -733,7 +779,7 @@ describe('briefToPrompt', () => {
 	it('lists findings with their sources, then gaps and conflicts', () => {
 		const text = briefToPrompt(
 			briefOf({
-				findings: [{ claim: 'A holds', sources: [1, 4] }],
+				findings: [{ claim: 'A holds', sources: [1, 4], support: 'read' }],
 				gaps: ['what about B'],
 				conflicts: ['1 vs 4']
 			})
@@ -1205,10 +1251,11 @@ describe('snippet-only sources reach the model marked', () => {
 		await consolidate({
 			choice,
 			systemPrompt: 'sys',
+			asked: 'q?',
 			question: 'q?',
 			prior: EMPTY_BRIEF,
 			fresh: [source(1), snippetSource(2)],
-			knownSources: [1, 2],
+			allEvidence: [source(1), snippetSource(2)],
 			ranQueries: ['first'],
 			round: 1,
 			rounds: 3,
@@ -1307,5 +1354,306 @@ describe('frameQuestion', () => {
 		});
 		expect(out.question).toBe('resolved');
 		expect(out.fellBack).toBeNull();
+	});
+});
+
+describe('sourceRegister', () => {
+	it('lists every source compactly, with its read status', () => {
+		const text = sourceRegister([source(1), snippetSource(4)]);
+		expect(text).toContain('[1] Source 1 — example.com — read in full');
+		expect(text).toContain('[4] Source 4 — example.com — SEARCH SNIPPET ONLY');
+	});
+
+	it('names why a source was not read when the reason is known', () => {
+		const text = sourceRegister([{ ...snippetSource(2), failure: 'blocked' }]);
+		expect(text).toContain('the site refused the request');
+	});
+
+	it('stays small enough to carry every round', () => {
+		const many = Array.from({ length: 24 }, (_, i) => source(i + 1));
+		expect(sourceRegister(many).length).toBeLessThan(2_000);
+	});
+
+	it('says so plainly when nothing has been gathered', () => {
+		expect(sourceRegister([])).toBe('(no sources yet)');
+	});
+});
+
+describe('the consolidation prompt carries what a round needs', () => {
+	const run = async (over: Record<string, unknown> = {}) => {
+		const choice = choiceOf(ok('{"findings":[{"claim":"c","sources":[1]}],"gaps":["g"]}'));
+		const prompt = spyOn(choice);
+		await consolidate({
+			choice,
+			systemPrompt: 'sys',
+			asked: 'do another round on that, but focus on the helium',
+			question: 'What proportion of a nebula is helium?',
+			background: 'Formation was covered in an earlier turn.',
+			prior: briefOf({
+				findings: [{ claim: 'Meeple Mountain is an AU/NZ review site', sources: [4], support: 'snippet' }]
+			}),
+			// Source 4 was read in round 1 and is deliberately NOT in `fresh`.
+			fresh: [source(7)],
+			allEvidence: [source(1), snippetSource(4), source(7)],
+			ranQueries: ['first search'],
+			round: 2,
+			rounds: 3,
+			maxQueries: 3,
+			cfg: DEFAULT_RESEARCH,
+			track: () => {},
+			...over
+		});
+		return prompt();
+	};
+
+	it('shows the original message verbatim, not only the restatement', async () => {
+		// A framing that narrowed or mis-resolved the request stays visible.
+		expect(await run()).toContain('do another round on that, but focus on the helium');
+	});
+
+	it('shows the framed question alongside it', async () => {
+		expect(await run()).toContain('What proportion of a nebula is helium?');
+	});
+
+	it('shows what the conversation already established', async () => {
+		// Without this the round can re-open a gap the conversation already closed.
+		expect(await run()).toContain('Formation was covered in an earlier turn.');
+	});
+
+	it('shows a prior round source that is not in this round of evidence', async () => {
+		// The regression guard for the reported failure: a carried finding cited
+		// [4], and [4] appeared nowhere except a list of legal integers, so the
+		// claim could only be restated, never checked.
+		const prompt = await run();
+		expect(prompt).toContain('[4] Source 4 — example.com — SEARCH SNIPPET ONLY');
+		expect(prompt).toMatch(/use the register to check a carried finding/i);
+	});
+
+	it('marks a carried finding whose support was only a snippet', async () => {
+		expect(await run()).toContain('(snippet-only support)');
+	});
+
+	it('says that leaving a finding out retracts it', async () => {
+		expect(await run()).toMatch(/treated as withdrawn/i);
+	});
+
+	it('omits the restatement when framing did not change the question', async () => {
+		const prompt = await run({ asked: 'same words', question: 'same words', background: '' });
+		expect(prompt).not.toContain('--- RESEARCHING ---');
+		expect(prompt).not.toContain('--- FROM THE CONVERSATION ---');
+	});
+});
+
+describe('decodeBody', () => {
+	it('reads UTF-16 rather than mistaking it for binary', () => {
+		// Decoded as UTF-8 this is riddled with real NULs and the binary sniff
+		// rejected the page outright — a guaranteed snippet-only source.
+		const utf16 = Buffer.from('﻿<html><p>Kia ora</p></html>', 'utf16le');
+		expect(decodeBody(utf16, 'text/html')).toContain('Kia ora');
+	});
+
+	it('honours the charset on the header', () => {
+		const latin1 = Buffer.from([0x63, 0x61, 0x66, 0xe9]); // café
+		expect(decodeBody(latin1, 'text/html; charset=ISO-8859-1')).toBe('café');
+	});
+
+	it('falls back to the meta tag when the header says nothing', () => {
+		const bytes = Buffer.concat([
+			Buffer.from('<html><head><meta charset="iso-8859-1"></head><body>caf', 'latin1'),
+			Buffer.from([0xe9]),
+			Buffer.from('</body></html>', 'latin1')
+		]);
+		expect(decodeBody(bytes, 'text/html')).toContain('café');
+	});
+
+	it('defaults to UTF-8', () => {
+		expect(decodeBody(Buffer.from('café', 'utf8'), '')).toBe('café');
+	});
+
+	it('does not throw on an encoding name it has never heard of', () => {
+		expect(decodeBody(Buffer.from('hello'), 'text/html; charset=x-made-up')).toBe('hello');
+	});
+});
+
+describe('safeFetch', () => {
+	const ok200 = () => new Response('fine', { status: 200 });
+	const redirect = (to: string) =>
+		new Response('', { status: 302, headers: { location: to } });
+
+	it('refuses a redirect into a private address', async () => {
+		// The guard was pre-flight only while redirects were followed by undici,
+		// so a public URL could hand us an internal one unsupervised.
+		await expect(
+			safeFetch('https://example.com/a', {}, async () => redirect('http://169.254.169.254/'))
+		).rejects.toThrow(/Blocked/);
+	});
+
+	it('follows an ordinary redirect chain', async () => {
+		let hop = 0;
+		const res = await safeFetch('https://example.com/a', {}, async () =>
+			hop++ === 0 ? redirect('https://example.com/b') : ok200()
+		);
+		expect(await res.text()).toBe('fine');
+	});
+
+	it('resolves a relative Location', async () => {
+		let hop = 0;
+		const seen: string[] = [];
+		await safeFetch('https://example.com/one/two', {}, async (url) => {
+			seen.push(String(url));
+			return hop++ === 0 ? redirect('/three') : ok200();
+		});
+		expect(seen[1]).toBe('https://example.com/three');
+	});
+
+	it('gives up rather than looping forever', async () => {
+		await expect(
+			safeFetch('https://example.com/a', {}, async () => redirect('https://example.com/a'))
+		).rejects.toThrow(/Too many redirects/);
+	});
+});
+
+describe('classifyFetchError and isRetryableFetch', () => {
+	it('separates a refusal from an outage from a timeout', () => {
+		expect(classifyFetchError(new PageFetchError('blocked', 'HTTP 403', 403)).reason).toBe('blocked');
+		expect(classifyFetchError(new PageFetchError('unavailable', 'HTTP 503', 503)).reason).toBe(
+			'unavailable'
+		);
+		const timeout = Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+		expect(classifyFetchError(timeout).reason).toBe('timeout');
+	});
+
+	it('unwraps the cause undici hides, instead of "fetch failed"', () => {
+		const err = new TypeError('fetch failed');
+		err.cause = new Error('ENOTFOUND example.invalid');
+		const out = classifyFetchError(err);
+		expect(out.reason).toBe('network');
+		expect(out.detail).toContain('ENOTFOUND');
+	});
+
+	it('retries what is worth retrying and nothing else', () => {
+		expect(isRetryableFetch(new PageFetchError('unavailable', 'HTTP 503', 503))).toBe(true);
+		expect(isRetryableFetch(new PageFetchError('blocked', 'HTTP 429', 429))).toBe(true);
+		expect(isRetryableFetch(new PageFetchError('blocked', 'HTTP 404', 404))).toBe(false);
+		expect(isRetryableFetch(new PageFetchError('unreadable-type', 'nope'))).toBe(false);
+	});
+});
+
+describe('jsonLdText', () => {
+	const page = (payload: unknown) =>
+		`<html><body><script type="application/ld+json">${JSON.stringify(payload)}</script><div id="app"></div></body></html>`;
+
+	it('recovers the article body a script-only page hides', () => {
+		const body = 'The full article text. '.repeat(20);
+		expect(jsonLdText(page({ '@type': 'NewsArticle', articleBody: body }))).toContain(
+			'The full article text.'
+		);
+	});
+
+	it('digs into nested graphs', () => {
+		const body = 'Nested article text. '.repeat(20);
+		expect(jsonLdText(page({ '@graph': [{ '@type': 'Article', articleBody: body }] }))).toContain(
+			'Nested article text.'
+		);
+	});
+
+	it('ignores a malformed block rather than failing the page', () => {
+		expect(jsonLdText('<script type="application/ld+json">{oops</script>')).toBe('');
+	});
+
+	it('finds nothing when there is nothing to find', () => {
+		expect(jsonLdText('<html><body><p>plain</p></body></html>')).toBe('');
+	});
+
+	it('is used when the markup extraction comes back empty', () => {
+		const body = 'Rescued by structured data. '.repeat(20);
+		const html = `<html><body><script type="application/ld+json">${JSON.stringify({
+			articleBody: body
+		})}</script><div id="root"></div></body></html>`;
+		expect(htmlToReadableText(html)).toContain('Rescued by structured data.');
+	});
+});
+
+describe('failure reasons reach the reader and the model', () => {
+	it('names the reason in the sources list', () => {
+		const footer = sourcesFooter([{ ...snippetSource(1), failure: 'blocked' }]);
+		expect(footer).toContain('the site refused the request');
+	});
+
+	it('names the reason in the prompt mark', async () => {
+		const choice = choiceOf(ok('{"findings":[{"claim":"c","sources":[1]}],"gaps":["g"]}'));
+		const prompt = spyOn(choice);
+		const thin: Evidence = { ...snippetSource(1), failure: 'timeout' };
+		await consolidate({
+			choice,
+			systemPrompt: 'sys',
+			asked: 'q?',
+			question: 'q?',
+			prior: EMPTY_BRIEF,
+			fresh: [thin],
+			allEvidence: [thin],
+			ranQueries: [],
+			round: 1,
+			rounds: 2,
+			maxQueries: 2,
+			cfg: DEFAULT_RESEARCH,
+			track: () => {}
+		});
+		expect(prompt()).toContain('the request timed out');
+	});
+
+	it('counts failures per cause for the run rollup', () => {
+		expect(
+			countFailures([
+				source(1),
+				{ ...snippetSource(2), failure: 'blocked' },
+				{ ...snippetSource(3), failure: 'blocked' },
+				{ ...snippetSource(4), failure: 'timeout' }
+			])
+		).toEqual({ blocked: 2, timeout: 1 });
+	});
+});
+
+describe('readPages retries', () => {
+	const hit = (url: string): SearchResult => ({ url, title: 't', snippet: 'the summary' });
+	const noop = () => {};
+
+	it('gives a rate-limited page a second chance', async () => {
+		let calls = 0;
+		const out = await readPages([hit('https://a.com/1')], [], 2, 100, noop, {
+			readPage: async () => {
+				if (calls++ === 0) throw new PageFetchError('blocked', 'HTTP 429', 429);
+				return 'the page after all';
+			}
+		});
+		expect(calls).toBe(2);
+		expect(out[0]).toMatchObject({ kind: 'page', excerpt: 'the page after all' });
+	});
+
+	it('does not retry a refusal that will not change', async () => {
+		let calls = 0;
+		await readPages([hit('https://a.com/1')], [], 2, 100, noop, {
+			readPage: async () => {
+				calls++;
+				throw new PageFetchError('blocked', 'HTTP 403', 403);
+			}
+		});
+		expect(calls).toBe(1);
+	});
+
+	it('records why a source fell back to its snippet', async () => {
+		const out = await readPages([hit('https://a.com/1')], [], 2, 100, noop, {
+			readPage: async () => {
+				throw new PageFetchError('blocked', 'HTTP 403', 403);
+			}
+		});
+		expect(out[0]).toMatchObject({ kind: 'snippet', failure: 'blocked' });
+	});
+
+	it('records a page that rendered nothing as such, not as a refusal', async () => {
+		const out = await readPages([hit('https://a.com/1')], [], 2, 100, noop, {
+			readPage: async () => ''
+		});
+		expect(out[0]).toMatchObject({ kind: 'snippet', failure: 'no-text' });
 	});
 });

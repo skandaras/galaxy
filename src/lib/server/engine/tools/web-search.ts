@@ -251,8 +251,14 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 
 const DEFAULT_MAX_SEARCHES = 4;
 
-/** Some browsers' UA. A bot-shaped UA is itself a reason to get blocked. */
-const BROWSER_UA =
+/**
+ * Some browsers' UA. A bot-shaped UA is itself a reason to get blocked.
+ *
+ * Exported because the pages a search returns need it at least as much as the
+ * search engine does — research used to browser-shape its request to the engine
+ * and then announce itself as `galaxy-research/1.0` to everything it found.
+ */
+export const BROWSER_UA =
 	'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 export function providerConfigured(provider: SearchProvider, cfg: WebSearchSettings): boolean {

@@ -5,7 +5,7 @@ import { usageLog, type AttachmentRef } from '$lib/server/db/schema';
 import { appendMessage, getChat, getMessages, updateChat, type StoredMessage } from '$lib/server/chats';
 import { EFFORT_FRACTION, type ResearchEffort } from '$lib/research-effort';
 import type { ModelChoice } from '$lib/server/providers/registry';
-import type { Usage } from '$lib/server/providers/types';
+import { isRetryable, type Usage } from '$lib/server/providers/types';
 import {
 	DEFAULT_RESEARCH,
 	DEFAULT_WEB_SEARCH,
@@ -28,7 +28,7 @@ import {
 	type LiveJob
 } from './jobs';
 import { streamWithIdleTimeout } from './loop';
-import { normaliseLanguage, runWebSearch, type SearchResult } from './tools/web-search';
+import { BROWSER_UA, normaliseLanguage, runWebSearch, type SearchResult } from './tools/web-search';
 
 export interface Evidence {
 	n: number;
@@ -44,6 +44,8 @@ export interface Evidence {
 	 * making the compiler force the decision is the point.
 	 */
 	kind: 'page' | 'snippet';
+	/** Why the page could not be read. Only set when `kind` is 'snippet'. */
+	failure?: FetchFailure;
 }
 
 /**
@@ -96,11 +98,11 @@ export function startResearchTurn(opts: {
 
 	// The research pipeline builds its own prompts from the question text, so
 	// any attached documents have to be folded into it here.
-	const question = withDocumentText(chat.id, opts.content, opts.attachments);
+	const asked = withDocumentText(chat.id, opts.content, opts.attachments);
 
 	void runResearch(
 		job,
-		{ ...opts, content: question },
+		{ ...opts, content: asked },
 		choice,
 		// Same bootstrap the chat loop gets: memory, the skills index, the
 		// library and boards. Research had none of it, so it could not know
@@ -166,14 +168,19 @@ async function runResearch(
 	//
 	// Skipped outright on the first message of a chat: it is already standalone,
 	// so a simple run pays nothing and never shows a stage it did not need.
-	let question = opts.content;
+	// The framed question is what gets *searched*; `asked` is what the run stays
+	// answerable to. Keeping both means a framing that narrowed or mis-resolved
+	// the request is visible to every later round instead of silently becoming
+	// the whole truth.
+	const asked = opts.content;
+	let question = asked;
 	let background = '';
 	if (conversation.history.length) {
 		pushChunk(job, { type: 'stage', name: 'framing' });
 		const framed = await frameQuestion({
 			choice,
 			systemPrompt,
-			message: opts.content,
+			message: asked,
 			history: conversation.history,
 			compactSummary: conversation.compactSummary,
 			track,
@@ -326,10 +333,12 @@ async function runResearch(
 		const outcome = await consolidate({
 			choice,
 			systemPrompt,
+			asked,
 			question,
+			background,
 			prior: brief,
 			fresh,
-			knownSources: evidence.map((e) => e.n),
+			allEvidence: evidence,
 			ranQueries,
 			round,
 			rounds: budget.rounds,
@@ -427,6 +436,9 @@ async function runResearch(
 		sources: evidence.length,
 		pagesRead: evidence.filter((e) => e.kind === 'page').length,
 		snippetOnly: evidence.filter((e) => e.kind === 'snippet').length,
+		// Per-cause counts, so "the web refused us" and "the material is not
+		// there" stop looking identical in the Observatory.
+		failures: countFailures(evidence),
 		findings: brief.findings.length,
 		gaps: brief.gaps.length,
 		searchesUsed: allowance.used,
@@ -638,7 +650,9 @@ export const PAGE_TEXT_CHARS = 6_000;
 const SYNTHESIS_MAX_PER_SOURCE = PAGE_TEXT_CHARS;
 
 /** Brief caps. These are what bound the carried context across rounds. */
-const MAX_FINDINGS = 12;
+// Duplicates no longer consume the cap now that a round replaces the brief
+// rather than merging into it.
+const MAX_FINDINGS = 16;
 const MAX_GAPS = 6;
 const MAX_CONFLICTS = 4;
 const CLAIM_CHARS = 400;
@@ -696,6 +710,16 @@ export function roundBudget(cfg: ResearchSettings, effort: ResearchEffort): Roun
 export interface BriefFinding {
 	claim: string;
 	sources: number[];
+	/**
+	 * Whether anything backing this claim was actually read.
+	 *
+	 * Without it, "do not rest a finding on a search snippet" was enforceable
+	 * only in the round the source arrived: one round later a snippet-only claim
+	 * and a fully-read one were typographically identical in the brief, and a
+	 * thin claim could harden into an established finding on its way to the
+	 * answer.
+	 */
+	support: 'read' | 'snippet';
 }
 
 /**
@@ -776,6 +800,17 @@ const STOP_NOTICE: Partial<
 	'no-gaps': (s) => `No open gaps left to search after ${plural(s.round, 'round')}.`
 };
 
+/** How many sources fell back for each reason, for the run's rollup event. */
+export function countFailures(evidence: Evidence[]): Record<string, number> {
+	const out: Record<string, number> = {};
+	for (const e of evidence) {
+		if (e.kind === 'page') continue;
+		const key = e.failure ?? 'unknown';
+		out[key] = (out[key] ?? 0) + 1;
+	}
+	return out;
+}
+
 function briefSummary(brief: ResearchBrief): string {
 	const parts = [plural(brief.findings.length, 'finding'), plural(brief.gaps.length, 'open gap')];
 	if (brief.conflicts.length) parts.push(plural(brief.conflicts.length, 'conflict'));
@@ -819,15 +854,59 @@ export function clipExcerpt(text: string, chars: number): string {
 }
 
 /** The marker consolidation and synthesis both key off. */
-const SNIPPET_MARK = ' — SEARCH SNIPPET ONLY (page could not be read)';
+function snippetMark(e: Evidence): string {
+	return e.kind === 'page'
+		? ''
+		: ` — SEARCH SNIPPET ONLY (${e.failure ? FETCH_FAILURE_TEXT[e.failure] : 'the page could not be read'})`;
+}
 
 function evidenceToPrompt(evidence: Evidence[], perSource: number): string {
 	return evidence
 		.map(
 			(e) =>
-				`[${e.n}] ${e.title} (${e.url})${e.kind === 'snippet' ? SNIPPET_MARK : ''}\n${clipExcerpt(e.excerpt, perSource)}`
+				`[${e.n}] ${e.title} (${e.url})${snippetMark(e)}\n${clipExcerpt(e.excerpt, perSource)}`
 		)
 		.join('\n\n');
+}
+
+/**
+ * Every source gathered so far, one compact line each.
+ *
+ * Consolidation is handed only the round's *new* excerpts, so before this a
+ * carried finding like `- Meeple Mountain is an AU/NZ review site [4]` reached
+ * later rounds with source 4 appearing nowhere except a list of legal integers.
+ * The model could not check the citation, could not find a conflict against it,
+ * and could only restate it — which is how a claim taken from a search snippet
+ * hardened into an established finding.
+ *
+ * Titles are clipped and excerpts omitted, so 24 sources cost well under 2 KB
+ * and the flat-context invariant holds.
+ */
+export function sourceRegister(evidence: Evidence[]): string {
+	if (!evidence.length) return '(no sources yet)';
+	return evidence
+		.map((e) => {
+			const host = hostOf(e.url) || e.url;
+			const title = e.title.length > REGISTER_TITLE_CHARS
+				? `${e.title.slice(0, REGISTER_TITLE_CHARS).trimEnd()}…`
+				: e.title;
+			const status =
+				e.kind === 'page'
+					? 'read in full'
+					: `SEARCH SNIPPET ONLY (${e.failure ? FETCH_FAILURE_TEXT[e.failure] : 'not read'})`;
+			return `[${e.n}] ${title} — ${host} — ${status}`;
+		})
+		.join('\n');
+}
+
+const REGISTER_TITLE_CHARS = 80;
+
+function hostOf(rawUrl: string): string {
+	try {
+		return new URL(rawUrl).hostname.replace(/^www\./, '');
+	} catch {
+		return '';
+	}
 }
 
 /**
@@ -842,7 +921,11 @@ export function sourcesFooter(evidence: Evidence[]): string {
 		'**Sources**',
 		...evidence.map(
 			(e) =>
-				`${e.n}. [${e.title}](${e.url})${e.kind === 'snippet' ? ' — search snippet only, page could not be read' : ''}`
+				`${e.n}. [${e.title}](${e.url})${
+					e.kind === 'snippet'
+						? ` — search snippet only, ${e.failure ? FETCH_FAILURE_TEXT[e.failure] : 'the page could not be read'}`
+						: ''
+				}`
 		)
 	].join('\n');
 }
@@ -855,7 +938,10 @@ export function briefToPrompt(brief: ResearchBrief): string {
 	return [
 		'Findings:',
 		...brief.findings.map(
-			(f) => `- ${f.claim}${f.sources.length ? ` [${f.sources.join(',')}]` : ''}`
+			(f) =>
+				`- ${f.claim}${f.sources.length ? ` [${f.sources.join(',')}]` : ''}${
+					f.support === 'snippet' ? ' (snippet-only support)' : ''
+				}`
 		),
 		brief.gaps.length ? 'Open gaps:' : '',
 		...brief.gaps.map((g) => `- ${g}`),
@@ -1484,22 +1570,49 @@ export async function readPages(
 	const readPage = deps.readPage ?? fetchPageText;
 	let n = existing.length;
 	const settled = await Promise.allSettled(
-		toRead.map(async (r) => {
+		toRead.map(async (r): Promise<Omit<Evidence, 'n'> | null> => {
 			const started = Date.now();
+			let retried = false;
 			const base = { title: r.title || r.url, url: r.url };
-			try {
+			const attempt = async () => {
 				const excerpt = (await readPage(r.url, timeoutMs)).trim();
 				// A 200 that extracts to nothing is not a read page — it is a JS
 				// shell or a paywall — and passing it on as an empty excerpt gave
 				// synthesis a citable URL with nothing behind it.
-				if (!excerpt) throw new Error('No readable text on the page');
-				event('fetch_page', 'ok', Date.now() - started, { url: r.url, chars: excerpt.length });
+				if (!excerpt) throw new PageFetchError('no-text', 'No readable text on the page');
+				return excerpt;
+			};
+			try {
+				let excerpt: string;
+				try {
+					excerpt = await attempt();
+				} catch (err) {
+					// One more go, and only for the classes worth it. Every other
+					// flaky dependency here already fails over; the one talking to
+					// the open web had nothing.
+					if (!isRetryableFetch(err)) throw err;
+					await new Promise((r2) => setTimeout(r2, RETRY_BACKOFF_MS));
+					excerpt = await attempt();
+					retried = true;
+				}
+				event('fetch_page', 'ok', Date.now() - started, {
+					url: r.url,
+					chars: excerpt.length,
+					...(retried ? { retried: true } : {})
+				});
 				return { ...base, excerpt, kind: 'page' as const };
 			} catch (err) {
-				event('fetch_page', 'error', Date.now() - started, { url: r.url, error: String(err) });
+				const { reason, detail } = classifyFetchError(err);
+				event('fetch_page', 'error', Date.now() - started, {
+					url: r.url,
+					reason,
+					error: detail,
+					...(err instanceof PageFetchError && err.status ? { status: err.status } : {}),
+					...(retried ? { retried: true } : {})
+				});
 				const snippet = (r.snippet ?? '').trim();
 				// Neither page nor snippet is a source in name only.
-				return snippet ? { ...base, excerpt: snippet, kind: 'snippet' as const } : null;
+				return snippet ? { ...base, excerpt: snippet, kind: 'snippet' as const, failure: reason } : null;
 			}
 		})
 	);
@@ -1531,11 +1644,17 @@ export type ConsolidateOutcome =
 export async function consolidate(args: {
 	choice: ModelChoice;
 	systemPrompt: string;
+	/** What the user actually typed, verbatim. The run stays answerable to it. */
+	asked: string;
+	/** The framed standalone question — what is being searched. */
 	question: string;
+	/** What the conversation already established, from framing. */
+	background?: string;
 	prior: ResearchBrief;
-	/** Only this round's new sources — the brief stands in for earlier ones. */
+	/** Only this round's new sources — full excerpts. */
 	fresh: Evidence[];
-	knownSources: number[];
+	/** Every source so far, rendered compactly so carried citations stay checkable. */
+	allEvidence: Evidence[];
 	ranQueries: string[];
 	round: number;
 	rounds: number;
@@ -1554,14 +1673,22 @@ export async function consolidate(args: {
 	);
 	const content = [
 		`RESEARCH-CONSOLIDATE — round ${args.round} of ${args.rounds}.`,
-		`Question: ${args.question}`,
+		`--- WHAT WAS ASKED ---`,
+		args.asked,
+		...(args.question.trim() && args.question.trim() !== args.asked.trim()
+			? [`--- RESEARCHING ---`, args.question]
+			: []),
+		...(args.background ? [`--- FROM THE CONVERSATION ---`, args.background] : []),
 		`--- BRIEF SO FAR ---`,
 		briefToPrompt(prior),
+		`--- SOURCES SO FAR ---`,
+		sourceRegister(args.allEvidence),
 		`--- NEW SOURCES THIS ROUND ---`,
 		evidenceToPrompt(fresh, perSource),
 		[
-			`Update the brief from what these sources actually say, not from what you already believe.`,
-			`findings: everything the evidence now establishes, each with the source numbers supporting it. Carry forward earlier findings that still hold; correct or drop any these sources contradict. Source numbers must come from: ${args.knownSources.join(', ')}.`,
+			`Update the brief from what these sources actually say, not from what you already believe. Keep it answerable to WHAT WAS ASKED, not only to the restated question.`,
+			`findings: the COMPLETE brief as it now stands — every earlier finding that still holds, restated, plus whatever these sources add. Anything you leave out is treated as withdrawn, so drop a finding only when you mean to retract it, and correct one by restating it corrected. Each finding carries the source numbers supporting it, and they must come from the register above.`,
+			`Use the register to check a carried finding before restating it: if the sources it cites do not actually support it, correct it or turn it into a gap.`,
 			`A source marked SEARCH SNIPPET ONLY is a search engine's summary, not the page. Use it to establish that something exists and to aim the next search — do not rest a finding on it, and if it is the only support for a claim, write that claim as a gap instead.`,
 			`gaps: what the question still needs and no source has answered. Write each one specifically enough that a web search can be made of it as it stands.`,
 			`conflicts: where sources disagree, naming both numbers.`,
@@ -1604,7 +1731,8 @@ export async function consolidate(args: {
 
 	if (!res.text.trim()) return { status: 'empty', reasonedOnly: Boolean(res.reasonedOnly) };
 	const parsed = parseBrief(res.text, {
-		knownSources: args.knownSources,
+		knownSources: args.allEvidence.map((e) => e.n),
+		readSources: args.allEvidence.filter((e) => e.kind === 'page').map((e) => e.n),
 		maxQueries: args.maxQueries,
 		fallbackLanguage: args.defaultLanguage ?? ''
 	});
@@ -1623,7 +1751,13 @@ export async function consolidate(args: {
  */
 export function parseBrief(
 	text: string,
-	opts: { knownSources: number[]; maxQueries: number; fallbackLanguage?: string }
+	opts: {
+		knownSources: number[];
+		/** Which of those were read in full, so a finding's support can be judged. */
+		readSources?: Iterable<number>;
+		maxQueries: number;
+		fallbackLanguage?: string;
+	}
 ): { brief: Omit<ResearchBrief, 'round'>; queries: PlannedQuery[] } | null {
 	const start = text.indexOf('{');
 	const end = text.lastIndexOf('}');
@@ -1637,6 +1771,7 @@ export function parseBrief(
 	if (!parsed || typeof parsed !== 'object') return null;
 
 	const known = new Set(opts.knownSources);
+	const read = new Set(opts.readSources ?? opts.knownSources);
 	const str = (v: unknown, cap: number): string =>
 		typeof v === 'string' && v.trim() ? v.trim().slice(0, cap) : '';
 	const list = (v: unknown, cap: number, max: number): string[] =>
@@ -1655,7 +1790,11 @@ export function parseBrief(
 			// A citation to a source that does not exist is worse than none: it
 			// would survive into synthesis and read as sourced.
 			.filter((n: number) => Number.isInteger(n) && known.has(n));
-		findings.push({ claim, sources: [...new Set(sources)] });
+		const unique = [...new Set(sources)];
+		// A claim is only as good as its best source: read if any backing source
+		// was read in full, snippet-only otherwise.
+		const support = unique.some((n) => read.has(n)) ? 'read' : 'snippet';
+		findings.push({ claim, sources: unique, support });
 		if (findings.length >= MAX_FINDINGS) break;
 	}
 
@@ -1689,26 +1828,44 @@ export function mergeBrief(
 	next: Omit<ResearchBrief, 'round'>,
 	round: number
 ): ResearchBrief {
-	const key = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
-	const merged: BriefFinding[] = [];
-	const seen = new Set<string>();
-	for (const finding of [...next.findings, ...prev.findings]) {
-		const k = key(finding.claim);
-		if (seen.has(k)) continue;
-		seen.add(k);
-		merged.push(finding);
-		if (merged.length >= MAX_FINDINGS) break;
-	}
 	return {
 		round,
-		findings: merged,
-		// A shorter gap list is progress. An empty one from a model that also said
-		// "not sufficient" is a formatting slip, and dropping the gaps there would
-		// end the run a round early for no reason.
+		// The round owns the brief: it is shown the whole prior one and the source
+		// register, and is told that anything it omits counts as withdrawn — so an
+		// omission is a decision, not an accident.
+		//
+		// Merging instead used to make three separate messes. Findings were
+		// deduplicated on exact text, so a reworded restatement was a new finding
+		// and a *correction* sat alongside the claim it corrected. The cap then
+		// evicted from the tail, which was always the oldest surviving findings —
+		// so a round that restated a dozen things in fresh words silently deleted
+		// round one while appearing to preserve it.
+		//
+		// The one thing worth guarding is a round that returns nothing at all:
+		// that is a formatting slip, not a retraction of everything.
+		findings: next.findings.length ? next.findings.slice(0, MAX_FINDINGS) : prev.findings,
+		// Same reasoning for gaps — a shorter list is progress, an empty one from a
+		// round that also said "not sufficient" is a slip.
 		gaps: next.gaps.length || next.sufficient ? next.gaps : prev.gaps,
-		conflicts: next.conflicts.length ? next.conflicts : prev.conflicts,
+		// Conflicts accumulate: two sources disagreeing stays true whether or not
+		// a later round happens to mention it again.
+		conflicts: mergeConflicts(prev.conflicts, next.conflicts),
 		sufficient: next.sufficient
 	};
+}
+
+function mergeConflicts(prev: string[], next: string[]): string[] {
+	const key = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const c of [...next, ...prev]) {
+		const k = key(c);
+		if (!k || seen.has(k)) continue;
+		seen.add(k);
+		out.push(c);
+		if (out.length >= MAX_CONFLICTS) break;
+	}
+	return out;
 }
 
 /**
@@ -1761,7 +1918,7 @@ export function assertPublicHttpUrl(rawUrl: string): void {
  * synthesis as a source.
  */
 export const READABLE_TYPE =
-	/^(text\/|application\/(json|xml|xhtml\+xml|javascript|x-yaml|yaml)|.*\+json$)/i;
+	/^(text\/|application\/(json|xml|xhtml\+xml|javascript|x-yaml|yaml)|.*\+(json|xml)$)/i;
 
 /**
  * Hard byte ceiling on a research download, independent of the character cap
@@ -1791,6 +1948,140 @@ async function readCappedBytes(res: Response, maxBytes: number): Promise<Buffer>
 	return Buffer.concat(chunks);
 }
 
+/**
+ * Decode a page body using the encoding it was actually served in.
+ *
+ * Everything used to be read as UTF-8. A UTF-16 page then decoded to a string
+ * full of real NUL characters and was rejected outright by the binary sniff
+ * below — a guaranteed snippet-only source, reported as "binary content". A
+ * Latin-1 or CP1252 page fared worse in its way: every accent, curly quote and
+ * dash became U+FFFD and the mangled text was passed on with nothing reporting
+ * it. The header wins; a `<meta charset>` is the fallback; UTF-8 is the default.
+ */
+export function decodeBody(bytes: Buffer, contentType: string): string {
+	const declared = /charset=["']?([\w-]+)/i.exec(contentType)?.[1];
+	// The meta tag is ASCII-compatible in every encoding that matters here, so a
+	// provisional Latin-1 read is enough to find it.
+	const sniffed = declared
+		? null
+		: /<meta[^>]+charset=["']?([\w-]+)/i.exec(bytes.subarray(0, 4096).toString('latin1'))?.[1];
+	const bom =
+		bytes[0] === 0xff && bytes[1] === 0xfe
+			? 'utf-16le'
+			: bytes[0] === 0xfe && bytes[1] === 0xff
+				? 'utf-16be'
+				: null;
+	for (const label of [bom, declared, sniffed, 'utf-8']) {
+		if (!label) continue;
+		try {
+			return new TextDecoder(label, { fatal: false }).decode(bytes);
+		} catch {
+			// An encoding name Node does not know; fall through to the next.
+		}
+	}
+	return bytes.toString('utf8');
+}
+
+/**
+ * Why a page could not be read.
+ *
+ * Every cause used to reach both the model and the reader as the same seven
+ * words — "page could not be read" — so "Facebook refused our bot", "the page
+ * was UTF-16" and "we timed out" were indistinguishable, and nobody could tell
+ * whether a thin answer meant the web refused us or the material was not there.
+ */
+export type FetchFailure =
+	| 'blocked'
+	| 'unavailable'
+	| 'timeout'
+	| 'unreadable-type'
+	| 'no-text'
+	| 'network';
+
+/** How a failure reads in a prompt and in the sources list. */
+export const FETCH_FAILURE_TEXT: Record<FetchFailure, string> = {
+	blocked: 'the site refused the request',
+	unavailable: 'the site was unavailable',
+	timeout: 'the request timed out',
+	'unreadable-type': 'the address is not a readable document',
+	'no-text': 'the page carried no readable text',
+	network: 'the address could not be reached'
+};
+
+export class PageFetchError extends Error {
+	readonly reason: FetchFailure;
+	readonly status?: number;
+	constructor(reason: FetchFailure, message: string, status?: number) {
+		super(message);
+		this.name = 'PageFetchError';
+		this.reason = reason;
+		this.status = status;
+	}
+}
+
+/**
+ * Classify whatever a fetch threw.
+ *
+ * undici buries the real cause in `err.cause` and `String(err)` does not
+ * include it, which is why every network failure used to read
+ * `TypeError: fetch failed` in the Observatory.
+ */
+export function classifyFetchError(err: unknown): { reason: FetchFailure; detail: string } {
+	if (err instanceof PageFetchError) {
+		return { reason: err.reason, detail: err.message };
+	}
+	if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+		return { reason: 'timeout', detail: err.message || 'timed out' };
+	}
+	const cause = err instanceof Error && err.cause ? ` (${String(err.cause)})` : '';
+	return { reason: 'network', detail: `${String(err)}${cause}` };
+}
+
+/**
+ * Worth one more attempt: the same classes the model loop already fails over
+ * on, plus the HTTP statuses that mean "ask again shortly".
+ */
+export function isRetryableFetch(err: unknown): boolean {
+	if (err instanceof PageFetchError) {
+		return err.reason === 'timeout' || err.reason === 'unavailable' || err.status === 429;
+	}
+	return isRetryable(err);
+}
+
+/** Pause before the single retry, so a rate limit has a moment to clear. */
+const RETRY_BACKOFF_MS = 700;
+
+/** Redirect hops one fetch may follow before giving up. */
+const MAX_REDIRECTS = 5;
+
+/**
+ * Fetch a URL with the SSRF guard re-checked on every hop.
+ *
+ * `assertPublicHttpUrl` was pre-flight only, while `redirect: 'follow'` let
+ * undici chase the chain unsupervised — so a search result whose server
+ * answered `302 Location: http://169.254.169.254/` was fetched from the
+ * internal address with the guard never running again. Following the chain by
+ * hand is the only way to see each hop.
+ *
+ * Shared with the `fetch_url` tool, which had the identical hole.
+ */
+export async function safeFetch(
+	url: string,
+	init: RequestInit & { signal?: AbortSignal },
+	fetchImpl: typeof fetch = fetch
+): Promise<Response> {
+	let target = url;
+	for (let hop = 0; ; hop++) {
+		assertPublicHttpUrl(target);
+		const res = await fetchImpl(target, { ...init, redirect: 'manual' });
+		const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+		if (!location) return res;
+		if (hop >= MAX_REDIRECTS) throw new Error(`Too many redirects (${MAX_REDIRECTS})`);
+		// Relative Locations are legal and common.
+		target = new URL(location, target).href;
+	}
+}
+
 export interface PageFetchDeps {
 	/** Injected in tests so no suite depends on the network. */
 	fetchImpl?: typeof fetch;
@@ -1801,20 +2092,35 @@ export async function fetchPageText(
 	timeoutMs: number,
 	deps: PageFetchDeps = {}
 ): Promise<string> {
-	assertPublicHttpUrl(url);
-	const res = await (deps.fetchImpl ?? fetch)(url, {
-		signal: AbortSignal.timeout(timeoutMs),
-		headers: {
-			'user-agent': 'galaxy-research/1.0',
-			// Was `text/html,text/plain`, which some servers honour by 406-ing a
-			// perfectly readable page.
-			accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5'
+	// safeFetch asserts the guard on this URL and on every redirect hop.
+	const res = await safeFetch(
+		url,
+		{
+			signal: AbortSignal.timeout(timeoutMs),
+			headers: {
+				// The same UA the search engines are given one step earlier. A
+				// bot-shaped UA is the single biggest reason a page comes back as a
+				// search snippet instead of an article.
+				'user-agent': BROWSER_UA,
+				// Was `text/html,text/plain`, which some servers honour by 406-ing a
+				// perfectly readable page.
+				accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5',
+				// Several CDNs score its absence on its own.
+				'accept-language': 'en-GB,en;q=0.9'
+			}
 		},
-		redirect: 'follow'
-	});
-	if (!res.ok) throw new Error(`HTTP ${res.status}`);
+		deps.fetchImpl
+	);
+	if (!res.ok) {
+		throw new PageFetchError(
+			res.status >= 500 ? 'unavailable' : 'blocked',
+			`HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`,
+			res.status
+		);
+	}
 
-	const bare = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+	const contentType = res.headers.get('content-type') ?? '';
+	const bare = contentType.split(';')[0].trim().toLowerCase();
 
 	// A PDF is a source, not a refusal: the extractor already exists for
 	// attachments and a lot of primary material is only published this way.
@@ -1822,15 +2128,17 @@ export async function fetchPageText(
 		const { extractPdf } = await import('$lib/server/attachments');
 		return clipPage(await extractPdf(await readCappedBytes(res, MAX_PAGE_BYTES)));
 	}
-	if (bare && !READABLE_TYPE.test(bare)) throw new Error(`Not readable as text: ${bare}`);
+	if (bare && !READABLE_TYPE.test(bare)) {
+		throw new PageFetchError('unreadable-type', `Not readable as text: ${bare}`);
+	}
 
-	const body = (await readCappedBytes(res, MAX_PAGE_BYTES)).toString('utf8');
+	const body = decodeBody(await readCappedBytes(res, MAX_PAGE_BYTES), contentType);
 	// Sniffed regardless of what the server claimed: a missing content-type and
 	// a PDF mislabelled `text/plain` both end the same way otherwise, with
 	// binary noise handed to synthesis as a source. Cheap, first kilobyte only,
 	// and no real page opens with %PDF- or carries NUL bytes.
 	if (/^%PDF-|\u0000/.test(body.slice(0, 1024))) {
-		throw new Error('Not readable as text: binary content');
+		throw new PageFetchError('unreadable-type', 'Not readable as text: binary content');
 	}
 	// text/plain must not go through the HTML stripper, which mangles code and
 	// comparison operators.
@@ -1984,6 +2292,55 @@ export function extractReadableHtml(html: string): string {
 }
 
 /**
+ * Article text out of a page's JSON-LD.
+ *
+ * Scripts are stripped before anything else, which is right — a `<script>` body
+ * can contain the literal text `</main>` and steer the subtree choice — but it
+ * also throws away the one machine-readable copy of the article that many news
+ * and product pages carry. When the ordinary extraction comes back empty, this
+ * is often the difference between a source and a search snippet.
+ *
+ * Only `application/ld+json` is mined. Framework payloads (`__NEXT_DATA__`,
+ * `ytInitialData`) would need per-site knowledge and are deliberately left.
+ */
+export function jsonLdText(html: string): string {
+	const blocks = [
+		...html.matchAll(
+			/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script\s*>/gi
+		)
+	];
+	const found: string[] = [];
+	const visit = (node: unknown, depth = 0) => {
+		if (depth > 6 || found.length >= 4) return;
+		if (Array.isArray(node)) {
+			for (const item of node) visit(item, depth + 1);
+			return;
+		}
+		if (!node || typeof node !== 'object') return;
+		const record = node as Record<string, unknown>;
+		for (const key of ['articleBody', 'text', 'description', 'reviewBody']) {
+			const value = record[key];
+			if (typeof value === 'string' && value.trim().length > 80) found.push(value.trim());
+		}
+		for (const value of Object.values(record)) {
+			if (value && typeof value === 'object') visit(value, depth + 1);
+		}
+	};
+	for (const block of blocks) {
+		try {
+			visit(JSON.parse(block[1].trim()));
+		} catch {
+			// A malformed block is not worth failing the page over.
+		}
+	}
+	// Longest first: articleBody beats a one-line description.
+	return found
+		.sort((a, b) => b.length - a.length)
+		.slice(0, 2)
+		.join('\n\n');
+}
+
+/**
  * A page reduced to its readable text, with a net under it.
  *
  * If stripping left almost nothing and the plain conversion is much longer,
@@ -1994,6 +2351,9 @@ export function extractReadableHtml(html: string): string {
 export function htmlToReadableText(html: string): string {
 	const readable = htmlToText(extractReadableHtml(html));
 	if (readable.length >= READABLE_MIN_CHARS) return readable;
+	// The page's own structured copy of itself, when the markup gave us nothing.
+	const structured = decodeEntities(jsonLdText(html));
+	if (structured.length > readable.length) return structured;
 	const plain = htmlToText(html);
 	return plain.length > readable.length * 3 ? plain : readable;
 }
