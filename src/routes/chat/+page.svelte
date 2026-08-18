@@ -227,16 +227,29 @@
 		input = getDraft(key);
 	}
 
-	async function selectChat(id: string) {
+	/**
+	 * Per-message composer choices, cleared when the user goes somewhere else.
+	 *
+	 * Deep research is a decision about one message, not a mode the session
+	 * stays in, so opening another conversation must not inherit it armed or
+	 * the effort it was armed at. Creating a chat in order to send is NOT such
+	 * a move — see loadChat.
+	 */
+	function resetComposerIntent() {
+		deepResearch = false;
+		researchEffort = 'balanced';
+	}
+
+	/**
+	 * Load a conversation into the pane. Deliberately free of the per-message
+	 * reset: `newChat` calls this, and a chat created *by pressing send* must
+	 * not have the send's own options cleared out from under it.
+	 */
+	async function loadChat(id: string) {
 		stashDraft();
 		closeStream();
 		errorBanner = null;
 		blockingJobId = null;
-		// Deep research is a decision about one message, not a mode the session
-		// stays in — opening another conversation must not inherit it armed, or
-		// the effort it was armed at.
-		deepResearch = false;
-		researchEffort = 'balanced';
 		const res = await fetch(`/api/chats/${id}`);
 		if (!res.ok) return;
 		const data = await res.json();
@@ -250,7 +263,18 @@
 		if (data.runningJobId) attachStream(data.runningJobId);
 	}
 
+	/** Navigate to another conversation: load it, and drop per-message intent. */
+	async function selectChat(id: string) {
+		resetComposerIntent();
+		await loadChat(id);
+	}
+
 	async function newChat(hidden: boolean) {
+		// A brand-new chat has no remembered model, so loadChat's applyChatModel
+		// would reset the picker to the task default — discarding a model the
+		// user chose before there was a conversation to hang it on. The server
+		// records it on the first turn, so keeping it here is enough.
+		const chosen = selectedModelId;
 		const res = await fetch('/api/chats', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
@@ -258,7 +282,8 @@
 		});
 		const chat = await res.json();
 		chats = [chat, ...chats];
-		await selectChat(chat.id);
+		await loadChat(chat.id);
+		if (chosen) selectedModelId = chosen;
 	}
 
 	/**
@@ -271,8 +296,22 @@
 		if ((!content && !pendingFiles.length && !uploadedRefs.length) || streaming) return;
 		errorBanner = null;
 
+		// What the user had armed at the moment they pressed send, read once.
+		// Everything below is behind an await while the composer stays live, and
+		// creating the chat is itself one of those awaits — reading these at the
+		// point the body is built is how an armed Deep research toggle used to be
+		// silently downgraded to an ordinary web search on a new chat's first
+		// message.
+		const intent = {
+			deepResearch,
+			effort: researchEffort,
+			modelId: selectedModelId || undefined,
+			webSearch
+		};
+
 		if (!currentChat) await newChat(false);
-		if (!currentChat) return;
+		const chat = currentChat;
+		if (!chat) return;
 
 		// Files already uploaded on a previous attempt are reused rather than
 		// sent again, so a retry doesn't leave duplicates behind.
@@ -280,7 +319,7 @@
 		for (const file of pendingFiles) {
 			const form = new FormData();
 			form.append('file', file);
-			const res = await fetch(`/api/chats/${currentChat.id}/attachments`, {
+			const res = await fetch(`/api/chats/${chat.id}/attachments`, {
 				method: 'POST',
 				body: form
 			});
@@ -296,15 +335,15 @@
 		if (failed.length) return;
 
 		const attachments = uploadedRefs;
-		const res = await fetch(`/api/chats/${currentChat.id}/messages`, {
+		const res = await fetch(`/api/chats/${chat.id}/messages`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({
 				content,
-				modelId: selectedModelId || undefined,
-				webSearch,
-				deepResearch,
-				effort: researchEffort,
+				modelId: intent.modelId,
+				webSearch: intent.webSearch,
+				deepResearch: intent.deepResearch,
+				effort: intent.effort,
 				attachments: attachments.length ? attachments : undefined
 			})
 		});
@@ -335,7 +374,8 @@
 		}
 		void scroll.toBottom('auto');
 		const { jobId } = await res.json();
-		researchRunning = deepResearch;
+		// The run that is actually going, not whatever the toggle says now.
+		researchRunning = intent.deepResearch;
 		attachStream(jobId);
 	}
 
@@ -1005,7 +1045,14 @@
 						onchange={(next) => (researchEffort = next)}
 					/>
 				{/if}
-				<select class="model-select" bind:value={selectedModelId}>
+				<select
+					class="model-select"
+					bind:value={selectedModelId}
+					disabled={deepResearch}
+					title={deepResearch
+						? 'Deep research uses the model configured for it in Admin → Tasks'
+						: 'Model for this conversation'}
+				>
 					{#if !models.length}
 						<option value="">No models — add a provider in Admin</option>
 					{/if}

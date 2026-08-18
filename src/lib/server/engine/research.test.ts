@@ -10,23 +10,39 @@ import {
 } from '$lib/server/settings';
 import {
 	EMPTY_BRIEF,
+	PAGE_TEXT_CHARS,
 	assertPublicHttpUrl,
 	briefToPrompt,
+	canonicalUrlKey,
 	clipExcerpt,
+	clipPage,
 	consolidate,
 	dedupeQueries,
 	evidenceExcerptBudget,
+	extractReadableHtml,
+	fetchPageText,
+	frameQuestion,
+	framingHistory,
 	gapQueries,
+	htmlToReadableText,
 	htmlToText,
 	mergeBrief,
 	parseBrief,
 	parseQueries,
+	parseTriagePicks,
 	planQueries,
+	readPages,
+	registrableDomain,
 	roundBudget,
 	shouldStopAfterRound,
+	sourcesFooter,
+	triagePages,
+	triageResults,
 	type Evidence,
 	type ResearchBrief
 } from './research';
+import type { StoredMessage } from '$lib/server/chats';
+import type { SearchResult } from './tools/web-search';
 
 /** Adapter whose complete() is scripted per call. */
 function choiceOf(...replies: CompletionResult[]): ModelChoice {
@@ -65,7 +81,14 @@ const source = (n: number, excerpt = `body of ${n}`): Evidence => ({
 	n,
 	title: `Source ${n}`,
 	url: `https://example.com/${n}`,
-	excerpt
+	excerpt,
+	kind: 'page'
+});
+
+/** A source whose page could not be read, so only the search snippet survived. */
+const snippetSource = (n: number, excerpt = `snippet for ${n}`): Evidence => ({
+	...source(n, excerpt),
+	kind: 'snippet'
 });
 
 const briefOf = (over: Partial<ResearchBrief> = {}): ResearchBrief => ({
@@ -719,5 +742,570 @@ describe('briefToPrompt', () => {
 		expect(text).toContain('Open gaps:');
 		expect(text).toContain('- what about B');
 		expect(text).toContain('Conflicts:');
+	});
+});
+
+describe('extractReadableHtml', () => {
+	const page = (body: string) => `<html><head><title>T</title></head><body>${body}</body></html>`;
+	const article = `<article><header><h1>The headline</h1><p>By a reporter</p></header><p>${'Real prose. '.repeat(30)}</p></article>`;
+
+	it('keeps the content subtree and drops the chrome around it', () => {
+		const out = extractReadableHtml(
+			page(`<nav>Home Contact Login</nav><main>${article}</main><footer>Cookie notice</footer>`)
+		);
+		expect(out).toContain('Real prose.');
+		expect(out).not.toContain('Home Contact Login');
+		expect(out).not.toContain('Cookie notice');
+	});
+
+	it('keeps a header inside the article, which carries the headline', () => {
+		const out = extractReadableHtml(page(`<main>${article}</main>`));
+		expect(out).toContain('The headline');
+		expect(out).toContain('By a reporter');
+	});
+
+	it('drops the page header when the page named no content subtree', () => {
+		const out = extractReadableHtml(
+			page(`<header>Site chrome</header><p>${'Body text. '.repeat(40)}</p>`)
+		);
+		expect(out).not.toContain('Site chrome');
+		expect(out).toContain('Body text.');
+	});
+
+	it('joins every article when there is no main', () => {
+		const out = extractReadableHtml(
+			page(
+				`<article><p>${'First piece. '.repeat(20)}</p></article><article><p>Second piece.</p></article>`
+			)
+		);
+		expect(out).toContain('First piece.');
+		expect(out).toContain('Second piece.');
+	});
+
+	it('ignores a closing tag written inside a script', () => {
+		// Scripts go first for exactly this reason: otherwise a site's own JS can
+		// steer which subtree is treated as the content.
+		const out = extractReadableHtml(
+			page(`<script>var s = "</main>";</script><main>${article}</main>`)
+		);
+		expect(out).toContain('Real prose.');
+		expect(out).not.toContain('var s');
+	});
+
+	it('does not let an unclosed nav swallow the article', () => {
+		const huge = 'x'.repeat(30_000);
+		const out = extractReadableHtml(page(`<nav>${huge}<p>${'Kept prose. '.repeat(40)}</p>`));
+		expect(out).toContain('Kept prose.');
+	});
+
+	it('leaks the outer wrapper rather than deleting content when navs nest', () => {
+		const out = extractReadableHtml(
+			page(`<nav>outer<nav>inner</nav>${'Survives. '.repeat(40)}</nav>`)
+		);
+		expect(out).toContain('Survives.');
+	});
+
+	it('falls back to the document when main is an empty shell', () => {
+		const out = extractReadableHtml(
+			page(`<main><div id="root"></div></main><p>${'Rendered elsewhere. '.repeat(30)}</p>`)
+		);
+		expect(out).toContain('Rendered elsewhere.');
+	});
+});
+
+describe('htmlToReadableText', () => {
+	it('puts the article, not the navigation, in the first page of text', () => {
+		// The defect this exists for: the clip is from the top, so 8 KB of chrome
+		// ahead of the article used to consume the whole excerpt.
+		const nav = `<nav>${'Some menu link. '.repeat(500)}</nav>`;
+		const html = `<html><body>${nav}<main><p>${'The actual finding. '.repeat(60)}</p></main></body></html>`;
+		const text = clipPage(htmlToReadableText(html));
+		expect(text).toContain('The actual finding.');
+		expect(text).not.toContain('Some menu link.');
+	});
+
+	it('returns the plain conversion when stripping left almost nothing', () => {
+		// Everything is inside elements the stripper removes, so the net catches it.
+		const html = `<html><body><form>${'Only inside a form. '.repeat(60)}</form></body></html>`;
+		expect(htmlToReadableText(html)).toContain('Only inside a form.');
+	});
+
+	it('leaves a short page alone', () => {
+		expect(htmlToReadableText('<html><body><p>Tiny.</p></body></html>')).toBe('Tiny.');
+	});
+});
+
+describe('htmlToText entities', () => {
+	it('decodes numeric entities, which used to survive as literal garbage', () => {
+		expect(htmlToText('<p>it&#8217;s &#x2014; here</p>')).toBe('it’s — here');
+	});
+
+	it('does not double-decode an escaped entity', () => {
+		// &amp;lt; means the page wanted to show "&lt;", not "<".
+		expect(htmlToText('<p>&amp;lt;</p>')).toBe('&lt;');
+	});
+});
+
+describe('clipPage', () => {
+	it('leaves text under the budget alone', () => {
+		expect(clipPage('short')).toBe('short');
+	});
+
+	it('clips at a paragraph boundary near the budget when there is one', () => {
+		const text = `${'a'.repeat(PAGE_TEXT_CHARS - 200)}\n\n${'b'.repeat(500)}`;
+		expect(clipPage(text)).toBe('a'.repeat(PAGE_TEXT_CHARS - 200));
+	});
+
+	it('takes the hard budget when no boundary is near enough', () => {
+		expect(clipPage('c'.repeat(PAGE_TEXT_CHARS * 2))).toHaveLength(PAGE_TEXT_CHARS);
+	});
+});
+
+describe('canonicalUrlKey', () => {
+	it('collapses scheme, www, a trailing slash and a fragment onto one key', () => {
+		const keys = [
+			'https://example.com/a/b',
+			'http://example.com/a/b',
+			'https://www.example.com/a/b/',
+			'https://EXAMPLE.com/a/b#section'
+		].map(canonicalUrlKey);
+		expect(new Set(keys).size).toBe(1);
+	});
+
+	it('strips tracking parameters', () => {
+		expect(canonicalUrlKey('https://example.com/a?utm_source=x&fbclid=y&gclid=z')).toBe(
+			'example.com/a'
+		);
+	});
+
+	it('keeps parameters that select content', () => {
+		// Dropping these would merge two different pages and lose one - the worse
+		// error of the two.
+		expect(canonicalUrlKey('https://youtube.com/watch?v=abc')).toContain('v=abc');
+		expect(canonicalUrlKey('https://example.com/p?id=7')).toContain('id=7');
+		expect(canonicalUrlKey('https://example.com/p?ref=nav')).toContain('ref=nav');
+	});
+
+	it('sorts surviving parameters so order cannot make a second key', () => {
+		expect(canonicalUrlKey('https://example.com/a?b=1&a=2')).toBe(
+			canonicalUrlKey('https://example.com/a?a=2&b=1')
+		);
+	});
+
+	it('lowercases the host but not the path', () => {
+		expect(canonicalUrlKey('https://Example.com/CaseSensitive')).toBe('example.com/CaseSensitive');
+	});
+
+	it('returns nothing for anything that is not a fetchable page', () => {
+		for (const bad of ['mailto:a@b.com', 'javascript:alert(1)', 'not a url', '']) {
+			expect(canonicalUrlKey(bad), bad).toBe('');
+		}
+	});
+});
+
+describe('registrableDomain', () => {
+	it('folds subdomains onto one bucket', () => {
+		expect(registrableDomain('a.foo.com')).toBe('foo.com');
+		expect(registrableDomain('b.deep.foo.com')).toBe('foo.com');
+	});
+
+	it('handles compound suffixes', () => {
+		expect(registrableDomain('news.bbc.co.uk')).toBe('bbc.co.uk');
+		expect(registrableDomain('shop.example.com.au')).toBe('example.com.au');
+	});
+});
+
+describe('triageResults', () => {
+	const hit = (url: string, title = url): SearchResult => ({ url, title, snippet: 's' });
+
+	it('drops near-duplicates that differ only by tracking parameters', () => {
+		const out = triageResults(
+			[hit('https://a.com/x'), hit('https://a.com/x?utm_source=news'), hit('https://b.com/y')],
+			{ limit: 5 }
+		);
+		expect(out.picked.map((r) => r.url)).toEqual(['https://a.com/x', 'https://b.com/y']);
+		expect(out.dropped.duplicate).toBe(1);
+	});
+
+	it('drops what has already been read, matching on the canonical key', () => {
+		const out = triageResults([hit('https://a.com/x?utm_source=q'), hit('https://b.com/y')], {
+			limit: 5,
+			known: ['https://www.a.com/x/']
+		});
+		expect(out.picked.map((r) => r.url)).toEqual(['https://b.com/y']);
+		expect(out.dropped.known).toBe(1);
+	});
+
+	it('stops one site from taking a whole round', () => {
+		const results = [
+			...Array.from({ length: 6 }, (_, i) => hit(`https://farm.com/${i}`)),
+			hit('https://other.com/a'),
+			hit('https://third.com/b')
+		];
+		const out = triageResults(results, { limit: 6, perDomain: 2 });
+		expect(out.picked.filter((r) => r.url.includes('farm.com'))).toHaveLength(2);
+		expect(out.dropped.domainCap).toBe(4);
+	});
+
+	it('interleaves domains while keeping rank within each', () => {
+		const out = triageResults(
+			[
+				hit('https://a.com/1'),
+				hit('https://a.com/2'),
+				hit('https://b.com/1'),
+				hit('https://b.com/2')
+			],
+			{ limit: 4, perDomain: 2 }
+		);
+		expect(out.picked.map((r) => r.url)).toEqual([
+			'https://a.com/1',
+			'https://b.com/1',
+			'https://a.com/2',
+			'https://b.com/2'
+		]);
+	});
+
+	it('demotes index pages without dropping them', () => {
+		const out = triageResults([hit('https://a.com/tag/games'), hit('https://b.com/article')], {
+			limit: 2
+		});
+		expect(out.picked.map((r) => r.url)).toEqual([
+			'https://b.com/article',
+			'https://a.com/tag/games'
+		]);
+	});
+
+	it('drops results that could never be fetched', () => {
+		const out = triageResults([hit('javascript:alert(1)'), hit('https://a.com/x')], { limit: 3 });
+		expect(out.picked.map((r) => r.url)).toEqual(['https://a.com/x']);
+		expect(out.dropped.unusable).toBe(1);
+	});
+
+	it('offers a pool at least as large as the picks, in the same order', () => {
+		const results = Array.from({ length: 12 }, (_, i) => hit(`https://s${i}.com/x`));
+		const out = triageResults(results, { limit: 3 });
+		expect(out.pool.length).toBeGreaterThanOrEqual(out.picked.length);
+		expect(out.pool.slice(0, 3)).toEqual(out.picked);
+	});
+
+	it('is deterministic', () => {
+		const results = Array.from({ length: 9 }, (_, i) => hit(`https://s${i % 3}.com/${i}`));
+		expect(triageResults(results, { limit: 4 })).toEqual(triageResults(results, { limit: 4 }));
+	});
+});
+
+describe('parseTriagePicks', () => {
+	it('takes the ids it was given, in order', () => {
+		expect(parseTriagePicks('{"open":[3,1,7]}', 8, 5)).toEqual([3, 1, 7]);
+	});
+
+	it('ignores ids outside the pool, repeats and non-integers', () => {
+		expect(parseTriagePicks('{"open":[0,3,3,99,"2",1.5,2]}', 5, 5)).toEqual([3, 2]);
+	});
+
+	it('honours the cap', () => {
+		expect(parseTriagePicks('{"open":[1,2,3,4]}', 8, 2)).toEqual([1, 2]);
+	});
+
+	it('returns nothing for prose, so the round keeps the heuristic order', () => {
+		expect(parseTriagePicks('I would read the second one', 5, 3)).toEqual([]);
+		expect(parseTriagePicks('{"open":[oops}', 5, 3)).toEqual([]);
+	});
+});
+
+describe('triagePages', () => {
+	const pool: SearchResult[] = Array.from({ length: 6 }, (_, i) => ({
+		url: `https://s${i}.com/x`,
+		title: `Result ${i}`,
+		snippet: `snippet ${i}`
+	}));
+	const base = {
+		systemPrompt: 'sys',
+		question: 'what changed?',
+		gaps: ['what proportion is helium'],
+		pool,
+		limit: 2,
+		track: () => {}
+	};
+
+	it('opens the pages the model chose', async () => {
+		const out = await triagePages({ ...base, choice: choiceOf(ok('{"open":[3,1]}')) });
+		expect(out.map((r) => r.url)).toEqual(['https://s2.com/x', 'https://s0.com/x']);
+	});
+
+	it('shows the model the open gaps and the candidates', async () => {
+		const choice = choiceOf(ok('{"open":[1]}'));
+		const prompt = spyOn(choice);
+		await triagePages({ ...base, choice });
+		expect(prompt()).toContain('what proportion is helium');
+		expect(prompt()).toContain('Result 3');
+		expect(prompt()).toContain('"open"');
+	});
+
+	it('has no opinion when the model returns prose', async () => {
+		expect(await triagePages({ ...base, choice: choiceOf(ok('read the first one')) })).toEqual([]);
+	});
+
+	it('has no opinion when the call throws, so the round is never lost', async () => {
+		const choice = choiceOf();
+		choice.adapter.complete = (async () => {
+			throw new Error('provider down');
+		}) as typeof choice.adapter.complete;
+		expect(await triagePages({ ...base, choice })).toEqual([]);
+	});
+
+	it('does not ask when there is no real choice to make', async () => {
+		let called = false;
+		const choice = choiceOf(ok('{"open":[1]}'));
+		const inner = choice.adapter.complete;
+		choice.adapter.complete = ((req: never, signal: AbortSignal) => {
+			called = true;
+			return inner(req, signal);
+		}) as typeof inner;
+		expect(await triagePages({ ...base, choice, limit: 6 })).toEqual([]);
+		expect(called).toBe(false);
+	});
+});
+
+describe('readPages', () => {
+	const hit = (url: string, snippet = 'the search summary'): SearchResult => ({
+		url,
+		title: `Title for ${url}`,
+		snippet
+	});
+	const noop = () => {};
+
+	it('reads the triaged picks rather than raw search order', async () => {
+		const out = await readPages(
+			[hit('https://a.com/1'), hit('https://a.com/2'), hit('https://b.com/1')],
+			[],
+			2,
+			100,
+			noop,
+			{ readPage: async (url) => `body of ${url}` }
+		);
+		// Domain round-robin, not simply the first two results.
+		expect(out.map((e) => e.url)).toEqual(['https://a.com/1', 'https://b.com/1']);
+	});
+
+	it('marks a source as snippet-only when the fetch fails', async () => {
+		const out = await readPages([hit('https://a.com/1')], [], 2, 100, noop, {
+			readPage: async () => {
+				throw new Error('HTTP 403');
+			}
+		});
+		expect(out[0]).toMatchObject({ kind: 'snippet', excerpt: 'the search summary' });
+	});
+
+	it('marks a source as snippet-only when the page has no readable text', async () => {
+		// A 200 that extracts to nothing is a JS shell or a paywall, not a page.
+		const out = await readPages([hit('https://a.com/1')], [], 2, 100, noop, {
+			readPage: async () => '   '
+		});
+		expect(out[0].kind).toBe('snippet');
+	});
+
+	it('drops a result with neither a page nor a snippet', async () => {
+		const out = await readPages([hit('https://a.com/1', '')], [], 2, 100, noop, {
+			readPage: async () => {
+				throw new Error('HTTP 500');
+			}
+		});
+		expect(out).toEqual([]);
+	});
+
+	it('numbers sources after the ones already gathered', async () => {
+		const out = await readPages([hit('https://b.com/1')], [source(1), source(2)], 2, 100, noop, {
+			readPage: async () => 'text'
+		});
+		expect(out[0].n).toBe(3);
+	});
+
+	it('keeps the heuristic order when the chooser has no opinion', async () => {
+		const results = Array.from({ length: 9 }, (_, i) => hit(`https://s${i}.com/x`));
+		const out = await readPages(results, [], 2, 100, noop, {
+			readPage: async () => 'text',
+			chooser: async () => []
+		});
+		expect(out.map((e) => e.url)).toEqual(['https://s0.com/x', 'https://s1.com/x']);
+	});
+
+	it('never asks the chooser when the pool barely exceeds the limit', async () => {
+		let asked = false;
+		await readPages([hit('https://a.com/1'), hit('https://b.com/1')], [], 2, 100, noop, {
+			readPage: async () => 'text',
+			chooser: async () => {
+				asked = true;
+				return [];
+			}
+		});
+		expect(asked).toBe(false);
+	});
+});
+
+describe('fetchPageText', () => {
+	const reply = (body: string, contentType?: string) =>
+		new Response(body, {
+			status: 200,
+			headers: contentType ? { 'content-type': contentType } : {}
+		});
+
+	it('refuses an image instead of passing binary off as a source', async () => {
+		await expect(
+			fetchPageText('https://example.com/a.png', 1000, {
+				fetchImpl: async () => reply(' ', 'image/png')
+			})
+		).rejects.toThrow(/Not readable as text: image\/png/);
+	});
+
+	it('reads text/plain without running it through the HTML stripper', async () => {
+		const out = await fetchPageText('https://example.com/a.txt', 1000, {
+			fetchImpl: async () => reply('if a < b && c > d then', 'text/plain')
+		});
+		expect(out).toBe('if a < b && c > d then');
+	});
+
+	it('extracts an HTML page', async () => {
+		const out = await fetchPageText('https://example.com/a', 1000, {
+			fetchImpl: async () =>
+				reply('<html><body><nav>Menu</nav><p>Content here.</p></body></html>', 'text/html')
+		});
+		expect(out).toContain('Content here.');
+	});
+
+	it('sniffs a binary body even when the server claimed it was text', async () => {
+		await expect(
+			fetchPageText('https://example.com/a', 1000, {
+				fetchImpl: async () => reply('%PDF-1.7 binary junk')
+			})
+		).rejects.toThrow(/binary content/);
+	});
+
+	it('still refuses a private address before any fetch happens', async () => {
+		await expect(fetchPageText('http://127.0.0.1/x', 1000)).rejects.toThrow(/Blocked/);
+	});
+});
+
+describe('sourcesFooter', () => {
+	it('lists sources and marks the ones that were never read', () => {
+		const footer = sourcesFooter([source(1), snippetSource(2)]);
+		expect(footer).toContain('1. [Source 1](https://example.com/1)');
+		expect(footer).toContain('2. [Source 2](https://example.com/2) — search snippet only');
+	});
+
+	it('is empty when nothing was gathered', () => {
+		expect(sourcesFooter([])).toBe('');
+	});
+});
+
+describe('snippet-only sources reach the model marked', () => {
+	it('labels them in the consolidation prompt', async () => {
+		const choice = choiceOf(ok('{"findings":[{"claim":"a","sources":[2]}],"gaps":["g"]}'));
+		const prompt = spyOn(choice);
+		await consolidate({
+			choice,
+			systemPrompt: 'sys',
+			question: 'q?',
+			prior: EMPTY_BRIEF,
+			fresh: [source(1), snippetSource(2)],
+			knownSources: [1, 2],
+			ranQueries: ['first'],
+			round: 1,
+			rounds: 3,
+			maxQueries: 3,
+			cfg: DEFAULT_RESEARCH,
+			track: () => {}
+		});
+		expect(prompt()).toContain('SEARCH SNIPPET ONLY');
+		expect(prompt()).toMatch(/do not rest a finding on it/i);
+	});
+});
+
+describe('framingHistory', () => {
+	const msg = (role: StoredMessage['role'], content: string): StoredMessage =>
+		({ role, content }) as StoredMessage;
+
+	it('drops tool exchanges and keeps the recent turns', () => {
+		const all = [
+			msg('user', 'old'),
+			msg('tool', 'tool output'),
+			msg('assistant', 'reply'),
+			msg('user', 'newer')
+		];
+		expect(framingHistory(all).map((m) => m.content)).toEqual(['old', 'reply', 'newer']);
+	});
+
+	it('keeps only the tail of a long conversation', () => {
+		const all = Array.from({ length: 30 }, (_, i) => msg('user', `m${i}`));
+		const out = framingHistory(all);
+		expect(out.length).toBeLessThanOrEqual(8);
+		expect(out.at(-1)?.content).toBe('m29');
+	});
+});
+
+describe('frameQuestion', () => {
+	const history: StoredMessage[] = [
+		{ role: 'user', content: 'Find me indie board game retailers' } as StoredMessage,
+		{ role: 'assistant', content: 'Here are several, including Australian ones.' } as StoredMessage
+	];
+	const base = {
+		systemPrompt: 'sys',
+		message: 'do another round, focus on Arabic games',
+		history,
+		track: () => {}
+	};
+
+	it('resolves a follow-up into a question that stands on its own', async () => {
+		const out = await frameQuestion({
+			...base,
+			choice: choiceOf(
+				ok(
+					'{"question":"Which retailers stock Arabic board games?","background":"Australian ones already found."}'
+				)
+			)
+		});
+		expect(out).toEqual({
+			question: 'Which retailers stock Arabic board games?',
+			background: 'Australian ones already found.',
+			fellBack: null
+		});
+	});
+
+	it('shows the model the conversation and the new message', async () => {
+		const choice = choiceOf(ok('{"question":"q","background":""}'));
+		const prompt = spyOn(choice);
+		await frameQuestion({ ...base, choice });
+		expect(prompt()).toContain('Find me indie board game retailers');
+		expect(prompt()).toContain('do another round, focus on Arabic games');
+	});
+
+	it('carries the compaction summary when the chat has one', async () => {
+		const choice = choiceOf(ok('{"question":"q","background":""}'));
+		const prompt = spyOn(choice);
+		await frameQuestion({ ...base, choice, compactSummary: 'Earlier: retailers in Japan.' });
+		expect(prompt()).toContain('Earlier: retailers in Japan.');
+	});
+
+	it('falls back to the message as written, and says which way it failed', async () => {
+		const prose = await frameQuestion({ ...base, choice: choiceOf(ok('Sure, here you go')) });
+		expect(prose).toMatchObject({ question: base.message, fellBack: 'unparseable' });
+
+		const empty = await frameQuestion({ ...base, choice: choiceOf(reasonedOut) });
+		expect(empty.fellBack).toBe('empty');
+
+		const broken = choiceOf();
+		broken.adapter.complete = (async () => {
+			throw new Error('down');
+		}) as typeof broken.adapter.complete;
+		expect((await frameQuestion({ ...base, choice: broken })).fellBack).toBe('error');
+	});
+
+	it('retries with more room when the model spent its budget reasoning', async () => {
+		const out = await frameQuestion({
+			...base,
+			choice: choiceOf(reasonedOut, ok('{"question":"resolved","background":""}'))
+		});
+		expect(out.question).toBe('resolved');
+		expect(out.fellBack).toBeNull();
 	});
 });

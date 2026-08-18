@@ -128,7 +128,18 @@ const server = createServer(async (req, res) => {
 		if (!parsed.stream) {
 			const userText = String(last?.content ?? '');
 			let content = 'Mock completion.';
-			if (userText.includes('RESEARCH-PLAN')) {
+			if (userText.includes('RESEARCH-FRAME')) {
+				// Echoes the subject from the conversation, so a test can prove the
+				// follow-up was resolved against it rather than researched literally.
+				content = JSON.stringify({
+					question: userText.includes('nebulae')
+						? 'How do nebulae form, focusing on helium content?'
+						: 'A standalone research question',
+					background: 'Earlier turns already covered formation.'
+				});
+			} else if (userText.includes('RESEARCH-TRIAGE')) {
+				content = JSON.stringify({ open: [1, 2] });
+			} else if (userText.includes('RESEARCH-PLAN')) {
 				content = JSON.stringify({ queries: ['nebula formation', 'nebula composition'] });
 			} else if (userText.includes('RESEARCH-CONSOLIDATE')) {
 				// Scripted to exercise the narrowing the loop exists for: the first
