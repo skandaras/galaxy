@@ -1,7 +1,7 @@
 import type { ToolDef } from '$lib/server/providers/types';
 import type { FetchSettings } from '$lib/server/settings';
 import { githubToken } from '../coding/workspace';
-import { assertPublicHttpUrl, htmlToText } from '../research';
+import { assertPublicHttpUrl, htmlToText, READABLE_TYPE } from '../research';
 import type { LoopTool } from '../loop';
 
 export const fetchUrlToolDef: ToolDef = {
@@ -26,8 +26,6 @@ export const fetchUrlToolDef: ToolDef = {
 	}
 };
 
-/** Content types worth handing to a model; anything else is refused by name. */
-const TEXTUAL = /^(text\/|application\/(json|xml|xhtml\+xml|javascript|x-yaml|yaml)|.*\+json$)/i;
 
 /**
  * Hard byte ceiling on the download, independent of the character cap on the
@@ -139,7 +137,7 @@ export function fetchUrlTool(cfg: FetchSettings, deps: FetchToolDeps = {}): Loop
 			}
 
 			const contentType = res.headers.get('content-type') ?? '';
-			if (!TEXTUAL.test(contentType)) {
+			if (!READABLE_TYPE.test(contentType)) {
 				report?.({ url: shownUrl, contentType, rejected: true, fetchesUsed: used });
 				return `${shownUrl} is ${contentType || 'of an unknown type'}, which is not readable as text. Only pages, documents and data files can be read this way.`;
 			}

@@ -131,6 +131,17 @@ export interface ResearchSettings {
 	 */
 	maxSearchesPerRun: number;
 	/**
+	 * Let the model choose which search results to open, instead of taking the
+	 * deduped, domain-diverse shortlist in order.
+	 *
+	 * Off by default. It adds a round-trip to the critical path of every round
+	 * that qualifies, and its whole evidence base is titles and search snippets
+	 * — text written by SEO teams to be picked. The deterministic triage is
+	 * where the reliable win is, and it runs either way; turn this on and watch
+	 * the `research.triage` events before deciding it earns its cost here.
+	 */
+	modelTriage?: boolean;
+	/**
 	 * Languages the planner is told to also search in, as a comma-separated list
 	 * of BCP-47 codes. Empty leaves the choice to the model, which will use the
 	 * question's own language.
@@ -148,6 +159,7 @@ export const DEFAULT_RESEARCH: ResearchSettings = {
 	// 4 rounds × 4 queries, so exhaustive effort is bounded by the round count
 	// rather than tripping the run cap halfway through.
 	maxSearchesPerRun: 16,
+	modelTriage: false,
 	extraLanguages: ''
 };
 
@@ -197,6 +209,7 @@ export function normaliseResearchSettings(raw: Record<string, unknown>): Researc
 		timeoutMs: num(raw.timeoutMs, DEFAULT_RESEARCH.timeoutMs, 2_000, 120_000),
 		maxRounds: researchRoundCeiling(raw as Partial<ResearchSettings>),
 		maxSearchesPerRun: num(raw.maxSearchesPerRun, DEFAULT_RESEARCH.maxSearchesPerRun, 1, 40),
+		modelTriage: raw.modelTriage === true,
 		extraLanguages: typeof raw.extraLanguages === 'string' ? raw.extraLanguages : ''
 	};
 }

@@ -243,6 +243,20 @@ check "research reports the brief it built" "$RSTREAM" 'Brief after 2 rounds: 2 
 REVENTS=$(api "$B/api/events?chatId=$RCHAT&limit=200")
 check "narrowed round searches the gap that was named" "$REVENTS" 'nebula helium fraction'
 check "the run records what its rounds cost" "$REVENTS" '"stopCause":"sufficient"'
+# Reading is triaged rather than taken in raw search rank order.
+check "reading is triaged before anything is fetched" "$REVENTS" '"name":"research.triage"'
+# The first message of a chat is already standalone, so framing is skipped.
+check "a first message is not framed" "$RSTREAM" '"name":"planning"'
+FIRSTFRAME=$(printf '%s' "$RSTREAM" | grep -c '"name":"framing"' || true)
+check "no framing stage on a standalone question" "$FIRSTFRAME" '0'
+
+# A follow-up must be researched against the conversation, not as a literal
+# sentence. This is the defect where "do another round, focus on X" was sent to
+# the planner verbatim with no idea what "another round" referred to.
+FJOB=$(api -X POST $B/api/chats/$RCHAT/messages -d '{"content":"do another round on that, but focus on the helium","deepResearch":true}' | jqn .jobId)
+FSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$FJOB/stream)
+check "a follow-up is framed against the conversation" "$FSTREAM" '"name":"framing"'
+check "and the resolved question is shown" "$FSTREAM" 'Researching: How do nebulae form'
 
 # Effort scales the round budget within the admin ceiling: quick gets fewer
 # rounds than the balanced default above, off the same settings.

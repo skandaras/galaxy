@@ -79,7 +79,14 @@ function standardFontDir(): string {
 	return `${dirname(require.resolve('pdfjs-dist/package.json'))}/standard_fonts/`;
 }
 
-async function extractPdf(data: Buffer): Promise<string> {
+/**
+ * Text layer of a PDF.
+ *
+ * Exported because deep research reads PDFs off the open web too — a great
+ * many primary sources (government reports, standards, papers) are PDFs, and
+ * before this they reached the model as binary noise.
+ */
+export async function extractPdf(data: Buffer): Promise<string> {
 	// The legacy build is the one that runs outside a browser; pdfjs v6 ships
 	// no exports map, so the deep path is the supported way in.
 	const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');

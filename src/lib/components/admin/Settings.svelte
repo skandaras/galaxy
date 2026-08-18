@@ -22,6 +22,7 @@
 		timeoutMs: 20000,
 		maxRounds: 4,
 		maxSearchesPerRun: 16,
+		modelTriage: false,
 		extraLanguages: ''
 	});
 	let coding = $state({ autoCheckpoint: true, autoContinue: true, maxLegs: 3 });
@@ -301,10 +302,16 @@
 				rounds per run
 				<input type="number" min="1" max="8" bind:value={research.maxRounds} />
 			</label>
+			<label class="row">
+				<input type="checkbox" bind:checked={research.modelTriage} />
+				let the model choose which search results to open
+			</label>
 		</div>
 		<p class="hint">
 			These are ceilings. The effort control beside the composer's Deep research toggle scales down
-			from them per message — Exhaustive spends the full ceiling.
+			from them per message — Exhaustive spends the full ceiling. Results are always deduplicated
+			and spread across sites before reading; the checkbox adds a model call on top of that, which
+			costs a round-trip per round and is worth watching in the Observatory before leaving on.
 		</p>
 		<button class="btn primary" onclick={() => save('research', research)}>
 			{saved === 'research' ? 'Saved ✓' : 'Save'}
