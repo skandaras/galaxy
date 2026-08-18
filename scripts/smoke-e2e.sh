@@ -258,6 +258,16 @@ FSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$FJOB/stream)
 check "a follow-up is framed against the conversation" "$FSTREAM" '"name":"framing"'
 check "and the resolved question is shown" "$FSTREAM" 'Researching: How do nebulae form'
 
+# The awkward pages the follow-up query returns. A UTF-16 page used to decode to
+# NULs and be rejected as binary; a page whose prose is only in JSON-LD used to
+# extract to nothing; a 403 used to read the same as every other failure.
+FEVENTS=$(api "$B/api/events?chatId=$RCHAT&limit=300")
+check "a UTF-16 page is read rather than called binary" "$FEVENTS" 'utf16-page'
+check "a refusal is recorded with its reason" "$FEVENTS" '"reason":"blocked"'
+check "and with its status" "$FEVENTS" '"status":403'
+FANSWER=$(api $B/api/chats/$RCHAT | jqn '.messages.at(-1).content')
+check "the answer says why a source was not read" "$FANSWER" 'the site refused the request'
+
 # Effort scales the round budget within the admin ceiling: quick gets fewer
 # rounds than the balanced default above, off the same settings.
 QCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)

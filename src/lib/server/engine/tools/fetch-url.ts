@@ -1,7 +1,8 @@
 import type { ToolDef } from '$lib/server/providers/types';
 import type { FetchSettings } from '$lib/server/settings';
 import { githubToken } from '../coding/workspace';
-import { assertPublicHttpUrl, htmlToText, READABLE_TYPE } from '../research';
+import { assertPublicHttpUrl, htmlToText, READABLE_TYPE, safeFetch } from '../research';
+import { BROWSER_UA } from './web-search';
 import type { LoopTool } from '../loop';
 
 export const fetchUrlToolDef: ToolDef = {
@@ -82,16 +83,20 @@ export function fetchUrlTool(cfg: FetchSettings, deps: FetchToolDeps = {}): Loop
 			// Read once: githubToken() is a settings lookup plus a decrypt, and the
 			// token only ever goes to GitHub's own hosts.
 			const token = resolved?.authorize ? githubToken() : null;
+			// safeFetch re-asserts the SSRF guard on every redirect hop; the
+			// pre-flight checks above only cover the address we start from.
 			const get = (url: string, accept?: string) =>
-				doFetch(url, {
+				safeFetch(url, {
 					signal: AbortSignal.timeout(cfg.timeoutMs),
 					headers: {
-						'user-agent': 'galaxy/1.0',
+						// A bot-shaped UA is itself a reason to get blocked — same
+						// constant the search calls and research page fetches use.
+						'user-agent': BROWSER_UA,
 						accept: accept ?? 'text/html,text/plain,application/json;q=0.9,*/*;q=0.5',
+						'accept-language': 'en-GB,en;q=0.9',
 						...(token ? { authorization: `Bearer ${token}` } : {})
-					},
-					redirect: 'follow'
-				});
+					}
+				}, doFetch);
 
 			let usedUrl = finalUrl;
 			let via = resolved?.via;

@@ -62,6 +62,34 @@ const server = createServer(async (req, res) => {
 	if (req.method === 'GET' && url.pathname === '/searxng/search') {
 		res.writeHead(200, { 'content-type': 'application/json' });
 		const q = url.searchParams.get('q');
+		// The follow-up query returns the awkward pages: one that refuses the
+		// fetch, one served as UTF-16, one whose prose is only in JSON-LD. Spread
+		// across loopback hostnames because triage caps how much of a round any
+		// one domain may take, and every mock page would otherwise be one site.
+		if (String(q ?? '').includes('helium')) {
+			res.end(
+				JSON.stringify({
+					results: [
+						{
+							title: 'Refuses robots',
+							url: `http://127.0.0.1:${port}/blocked-page`,
+							content: 'Snippet standing in for a page we may not read.'
+						},
+						{
+							title: 'Served as UTF-16',
+							url: `http://localhost:${port}/utf16-page`,
+							content: 'Snippet about encodings.'
+						},
+						{
+							title: 'Prose only in JSON-LD',
+							url: `http://127.0.0.2:${port}/jsonld-page`,
+							content: 'Snippet about structured data.'
+						}
+					]
+				})
+			);
+			return;
+		}
 		res.end(
 			JSON.stringify({
 				results: [
@@ -86,6 +114,38 @@ const server = createServer(async (req, res) => {
 	if (req.method === 'GET' && url.pathname === '/searxng-blocked/search') {
 		res.writeHead(200, { 'content-type': 'text/html' });
 		res.end('<html><body><h1>Unusual traffic detected</h1><p>anomaly</p></body></html>');
+		return;
+	}
+
+	// A page that refuses a fetch outright, so the snippet fallback can be seen
+	// carrying a real reason rather than one generic phrase.
+	if (req.method === 'GET' && url.pathname === '/blocked-page') {
+		res.writeHead(403, { 'content-type': 'text/html' });
+		res.end('<html><body>Forbidden</body></html>');
+		return;
+	}
+
+	// UTF-16, which used to decode to NULs and be rejected as binary content.
+	if (req.method === 'GET' && url.pathname === '/utf16-page') {
+		res.writeHead(200, { 'content-type': 'text/html; charset=utf-16le' });
+		res.end(
+			Buffer.from(
+				'\ufeff<html><body><p>Nebulae are born in collapsing clouds. UTF16-FACT confirmed.</p></body></html>',
+				'utf16le'
+			)
+		);
+		return;
+	}
+
+	// All the prose lives in JSON-LD, as on many news and product pages.
+	if (req.method === 'GET' && url.pathname === '/jsonld-page') {
+		res.writeHead(200, { 'content-type': 'text/html' });
+		res.end(
+			`<html><body><script type="application/ld+json">${JSON.stringify({
+				'@type': 'NewsArticle',
+				articleBody: `JSONLD-FACT confirmed. ${'Nebula composition detail. '.repeat(20)}`
+			})}</script><div id="root"></div></body></html>`
+		);
 		return;
 	}
 
@@ -671,6 +731,9 @@ const server = createServer(async (req, res) => {
 	res.end('not found');
 });
 
-server.listen(port, '127.0.0.1', () => {
+// All loopback addresses, not just 127.0.0.1: the research triage caps how much
+// of a round one domain may take, so the fetch-variety pages above are served on
+// several loopback hostnames to look like several sites.
+server.listen(port, () => {
 	console.log(`mock provider listening on http://127.0.0.1:${port}`);
 });
