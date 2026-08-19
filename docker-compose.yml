@@ -96,6 +96,18 @@ networks:
   # or control containers. That separation is the sandbox boundary.
   docker-api:
     internal: true
+  # Galaxy ↔ SearXNG.
+  #
+  # Deliberately NOT `internal: true`, for the same reason as `runners` below:
+  # a metasearch engine's whole job is outbound requests, and an internal
+  # network has no gateway. SearXNG could therefore reach no engine at all and
+  # answered every query with HTTP 200 and an empty result set — which read
+  # downstream as "the web has nothing on this".
+  #
+  # Dropping it makes nothing reachable from outside: the service publishes no
+  # ports, and that is what keeps it private. Isolation comes from not
+  # publishing it, not from cutting its egress.
+  searxng: {}
   # Ephemeral coding runners join this network (created at runtime via the
   # Docker API, so no compose service references it — see INSTALL.md §5:
   # it must be created once by hand).
@@ -106,8 +118,5 @@ networks:
   # Deliberately NOT `internal: true`: git clone/push and dependency installs
   # (npm/pip) run inside runners, so they need outbound access. Isolation from
   # the Docker API comes from docker-api above, not from cutting egress.
-  # Galaxy ↔ SearXNG only; no outbound publishing.
-  searxng:
-    internal: true
   runners:
     name: galaxy_runners

@@ -42,6 +42,7 @@
 		durationMs?: number;
 		warning?: string | null;
 		failedOver?: { from: string; reason: string } | null;
+		unresponsiveEngines?: string[] | null;
 		sample?: { title: string; url: string }[];
 	}
 	let testing = $state(false);
@@ -65,6 +66,9 @@
 				lines.push(`  ! fell back from ${t.failedOver.from}: ${t.failedOver.reason}`);
 			}
 			if (t.warning) lines.push(`  ! ${t.warning}`);
+			// Named individually: "some engines are blocked" is actionable, "0
+			// results" is not.
+			for (const e of t.unresponsiveEngines ?? []) lines.push(`  ✗ engine down: ${e}`);
 			for (const s of t.sample ?? []) lines.push(`  · ${s.title} — ${s.url}`);
 		} else {
 			lines.push(`✗ ${t.provider ?? 'search'} failed`);

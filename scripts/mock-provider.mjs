@@ -109,6 +109,23 @@ const server = createServer(async (req, res) => {
 		return;
 	}
 
+	// A SearXNG whose engines are all down: HTTP 200, empty results, and the
+	// diagnosis in `unresponsive_engines` — exactly what an instance with no
+	// route to the internet returns for every query.
+	if (req.method === 'GET' && url.pathname === '/searxng-enginesdown/search') {
+		res.writeHead(200, { 'content-type': 'application/json' });
+		res.end(
+			JSON.stringify({
+				results: [],
+				unresponsive_engines: [
+					['duckduckgo', 'DNS error'],
+					['brave', 'DNS error']
+				]
+			})
+		);
+		return;
+	}
+
 	// A "blocked" search backend: HTTP 200 with a bot-check body and no results
 	// markup — exactly how DuckDuckGo refuses a datacenter IP.
 	if (req.method === 'GET' && url.pathname === '/searxng-blocked/search') {

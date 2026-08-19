@@ -71,6 +71,19 @@ BLOCKED=$(api -X POST $B/api/admin/settings/test-search)
 check "blocked provider reports failure" "$BLOCKED" '"ok":false'
 check "blocked provider gives a reason" "$BLOCKED" 'expected JSON, got HTML'
 
+# A SearXNG whose engines are all down answers 200 with an empty result list.
+# That used to be indistinguishable from "the web has nothing on this": the
+# probe reported ok, the fallback never fired, and the model was told the search
+# had worked.
+api -X PUT $B/api/admin/settings -d "{\"key\":\"websearch\",\"value\":{\"provider\":\"searxng\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/searxng-enginesdown\",\"fallbackProvider\":\"none\"}}" > /dev/null
+DOWN=$(api -X POST $B/api/admin/settings/test-search)
+check "an all-engines-down instance is a failure, not an empty answer" "$DOWN" '"ok":false'
+check "and the failing engines are named" "$DOWN" 'duckduckgo (DNS error)'
+
+# With a fallback configured it now actually gets used.
+api -X PUT $B/api/admin/settings -d "{\"key\":\"websearch\",\"value\":{\"provider\":\"searxng\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/searxng-enginesdown\",\"fallbackProvider\":\"searxng\"}}" > /dev/null
+echo "ok: engine-health probe checked"
+
 # Restore a working provider and confirm the same probe reports success.
 # (Failover between two providers is covered by unit tests: both providers share
 # one baseUrl setting, so it can't be staged meaningfully against the mock.)
