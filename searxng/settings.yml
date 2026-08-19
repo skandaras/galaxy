@@ -22,7 +22,6 @@ use_default_settings:
       - startpage
       - mojeek
       - wikipedia
-      - wikidata
 
 general:
   instance_name: 'Galaxy Search'
@@ -78,6 +77,4 @@ engines:
   - name: mojeek
     disabled: false
   - name: wikipedia
-    disabled: false
-  - name: wikidata
     disabled: false

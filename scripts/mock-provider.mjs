@@ -59,7 +59,31 @@ const server = createServer(async (req, res) => {
 		return;
 	}
 
-	if (req.method === 'GET' && url.pathname === '/searxng/search') {
+	// The same canned results, optionally with an engine complaining that it is
+	// being asked too often — which is what a real instance reported when a
+	// round fired all its queries at once. `/searxng-ratelimited` exists so the
+	// smoke can prove the run slows itself down instead of pressing on.
+	if (
+		req.method === 'GET' &&
+		(url.pathname === '/searxng/search' || url.pathname === '/searxng-ratelimited/search')
+	) {
+		const rateLimited = url.pathname.startsWith('/searxng-ratelimited');
+		if (rateLimited) {
+			res.writeHead(200, { 'content-type': 'application/json' });
+			res.end(
+				JSON.stringify({
+					results: [
+						{
+							title: 'Mock result one',
+							url: `http://127.0.0.1:${port}/page/one`,
+							content: 'Snippet under a rate limit.'
+						}
+					],
+					unresponsive_engines: [['brave', 'too many requests']]
+				})
+			);
+			return;
+		}
 		res.writeHead(200, { 'content-type': 'application/json' });
 		const q = url.searchParams.get('q');
 		// The follow-up query returns the awkward pages: one that refuses the

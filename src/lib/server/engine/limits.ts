@@ -51,3 +51,30 @@ export const codingMaxSteps = () => num('CODING_MAX_STEPS', 50);
  * can carry many tool calls at once; see the turn-budget note in loop.ts.
  */
 export const chatMaxSteps = () => num('CHAT_MAX_STEPS', 12);
+
+/**
+ * Searches a research round may have in flight at once.
+ *
+ * Rounds used to fire every query simultaneously, and each one fans out across
+ * every enabled engine — three queries against six engines is eighteen
+ * near-simultaneous requests from one address, then the next round straight
+ * after. "Too many requests" and "unusual traffic from your network" are
+ * measuring exactly that, and no amount of dressing up the request fixes a
+ * pattern no browser produces.
+ */
+export const searchConcurrency = () => num('SEARCH_CONCURRENCY', 3);
+
+/**
+ * Gap between searches once a provider has said it is being asked too often.
+ *
+ * Deliberately slow: by the time this engages an engine has already refused,
+ * and SearXNG benches a blocked engine for minutes to an hour, so hurrying only
+ * spends searches on engines that are still out.
+ */
+export const searchThrottledGapMs = () => num('SEARCH_THROTTLED_GAP_MS', 2_000);
+
+/**
+ * Gap between searches against a provider whose rate limit is published rather
+ * than discovered. Brave's free tier is the case this exists for.
+ */
+export const searchProviderGapMs = () => num('SEARCH_PROVIDER_GAP_MS', 1_200);

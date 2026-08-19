@@ -36,7 +36,9 @@ node scripts/mock-provider.mjs $MOCK_PORT &
 MOCK_PID=$!
 # ALLOW_PRIVATE_RESEARCH_FETCH: the mock "web" lives on 127.0.0.1, which the
 # SSRF guard rightly blocks in production.
-AUTH_MODE=dev DEV_USER=smoke DATA_DIR=$DATA PORT=$APP_PORT CODING_EXECUTOR=local ALLOW_PRIVATE_RESEARCH_FETCH=1 node build &
+# SEARCH_THROTTLED_GAP_MS: the real 2s gap is the point in production and dead
+# time here — the smoke asserts that throttling engages, not how slow it is.
+AUTH_MODE=dev DEV_USER=smoke DATA_DIR=$DATA PORT=$APP_PORT CODING_EXECUTOR=local ALLOW_PRIVATE_RESEARCH_FETCH=1 SEARCH_THROTTLED_GAP_MS=50 node build &
 APP_PID=$!
 trap 'kill $MOCK_PID $APP_PID 2>/dev/null; rm -rf $DATA' EXIT
 wait_for "the mock provider" "http://127.0.0.1:$MOCK_PORT/" --any
@@ -262,6 +264,19 @@ check "reading is triaged before anything is fetched" "$REVENTS" '"name":"resear
 check "a first message is not framed" "$RSTREAM" '"name":"planning"'
 FIRSTFRAME=$(printf '%s' "$RSTREAM" | grep -c '"name":"framing"' || true)
 check "no framing stage on a standalone question" "$FIRSTFRAME" '0'
+
+# A round that gets told it is asking too often must slow down and say so — once
+# for the run, not once per query. The burst was ours: every query in a round
+# fired at the same instant, each fanned out across every engine.
+api -X PUT $B/api/admin/settings -d "{\"key\":\"websearch\",\"value\":{\"provider\":\"searxng\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/searxng-ratelimited\",\"fallbackProvider\":\"none\"}}" > /dev/null
+TCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+TJOB=$(api -X POST $B/api/chats/$TCHAT/messages -d '{"content":"How do nebulae form?","deepResearch":true}' | jqn .jobId)
+TSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$TJOB/stream)
+check "a rate-limited run says why it slowed down" "$TSTREAM" 'rate-limiting this address'
+THROTTLE_NOTICES=$(printf '%s' "$TSTREAM" | grep -c 'rate-limiting this address' || true)
+check "and says it exactly once for the run" "$THROTTLE_NOTICES" '1'
+check "the throttle is recorded in the Observatory" "$(api "$B/api/events?chatId=$TCHAT&limit=200")" '"name":"search_throttled"'
+api -X PUT $B/api/admin/settings -d "{\"key\":\"websearch\",\"value\":{\"provider\":\"searxng\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/searxng\",\"fallbackProvider\":\"none\"}}" > /dev/null
 
 # A follow-up must be researched against the conversation, not as a literal
 # sentence. This is the defect where "do another round, focus on X" was sent to

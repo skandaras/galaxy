@@ -28,7 +28,15 @@ import {
 	type LiveJob
 } from './jobs';
 import { streamWithIdleTimeout } from './loop';
-import { BROWSER_UA, normaliseLanguage, runWebSearch, type SearchResult } from './tools/web-search';
+import {
+	BROWSER_UA,
+	createPacer,
+	normaliseLanguage,
+	runPaced,
+	runWebSearch,
+	type Pacer,
+	type SearchResult
+} from './tools/web-search';
 
 export interface Evidence {
 	n: number;
@@ -161,6 +169,7 @@ async function runResearch(
 	// counter and a new evidence set.
 	const budget = roundBudget(cfg, effort);
 	const allowance = searchAllowance(budget.searchBudget);
+	const pacer = createPacer(searchCfg.provider);
 	const defaultLanguage = normaliseLanguage(searchCfg.defaultLanguage);
 	const loopStarted = Date.now();
 
@@ -274,7 +283,26 @@ async function runResearch(
 			name: 'searching',
 			detail: `round ${round}/${budget.rounds} · ${plural(pending.length, 'query', 'queries')}`
 		});
-		const results = await runSearches(pending, searchCfg, allowance, event);
+		const results = await runSearches(
+			pending,
+			searchCfg,
+			allowance,
+			event,
+			pacer,
+			(p) => {
+				// A run that suddenly takes twice as long should say why, once.
+				pushChunk(job, {
+					type: 'notice',
+					text: `Search engines are rate-limiting this address — slowing to one search at a time (${Math.round(p.pacing.gapMs / 100) / 10}s apart) for the rest of this run.`
+				});
+				event('search_throttled', 'ok', 0, {
+					scope: 'research-run',
+					round,
+					gapMs: p.pacing.gapMs,
+					concurrency: p.pacing.concurrency
+				});
+			}
+		);
 		ranQueries.push(...pending.map((p) => p.q));
 
 		const fresh = await readPages(results, evidence, budget.pagesPerRound, cfg.timeoutMs, event, {
@@ -1213,7 +1241,7 @@ export async function planQueries(
  * pipeline was already bounded this way by the loop's shape — this makes the
  * ceiling explicit, adjustable and visible in the Observatory.
  */
-function searchAllowance(total: number) {
+export function searchAllowance(total: number) {
 	let used = 0;
 	return {
 		get used() {
@@ -1231,11 +1259,20 @@ function searchAllowance(total: number) {
 	};
 }
 
-async function runSearches(
+/**
+ * Run one round's queries, under the run's pacer, and pool the results.
+ *
+ * Exported for tests: the throttling behaviour it carries — tighten on the
+ * first refusal, say so once — is only observable from here.
+ */
+export async function runSearches(
 	queries: PlannedQuery[],
 	searchCfg: WebSearchSettings,
 	allowance: ReturnType<typeof searchAllowance>,
-	event: (name: string, status: 'ok' | 'error', d: number, detail?: Record<string, unknown>) => void
+	event: (name: string, status: 'ok' | 'error', d: number, detail?: Record<string, unknown>) => void,
+	pacer: Pacer,
+	/** Called the one time the run tips into throttling, never per query. */
+	onThrottled: (pacer: Pacer) => void
 ): Promise<SearchResult[]> {
 	const granted = allowance.take(queries.length);
 	if (granted < queries.length) {
@@ -1246,36 +1283,38 @@ async function runSearches(
 			scope: 'research-run'
 		});
 	}
-	const settled = await Promise.allSettled(
-		queries.slice(0, granted).map(async ({ q, language }) => {
-			const started = Date.now();
-			try {
-				const outcome = await runWebSearch(q, searchCfg, language);
-				event('web_search', 'ok', Date.now() - started, {
-					query: q,
-					results: outcome.results.length,
-					provider: outcome.provider,
-					searchesUsed: allowance.used,
-					searchBudget: allowance.total,
-					scope: 'research-run',
-					...(language
-						? { language, languageApplied: outcome.languageApplied !== false }
-						: {}),
-					...(outcome.failedOver ? { failedOver: outcome.failedOver } : {})
-				});
-				return outcome.results;
-			} catch (err) {
-				event('web_search', 'error', Date.now() - started, {
-					query: q,
-					error: String(err),
-					scope: 'research-run',
-					...(language ? { language } : {})
-				});
-				return [] as SearchResult[];
-			}
-		})
-	);
-	const all = settled.flatMap((s) => (s.status === 'fulfilled' ? s.value : []));
+	const settled = await runPaced(queries.slice(0, granted), pacer, async ({ q, language }) => {
+		const started = Date.now();
+		try {
+			const outcome = await runWebSearch(q, searchCfg, language);
+			// Engines that refused are the only signal a search carries about how
+			// hard it is being pushed; feed them back before the next claim.
+			if (pacer.observe(outcome.degraded?.engines ?? [])) onThrottled(pacer);
+			event('web_search', 'ok', Date.now() - started, {
+				query: q,
+				results: outcome.results.length,
+				provider: outcome.provider,
+				searchesUsed: allowance.used,
+				searchBudget: allowance.total,
+				scope: 'research-run',
+				...(pacer.pacing.throttled ? { pacing: 'throttled' } : {}),
+				...(language ? { language, languageApplied: outcome.languageApplied !== false } : {}),
+				...(outcome.failedOver ? { failedOver: outcome.failedOver } : {})
+			});
+			return outcome.results;
+		} catch (err) {
+			if (pacer.observe([String(err)])) onThrottled(pacer);
+			event('web_search', 'error', Date.now() - started, {
+				query: q,
+				error: String(err),
+				scope: 'research-run',
+				...(pacer.pacing.throttled ? { pacing: 'throttled' } : {}),
+				...(language ? { language } : {})
+			});
+			return [] as SearchResult[];
+		}
+	});
+	const all = settled.flatMap((s) => s ?? []);
 	const seen = new Set<string>();
 	return all.filter((r) => r.url && !seen.has(r.url) && seen.add(r.url));
 }

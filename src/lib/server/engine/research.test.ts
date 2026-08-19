@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import type { CompletionResult } from '$lib/server/providers/types';
 import { RESEARCH_EFFORTS, resolveEffort } from '$lib/research-effort';
@@ -34,6 +34,8 @@ import {
 	readPages,
 	registrableDomain,
 	roundBudget,
+	runSearches,
+	searchAllowance,
 	shouldStopAfterRound,
 	classifyFetchError,
 	countFailures,
@@ -50,7 +52,8 @@ import {
 	type ResearchBrief
 } from './research';
 import type { StoredMessage } from '$lib/server/chats';
-import type { SearchResult } from './tools/web-search';
+import { createPacer, type SearchResult } from './tools/web-search';
+import { DEFAULT_WEB_SEARCH, type WebSearchSettings } from '$lib/server/settings';
 
 /** Adapter whose complete() is scripted per call. */
 function choiceOf(...replies: CompletionResult[]): ModelChoice {
@@ -1655,5 +1658,142 @@ describe('readPages retries', () => {
 			readPage: async () => ''
 		});
 		expect(out[0]).toMatchObject({ kind: 'snippet', failure: 'no-text' });
+	});
+});
+
+/**
+ * A round used to fire every query at once, and SearXNG fans each of those to
+ * every engine — which is what the instance was complaining about when it came
+ * back with `too many requests` from Brave and `CAPTCHA` from DuckDuckGo and
+ * Startpage in a single response.
+ */
+describe('runSearches pacing', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		delete process.env.SEARCH_THROTTLED_GAP_MS;
+	});
+
+	const cfg: WebSearchSettings = {
+		...DEFAULT_WEB_SEARCH,
+		provider: 'searxng',
+		baseUrl: 'http://s:8080',
+		fallbackProvider: 'none'
+	};
+	// Six rather than three: with the default concurrency of three, a throttle
+	// seen by the first search can only be *observed* on queries that had not
+	// started yet.
+	const queries = ['a', 'b', 'c', 'd', 'e', 'f'].map((q) => ({ q, language: '' }));
+
+	/**
+	 * Answer every SearXNG query, reporting `unresponsive_engines` on the nth
+	 * call onwards, and record how many requests were in flight at a time.
+	 */
+	function stubSearxng(unresponsiveFrom: number, reason: string) {
+		let calls = 0;
+		let live = 0;
+		const peaks: number[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => {
+				const n = ++calls;
+				peaks.push(++live);
+				await new Promise((r) => setTimeout(r, 5));
+				live--;
+				return new Response(
+					JSON.stringify({
+						results: [{ title: `R${n}`, url: `https://example.com/${n}`, content: 'x' }],
+						unresponsive_engines: n >= unresponsiveFrom ? [['brave', reason]] : []
+					}),
+					{ status: 200, headers: { 'content-type': 'application/json' } }
+				);
+			})
+		);
+		return { peaks, get calls() {
+			return calls;
+		} };
+	}
+
+	it('throttles the rest of the round after the first rate limit, and says so once', async () => {
+		process.env.SEARCH_THROTTLED_GAP_MS = '5'; // the real 2s would be a slow test
+		const { peaks } = stubSearxng(1, 'too many requests');
+		const pacer = createPacer('searxng');
+		const notices: number[] = [];
+		const results = await runSearches(queries, cfg, searchAllowance(8), () => {}, pacer, (p) =>
+			notices.push(p.pacing.gapMs)
+		);
+
+		expect(pacer.pacing.throttled).toBe(true);
+		expect(pacer.pacing.concurrency).toBe(1);
+		// One notice for the run, not one per query — the point of `observe`
+		// reporting only the transition.
+		expect(notices).toHaveLength(1);
+		expect(notices[0]).toBeGreaterThan(0);
+		// Whatever the first batch did, the tail ran alone.
+		expect(peaks.slice(-2)).toEqual([1, 1]);
+		expect(results).toHaveLength(6);
+	});
+
+	it('leaves a healthy round at full concurrency', async () => {
+		const { peaks } = stubSearxng(99, 'unused');
+		const pacer = createPacer('searxng');
+		const notices: unknown[] = [];
+		await runSearches(queries, cfg, searchAllowance(8), () => {}, pacer, (p) => notices.push(p));
+
+		expect(pacer.pacing.throttled).toBe(false);
+		expect(notices).toEqual([]);
+		expect(Math.max(...peaks)).toBeGreaterThan(1);
+	});
+
+	it('does not throttle on engines that are merely broken', async () => {
+		// A DNS error is not "slow down"; treating it as one makes every later
+		// round of the run serial for no benefit.
+		const { peaks } = stubSearxng(1, 'DNS error');
+		const pacer = createPacer('searxng');
+		await runSearches(queries, cfg, searchAllowance(8), () => {}, pacer, () => {});
+		expect(pacer.pacing.throttled).toBe(false);
+		expect(Math.max(...peaks)).toBeGreaterThan(1);
+	});
+
+	it('still pools and de-duplicates results across a throttled round', async () => {
+		process.env.SEARCH_THROTTLED_GAP_MS = '5';
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							results: [{ title: 'Same', url: 'https://example.com/same', content: 'x' }],
+							unresponsive_engines: [['brave', 'CAPTCHA']]
+						}),
+						{ status: 200, headers: { 'content-type': 'application/json' } }
+					)
+			)
+		);
+		const results = await runSearches(
+			queries,
+			cfg,
+			searchAllowance(8),
+			() => {},
+			createPacer('searxng'),
+			() => {}
+		);
+		expect(results).toHaveLength(1);
+	});
+
+	it('spends no searches beyond the run allowance, throttled or not', async () => {
+		const stub = stubSearxng(99, 'unused');
+		const skipped: Record<string, unknown>[] = [];
+		await runSearches(
+			queries,
+			cfg,
+			searchAllowance(2),
+			(_n, status, _d, detail) => {
+				if (status === 'error' && detail?.skipped) skipped.push(detail);
+			},
+			createPacer('searxng'),
+			() => {}
+		);
+		expect(stub.calls).toBe(2);
+		expect(skipped[0]?.skipped).toBe(4);
 	});
 });
