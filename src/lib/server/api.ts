@@ -1,5 +1,11 @@
 import { error } from '@sveltejs/kit';
 import type { SessionUser } from '$lib/server/auth';
+import {
+	ALIGNMENT_ENABLED_KEY,
+	DEFAULT_ALIGNMENT,
+	getSetting,
+	type AlignmentSettings
+} from '$lib/server/settings';
 
 export function requireUser(locals: App.Locals): SessionUser {
 	if (!locals.user) error(401, 'Unauthorized');
@@ -22,6 +28,25 @@ export function requireCoder(locals: App.Locals): SessionUser {
 	const user = requireUser(locals);
 	if (!user.canCode) {
 		error(403, 'Coding is not enabled for your account — an admin can grant it in Admin → Users');
+	}
+	return user;
+}
+
+/**
+ * Alignment holds the most private data in the platform — someone's stated
+ * beliefs and their reflection journal. It is off until a person turns it on for
+ * themselves, and this refuses every route while it is off, so hiding the nav
+ * link is presentation rather than the actual boundary.
+ *
+ * Deliberately not an admin grant like `canCode`: nobody else decides whether
+ * you may keep a journal, and being an admin grants no access to anyone else's.
+ */
+export function requireAlignment(locals: App.Locals): SessionUser {
+	const user = requireUser(locals);
+	const platform = getSetting<AlignmentSettings>('alignment', DEFAULT_ALIGNMENT);
+	if (!platform.enabled) error(403, 'Alignment is switched off for this instance');
+	if (!getSetting<boolean>(ALIGNMENT_ENABLED_KEY, false, user.id)) {
+		error(403, 'Alignment is off — turn it on in Settings → Alignment');
 	}
 	return user;
 }

@@ -15,6 +15,8 @@
 		...(data.user?.canCode ? [{ href: '/code', label: 'Code' }] : []),
 		{ href: '/boards', label: 'Boards' },
 		{ href: '/library', label: 'Library' },
+		// A private feature, off by default and turned on per person in Settings.
+		...(data.alignmentEnabled ? [{ href: '/alignment', label: 'Alignment' }] : []),
 		{ href: '/settings', label: 'Settings' },
 		...(data.user?.isAdmin ? [{ href: '/admin', label: 'Admin' }] : [])
 	]);
