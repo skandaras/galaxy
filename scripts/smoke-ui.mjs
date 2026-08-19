@@ -157,6 +157,41 @@ await asAdmin('/api/admin/users', {
 });
 
 /** Card titles per lane, in board order — read back from the API, not the DOM. */
+// Alignment is off until someone turns it on, so the browser would otherwise
+// never see the page at all. No model is configured here, which is the more
+// interesting state anyway: every one of these views has to render before
+// anything has ever been assessed.
+await as(ALICE, '/api/alignment/settings', {
+	method: 'PUT',
+	body: JSON.stringify({ enabled: true })
+});
+const honesty = await as(ALICE, '/api/alignment/principles', {
+	method: 'POST',
+	body: JSON.stringify({
+		kind: 'value',
+		title: 'Honesty',
+		statement: 'I say the uncomfortable thing kindly.',
+		exemplar: 'Told them the estimate was wrong.',
+		weight: 5
+	})
+});
+const presence = await as(ALICE, '/api/alignment/principles', {
+	method: 'POST',
+	body: JSON.stringify({ kind: 'value', title: 'Presence', statement: 'Attention over output.' })
+});
+await as(ALICE, '/api/alignment/tensions', {
+	method: 'POST',
+	body: JSON.stringify({
+		aId: honesty.principle.id,
+		bId: presence.principle.id,
+		note: 'honesty first'
+	})
+});
+await as(ALICE, '/api/alignment/entries', {
+	method: 'POST',
+	body: JSON.stringify({ title: 'A Tuesday', body: 'I let a wrong number stand because it was late.' })
+});
+
 const layout = async () => {
 	const v = await as(ALICE, `/api/boards/${alicesBoard.id}`);
 	const of = (laneId) =>
@@ -192,7 +227,7 @@ const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
 
 // 1. Every page renders, and renders quietly. A page that throws during
 //    hydration still answers 200, so the bash smoke calls it healthy.
-for (const path of ['/chat', '/code', '/boards', '/library', '/settings', '/observatory']) {
+for (const path of ['/chat', '/code', '/boards', '/library', '/settings', '/observatory', '/alignment']) {
 	problems = [];
 	// Not networkidle: the app holds SSE streams open (notifications, the
 	// Observatory feed), so the network is never idle and every goto would sit
@@ -329,6 +364,62 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/settings', '/obse
 	await page.locator('article.card', { hasText: 'charlie' }).first().click();
 	await page.waitForTimeout(400);
 	check('a click still opens the card', await page.locator('.card-detail, dialog, aside').count() > 0);
+}
+
+// 5. Alignment. Four tabs that each fetch on mount, a constellation drawn from
+//    scratch in SVG, and an editor that loads a principle's track record before
+//    it shows a single field. Plenty to render blank.
+{
+	await page.goto(`${B}/alignment`);
+	await page.locator('.tabs').waitFor();
+	await page.waitForTimeout(400);
+
+	// Nothing has been assessed, so Standing must explain itself rather than
+	// showing an empty chart — the state every new user starts in.
+	check('standing greets an empty account', await page.locator('.line, .empty').count() > 0);
+
+	for (const tab of ['Journal', 'Constitution', 'Rubric']) {
+		problems = [];
+		await page.locator(`.tabs button:text-is("${tab}")`).click();
+		await page.waitForTimeout(400);
+		check(`the ${tab} tab renders quietly`, problems, []);
+		const body = await page.locator('.body').boundingBox();
+		check(`the ${tab} tab draws something`, (body?.height ?? 0) > 100);
+	}
+
+	// The rubric's anchors are the thing that makes it inspectable rather than a
+	// black box, so they have to actually open.
+	await page.locator('.tabs button:text-is("Rubric")').click();
+	await page.locator('.link:text-is("Show the scale")').first().click();
+	check('the rubric shows its 1-5 anchors', await page.locator('.anchors li').count(), 5);
+
+	// Opening a principle must lead with its track record, not the fields.
+	await page.locator('.tabs button:text-is("Constitution")').click();
+	await page.locator('.row-item').first().click();
+	await page.locator('.editor').waitFor();
+	check('the editor leads with the track record', await page.locator('.track-record').isVisible());
+	check('and relabels the exemplar for the kind', await page
+		.locator('.editor .label')
+		.allTextContents()
+		.then((t) => t.some((x) => x.includes('In practice this looks like'))));
+
+	// A belief asks a different question of the same field — the mechanism that
+	// lets one schema serve six kinds.
+	await page.selectOption('.editor select', 'belief');
+	await page.waitForTimeout(150);
+	check('a belief asks what would falsify it', await page
+		.locator('.editor .label')
+		.allTextContents()
+		.then((t) => t.some((x) => x.includes('What would make me doubt it'))));
+
+	await shot('alignment-editor');
+
+	// The journal composer is the whole point of the Journal tab, and a textarea
+	// that starts small asks for a small thought.
+	await page.locator('.tabs button:text-is("Journal")').click();
+	const composer = await page.locator('.composer textarea').boundingBox();
+	check('the composer is a roomy box', (composer?.height ?? 0) > 120);
+	await shot('alignment-journal');
 }
 
 if (fail.length) await shot('final-state');

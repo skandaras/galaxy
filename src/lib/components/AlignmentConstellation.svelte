@@ -16,19 +16,24 @@
 
 	/** Viewbox is 0-1000 so the fractions above turn into round numbers. */
 	const S = 1000;
+	/**
+	 * Height as a share of the width. A square field wastes most of a laptop
+	 * screen on empty sky and pushes everything worth reading below the fold.
+	 */
+	const H = 0.5;
 	const reading = (value: number | null) => (value === null ? 'not yet read' : value.toFixed(1));
 </script>
 
 <figure class="constellation">
-	<svg viewBox="0 0 {S} {S * 0.72}" role="img" aria-label="Your alignment constellation">
+	<svg viewBox="0 0 {S} {S * H}" role="img" aria-label="Your alignment constellation">
 		<!-- Joins are decorative: they make it a sky rather than a scatter plot,
 		     and deliberately encode nothing about which dimensions relate. -->
 		{#each lines as line, i (i)}
 			<line
 				x1={line.x1 * S}
-				y1={line.y1 * S * 0.72}
+				y1={line.y1 * S * H}
 				x2={line.x2 * S}
-				y2={line.y2 * S * 0.72}
+				y2={line.y2 * S * H}
 				class="join"
 			/>
 		{/each}
@@ -49,20 +54,21 @@
 				<!-- Glow first, so the star core sits on top of its own halo. -->
 				<circle
 					cx={star.x * S}
-					cy={star.y * S * 0.72}
-					r={star.r * S * 2.6}
+					cy={star.y * S * H}
+					r={star.r * S * 3.2}
 					class="glow"
 					style="opacity: {star.brightness * 0.28}"
 				/>
 				<circle
 					cx={star.x * S}
-					cy={star.y * S * 0.72}
+					cy={star.y * S * H}
 					r={star.r * S}
 					class="core"
 					style="opacity: {0.35 + star.brightness * 0.65}"
 				/>
-				<!-- Hit area: the drawn star is far too small to point at on a phone. -->
-				<circle cx={star.x * S} cy={star.y * S * 0.72} r={star.r * S * 3.2} class="hit" />
+				<!-- Hit area: the drawn star is a few pixels across, which is nothing
+				     to aim a finger at. Sized for a thumb, not for the dot. -->
+				<circle cx={star.x * S} cy={star.y * S * H} r={star.r * S * 6} class="hit" />
 			</g>
 		{/each}
 	</svg>

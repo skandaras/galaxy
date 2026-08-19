@@ -367,13 +367,20 @@
 				<button class="btn" onclick={close}>Back</button>
 			</div>
 
-			{#if stats}
+			{#if openId}
 				<!-- Before anything is changed: how much this has actually been in
 				     play. The honest question is whether the principle is wrong or
-				     whether you are, and you cannot ask it without this. -->
+				     whether you are, and you cannot ask it without this.
+
+				     Rendered from the moment the editor opens rather than when the
+				     fetch lands. Popping in after the fields have drawn is the same
+				     as not leading with it — by then the wording is already being
+				     retyped. -->
 				<div class="track-record">
 					<h4>Its track record</h4>
-					{#if stats.ofAssessments === 0}
+					{#if !stats}
+						<p class="hint">Looking at how often this has come up…</p>
+					{:else if stats.ofAssessments === 0}
 						<p class="hint">Nothing has been read against it yet.</p>
 					{:else}
 						<p class="record-line">

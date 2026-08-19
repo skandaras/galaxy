@@ -265,6 +265,48 @@ const server = createServer(async (req, res) => {
 							conflicts: [],
 							sufficient: true
 						});
+			} else if (userText.includes('--- BEGIN ENTRY ---')) {
+				// Alignment assessment. Quotes are pulled out of the entry itself and
+				// ids out of the prompt, because the parser drops any score whose
+				// evidence is not verbatim and any principle id it does not
+				// recognise — a canned reply would be silently discarded and the
+				// smoke would pass while proving nothing.
+				const entry = userText.split('--- BEGIN ENTRY ---')[1].split('--- END ENTRY ---')[0].trim();
+				const quote = entry.split(/(?<=\.)\s+/)[0] ?? entry.slice(0, 60);
+				const principleIds = [...userText.matchAll(/^- id: (\S+)$/gm)].map((m) => m[1]);
+				const dimensionIds = [...userText.matchAll(/^### (\S+) — /gm)].map((m) => m[1]);
+				content = JSON.stringify({
+					care: false,
+					rumination: false,
+					confidence: 'medium',
+					band: 'mixed',
+					standing: 'MOCK-STANDING: honest about it after the fact',
+					summary: 'A mock reading.',
+					dimensions: dimensionIds.slice(0, 2).map((id, i) => ({
+						id,
+						score: i === 0 ? 2 : 4,
+						evidence: quote,
+						principles: principleIds.slice(0, 1),
+						note: 'mock note'
+					})),
+					tensions:
+						principleIds.length >= 2
+							? [{ between: principleIds.slice(0, 2), chose: principleIds[1], note: 'mock trade-off' }]
+							: [],
+					gaps: principleIds.length
+						? [{ principle: principleIds[0], observation: 'mock gap', evidence: quote }]
+						: [],
+					disengagement: ['euphemistic-labelling'],
+					next_step: 'If it happens again, then say the true thing first.',
+					question: 'What made the easy answer feel necessary?'
+				});
+			} else if (userText.includes('Recent readings, oldest first')) {
+				const neglected = [...userText.matchAll(/^- (\S+) — /gm)].map((m) => m[1]);
+				content = JSON.stringify({
+					body: 'MOCK-LETTER\n\nA mock letter about the direction of travel.',
+					highlights: ['steadier on honesty', 'presence still slipping'],
+					neglected: neglected.slice(0, 1)
+				});
 			} else if (userText.includes('MEMORY-AUDIT')) {
 				// Echo a marker drawn from the audited activity so a test can prove
 				// each user's memory came from their own chats and nobody else's.

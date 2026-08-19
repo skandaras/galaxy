@@ -235,6 +235,11 @@
 		min-width: 12rem;
 		color: var(--fg);
 	}
+	/* Its own line: the standing sentence is the thing to read, and a timestamp
+	   sharing the row with it wraps into the middle of the sentence. */
+	header .meta {
+		flex-basis: 100%;
+	}
 	.meta,
 	.hint {
 		font-size: 0.68rem;

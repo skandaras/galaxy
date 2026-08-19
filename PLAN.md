@@ -64,7 +64,7 @@ Internet ─► Proxy ──┤
   themes/*.json        # theme presets
 ```
 
-**Core SQLite tables:** `users`, `chats` (with `hidden` flag), `messages`, `attachments`, `task_configs` (one per core task: system prompt, primary model, backup model, tool allowlist, options), `providers`, `models` (with capability flags), `skills` (index metadata; body on disk), `library_docs` (metadata + cached snippet; body on disk), `mcp_servers`, `jobs`, `events` (Observatory feed), `memory_items`, `settings` (global + per-user), `usage_log` (tokens + cost per request), `audit_log` (admin changes).
+**Core SQLite tables:** `users`, `chats` (with `hidden` flag), `messages`, `attachments`, `task_configs` (one per core task: system prompt, primary model, backup model, tool allowlist, options), `providers`, `models` (with capability flags), `skills` (index metadata; body on disk), `library_docs` (metadata + cached snippet; body on disk), `mcp_servers`, `jobs`, `events` (Observatory feed), `memory_items`, `settings` (global + per-user), `usage_log` (tokens + cost per request), `audit_log` (admin changes), and the `alignment_*` tables (principles, their revisions and declared tensions, constitution versions, journal entries, assessments, syntheses).
 
 ---
 
@@ -98,7 +98,9 @@ Internet ─► Proxy ──┤
 
 14. **Theme / UI** — futuristic-minimalist space aesthetic: pre-rendered ASCII-art galaxy as the ambient background (subtle, low-contrast; optional slow canvas shimmer), monospace-accent typography. All theming = CSS custom properties driven from theme JSON: colours, fonts, backgrounds, highlights, button styling, layout density — editable in Theme settings with live preview, per-user selection, exportable presets.
 
-15. **Mobile** — responsive layout from day one + **PWA** (manifest + service worker) so it installs to a phone home screen immediately; APK wrapper (Capacitor/TWA) is a backlog item, not v1.
+15. **Alignment** — a private place to state what you actually hold (values, principles, beliefs, roles, known failure modes, aspirations, each with examples of keeping and breaking it, a weight for collisions and a conviction for how settled it is), a reflection journal, and an agent that reads an entry back against it. Off by default and switched on per user in Settings. Judgment is against *your* constitution and nothing else, every score must quote your own words verbatim or it is dropped, and "not enough here to say" is a first-class answer. The rubric is a versioned, fully readable code module drawn from Frankfurt, Aristotle, the Stoics, Sartre, MacIntyre, Confucian role ethics, Deci & Ryan, Schwartz, Bandura, Festinger, Fonagy and Neff. Assessments anchor to the constitution version live at the time, so revising a value never re-judges the past; a bounded re-assessment shows old and new side by side when you want the difference. Rumination and distress divert to a care path that drops the rubric entirely. Nothing here reaches the memory agent, the context bootstrap, the Library or the Observatory's stored detail — asserted in tests, not just intended.
+
+16. **Mobile** — responsive layout from day one + **PWA** (manifest + service worker) so it installs to a phone home screen immediately; APK wrapper (Capacitor/TWA) is a backlog item, not v1.
 
 ---
 
@@ -165,6 +167,8 @@ Each milestone ends **deployed on the dev subdomain**; promote to prod when stab
 - **M6 — Deep research + visual:** research pipeline with progress UI and citations, save-to-Library, Mermaid/HTML artifact rendering.
 - **M7 — Theme + mobile polish + promotion + docs:** ASCII-galaxy aesthetic, Theme settings with live preview + presets, PWA install, responsive audit, Promote/Rollback admin buttons, promotion-gate smoke suite, and **`docs/INSTALL.md`** — a start-to-finish Ubuntu server guide (Docker + compose deployment, reverse proxy + Authelia wiring, env vars, backups, dev→prod promotion) written last so it documents the platform as it actually landed.
 - **M8 — Self-review & housekeeping:** `ux-audit` task — a weekly agent that reviews aggregated usage telemetry plus the interface source (never conversation content) and files ideas into a **UX backlog** in Admin, where each is Actioned or Discarded and both decisions are replayed to future runs so nothing is proposed twice. Alongside it: the schema's first indexes, admin-set retention windows for events and usage, and a composer that grows with the text it holds.
+
+- **M9 — Alignment:** constitution with per-principle revision history and declared tensions, reflection journal, the rubric module, the assessing agent and its evidence guarantees, the care path, standing view with the constellation and version boundaries, the weekly letter, export and wholesale delete, and the privacy tests that keep it out of every other agent's reach.
 
 ## Verification
 

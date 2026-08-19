@@ -751,5 +751,113 @@ check "checkpointed work reaches the remote" "$(git -C $ORIGIN2.git log --all --
 # The second leg is told to carry on from state rather than start over.
 check "continuation is visible in the transcript" "$(api $L/api/chats/$SID2)" 'Continue from where you left off'
 
+# --- alignment ---------------------------------------------------------------
+# The whole loop: off by default, refused while off, then constitution ->
+# entry -> reading -> letter, and a constitution edit that offers a re-read.
+
+check "alignment is refused while it is off" \
+  "$(curl -s -o /dev/null -w '%{http_code}' $B/api/alignment/entries)" '403'
+
+api -X PUT $B/api/alignment/settings -d '{"enabled":true}' > /dev/null
+check "alignment can be switched on" "$(api $B/api/alignment/settings)" '"enabled":true'
+api -X PUT $B/api/admin/task-configs -d "{\"task\":\"alignment\",\"primaryModelId\":\"$MODEL_ID\"}" > /dev/null
+api -X PUT $B/api/admin/task-configs -d "{\"task\":\"alignment-synthesis\",\"primaryModelId\":\"$MODEL_ID\"}" > /dev/null
+
+# An entry cannot be read against an empty constitution.
+E0=$(api -X POST $B/api/alignment/entries -d '{"body":"A first day with nothing to judge it by."}' | jqn .entry.id)
+check "refuses to read against an empty constitution" \
+  "$(api -X POST $B/api/alignment/entries/$E0/assess)" 'constitution'
+
+P1=$(api -X POST $B/api/alignment/principles \
+  -d '{"kind":"value","title":"Honesty","statement":"I say the uncomfortable thing kindly.","exemplar":"Told them the estimate was wrong.","counterExemplar":"Let a wrong number stand because it was late.","weight":5,"conviction":5}' | jqn .principle.id)
+P2=$(api -X POST $B/api/alignment/principles \
+  -d '{"kind":"failure-mode","title":"Conflict avoidance","statement":"I go quiet rather than disagree.","weight":3,"conviction":4}' | jqn .principle.id)
+api -X POST $B/api/alignment/tensions -d "{\"aId\":\"$P1\",\"bId\":\"$P2\",\"note\":\"honesty should win\"}" > /dev/null
+check "a tension is stored once whichever way round" \
+  "$(api -X POST $B/api/alignment/tensions -d "{\"aId\":\"$P2\",\"bId\":\"$P1\"}" > /dev/null; api $B/api/alignment/tensions | jqn .tensions.length)" '1'
+
+ENTRY='I told Sam the deadline was fine when I knew it was not. I did it because the meeting was nearly over.'
+E1=$(api -X POST $B/api/alignment/entries -d "{\"title\":\"Sam\",\"body\":\"$ENTRY\",\"mood\":2}" | jqn .entry.id)
+READ=$(api -X POST $B/api/alignment/entries/$E1/assess)
+check "an entry is read against the constitution" "$READ" 'MOCK-STANDING'
+check "the reading cites a principle by id" "$READ" "$P1"
+check "a declared tension is recognised as one" "$READ" '"declared":true'
+
+# The evidence rule is the guarantee the whole feature rests on: a quote the
+# entry does not contain must never reach the screen.
+check "every quote it kept is really in the entry" \
+  "$(api $B/api/alignment/entries/$E1 | node -pe "
+    const d=JSON.parse(require('fs').readFileSync(0));
+    const body=d.entry.body.toLowerCase().replace(/\s+/g,' ');
+    const q=[...(d.assessments[0].scores||[]),...(d.assessments[0].gaps||[])].map(x=>x.evidence);
+    q.length && q.every(e=>body.includes(e.toLowerCase().replace(/\s+/g,' '))) ? 'all-verbatim' : 'BAD';
+  ")" 'all-verbatim'
+
+# Editing the entry does not silently invalidate the reading; it marks it.
+api -X PATCH $B/api/alignment/entries/$E1 -d '{"body":"Rewritten entirely."}' > /dev/null
+check "editing an entry marks its reading stale" "$(api $B/api/alignment/entries)" '"stale":true'
+api -X PATCH $B/api/alignment/entries/$E1 -d "{\"body\":\"$ENTRY\"}" > /dev/null
+
+# An entry marked private is never read, whatever is asked.
+E2=$(api -X POST $B/api/alignment/entries -d '{"body":"Just needed to write this down.","skipAssessment":true}' | jqn .entry.id)
+check "an entry marked not-for-assessing is refused" \
+  "$(api -X POST $B/api/alignment/entries/$E2/assess)" 'not to be assessed'
+
+# The track record, which is what the editor shows before anything is changed.
+check "a principle knows how often it has come up" \
+  "$(api $B/api/alignment/principles/$P1/stats | jqn .cited)" '1'
+
+# Editing the wording cuts a new version; the old reading keeps the old one.
+V_BEFORE=$(api $B/api/alignment/constitution/versions | jqn .versions.length)
+api -X PATCH $B/api/alignment/principles/$P1 \
+  -d '{"statement":"I say the true thing even when it costs me.","note":"the old wording let me off"}' > /dev/null
+check "the edit is recorded with its reason" \
+  "$(api $B/api/alignment/principles/$P1/revisions)" 'the old wording let me off'
+check "the edit names the field it changed" \
+  "$(api $B/api/alignment/principles/$P1/revisions | jqn '.revisions[0].changedFields')" 'statement'
+
+E3=$(api -X POST $B/api/alignment/entries -d '{"body":"A quieter day. I said what I meant in the review."}' | jqn .entry.id)
+api -X POST $B/api/alignment/entries/$E3/assess > /dev/null
+check "a new reading cuts a new constitution version" \
+  "$(api $B/api/alignment/constitution/versions | node -pe "JSON.parse(require('fs').readFileSync(0)).versions.length > $V_BEFORE")" 'true'
+
+# Re-reading after the edit keeps both readings rather than overwriting one.
+REASSESS=$(api -X POST $B/api/alignment/reassess -d "{\"entryIds\":[\"$E1\"]}")
+check "re-reading returns before and after" "$REASSESS" '"before"'
+check "both readings of the entry are kept" \
+  "$(api $B/api/alignment/entries/$E1 | jqn .assessments.length)" '2'
+
+# The letter needs three *distinct* assessed entries. Re-reads of one entry do
+# not count towards that, which is exactly what latestAssessments is for.
+check "the letter declines until there is a run to read" \
+  "$(api -X POST $B/api/alignment/syntheses/run)" 'not enough assessments'
+E4=$(api -X POST $B/api/alignment/entries -d '{"body":"Said the awkward thing in standup. It landed fine."}' | jqn .entry.id)
+api -X POST $B/api/alignment/entries/$E4/assess > /dev/null
+
+# The letter reads assessments, never the entries themselves.
+LETTER=$(api -X POST $B/api/alignment/syntheses/run)
+check "a letter is written from the readings" "$LETTER" 'MOCK-LETTER'
+
+STATUS=$(api $B/api/alignment/status)
+check "standing reports a plain sentence" "$STATUS" 'MOCK-STANDING'
+check "standing counts the days written on" "$STATUS" '"streak":1'
+check "standing marks where the measure moved" "$STATUS" 'versionBoundaries'
+
+check "export carries the revision history" "$(api "$B/api/alignment/export?format=markdown")" 'the old wording let me off'
+check "export carries the journal" "$(api "$B/api/alignment/export?format=markdown")" 'I told Sam the deadline'
+
+# Nothing of any of this may reach the Observatory, which admins can read.
+check "no journal text reaches the event feed" \
+  "$(api "$B/api/events?limit=200" | node -pe "
+    JSON.parse(require('fs').readFileSync(0)).some(e=>JSON.stringify(e).includes('I told Sam')) ? 'LEAKED' : 'clean'
+  ")" 'clean'
+check "the feed still records that a reading happened" \
+  "$(api "$B/api/events?limit=200")" 'alignment.assess'
+
+curl -sf -X DELETE $B/api/alignment/export > /dev/null
+check "deleting everything leaves nothing" "$(api $B/api/alignment/entries | jqn .entries.length)" '0'
+check "deleting everything removes the constitution too" \
+  "$(api $B/api/alignment/principles | jqn .principles.length)" '0'
+
 if [ "$FAIL" -ne 0 ]; then echo "SMOKE FAILED"; exit 1; fi
 echo "SMOKE PASSED"

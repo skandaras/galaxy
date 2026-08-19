@@ -75,15 +75,23 @@ export function layoutStars(dimensions: StarInput[]): Star[] {
 				? MIN_BRIGHTNESS
 				: MIN_BRIGHTNESS + ((clamp(d.recent, 1, 5) - 1) / 4) * (1 - MIN_BRIGHTNESS);
 
+		// Small. A star that fills a tenth of the frame is a blob, and twelve of
+		// them are a diagram of nothing — the picture only reads as a sky when the
+		// points are points and the space between them does the work.
+		const base = 0.004 + (clamp(d.weight, 1, 5) / 5) * 0.005;
+		const lit = d.count > 0;
+
 		return {
 			...d,
 			x: 0.5 + Math.cos(angle) * radius,
 			// Slightly flattened: a perfect circle reads as a diagram, an ellipse
 			// reads as a sky.
 			y: 0.5 + Math.sin(angle) * radius * 0.84,
-			r: 0.012 + (clamp(d.weight, 1, 5) / 5) * 0.016 + brightness * 0.012,
+			// An unlit star draws smaller as well as duller, so a sky that is mostly
+			// unread looks sparse rather than crowded with grey.
+			r: lit ? base + brightness * 0.005 : base * 0.55,
 			brightness,
-			lit: d.count > 0
+			lit
 		};
 	});
 }
