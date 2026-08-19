@@ -1,6 +1,7 @@
 import type { ToolDef } from '$lib/server/providers/types';
 import type { SearchProvider, WebSearchSettings } from '$lib/server/settings';
 import { decryptSecret } from '$lib/server/crypto';
+import { searchConcurrency, searchProviderGapMs, searchThrottledGapMs } from '../limits';
 import type { LoopTool } from '../loop';
 
 export interface SearchResult {
@@ -303,6 +304,148 @@ function apiKey(cfg: WebSearchSettings): string {
 }
 
 /**
+ * How fast a run is allowed to search.
+ *
+ * A round used to fire every query at once, and SearXNG fans each of those out
+ * to every enabled engine, so three queries became eighteen near-simultaneous
+ * requests from one address. The engines' answer was `too many requests` and
+ * `CAPTCHA` — they were measuring the pattern, not the disguise, which is why
+ * no amount of header-dressing moved it.
+ */
+export interface Pacing {
+	/** Searches that may be in flight at once. */
+	concurrency: number;
+	/** Minimum spacing between two searches *starting*. */
+	gapMs: number;
+	/** Whether this is the tightened pacing rather than the provider's normal. */
+	throttled: boolean;
+}
+
+/**
+ * "You are asking too often", as distinct from "this engine is broken".
+ *
+ * The distinction is the whole point: slowing down fixes the first and does
+ * nothing for the second, and a run that throttles itself because an engine had
+ * a DNS error has simply become slower for no reason.
+ */
+export function isRateLimitReason(reason: unknown): boolean {
+	if (typeof reason !== 'string') return false;
+	return /too many requests|unusual traffic|captcha|rate.?limit|\b429\b|quota|throttl/i.test(
+		reason
+	);
+}
+
+/**
+ * What a provider tolerates before anything has gone wrong.
+ *
+ * Brave is metered per second on its free tier, so it starts serial with a gap
+ * rather than discovering the limit by tripping it. The gap is deliberately
+ * conservative — the exact free-tier rate is Brave's to change, and
+ * `SEARCH_PROVIDER_GAP_MS` exists for anyone who has read their current plan.
+ */
+export function basePacing(provider: SearchProvider): Pacing {
+	if (provider === 'brave') {
+		return { concurrency: 1, gapMs: Math.round(searchProviderGapMs()), throttled: false };
+	}
+	return { concurrency: Math.max(1, Math.round(searchConcurrency())), gapMs: 0, throttled: false };
+}
+
+/**
+ * Given what a search reported, how the rest of the run should behave.
+ *
+ * One-way on purpose. SearXNG benches a blocked engine for anywhere from three
+ * minutes to an hour, so a run that sped back up after one quiet search would
+ * only spend its remaining searches on engines that are still out.
+ */
+export function nextPacing(current: Pacing, sawRateLimit: boolean): Pacing {
+	if (!sawRateLimit || current.throttled) return current;
+	return {
+		concurrency: 1,
+		gapMs: Math.max(current.gapMs, Math.round(searchThrottledGapMs())),
+		throttled: true
+	};
+}
+
+/** The live pacing for one run, plus the feedback that tightens it. */
+export interface Pacer {
+	readonly pacing: Pacing;
+	/**
+	 * Feed back the reasons a search came home with — SearXNG's unresponsive
+	 * engines, a provider error. Returns true the one time this tips the run
+	 * into throttling, so the caller can say so once rather than per query.
+	 */
+	observe(reasons: readonly unknown[]): boolean;
+}
+
+/**
+ * Created per research run, so it is unambiguously per request: a second run
+ * starts from the provider's normal pacing rather than inheriting a throttle
+ * from someone else's rate limit.
+ */
+export function createPacer(provider: SearchProvider): Pacer {
+	let pacing = basePacing(provider);
+	return {
+		get pacing() {
+			return pacing;
+		},
+		observe(reasons) {
+			const next = nextPacing(pacing, reasons.some(isRateLimitReason));
+			const engaged = next.throttled && !pacing.throttled;
+			pacing = next;
+			return engaged;
+		}
+	};
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Run `task` over `items` under a pacer, returning results in *item* order
+ * however they finish.
+ *
+ * The pacer is read on every claim rather than captured up front, so a rate
+ * limit seen by the first search tightens the ones still queued behind it.
+ */
+export async function runPaced<T, R>(
+	items: readonly T[],
+	pacer: Pacer,
+	task: (item: T, index: number) => Promise<R>
+): Promise<(R | undefined)[]> {
+	const out: (R | undefined)[] = new Array(items.length).fill(undefined);
+	let next = 0;
+	let lastStart = 0;
+
+	const worker = async (slot: number) => {
+		for (;;) {
+			// A worker whose slot no longer exists retires: this is how tightening
+			// to serial takes effect on a round that is already in flight.
+			if (slot >= pacer.pacing.concurrency) return;
+			const index = next++;
+			if (index >= items.length) return;
+
+			// Reserve the start instant synchronously, so two workers cannot both
+			// decide the gap has already elapsed and start together.
+			const gap = pacer.pacing.gapMs;
+			const now = Date.now();
+			const startAt = gap > 0 ? Math.max(now, lastStart + gap) : now;
+			lastStart = startAt;
+			if (startAt > now) await sleep(startAt - now);
+
+			try {
+				out[index] = await task(items[index], index);
+			} catch {
+				// One query failing is a thin round, not a dead one.
+				out[index] = undefined;
+			}
+		}
+	};
+
+	const slots = Math.max(1, Math.min(items.length, pacer.pacing.concurrency));
+	await Promise.all(Array.from({ length: slots }, (_, slot) => worker(slot)));
+	return out;
+}
+
+/**
  * Run a search, falling back to the configured secondary provider when the
  * primary *fails*. A genuine empty result is an answer, not a failure, and
  * never triggers failover.
@@ -440,7 +583,7 @@ async function searchWith(
 			if (!rows.length && down.length) {
 				throw new SearchProviderError(
 					provider,
-					`every engine failed — ${down.join(', ')}. Check the instance can reach the internet (\`docker compose exec searxng python -c "import socket; print(socket.gethostbyname('duckduckgo.com'))"\`) and see its logs`,
+					`every engine failed — ${down.join(', ')}. Ask the instance directly to see why: \`docker compose exec searxng python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/search?q=test&format=json',timeout=20).read()[:800])"\`. CAPTCHA and rate-limit reasons mean the engines are refusing us; DNS or connection errors mean the container cannot reach the internet`,
 					res.status
 				);
 			}

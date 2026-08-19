@@ -2,10 +2,16 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
 	SearchProviderError,
 	assertLooksLikeDuckDuckGoResults,
+	basePacing,
+	createPacer,
 	formatSearchResults,
+	isRateLimitReason,
+	nextPacing,
 	parseDuckDuckGoHtml,
 	parseUnresponsiveEngines,
-	runWebSearch
+	runPaced,
+	runWebSearch,
+	type Pacing
 } from './web-search';
 import { DEFAULT_WEB_SEARCH, type WebSearchSettings } from '$lib/server/settings';
 
@@ -396,5 +402,197 @@ describe('what the model is told about an empty search', () => {
 		expect(partial).toContain('brave (timeout)');
 		expect(partial).toContain('incomplete');
 		expect(partial).toContain('example.com/1');
+	});
+});
+
+/**
+ * Pacing exists because the engines told us so: `too many requests` from Brave,
+ * `CAPTCHA` from DuckDuckGo and Startpage, all in one response, from a round
+ * that fired three queries at once across six engines. These cover the two
+ * halves — knowing which refusals mean "slow down", and actually slowing down.
+ */
+describe('isRateLimitReason', () => {
+	it.each([
+		'too many requests',
+		'Too Many Requests',
+		'unusual traffic from your computer network',
+		'CAPTCHA',
+		'HTTP 429',
+		'rate limited',
+		'rate-limit exceeded',
+		'quota exceeded',
+		'throttled'
+	])('treats %j as being asked too often', (reason) => {
+		expect(isRateLimitReason(reason)).toBe(true);
+	});
+
+	it.each(['DNS error', 'timeout', 'parsing error', 'connection refused', ''])(
+		'treats %j as a broken engine, not a fast one',
+		(reason) => {
+			// Slowing down would make the run longer and fix nothing.
+			expect(isRateLimitReason(reason)).toBe(false);
+		}
+	);
+
+	it('ignores anything that is not a string', () => {
+		expect(isRateLimitReason(undefined)).toBe(false);
+		expect(isRateLimitReason(429)).toBe(false);
+	});
+
+	it('does not fire on a number that merely contains 429', () => {
+		expect(isRateLimitReason('took 1429ms')).toBe(false);
+	});
+});
+
+describe('basePacing', () => {
+	it('starts Brave serial with a gap, before anything has failed', () => {
+		// Brave's free tier is metered per second; discovering that by tripping it
+		// spends searches the run needed.
+		const pacing = basePacing('brave');
+		expect(pacing.concurrency).toBe(1);
+		expect(pacing.gapMs).toBeGreaterThan(0);
+		expect(pacing.throttled).toBe(false);
+	});
+
+	it.each(['searxng', 'duckduckgo', 'tavily'] as const)(
+		'lets %s run at the configured concurrency with no gap',
+		(provider) => {
+			const pacing = basePacing(provider);
+			expect(pacing.concurrency).toBeGreaterThan(1);
+			expect(pacing.gapMs).toBe(0);
+			expect(pacing.throttled).toBe(false);
+		}
+	);
+});
+
+describe('nextPacing', () => {
+	const fast: Pacing = { concurrency: 3, gapMs: 0, throttled: false };
+
+	it('drops to serial with a gap when something says we are asking too often', () => {
+		const tightened = nextPacing(fast, true);
+		expect(tightened.concurrency).toBe(1);
+		expect(tightened.gapMs).toBeGreaterThan(0);
+		expect(tightened.throttled).toBe(true);
+	});
+
+	it('leaves pacing alone when nothing was rate limited', () => {
+		expect(nextPacing(fast, false)).toBe(fast);
+	});
+
+	it('stays throttled once throttled', () => {
+		// One-way on purpose: SearXNG benches a blocked engine for minutes to an
+		// hour, so a quiet search is not evidence the block has lifted.
+		const tightened = nextPacing(fast, true);
+		expect(nextPacing(tightened, false)).toBe(tightened);
+		expect(nextPacing(tightened, true)).toBe(tightened);
+	});
+});
+
+describe('createPacer', () => {
+	it('reports throttling engaging exactly once', () => {
+		const pacer = createPacer('searxng');
+		expect(pacer.observe(['duckduckgo (DNS error)'])).toBe(false);
+		expect(pacer.pacing.throttled).toBe(false);
+		expect(pacer.observe(['brave (too many requests)'])).toBe(true);
+		expect(pacer.observe(['duckduckgo (CAPTCHA)'])).toBe(false);
+		expect(pacer.pacing.throttled).toBe(true);
+	});
+
+	it('reads a provider error string as well as engine names', () => {
+		const pacer = createPacer('searxng');
+		expect(pacer.observe(['SearchProviderError: brave returned HTTP 429'])).toBe(true);
+	});
+});
+
+describe('runPaced', () => {
+	const pacerAt = (pacing: Pacing) => {
+		let current = pacing;
+		return {
+			get pacing() {
+				return current;
+			},
+			observe(reasons: readonly unknown[]) {
+				const next = nextPacing(current, reasons.some(isRateLimitReason));
+				const engaged = next.throttled && !current.throttled;
+				current = next;
+				return engaged;
+			}
+		};
+	};
+
+	it('never exceeds its concurrency', async () => {
+		let live = 0;
+		let peak = 0;
+		await runPaced([1, 2, 3, 4, 5, 6], pacerAt({ concurrency: 2, gapMs: 0, throttled: false }), async (n) => {
+			peak = Math.max(peak, ++live);
+			await new Promise((r) => setTimeout(r, 5));
+			live--;
+			return n;
+		});
+		expect(peak).toBe(2);
+	});
+
+	it('returns results in item order however they finish', async () => {
+		const out = await runPaced(
+			[30, 5, 15],
+			pacerAt({ concurrency: 3, gapMs: 0, throttled: false }),
+			async (ms) => {
+				await new Promise((r) => setTimeout(r, ms));
+				return ms;
+			}
+		);
+		expect(out).toEqual([30, 5, 15]);
+	});
+
+	it('spaces starts by the gap', async () => {
+		const starts: number[] = [];
+		await runPaced([1, 2, 3], pacerAt({ concurrency: 1, gapMs: 20, throttled: false }), async () => {
+			starts.push(Date.now());
+		});
+		expect(starts).toHaveLength(3);
+		// Timers overshoot rather than undershoot, so assert the floor with slack.
+		expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(15);
+		expect(starts[2] - starts[1]).toBeGreaterThanOrEqual(15);
+	});
+
+	it('lets one failing item thin the round rather than sink it', async () => {
+		const out = await runPaced(
+			[1, 2, 3],
+			pacerAt({ concurrency: 2, gapMs: 0, throttled: false }),
+			async (n) => {
+				if (n === 2) throw new Error('boom');
+				return n;
+			}
+		);
+		expect(out).toEqual([1, undefined, 3]);
+	});
+
+	it('tightens queries still queued behind one that hit a rate limit', async () => {
+		// The point of reading the pacer per claim: the first search's refusal has
+		// to reach the four still waiting, not just the next round.
+		process.env.SEARCH_THROTTLED_GAP_MS = '5'; // the real 2s would be a slow test
+		const pacer = pacerAt({ concurrency: 3, gapMs: 0, throttled: false });
+		let live = 0;
+		const peaks: number[] = [];
+		await runPaced([1, 2, 3, 4, 5, 6], pacer, async (n) => {
+			live++;
+			peaks.push(live);
+			if (n === 1) pacer.observe(['brave (too many requests)']);
+			await new Promise((r) => setTimeout(r, 5));
+			live--;
+			return n;
+		});
+		expect(pacer.pacing.concurrency).toBe(1);
+		// The last items ran alone, whatever the first three did.
+		expect(peaks.slice(-2)).toEqual([1, 1]);
+		delete process.env.SEARCH_THROTTLED_GAP_MS;
+	});
+
+	it('does nothing at all for an empty round', async () => {
+		const task = vi.fn();
+		expect(await runPaced([], pacerAt({ concurrency: 3, gapMs: 0, throttled: false }), task)).toEqual(
+			[]
+		);
+		expect(task).not.toHaveBeenCalled();
 	});
 });

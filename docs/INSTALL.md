@@ -301,9 +301,42 @@ No — and it is worth knowing exactly why, because it is easy to break later:
 
 ## 7c. Web search
 
-The compose file runs a **SearXNG** container as the recommended backend. It is
-not published through the reverse proxy — only the galaxy containers reach it,
-on an internal network.
+Galaxy searches through one provider, with an optional fallback for when the
+first one fails. The shape that works:
+
+- **primary — a keyed search API** (Brave is supported out of the box);
+- **fallback — the bundled SearXNG container**, which costs nothing.
+
+### Why a keyed API rather than SearXNG alone
+
+SearXNG is a metasearch front end: it queries DuckDuckGo, Brave, Startpage and
+friends on your behalf by scraping them. Those engines challenge automated
+querying — from datacenter IPs *and* from home connections. A blocked instance
+does not error; it answers HTTP 200 with an empty result list, and every engine
+reports why in `unresponsive_engines`:
+
+```json
+"unresponsive_engines": [["brave","too many requests"],["duckduckgo","CAPTCHA"]]
+```
+
+There is no free, reliable, automation-permitted web index. Indexing the web is
+expensive and the organisations that do it charge for access — which is why
+hosted assistants query licensed commercial indexes or their own crawlers, and
+bill for the feature. The realistic choice is a small paid index or scrapers
+that flap.
+
+**How much would you actually use?** One deep-research run makes at most
+`rounds × queries per round` searches: 16 at Exhaustive effort, about 9 at
+Balanced, with the ceiling set in Admin → Settings → Deep research. An ordinary
+chat turn makes at most `searches per turn`, default 4. Divide whatever
+allowance a provider currently offers by those numbers before assuming you need
+a paid tier — a personal instance often does not.
+
+Brave's current tiers and rate limits are on their pricing page
+(<https://brave.com/search/api/>); they change, so check rather than trusting a
+number written here.
+
+### Setting up SearXNG (the fallback)
 
 Two files are required and both come from the repo (see §2): the `searxng`
 service in `docker-compose.yml`, and `searxng/settings.yml`, which the service
@@ -320,37 +353,54 @@ grep SEARXNG_SECRET .env || echo "SEARXNG_SECRET=$(openssl rand -hex 32)" >> .en
 docker compose up -d searxng
 ```
 
-Then in **Admin → Settings → Web search** choose `SearXNG (self-hosted)` with
-instance URL `http://searxng:8080`, save, and press **Test search**. It reports
-the provider, result count and — when something is wrong — the HTTP status,
-response size and reason.
+`searxng/settings.yml` enables five engines through `use_default_settings.engines.keep_only`.
+That nesting matters: a *top-level* `engines:` list merges into SearXNG's
+defaults rather than replacing them, so a short list there quietly leaves every
+default engine running as well.
 
-Why not DuckDuckGo: its keyless HTML endpoint blocks datacenter IPs (which is
-what your droplet is) and answers a blocked request with **HTTP 200** plus a
-bot-check page. That is exactly how search appeared to "work" while returning
-nothing. It remains available and is fine as a *fallback*, but SearXNG is the
-dependable primary.
+### Wiring it up
 
-> **Upgrading from a version before this one?** Two shipped files changed and
-> both are bind-mounted from your project directory, so a `docker compose pull`
-> does **not** pick them up. Re-copy them (§2) and restart:
->
-> ```sh
-> cd /opt/galaxy                 # your project directory (see §2)
-> docker compose up -d searxng   # after re-copying docker-compose.yml + searxng/settings.yml
-> ```
->
-> The `searxng` network was declared `internal: true`, which gave the container
-> no route out. A metasearch engine with no egress reaches no engine at all and
-> answers every query with HTTP 200 and an empty result list — which read all
-> the way downstream as "the web has nothing on this". Check yours:
->
-> ```sh
-> docker compose exec searxng python -c "import socket; print(socket.gethostbyname('duckduckgo.com'))"
-> ```
->
-> A DNS failure there is the whole problem. Nothing becomes publicly reachable
-> by fixing it: the service publishes no ports, which is what keeps it private.
+In **Admin → Settings → Web search**, set the provider (paste an API key for a
+keyed one, or `http://searxng:8080` for SearXNG), pick a fallback, save, and
+press **Test search**. It reports the provider, the result count, any engine
+that did not answer, and — when something is wrong — the HTTP status, response
+size and reason.
+
+The fallback is used when the primary *fails*: blocked, unreachable,
+unparseable, or every engine down. A provider that legitimately returns zero
+results has answered, so it never silently costs a second query.
+
+### Pacing
+
+Searches within a research round are paced rather than fired at once, because
+bursts are what trigger "too many requests" and "unusual traffic from your
+network". Pacing starts from what the provider is known to tolerate and tightens
+for the rest of the run if anything reports a rate limit or a CAPTCHA. Two env
+vars tune it: `SEARCH_CONCURRENCY` (default 3) and `SEARCH_THROTTLED_GAP_MS`
+(default 2000). Lower the first if your provider's rate limit is tight.
+
+### When search returns nothing
+
+Ask the instance directly — the answer distinguishes the two causes, which need
+opposite fixes:
+
+```sh
+docker compose exec searxng python -c \
+  "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/search?q=test&format=json',timeout=20).read()[:800])"
+```
+
+- **CAPTCHA / too many requests** — the container is connecting fine and the
+  engines are refusing it. Pacing helps; a keyed primary is the real answer.
+- **DNS errors / connection refused** — the container cannot reach the internet.
+  Confirm with a TCP connect, not a name lookup, because Docker's embedded
+  resolver can answer a lookup even when the container has no route out:
+
+  ```sh
+  docker compose exec searxng python -c \
+    "import socket; socket.create_connection(('duckduckgo.com',443),5); print('egress OK')"
+  ```
+
+`docker compose logs --tail=100 searxng` names the failing engines in full.
 
 Two things worth knowing:
 
@@ -395,7 +445,8 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | Coding refuses model | The selected model lacks tool support — pick one with the `T` badge |
 | `Budget cap reached` | Raise/disable in Admin → Settings, or wait for the period to roll over |
 | Promote button errors | GitHub PAT missing workflow scope, or `GITHUB_REPO` wrong, or dev unhealthy (gate) |
-| Search returns zero results for everything, but the same queries work in a browser | The SearXNG container cannot reach the internet. Run the `gethostbyname` check above; if it fails, re-copy `docker-compose.yml` (the `searxng` network must not be `internal`) and `docker compose up -d searxng`. Admin → Settings → **Test search** now names the engines that failed |
+| Search returns zero results for everything, but the same queries work in a browser | Ask the instance which engines failed and why (§7c, "When search returns nothing"). **CAPTCHA / too many requests** means the container connects fine and the engines are refusing it — the fix is a keyed primary, not more configuration. **DNS errors / connection refused** means it cannot get out; confirm with a TCP connect rather than a name lookup, because Docker's resolver answers lookups even with no route out |
+| A search returns one Wikipedia result and nothing else | The scraped engines are benched. SearXNG suspends a blocked engine for 180s–1h, so runs get progressively thinner. Admin → Settings → **Test search** names them. Expected on SearXNG alone; it is why a keyed API is the recommended primary |
 | Search results are thinner than expected | **Test search** lists any engine that did not answer. Scraped engines (DuckDuckGo, Brave, Startpage) periodically refuse datacenter IPs; `searxng/settings.yml` enables several so one being blocked thins the results rather than emptying them. A keyed provider (Brave, Tavily) as the **fallback** is not IP-blocked |
 | `searxng` container won't start | `searxng/settings.yml` missing next to `docker-compose.yml` (§2) — the service bind-mounts it |
 | `No such file or directory` writing `.env` | You're not in the project directory. `docker compose ls` shows where the compose file actually is (§2); `/opt/galaxy` in this guide is only an example |
