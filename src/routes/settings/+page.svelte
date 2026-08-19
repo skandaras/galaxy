@@ -3,8 +3,9 @@
 	import Memory from '$lib/components/settings/Memory.svelte';
 	import Boards from '$lib/components/settings/Boards.svelte';
 	import Notifications from '$lib/components/settings/Notifications.svelte';
+	import Alignment from '$lib/components/settings/Alignment.svelte';
 
-	const tabs = ['Theme', 'Boards', 'Notifications', 'Memory'] as const;
+	const tabs = ['Theme', 'Boards', 'Notifications', 'Memory', 'Alignment'] as const;
 	let active = $state<(typeof tabs)[number]>('Theme');
 </script>
 
@@ -22,8 +23,10 @@
 			<Boards />
 		{:else if active === 'Notifications'}
 			<Notifications />
-		{:else}
+		{:else if active === 'Memory'}
 			<Memory />
+		{:else}
+			<Alignment />
 		{/if}
 	</div>
 </div>

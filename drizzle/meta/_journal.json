@@ -134,6 +134,13 @@
       "when": 1786312308931,
       "tag": "0018_tan_skin",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1787173430610,
+      "tag": "0019_lonely_vector",
+      "breakpoints": true
     }
   ]
 }

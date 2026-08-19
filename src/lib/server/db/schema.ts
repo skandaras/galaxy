@@ -188,7 +188,9 @@ export const CORE_TASKS = [
 	'ux-audit',
 	'chat-title',
 	'run-summary',
-	'board'
+	'board',
+	'alignment',
+	'alignment-synthesis'
 ] as const;
 export type CoreTask = (typeof CORE_TASKS)[number];
 
@@ -698,4 +700,274 @@ export const uxIdeas = sqliteTable(
 		index('ux_ideas_status_created_idx').on(t.status, t.createdAt),
 		index('ux_ideas_fingerprint_idx').on(t.fingerprint)
 	]
+);
+
+// --- alignment --------------------------------------------------------------
+//
+// A private place to state who you are, write reflections, and have an agent
+// report how closely the two track each other.
+//
+// The whole feature is a mirror rather than a verdict, and the schema is shaped
+// by that. Nothing is deleted by editing: a principle is retired, an entry keeps
+// its assessments, and every save of a principle leaves a revision behind. An
+// assessment is pinned both to the text it read (`entryHash`) and to the
+// constitution version live at the time, so a March entry is never re-judged
+// against August's values — which is the only thing that makes the trend mean
+// anything.
+//
+// This is the most private data in the platform. Every read filters by user,
+// admins included; nothing here reaches the memory agent, the context bootstrap,
+// the Library or the UX audit; and no event detail ever carries the text.
+
+export const PRINCIPLE_KINDS = [
+	'value',
+	'principle',
+	'belief',
+	'role',
+	'failure-mode',
+	'aspiration'
+] as const;
+export type PrincipleKind = (typeof PRINCIPLE_KINDS)[number];
+
+export const PRINCIPLE_STATUSES = ['active', 'provisional', 'retired'] as const;
+export type PrincipleStatus = (typeof PRINCIPLE_STATUSES)[number];
+
+/**
+ * The constitution: one row per thing you hold.
+ *
+ * `statement` is the sentence actually judged against; `body` is context. The
+ * two exemplar columns carry different questions depending on `kind` — the form
+ * relabels them (see ALIGNMENT_EXEMPLAR_LABELS) rather than the schema growing a
+ * column per kind that five of the six leave empty. For a belief they become
+ * "what follows from this" and "what would make me doubt it", which is what turns
+ * a philosophical statement into something you can actually be wrong about.
+ *
+ * `weight` and `conviction` are deliberately separate axes and both reach the
+ * agent: weight decides who wins when two of these collide, conviction decides
+ * how firmly you are held to it. Without the split, "I'm still working this out"
+ * and "this one is non-negotiable" are indistinguishable.
+ */
+export const alignmentPrinciples = sqliteTable(
+	'alignment_principles',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id').notNull(),
+		kind: text('kind', { enum: PRINCIPLE_KINDS }).notNull().default('value'),
+		/** Short handle. Cited verbatim in assessments, so it is the name you'll read. */
+		title: text('title').notNull(),
+		/** The one-line canonical claim, in your own words. */
+		statement: text('statement').notNull().default(''),
+		body: text('body').notNull().default(''),
+		/** "In practice this looks like…" — kind-dependent, see above. */
+		exemplar: text('exemplar').notNull().default(''),
+		/** "I've broken this when…" — kind-dependent, see above. */
+		counterExemplar: text('counter_exemplar').notNull().default(''),
+		/** 1–5: priority when two principles collide. */
+		weight: integer('weight').notNull().default(3),
+		/** 1–5: how settled you are. Low means engage it as an open question. */
+		conviction: integer('conviction').notNull().default(3),
+		/** A book, a person, an event. */
+		origin: text('origin').notNull().default(''),
+		status: text('status', { enum: PRINCIPLE_STATUSES }).notNull().default('active'),
+		/** A nudge to revisit this one; null means never ask. */
+		reviewAfter: integer('review_after', { mode: 'timestamp_ms' }),
+		position: integer('position').notNull().default(0),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	// Every read is "this user's constitution", usually the live part of it.
+	(t) => [index('alignment_principles_user_status_idx').on(t.userId, t.status)]
+);
+
+/**
+ * Conflicts you declare between two of your own principles.
+ *
+ * Stored once with aId < bId, so a pair cannot be entered twice in opposite
+ * order. This changes what the agent does with a collision: a declared tension
+ * is judged on how you resolved it, where an undeclared one gets reported as a
+ * gap every single time it appears.
+ */
+export const alignmentPrincipleTensions = sqliteTable(
+	'alignment_principle_tensions',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id').notNull(),
+		aId: text('a_id').notNull(),
+		bId: text('b_id').notNull(),
+		/** How you intend to resolve it when it comes up. */
+		note: text('note').notNull().default(''),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [index('alignment_tensions_user_idx').on(t.userId)]
+);
+
+/**
+ * Per-principle history, written on every save that actually changes something.
+ *
+ * Separate from the constitution snapshots below and for a different purpose:
+ * these are for reading — how one belief was worded two years ago and why it
+ * changed — where a snapshot exists so an old assessment can say what it was
+ * judging against.
+ */
+export const alignmentPrincipleRevisions = sqliteTable(
+	'alignment_principle_revisions',
+	{
+		id: text('id').primaryKey(),
+		principleId: text('principle_id').notNull(),
+		userId: text('user_id').notNull(),
+		/** Every field as it stood *after* this save. */
+		snapshot: text('snapshot', { mode: 'json' }).notNull(),
+		/** Which columns this save touched, so the history renders as a diff. */
+		changedFields: text('changed_fields', { mode: 'json' }).$type<string[]>(),
+		/** Optional, prompted: why did this change? */
+		note: text('note').notNull().default(''),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [index('alignment_revisions_principle_idx').on(t.principleId, t.createdAt)]
+);
+
+/**
+ * Whole-constitution snapshots, written lazily: an assessment hashes the live
+ * principles and only inserts when the fingerprint differs from the newest row.
+ * Editing a principle therefore costs nothing until it next matters.
+ */
+export const alignmentConstitutionVersions = sqliteTable(
+	'alignment_constitution_versions',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id').notNull(),
+		/** Hash of the live principles; the whole mechanism for "has this changed". */
+		fingerprint: text('fingerprint').notNull(),
+		snapshot: text('snapshot', { mode: 'json' }).notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [index('alignment_versions_user_created_idx').on(t.userId, t.createdAt)]
+);
+
+/** A journal entry. Never assessed unless asked, and never at all if flagged. */
+export const alignmentEntries = sqliteTable(
+	'alignment_entries',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id').notNull(),
+		title: text('title').notNull().default(''),
+		body: text('body').notNull(),
+		/** 1–5, or null. Optional on purpose: a required field is a reason not to write. */
+		mood: integer('mood'),
+		/** Free comma-separated labels — work, family, health. */
+		tags: text('tags').notNull().default(''),
+		/**
+		 * "Don't judge this one." Some entries exist to be written, not read back,
+		 * and a journal you feel graded by is a journal you stop keeping.
+		 */
+		skipAssessment: integer('skip_assessment', { mode: 'boolean' }).notNull().default(false),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [index('alignment_entries_user_created_idx').on(t.userId, t.createdAt)]
+);
+
+/**
+ * How aligned an entry reads against the constitution that was live when it was
+ * judged.
+ *
+ * `band` is deliberately coarse and 'insufficient' is a first-class answer: a
+ * three-line entry cannot support a judgement about character, and inventing one
+ * is worse than saying so. There is no aggregate score column anywhere by
+ * design — a number is a thing to optimise, and you would start writing for it.
+ */
+export const ASSESSMENT_BANDS = ['aligned', 'mixed', 'diverging', 'insufficient'] as const;
+export type AssessmentBand = (typeof ASSESSMENT_BANDS)[number];
+
+export const alignmentAssessments = sqliteTable(
+	'alignment_assessments',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id').notNull(),
+		entryId: text('entry_id').notNull(),
+		constitutionVersionId: text('constitution_version_id').notNull(),
+		rubricVersion: integer('rubric_version').notNull().default(1),
+		/**
+		 * Hash of the entry body this read. When it stops matching the entry, the
+		 * assessment is stale rather than quietly wrong.
+		 */
+		entryHash: text('entry_hash').notNull(),
+		band: text('band', { enum: ASSESSMENT_BANDS }).notNull().default('insufficient'),
+		/** One plain sentence — the line the Standing view actually shows. */
+		standing: text('standing').notNull().default(''),
+		summary: text('summary').notNull().default(''),
+		confidence: text('confidence', { enum: ['low', 'medium', 'high'] })
+			.notNull()
+			.default('low'),
+		/** Per-dimension: score, the quote that supports it, principles engaged. */
+		scores: text('scores', { mode: 'json' }).$type<AssessmentScore[]>(),
+		tensions: text('tensions', { mode: 'json' }).$type<AssessmentTension[]>(),
+		gaps: text('gaps', { mode: 'json' }).$type<AssessmentGap[]>(),
+		/** Bandura's mechanisms spotted in the entry's own language. */
+		disengagement: text('disengagement', { mode: 'json' }).$type<string[]>(),
+		/** Brooding rather than reflecting — switches the reply to self-distancing. */
+		rumination: integer('rumination', { mode: 'boolean' }).notNull().default(false),
+		/** Distress signals: the rubric is dropped entirely and care comes first. */
+		care: integer('care', { mode: 'boolean' }).notNull().default(false),
+		/** One if-then implementation intention, not a lecture. */
+		nextStep: text('next_step').notNull().default(''),
+		/** One question to sit with — usually worth more than the advice. */
+		question: text('question').notNull().default(''),
+		modelKey: text('model_key'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [
+		index('alignment_assessments_user_created_idx').on(t.userId, t.createdAt),
+		index('alignment_assessments_entry_idx').on(t.entryId)
+	]
+);
+
+export interface AssessmentScore {
+	dimensionId: string;
+	score: number;
+	/** Verbatim from the entry. No quote, no score — enforced in parseAssessment. */
+	evidence: string;
+	/** Principle ids this engaged. */
+	principles: string[];
+	note: string;
+}
+
+export interface AssessmentTension {
+	/** Exactly two principle ids. */
+	between: string[];
+	/** Which one won, of the two. */
+	chose: string;
+	note: string;
+	/** Whether you had already declared this pair as a known tension. */
+	declared: boolean;
+}
+
+export interface AssessmentGap {
+	principle: string;
+	observation: string;
+	evidence: string;
+}
+
+/**
+ * The periodic letter: what is growing, what is slipping, one thing to watch.
+ *
+ * Written from past *assessments* rather than the entries themselves — smaller
+ * context, and one more layer between the rawest text and a model call.
+ */
+export const alignmentSyntheses = sqliteTable(
+	'alignment_syntheses',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id').notNull(),
+		periodStart: integer('period_start', { mode: 'timestamp_ms' }).notNull(),
+		periodEnd: integer('period_end', { mode: 'timestamp_ms' }).notNull(),
+		body: text('body').notNull().default(''),
+		/** Short bullets the Standing view can show without the whole letter. */
+		highlights: text('highlights', { mode: 'json' }).$type<string[]>(),
+		/** Principles nothing has cited lately, so the letter can ask about them. */
+		neglected: text('neglected', { mode: 'json' }).$type<string[]>(),
+		modelKey: text('model_key'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [index('alignment_syntheses_user_created_idx').on(t.userId, t.createdAt)]
 );

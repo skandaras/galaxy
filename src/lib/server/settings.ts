@@ -251,6 +251,42 @@ export interface MemorySettings {
 
 export const DEFAULT_MEMORY: MemorySettings = { enabled: true, intervalHours: 12 };
 
+export interface AlignmentSettings {
+	/**
+	 * Platform-level kill switch for the whole feature. Each user opts in
+	 * separately (`alignment.userEnabled`, default false) — this only decides
+	 * whether they are allowed to.
+	 */
+	enabled: boolean;
+	/** 168 = weekly. How often the synthesis letter is written, per user. */
+	synthesisIntervalHours: number;
+	/**
+	 * Assessments the synthesis reads. It reads assessments rather than the
+	 * entries themselves, so this is cheap — but a letter drawing on forty of
+	 * them says less than one drawing on twelve.
+	 */
+	synthesisMaxAssessments: number;
+	/**
+	 * Entries one re-assessment run may re-judge after a constitution edit.
+	 * Each is a model call, so this is the thing standing between a reworded
+	 * value and an unbounded bill.
+	 */
+	maxReassessPerRun: number;
+}
+
+/**
+ * Per-user opt-in, scoped to the user id. Default false: this is the one feature
+ * in the platform nobody should find themselves already using.
+ */
+export const ALIGNMENT_ENABLED_KEY = 'alignment.userEnabled';
+
+export const DEFAULT_ALIGNMENT: AlignmentSettings = {
+	enabled: true,
+	synthesisIntervalHours: 168,
+	synthesisMaxAssessments: 12,
+	maxReassessPerRun: 10
+};
+
 export interface UxAuditSettings {
 	enabled: boolean;
 	/** 168 = weekly. Global, not per user: the audit reviews the platform. */

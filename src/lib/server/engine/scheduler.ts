@@ -3,14 +3,18 @@ import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db';
 import { events, usageLog, users, uxIdeas } from '$lib/server/db/schema';
 import {
+	ALIGNMENT_ENABLED_KEY,
+	DEFAULT_ALIGNMENT,
 	DEFAULT_MEMORY,
 	DEFAULT_RETENTION,
 	DEFAULT_UX_AUDIT,
 	getSetting,
+	type AlignmentSettings,
 	type MemorySettings,
 	type RetentionSettings,
 	type UxAuditSettings
 } from '$lib/server/settings';
+import { getSynthesisStatus, runAlignmentSynthesis } from './alignment';
 import { getMemoryStatus, runMemory } from './memory';
 import { runUxAudit } from './ux-audit';
 
@@ -63,6 +67,29 @@ async function sweepMemory(): Promise<void> {
 		// and hammer the provider. One user's failure must not stop the rest.
 		await runMemory('schedule', user.id).catch(() => {
 			// runMemory reports its own failures via events
+		});
+	}
+}
+
+/**
+ * The alignment letter, per user and only for those who turned the feature on.
+ *
+ * The letter is the only part of Alignment that ever runs unasked, and it reads
+ * past assessments rather than journal entries — nothing here goes near an entry
+ * nobody chose to have read.
+ */
+async function sweepAlignmentSynthesis(): Promise<void> {
+	const cfg = getSetting<AlignmentSettings>('alignment', DEFAULT_ALIGNMENT);
+	if (!cfg.enabled) return;
+	const now = Date.now();
+	for (const user of db.select().from(users).all()) {
+		if (!getSetting<boolean>(ALIGNMENT_ENABLED_KEY, false, user.id)) continue;
+		const { lastRun } = getSynthesisStatus(user.id);
+		if (now < lastRun + cfg.synthesisIntervalHours * 3_600_000) continue;
+		// Sequential for the same reason the memory sweep is, and one person's
+		// failure must not stop the rest.
+		await runAlignmentSynthesis('schedule', user.id).catch(() => {
+			// runAlignmentSynthesis reports its own failures via events
 		});
 	}
 }
