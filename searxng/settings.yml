@@ -1,10 +1,28 @@
 # SearXNG configuration for Galaxy's web search.
 #
-# The one setting that matters: `formats` MUST include `json`. SearXNG serves
-# only HTML by default and answers the JSON API with 403 — the classic
-# first-run trap when wiring it to a program instead of a browser.
+# Two settings matter more than the rest:
+#
+#   * `formats` MUST include `json`. SearXNG serves only HTML by default and
+#     answers the JSON API with 403 — the classic first-run trap when wiring it
+#     to a program instead of a browser.
+#   * the container needs outbound network access. It is a metasearch engine:
+#     with no route out it reaches no engine, and answers every query with
+#     HTTP 200 and an empty result set. See the `searxng` network in
+#     docker-compose.yml.
 
-use_default_settings: true
+use_default_settings:
+  engines:
+    # `keep_only` is what actually restricts the engine set. A top-level
+    # `engines:` list is *merged into* the defaults by name, so listing four
+    # engines there enables those four and leaves the rest — including Google,
+    # which hard-blocks datacenter IPs — running as well.
+    keep_only:
+      - duckduckgo
+      - brave
+      - startpage
+      - mojeek
+      - wikipedia
+      - wikidata
 
 general:
   instance_name: 'Galaxy Search'
@@ -14,8 +32,11 @@ general:
   contact_url: false
 
 server:
-  # Override with SEARXNG_SECRET in the environment; never ship a real secret.
-  secret_key: 'change-me-see-docs-install-md'
+  # Not substituted from the environment: the settings file is bind-mounted
+  # read-only, and the image's entrypoint rewrites a different placeholder.
+  # Nothing here depends on it — the limiter and the image proxy are both off,
+  # and there is no public UI to sign — so it stays a literal.
+  secret_key: 'galaxy-searxng-no-public-ui'
   limiter: false # no bot-limiting: the only client is our own backend
   image_proxy: false
 
@@ -26,16 +47,37 @@ search:
     - html
     - json # required by Galaxy
 
+outgoing:
+  # SearXNG's own default is 3s, which silently drops any engine slower than
+  # that while still answering 200. Galaxy waits 10s for the whole search
+  # (DEFAULT_WEB_SEARCH.timeoutMs), so there is room for a slower engine to
+  # finish rather than vanishing from the results.
+  request_timeout: 6.0
+  max_request_timeout: 10.0
+  pool_connections: 100
+  pool_maxsize: 20
+
 ui:
   static_use_hash: true
 
-# Keep the engine set small and reliable; add more as needed.
+# Enabled engines. Several rather than one on purpose: these are scraped
+# rather than API-keyed, so any of them may refuse a datacenter IP on any given
+# day. With a spread, one being blocked thins the results instead of emptying
+# them — and Galaxy now reports which engines failed rather than presenting an
+# engine-wide outage as "nothing found".
+#
+# Mojeek and Wikidata are here because they have their own indexes and do not
+# bot-challenge self-hosters the way the big scrapers do.
 engines:
-  - name: wikipedia
-    disabled: false
   - name: duckduckgo
     disabled: false
   - name: brave
     disabled: false
   - name: startpage
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: wikipedia
+    disabled: false
+  - name: wikidata
     disabled: false

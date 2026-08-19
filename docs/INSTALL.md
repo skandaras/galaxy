@@ -331,6 +331,27 @@ bot-check page. That is exactly how search appeared to "work" while returning
 nothing. It remains available and is fine as a *fallback*, but SearXNG is the
 dependable primary.
 
+> **Upgrading from a version before this one?** Two shipped files changed and
+> both are bind-mounted from your project directory, so a `docker compose pull`
+> does **not** pick them up. Re-copy them (§2) and restart:
+>
+> ```sh
+> cd /opt/galaxy                 # your project directory (see §2)
+> docker compose up -d searxng   # after re-copying docker-compose.yml + searxng/settings.yml
+> ```
+>
+> The `searxng` network was declared `internal: true`, which gave the container
+> no route out. A metasearch engine with no egress reaches no engine at all and
+> answers every query with HTTP 200 and an empty result list — which read all
+> the way downstream as "the web has nothing on this". Check yours:
+>
+> ```sh
+> docker compose exec searxng python -c "import socket; print(socket.gethostbyname('duckduckgo.com'))"
+> ```
+>
+> A DNS failure there is the whole problem. Nothing becomes publicly reachable
+> by fixing it: the service publishes no ports, which is what keeps it private.
+
 Two things worth knowing:
 
 - `searxng/settings.yml` sets `search.formats: [html, json]`. SearXNG serves
@@ -374,6 +395,8 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | Coding refuses model | The selected model lacks tool support — pick one with the `T` badge |
 | `Budget cap reached` | Raise/disable in Admin → Settings, or wait for the period to roll over |
 | Promote button errors | GitHub PAT missing workflow scope, or `GITHUB_REPO` wrong, or dev unhealthy (gate) |
+| Search returns zero results for everything, but the same queries work in a browser | The SearXNG container cannot reach the internet. Run the `gethostbyname` check above; if it fails, re-copy `docker-compose.yml` (the `searxng` network must not be `internal`) and `docker compose up -d searxng`. Admin → Settings → **Test search** now names the engines that failed |
+| Search results are thinner than expected | **Test search** lists any engine that did not answer. Scraped engines (DuckDuckGo, Brave, Startpage) periodically refuse datacenter IPs; `searxng/settings.yml` enables several so one being blocked thins the results rather than emptying them. A keyed provider (Brave, Tavily) as the **fallback** is not IP-blocked |
 | `searxng` container won't start | `searxng/settings.yml` missing next to `docker-compose.yml` (§2) — the service bind-mounts it |
 | `No such file or directory` writing `.env` | You're not in the project directory. `docker compose ls` shows where the compose file actually is (§2); `/opt/galaxy` in this guide is only an example |
 | MCP server won't connect | See [MCP.md](MCP.md#troubleshooting); the common cases are a wrong header and a server that requires OAuth |

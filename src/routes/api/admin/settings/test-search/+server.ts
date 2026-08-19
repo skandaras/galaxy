@@ -41,7 +41,11 @@ export const POST: RequestHandler = async ({ locals }) => {
 			name: 'websearch.test',
 			status: 'ok',
 			durationMs: Date.now() - started,
-			detail: { provider: outcome.provider, results: outcome.results.length }
+			detail: {
+				provider: outcome.provider,
+				results: outcome.results.length,
+				...(outcome.degraded ? { unresponsiveEngines: outcome.degraded.engines } : {})
+			}
 		});
 		return json({
 			ok: true,
@@ -49,10 +53,13 @@ export const POST: RequestHandler = async ({ locals }) => {
 			results: outcome.results.length,
 			durationMs: Date.now() - started,
 			failedOver: outcome.failedOver ?? null,
-			// A configured provider that returns zero for this query is suspicious
-			// even though it is not technically an error.
-			warning:
-				outcome.results.length === 0
+			// Which engines did not answer, when the provider says. This used to
+			// be a guess ("may be silently rate-limiting") purely because nothing
+			// read the diagnosis the provider was already sending.
+			unresponsiveEngines: outcome.degraded?.engines ?? null,
+			warning: outcome.degraded
+				? `Answered, but these engines did not: ${outcome.degraded.engines.join(', ')}. Results are incomplete.`
+				: outcome.results.length === 0
 					? 'The provider answered but returned no results for a generic query — it may be silently rate-limiting.'
 					: null,
 			sample: outcome.results.slice(0, 3).map((r) => ({ title: r.title, url: r.url }))

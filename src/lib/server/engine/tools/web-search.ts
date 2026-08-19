@@ -15,6 +15,13 @@ export interface SearchOutcome {
 	provider: SearchProvider;
 	/** Set when the primary failed and a fallback answered. */
 	failedOver?: { from: SearchProvider; reason: string };
+	/**
+	 * Set when the provider answered but part of it was down — a SearXNG
+	 * instance with some engines blocked, say. The results are real but thinner
+	 * than they should be, and neither the model nor the reader should take
+	 * them for the whole of what exists.
+	 */
+	degraded?: DegradedSearch;
 	/** Language the search was asked to bias towards, if any. */
 	language?: string;
 	/**
@@ -135,7 +142,7 @@ const MAX_SNIPPET_CHARS = 240;
 export function formatSearchResults(
 	results: SearchResult[],
 	query: string,
-	outcome?: Pick<SearchOutcome, 'provider' | 'language' | 'languageApplied'>
+	outcome?: Pick<SearchOutcome, 'provider' | 'language' | 'languageApplied' | 'degraded'>
 ): string {
 	// A language the provider could not honour is worth one line: without it a
 	// model reads the off-language results as the tool having ignored it.
@@ -144,12 +151,26 @@ export function formatSearchResults(
 			? `\n(${outcome.provider} cannot filter by language, so these results are unfiltered — the wording of the query is what steers them. Write the query in ${outcome.language} if you have not already.)`
 			: '';
 
+	// Engines that did not answer. Stated wherever it happened, because thin
+	// results from a half-working provider read exactly like thin results from
+	// a thin subject.
+	const degraded = outcome?.degraded
+		? `\n(Some search engines did not answer: ${outcome.degraded.engines.join(', ')}. These results are therefore incomplete — treat them as a partial view, not as everything that exists.)`
+		: '';
+
 	if (!results.length) {
 		// `[]` told the model nothing, so its next move was always to rephrase
-		// and search again. Say what happened instead.
+		// and search again. Say what happened instead — but only claim the
+		// search worked when it demonstrably did. Asserting "there is simply
+		// nothing indexed" over a provider whose engines had all failed is how
+		// an outage was passed off to the model as a fact about the world.
+		if (outcome?.degraded) {
+			return `No results for "${query}", but the search did not work properly: ${outcome.degraded.engines.join(', ')} did not answer. This is a tooling failure, not evidence that nothing exists. Say so rather than concluding the subject has no coverage; the same query is worth trying again.`;
+		}
 		return `No results for "${query}". The search worked — there is simply nothing indexed for these terms. Try broader or different wording, or answer from what you already know and say the search found nothing. Do not repeat this query.${note}`;
 	}
 	return (
+		degraded +
 		results
 			.map((r, i) => {
 				const snippet = r.snippet.replace(/\s+/g, ' ').trim();
@@ -233,17 +254,22 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 				searchBudget: budget,
 				scope,
 				...(language ? { language, languageApplied: outcome.languageApplied !== false } : {}),
-				...(outcome.failedOver ? { failedOver: outcome.failedOver } : {})
+				...(outcome.failedOver ? { failedOver: outcome.failedOver } : {}),
+				// Named in the Observatory so a partly-blocked provider shows as a
+				// pattern across a run rather than as consistently thin results.
+				...(outcome.degraded ? { unresponsiveEngines: outcome.degraded.engines } : {})
 			});
 			const remaining = budget - used;
 			const tally = remaining
 				? `\n(${remaining} more search${remaining === 1 ? '' : 'es'} available this ${scope})`
 				: `\n(that was the last search available this ${scope})`;
 			const text = formatSearchResults(outcome.results, query, outcome);
-			// Cached either way: a query that found nothing is exactly the one
-			// worth not running twice. The tally is outside the memo so a replay
+			// A query that genuinely found nothing is exactly the one worth not
+			// running twice — but a degraded search is not a finding about the
+			// world, and caching one froze a transient engine outage in as fact
+			// for the rest of the turn. The tally is outside the memo so a replay
 			// doesn't restate a count that has since moved.
-			memo.set(key, text);
+			if (!outcome.degraded) memo.set(key, text);
 			return text + tally;
 		}
 	};
@@ -287,9 +313,10 @@ export async function runWebSearch(
 	language?: string
 ): Promise<SearchOutcome> {
 	const lang = normaliseLanguage(language) || normaliseLanguage(cfg.defaultLanguage);
-	const outcome = (results: SearchResult[], provider: SearchProvider) => ({
-		results,
+	const outcome = (answer: ProviderAnswer, provider: SearchProvider): SearchOutcome => ({
+		results: answer.results,
 		provider,
+		...(answer.degraded ? { degraded: answer.degraded } : {}),
 		...(lang ? { language: lang, languageApplied: supportsLanguage(provider) } : {})
 	});
 	try {
@@ -312,12 +339,24 @@ export async function runWebSearch(
 	}
 }
 
+/** Engines that did not answer, when some still did. */
+export interface DegradedSearch {
+	engines: string[];
+	reason: string;
+}
+
+/** What one provider returned, plus anything it said about its own health. */
+interface ProviderAnswer {
+	results: SearchResult[];
+	degraded?: DegradedSearch;
+}
+
 async function searchWith(
 	provider: SearchProvider,
 	query: string,
 	cfg: WebSearchSettings,
 	language = ''
-): Promise<SearchResult[]> {
+): Promise<ProviderAnswer> {
 	const signal = AbortSignal.timeout(cfg.timeoutMs);
 	switch (provider) {
 		case 'duckduckgo': {
@@ -341,7 +380,7 @@ async function searchWith(
 			);
 			const html = await res.text();
 			assertLooksLikeDuckDuckGoResults(html, res.status);
-			return parseDuckDuckGoHtml(html, cfg.maxResults);
+			return { results: parseDuckDuckGoHtml(html, cfg.maxResults) };
 		}
 		case 'brave': {
 			// Brave splits the two: search_lang is the content language, country
@@ -356,11 +395,13 @@ async function searchWith(
 			);
 			const data = await parseJsonOrThrow(provider, res);
 			const rows: Record<string, string>[] = data.web?.results ?? [];
-			return rows.slice(0, cfg.maxResults).map((r) => ({
-				title: r.title ?? '',
-				url: r.url ?? '',
-				snippet: r.description ?? ''
-			}));
+			return {
+				results: rows.slice(0, cfg.maxResults).map((r) => ({
+					title: r.title ?? '',
+					url: r.url ?? '',
+					snippet: r.description ?? ''
+				}))
+			};
 		}
 		case 'tavily': {
 			const res = await fetchOrThrow(provider, 'https://api.tavily.com/search', {
@@ -371,11 +412,13 @@ async function searchWith(
 			});
 			const data = await parseJsonOrThrow(provider, res);
 			const rows: Record<string, string>[] = data.results ?? [];
-			return rows.map((r) => ({
-				title: r.title ?? '',
-				url: r.url ?? '',
-				snippet: r.content ?? ''
-			}));
+			return {
+				results: rows.map((r) => ({
+					title: r.title ?? '',
+					url: r.url ?? '',
+					snippet: r.content ?? ''
+				}))
+			};
 		}
 		case 'searxng': {
 			const base = (cfg.baseUrl ?? '').replace(/\/$/, '');
@@ -388,11 +431,30 @@ async function searchWith(
 			);
 			const data = await parseJsonOrThrow(provider, res, 'is the JSON format enabled? SearXNG needs `search.formats` to include `json`');
 			const rows: Record<string, string>[] = data.results ?? [];
-			return rows.slice(0, cfg.maxResults).map((r) => ({
-				title: r.title ?? '',
-				url: r.url ?? '',
-				snippet: r.content ?? ''
-			}));
+			const down = parseUnresponsiveEngines(data.unresponsive_engines);
+			// SearXNG answers 200 with an empty list whether the query found
+			// nothing or every engine failed — and it says which in the same body.
+			// Without this the two are identical, the fallback provider never
+			// fires, and the model is told the web has nothing on the subject.
+			// This is the SearXNG counterpart of assertLooksLikeDuckDuckGoResults.
+			if (!rows.length && down.length) {
+				throw new SearchProviderError(
+					provider,
+					`every engine failed — ${down.join(', ')}. Check the instance can reach the internet (\`docker compose exec searxng python -c "import socket; print(socket.gethostbyname('duckduckgo.com'))"\`) and see its logs`,
+					res.status
+				);
+			}
+			return {
+				results: rows.slice(0, cfg.maxResults).map((r) => ({
+					title: r.title ?? '',
+					url: r.url ?? '',
+					snippet: r.content ?? ''
+				})),
+				// Some engines answered and some did not: results are thinner than
+				// they should be, which is worth saying rather than passing off as
+				// the whole of what exists.
+				...(down.length ? { degraded: { engines: down, reason: 'engines did not answer' } } : {})
+			};
 		}
 		default:
 			throw new SearchProviderError(
@@ -427,11 +489,46 @@ async function fetchOrThrow(
 	return res;
 }
 
+/**
+ * The parts of a provider's JSON body anything reads.
+ *
+ * `unresponsive_engines` was previously unreachable: the return type here was
+ * `Record<string, never>`, so reading it would not even typecheck. SearXNG puts
+ * the whole diagnosis in it — `[["duckduckgo","DNS error"],["brave","CAPTCHA"]]`
+ * — and without it an instance whose engines had all failed was indistinguishable
+ * from a query the web has no answer for.
+ */
+export interface SearchResponseBody {
+	results?: Record<string, string>[];
+	web?: { results?: Record<string, string>[] };
+	/** SearXNG: `[engine, reason]` pairs for every engine that did not answer. */
+	unresponsive_engines?: unknown;
+	number_of_results?: number;
+}
+
+/** `[["duckduckgo","DNS error"]]` → `["duckduckgo (DNS error)"]`. */
+export function parseUnresponsiveEngines(raw: unknown): string[] {
+	if (!Array.isArray(raw)) return [];
+	const out: string[] = [];
+	for (const entry of raw) {
+		if (typeof entry === 'string' && entry.trim()) {
+			out.push(entry.trim());
+			continue;
+		}
+		if (!Array.isArray(entry) || typeof entry[0] !== 'string') continue;
+		const name = entry[0].trim();
+		if (!name) continue;
+		const reason = typeof entry[1] === 'string' ? entry[1].trim() : '';
+		out.push(reason ? `${name} (${reason})` : name);
+	}
+	return out;
+}
+
 async function parseJsonOrThrow(
 	provider: SearchProvider,
 	res: Response,
 	hint?: string
-): Promise<Record<string, never> & { web?: { results?: Record<string, string>[] }; results?: Record<string, string>[] }> {
+): Promise<SearchResponseBody> {
 	const text = await res.text();
 	try {
 		return JSON.parse(text);

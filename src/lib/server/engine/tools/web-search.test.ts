@@ -2,7 +2,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
 	SearchProviderError,
 	assertLooksLikeDuckDuckGoResults,
+	formatSearchResults,
 	parseDuckDuckGoHtml,
+	parseUnresponsiveEngines,
 	runWebSearch
 } from './web-search';
 import { DEFAULT_WEB_SEARCH, type WebSearchSettings } from '$lib/server/settings';
@@ -233,5 +235,166 @@ describe('runWebSearch language', () => {
 		);
 		expect(calls[0].url).not.toContain('safesearch');
 		expect(calls[0].url).not.toContain('language=');
+	});
+});
+
+/**
+ * SearXNG answers HTTP 200 with an empty result list whether the query found
+ * nothing or every engine failed — and says which in `unresponsive_engines`.
+ *
+ * Every pre-existing SearXNG test here stubbed `{ results: [] }` and asserted
+ * only on the request URL, so all of them passed while a completely dead
+ * instance was being reported to the model as "there is simply nothing indexed
+ * for these terms". These cover the difference.
+ */
+describe('SearXNG engine health', () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	const cfg = (over: Partial<WebSearchSettings> = {}): WebSearchSettings => ({
+		...DEFAULT_WEB_SEARCH,
+		provider: 'searxng',
+		baseUrl: 'http://s:8080',
+		...over
+	});
+
+	/** Reply to the SearXNG host with `body`, and to anything else with `other`. */
+	function stub(body: unknown, other?: string) {
+		const calls: string[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string) => {
+				calls.push(String(url));
+				const searx = String(url).includes('s:8080');
+				return searx || other === undefined
+					? new Response(JSON.stringify(body), {
+							status: 200,
+							headers: { 'content-type': 'application/json' }
+						})
+					: new Response(other, { status: 200, headers: { 'content-type': 'text/html' } });
+			})
+		);
+		return calls;
+	}
+
+	const DOWN = {
+		results: [],
+		unresponsive_engines: [
+			['duckduckgo', 'DNS error'],
+			['brave', 'CAPTCHA']
+		]
+	};
+	const SOME = {
+		results: [{ title: 'One', url: 'https://example.com/1', content: 'A snippet.' }],
+		unresponsive_engines: [['brave', 'timeout']]
+	};
+
+	it('treats every engine failing as a provider failure, not an empty answer', async () => {
+		stub(DOWN);
+		await expect(runWebSearch('anything', cfg({ fallbackProvider: 'none' }))).rejects.toThrow(
+			SearchProviderError
+		);
+	});
+
+	it('names the engines and how to check the instance', async () => {
+		stub(DOWN);
+		await runWebSearch('anything', cfg({ fallbackProvider: 'none' })).catch((err) => {
+			expect(err.reason).toContain('duckduckgo (DNS error)');
+			expect(err.reason).toContain('brave (CAPTCHA)');
+			expect(err.reason).toMatch(/reach the internet/);
+		});
+		expect.assertions(3);
+	});
+
+	it('finally lets the fallback provider do its job', async () => {
+		// The whole point: a 200-with-nothing returned normally, so the catch
+		// that drives failover never ran and the configured fallback was inert
+		// for exactly the failure being hit.
+		stub(DOWN, RESULTS_PAGE);
+		const outcome = await runWebSearch('anything', cfg({ fallbackProvider: 'duckduckgo' }));
+		expect(outcome.provider).toBe('duckduckgo');
+		expect(outcome.results.length).toBeGreaterThan(0);
+		expect(outcome.failedOver?.from).toBe('searxng');
+	});
+
+	it('returns partial results rather than failing when some engines answered', async () => {
+		stub(SOME);
+		const outcome = await runWebSearch('anything', cfg());
+		expect(outcome.results).toHaveLength(1);
+		expect(outcome.degraded?.engines).toEqual(['brave (timeout)']);
+	});
+
+	it('leaves a genuinely empty answer alone', async () => {
+		// No unresponsive engines: the search worked and the web has nothing.
+		stub({ results: [], unresponsive_engines: [] });
+		const outcome = await runWebSearch('anything', cfg());
+		expect(outcome.results).toEqual([]);
+		expect(outcome.degraded).toBeUndefined();
+	});
+
+	it('copes with an instance that reports engines as bare names', async () => {
+		stub({ results: [], unresponsive_engines: ['duckduckgo'] });
+		await expect(runWebSearch('x', cfg({ fallbackProvider: 'none' }))).rejects.toThrow(
+			/duckduckgo/
+		);
+	});
+});
+
+describe('parseUnresponsiveEngines', () => {
+	it('renders engine and reason pairs', () => {
+		expect(
+			parseUnresponsiveEngines([
+				['duckduckgo', 'DNS error'],
+				['brave', 'CAPTCHA']
+			])
+		).toEqual(['duckduckgo (DNS error)', 'brave (CAPTCHA)']);
+	});
+
+	it('accepts a bare engine name', () => {
+		expect(parseUnresponsiveEngines(['mojeek'])).toEqual(['mojeek']);
+	});
+
+	it('ignores anything that is not an engine', () => {
+		expect(parseUnresponsiveEngines([[], [''], [null, 'x'], 7, null])).toEqual([]);
+	});
+
+	it('is empty for a body that carries no such field', () => {
+		expect(parseUnresponsiveEngines(undefined)).toEqual([]);
+		expect(parseUnresponsiveEngines('nonsense')).toEqual([]);
+	});
+});
+
+describe('what the model is told about an empty search', () => {
+	it('claims the search worked only when it demonstrably did', () => {
+		const clean = formatSearchResults([], 'board game reviewers', { provider: 'searxng' });
+		expect(clean).toContain('The search worked');
+		expect(clean).toContain('Do not repeat this query');
+	});
+
+	it('says a degraded search failed, and does not forbid a retry', () => {
+		// The reported defect: an instance whose engines were all down told the
+		// model there was "simply nothing indexed for these terms", and not to
+		// try again.
+		const broken = formatSearchResults([], 'board game reviewers', {
+			provider: 'searxng',
+			degraded: { engines: ['duckduckgo (DNS error)'], reason: 'engines did not answer' }
+		});
+		expect(broken).not.toContain('The search worked');
+		expect(broken).not.toContain('Do not repeat this query');
+		expect(broken).toContain('duckduckgo (DNS error)');
+		expect(broken).toMatch(/tooling failure/);
+	});
+
+	it('marks partial results as partial', () => {
+		const partial = formatSearchResults(
+			[{ title: 'One', url: 'https://example.com/1', snippet: 'x' }],
+			'q',
+			{
+				provider: 'searxng',
+				degraded: { engines: ['brave (timeout)'], reason: 'engines did not answer' }
+			}
+		);
+		expect(partial).toContain('brave (timeout)');
+		expect(partial).toContain('incomplete');
+		expect(partial).toContain('example.com/1');
 	});
 });
