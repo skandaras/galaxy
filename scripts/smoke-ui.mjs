@@ -317,12 +317,66 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/settings', '/obse
 	};
 	await settled(laneA.id, 3);
 
+	/**
+	 * Wait for a lane to *show* a given order, not merely a given count.
+	 *
+	 * `settled()` waits on the number of cards in a lane, which never changes
+	 * when a card is reordered within its own lane — so it returned instantly,
+	 * and the bounding box read straight afterwards could be taken while the
+	 * board still showed the previous order. The next drag then grabbed
+	 * whichever card happened to be occupying that slot a moment ago.
+	 *
+	 * That is what failed CI: asked for `bravo`, it moved `charlie`. The board
+	 * itself was fine — `layout()` reads the API and reported the right thing
+	 * throughout — so the whole failure lived in the test reading coordinates
+	 * from a screen that had not caught up yet. Every drag now waits for the
+	 * DOM to match before anything measures it.
+	 */
+	const settledOrder = async (laneId, titles) => {
+		try {
+			await page.waitForFunction(
+				({ id, want }) =>
+					JSON.stringify(
+						[...document.querySelectorAll(`[data-lane="${id}"] [data-card] .card-title`)].map(
+							(el) => el.textContent.trim()
+						)
+					) === JSON.stringify(want),
+				{ id: laneId, want: titles },
+				{ timeout: 15_000 }
+			);
+		} catch {
+			const seen = await page
+				.locator(`[data-lane="${laneId}"] [data-card] .card-title`)
+				.allTextContents();
+			await shot('board-order-not-settled');
+			throw new Error(
+				`lane ${laneId} never showed ${JSON.stringify(titles)} — on screen: ${JSON.stringify(seen)}`
+			);
+		}
+	};
+
 	const boxOf = async (title) =>
 		page.locator('article.card', { hasText: title }).first().boundingBox();
 
 	async function press(title, to) {
 		const box = await boxOf(title);
-		await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+		const x = box.x + box.width / 2;
+		const y = box.y + box.height / 2;
+		// Check what is actually under the point before pressing on it. The board
+		// re-renders after every drop (PATCH, then a full reload, with no
+		// optimistic update), so a box measured a moment too early describes a
+		// slot that now holds a different card — and the drag silently moves the
+		// wrong one. This turns that into a legible failure instead of a
+		// mystifying assertion about charlie.
+		const under = await page.evaluate(
+			({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-card]')?.textContent?.trim(),
+			{ x, y }
+		);
+		if (!under || !under.includes(title)) {
+			await shot('drag-wrong-card');
+			throw new Error(`press("${title}") would have grabbed "${under ?? 'nothing'}" — the board moved under the test`);
+		}
+		await page.mouse.move(x, y);
 		await page.mouse.down();
 		await page.waitForTimeout(300); // past the hold threshold
 		// Stepped, because one jump can skip every hover calculation.
@@ -341,14 +395,15 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/settings', '/obse
 	check('a drop line shows where it will land', await page.locator('.drop-line').count(), 1);
 	await shot('drag-in-flight');
 	await page.mouse.up();
-	await settled(laneA.id, 3);
+	await settledOrder(laneA.id, ['bravo', 'charlie', 'alpha']);
 	check('reordered within its lane', (await layout()).a, ['bravo', 'charlie', 'alpha']);
 
 	// Move to another lane.
 	const lb = await page.locator(`[data-lane="${laneB.id}"]`).boundingBox();
 	await press('bravo', { x: lb.x + lb.width / 2, y: lb.y + 60 });
 	await page.mouse.up();
-	await settled(laneB.id, 1);
+	await settledOrder(laneB.id, ['bravo']);
+	await settledOrder(laneA.id, ['charlie', 'alpha']);
 	const moved = await layout();
 	check('moved into another lane', moved.b, ['bravo']);
 	check('and left the one it came from', moved.a, ['charlie', 'alpha']);
@@ -357,7 +412,7 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/settings', '/obse
 	const before = await layout();
 	await press('charlie', { x: 30, y: 880 });
 	await page.mouse.up();
-	await page.waitForTimeout(500);
+	await settledOrder(laneA.id, ['charlie', 'alpha']);
 	check('a drop outside every lane changes nothing', await layout(), before);
 
 	// And a plain click still opens a card rather than being eaten by the drag.
