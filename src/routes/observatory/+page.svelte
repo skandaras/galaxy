@@ -79,7 +79,7 @@
 					<span class="type">{e.type}</span>
 					<span class="name">{e.name}</span>
 					{#if e.task}<span class="task">{e.task}</span>{/if}
-					<span class="dur">{e.durationMs != null ? `${e.durationMs}ms` : ''}</span>
+					<span class="dur num">{e.durationMs != null ? `${e.durationMs}ms` : ''}</span>
 					<span class="status {e.status}">{e.status}</span>
 				</button>
 				{#if expanded === e.id}
@@ -205,6 +205,8 @@
 		color: var(--accent);
 	}
 	.detail {
+		/* Pretty-printed JSON, indented with spaces. */
+		font-family: var(--font-mono);
 		background: var(--bg-pane);
 		border-radius: 6px;
 		font-size: 0.68rem;

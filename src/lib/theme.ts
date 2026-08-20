@@ -1,5 +1,14 @@
 // Theme definitions shared by server (persistence) and client (editor).
 
+import {
+	DEFAULT_MONO_FONT,
+	DEFAULT_UI_FONT,
+	FONT_FACE_CSS,
+	GALAXY_FONT_STACK,
+	fontStack,
+	isFontId
+} from '$lib/fonts';
+
 export interface Theme {
 	/** Page background */
 	bg: string;
@@ -25,8 +34,16 @@ export interface Theme {
 	border: string;
 	/** Errors and destructive actions */
 	danger: string;
-	/** Font stack */
-	font: string;
+	/**
+	 * Interface font, as an id from the font catalogue (see $lib/fonts).
+	 *
+	 * An id rather than a CSS stack: a stack was free text with no requirement
+	 * that it end in a generic family, so one typo took the whole interface down
+	 * to an unstyled default. An unknown id here simply renders the default face.
+	 */
+	fontUi: string;
+	/** Code font, same rules. Used for code, preformatted text and all numbers. */
+	fontMono: string;
 	/** Corner radius for buttons/controls, e.g. "5px" or "999px" */
 	radius: string;
 	/**
@@ -52,13 +69,14 @@ export const PRESETS: Record<string, Theme> = {
 		bg: '#05060f',
 		bgPane: '#0a0c1a',
 		fg: '#c8d0e8',
-		fgDim: '#5a627e',
+		fgDim: '#717994',
 		heading: '#7f9cff',
-		label: '#5a627e',
+		label: '#717994',
 		accent: '#7f9cff',
 		border: '#171a2e',
 		danger: '#ff5d73',
-		font: "'SF Mono', ui-monospace, 'Cascadia Code', Menlo, monospace",
+		fontUi: 'quicksand',
+		fontMono: 'source-code-pro',
 		radius: '5px',
 		baseFont: '100%',
 		glow: '#7f9cff',
@@ -71,13 +89,14 @@ export const PRESETS: Record<string, Theme> = {
 		bg: '#0a0512',
 		bgPane: '#140a20',
 		fg: '#e2d4f0',
-		fgDim: '#71618a',
+		fgDim: '#84759b',
 		heading: '#c084fc',
-		label: '#71618a',
+		label: '#84759b',
 		accent: '#c084fc',
 		border: '#241533',
 		danger: '#fb7185',
-		font: "'SF Mono', ui-monospace, 'Cascadia Code', Menlo, monospace",
+		fontUi: 'quicksand',
+		fontMono: 'source-code-pro',
 		radius: '8px',
 		baseFont: '100%',
 		glow: '#c084fc',
@@ -96,7 +115,8 @@ export const PRESETS: Record<string, Theme> = {
 		accent: '#fbbf24',
 		border: '#2b2210',
 		danger: '#f87171',
-		font: "'SF Mono', ui-monospace, 'Cascadia Code', Menlo, monospace",
+		fontUi: 'quicksand',
+		fontMono: 'source-code-pro',
 		radius: '3px',
 		baseFont: '100%',
 		glow: '#fbbf24',
@@ -109,13 +129,14 @@ export const PRESETS: Record<string, Theme> = {
 		bg: '#000000',
 		bgPane: '#0a0a0a',
 		fg: '#e0e0e0',
-		fgDim: '#6a6a6a',
+		fgDim: '#797979',
 		heading: '#ffffff',
-		label: '#6a6a6a',
+		label: '#797979',
 		accent: '#ffffff',
 		border: '#1f1f1f',
 		danger: '#ff4d4d',
-		font: "ui-monospace, 'Cascadia Code', Menlo, monospace",
+		fontUi: 'quicksand',
+		fontMono: 'source-code-pro',
 		radius: '0px',
 		baseFont: '94%',
 		glow: '#ffffff',
@@ -128,27 +149,35 @@ export const PRESETS: Record<string, Theme> = {
 		bg: '#f5f2ea',
 		bgPane: '#ffffff',
 		fg: '#2a2a33',
-		fgDim: '#8a8a96',
-		heading: '#4c6ef5',
-		label: '#8a8a96',
-		accent: '#4c6ef5',
+		fgDim: '#6e6e79',
+		heading: '#3d5ccc',
+		label: '#6e6e79',
+		accent: '#3d5ccc',
 		border: '#dcd8cc',
-		danger: '#d6455d',
-		font: "'SF Mono', ui-monospace, Menlo, monospace",
+		danger: '#b8384e',
+		fontUi: 'quicksand',
+		fontMono: 'source-code-pro',
 		radius: '6px',
 		baseFont: '100%',
 		glow: '#4c6ef5',
 		glowStrength: '7px',
 		galaxyBg: false,
 		galaxyAnimate: false,
-		galaxyColor: '#4c6ef5'
+		galaxyColor: '#3d5ccc'
 	}
 };
 
 export const DEFAULT_THEME: Theme = PRESETS.Galaxy;
 
+// The shipped defaults, asserted here so a preset edit cannot quietly change
+// what an unrecognised font id falls back to.
+if (DEFAULT_THEME.fontUi !== DEFAULT_UI_FONT || DEFAULT_THEME.fontMono !== DEFAULT_MONO_FONT) {
+	throw new Error('DEFAULT_THEME must use the catalogue defaults');
+}
+
 export function themeCss(t: Theme): string {
 	return [
+		FONT_FACE_CSS,
 		':root{',
 		`--bg:${t.bg};`,
 		`--bg-pane:${t.bgPane};`,
@@ -159,13 +188,33 @@ export function themeCss(t: Theme): string {
 		`--galaxy:${t.galaxyColor};`,
 		`--accent:${t.accent};`,
 		`--border:${t.border};`,
+		// Derived rather than configurable: a separator at 1.2:1 is fine, and a
+		// text field whose only boundary is that same colour is invisible. See
+		// controlBorder().
+		`--control-border:${controlBorder(t)};`,
 		`--danger:${t.danger};`,
-		`--font-mono:${t.font};`,
+		`--font-ui:${fontStack(t.fontUi, 'ui')};`,
+		`--font-mono:${fontStack(t.fontMono, 'mono')};`,
+		// Fixed, and deliberately not from the theme: the ASCII backdrop is art
+		// made of characters, and a proportional or oddly-proportioned font
+		// distorts the spiral. Nothing in Settings writes to this.
+		`--font-galaxy:${GALAXY_FONT_STACK};`,
 		`--radius:${t.radius};`,
 		`--glow:${t.glow};`,
 		`--glow-size:${t.glowStrength};`,
 		'}',
 		`html{font-size:${t.baseFont};}`,
+		// Digits in a proportional face are not equal width, so figures in a
+		// column stop lining up. The monospace font is the fix; tabular-nums
+		// costs nothing and helps in any face that carries tabular figures.
+		'.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;}',
+		// A control's border is the only thing saying where it is, so it needs the
+		// 3:1 that WCAG asks of a meaningful boundary — unlike the card
+		// separators that share the plain --border.
+		'input,select,textarea{border-color:var(--control-border);}',
+		// Visible text for screen readers only. Used where a control needs a name
+		// but the layout has no room for a visible caption.
+		'.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}',
 		// Part of the design system rather than a per-component flourish: every
 		// button lifts on hover, and one theme value tunes all of them at once.
 		// A strength of 0 collapses the shadow, which is how it is switched off.
@@ -205,6 +254,15 @@ export function normalizeTheme(raw: unknown): Theme {
 		const v = r[key];
 		if (typeof DEFAULT_THEME[key] === 'boolean') {
 			if (typeof v === 'boolean') {
+				(out as Record<string, unknown>)[key] = v;
+				accepted.add(key);
+			}
+		} else if (key === 'fontUi' || key === 'fontMono') {
+			// Checked against the catalogue rather than pattern-matched for
+			// dangerous characters. A theme saved before the split carries a raw
+			// CSS stack in `font`, which is not an id and is therefore dropped —
+			// so those themes come back on the new defaults, deliberately.
+			if (isFontId(v)) {
 				(out as Record<string, unknown>)[key] = v;
 				accepted.add(key);
 			}
@@ -269,4 +327,41 @@ export function contrastGrade(ratio: number): 'AAA' | 'AA' | 'AA-large' | 'fail'
 	if (ratio >= 4.5) return 'AA';
 	if (ratio >= 3) return 'AA-large';
 	return 'fail';
+}
+
+/**
+ * A border colour for form controls that is actually visible.
+ *
+ * `--border` does two jobs: it separates cards, where 1.2:1 is a deliberate
+ * whisper, and it outlines text fields, where it is the only thing saying a
+ * control is there at all. WCAG 1.4.11 asks 3:1 of the second. Splitting them
+ * into two settable colours would mean asking everyone to tune one more swatch
+ * and getting it wrong on every theme saved before today, so this derives the
+ * second from the first: step `border` toward `fg` until it clears 3:1 against
+ * the page, and stop.
+ *
+ * Falls back to `fg` if either colour is unparseable — an over-strong border is
+ * a great deal better than an invisible field.
+ */
+export function controlBorder(t: Theme, target = 3): string {
+	const from = parseHex(t.border);
+	const to = parseHex(t.fg);
+	const bg = t.bg;
+	if (!from || !to) return t.fg;
+	if (contrastRatio(t.border, bg) >= target) return t.border;
+
+	for (let i = 1; i <= 100; i++) {
+		const mixed = hexOf(from.map((v, k) => v + (to[k] - v) * (i / 100)) as [number, number, number]);
+		if (contrastRatio(mixed, bg) >= target) return mixed;
+	}
+	return t.fg;
+}
+
+function hexOf([r, g, b]: [number, number, number]): string {
+	return (
+		'#' +
+		[r, g, b]
+			.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0'))
+			.join('')
+	);
 }

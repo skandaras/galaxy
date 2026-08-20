@@ -64,7 +64,10 @@
 
 <section>
 	<div class="bar">
-		<input placeholder="Filter models… (type to search all synced models)" bind:value={filter} />
+		<label>
+			<span class="sr-only">filter models</span>
+			<input placeholder="Filter models… (type to search all synced models)" bind:value={filter} />
+		</label>
 		<label class="chk">
 			<input type="checkbox" bind:checked={showDisabled} /> show disabled
 		</label>
@@ -87,9 +90,9 @@
 						{#if m.supportsTools}<span class="badge" title="tool calling">T</span>{/if}
 						{#if m.supportsVision}<span class="badge" title="vision">V</span>{/if}
 					</td>
-					<td>{m.contextWindow ? `${Math.round(m.contextWindow / 1024)}k` : '—'}</td>
-					<td>{fmtCost(m.promptCostPerMTok)}</td>
-					<td>{fmtCost(m.completionCostPerMTok)}</td>
+					<td class="num">{m.contextWindow ? `${Math.round(m.contextWindow / 1024)}k` : '—'}</td>
+					<td class="num">{fmtCost(m.promptCostPerMTok)}</td>
+					<td class="num">{fmtCost(m.completionCostPerMTok)}</td>
 				</tr>
 			{:else}
 				<tr><td colspan="6" class="empty">No models — sync a provider first.</td></tr>
@@ -111,6 +114,10 @@
 		align-items: center;
 		gap: 0.75rem;
 		margin-bottom: 0.6rem;
+	}
+	.bar label {
+		flex: 1;
+		display: flex;
 	}
 	.bar input {
 		flex: 1;

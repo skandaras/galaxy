@@ -118,16 +118,28 @@
 
 	<h3>Add provider</h3>
 	<div class="form">
-		<select bind:value={form.kind}>
-			<option value="openrouter">OpenRouter</option>
-			<option value="openai-compatible">OpenAI-compatible endpoint</option>
-		</select>
-		<input placeholder="Name (optional)" bind:value={form.name} />
-		<input
-			placeholder={form.kind === 'openrouter' ? 'Base URL (default: openrouter.ai)' : 'Base URL, e.g. http://host:8000/v1'}
-			bind:value={form.baseUrl}
-		/>
-		<input type="password" placeholder="API key (optional)" bind:value={form.apiKey} />
+		<label>
+			kind
+			<select bind:value={form.kind}>
+				<option value="openrouter">OpenRouter</option>
+				<option value="openai-compatible">OpenAI-compatible endpoint</option>
+			</select>
+		</label>
+		<label>
+			name <span class="opt">optional</span>
+			<input bind:value={form.name} />
+		</label>
+		<label>
+			base URL
+			<input
+				placeholder={form.kind === 'openrouter' ? 'default: openrouter.ai' : 'http://host:8000/v1'}
+				bind:value={form.baseUrl}
+			/>
+		</label>
+		<label>
+			API key <span class="opt">optional</span>
+			<input type="password" bind:value={form.apiKey} />
+		</label>
 		<button class="btn primary" disabled={busy === 'add'} onclick={add}>Add</button>
 	</div>
 </section>
@@ -175,8 +187,20 @@
 	}
 	.form {
 		display: flex;
-		gap: 0.4rem;
+		gap: 0.5rem;
 		flex-wrap: wrap;
+		align-items: flex-end;
+	}
+	.form label {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+		font-size: 0.68rem;
+		color: var(--label);
+	}
+	.opt {
+		color: var(--fg-dim);
+		font-size: 0.62rem;
 	}
 	input,
 	select {

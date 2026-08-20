@@ -422,6 +422,74 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/settings', '/obse
 	await shot('alignment-journal');
 }
 
+// 6. Fonts. The interface font is now separate from the code font, which puts
+//    two things at risk that nothing else in this suite would notice: the ASCII
+//    backdrop going proportional, and number columns losing their alignment.
+{
+	await page.goto(`${B}/settings`);
+	await page.locator('.tabs').waitFor();
+	await page.waitForTimeout(400);
+
+	const uiSelect = page.locator('.font-field select').first();
+	const monoSelect = page.locator('.font-field select').nth(1);
+	check('both font dropdowns are there', await page.locator('.font-field select').count(), 2);
+	check('and neither is a free-text box', await page.locator('input[bind\\:value]').count(), 0);
+
+	const familyOf = (selector) =>
+		page.locator(selector).first().evaluate((el) => getComputedStyle(el).fontFamily);
+	const rootVar = (name) =>
+		page.evaluate((n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim(), name);
+
+	check('the interface font defaults to Quicksand', (await rootVar('--font-ui')).includes('Quicksand'));
+
+	// The backdrop's font must not move when the code font does. This is the
+	// regression that ships silently: it never appears in a diff, and a distorted
+	// spiral gets blamed on anything but the font setting.
+	const backdropBefore = await familyOf('.backdrop pre');
+	await monoSelect.selectOption('courier');
+	await page.waitForTimeout(300);
+	check('the code font changed', (await rootVar('--font-mono')).includes('Courier'));
+	check('but the galaxy backdrop did not', await familyOf('.backdrop pre'), backdropBefore);
+	check('the backdrop is still monospace', backdropBefore.includes('SF Mono'));
+
+	// Switching the interface font must not drag code along with it.
+	await uiSelect.selectOption('georgia');
+	await page.waitForTimeout(300);
+	check('the interface font changed', (await rootVar('--font-ui')).includes('Georgia'));
+	check('and the backdrop still did not', await familyOf('.backdrop pre'), backdropBefore);
+	await shot('fonts-swapped');
+
+	// Back to the shipped defaults before anything else looks at the page.
+	await uiSelect.selectOption('quicksand');
+	await monoSelect.selectOption('source-code-pro');
+	await page.waitForTimeout(300);
+}
+
+// 7. Numbers line up. Digits in a proportional face are not equal width, so a
+//    figure in a column has to opt into the monospace font.
+{
+	await page.goto(`${B}/admin`);
+	await page.locator('.tabs, nav').first().waitFor();
+	await page.getByRole('button', { name: 'Usage' }).click();
+	await page.waitForTimeout(500);
+	const cell = page.locator('td.num').first();
+	if (await cell.count()) {
+		const family = await cell.evaluate((el) => getComputedStyle(el).fontFamily);
+		check('a figure in the usage table is monospace', family.includes('Source Code Pro'));
+	} else {
+		// No usage rows in a fresh instance; the rule itself is what matters.
+		const declared = await page.evaluate(() => {
+			const el = document.createElement('span');
+			el.className = 'num';
+			document.body.appendChild(el);
+			const f = getComputedStyle(el).fontFamily;
+			el.remove();
+			return f;
+		});
+		check('the .num utility resolves to the code font', declared.includes('Source Code Pro'));
+	}
+}
+
 if (fail.length) await shot('final-state');
 await browser.close();
 

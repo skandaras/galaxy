@@ -1017,6 +1017,8 @@
 		border-color: var(--accent);
 	}
 	.diff {
+		/* A diff is columns of aligned text; a proportional font destroys it. */
+		font-family: var(--font-mono);
 		max-height: 40vh;
 		overflow: auto;
 		background: var(--bg-pane);

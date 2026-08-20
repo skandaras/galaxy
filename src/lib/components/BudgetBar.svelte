@@ -58,7 +58,7 @@
 {#if status}
 	<div class="budget" class:blocked={status.blocked} title={title(status)}>
 		<span class="amount">
-			{money(status.spentUsd)}{#if status.enabled}<span class="of"
+			<span class="num">{money(status.spentUsd)}</span>{#if status.enabled}<span class="of num"
 					>/{money(status.limitUsd)}</span
 				>{/if}
 		</span>

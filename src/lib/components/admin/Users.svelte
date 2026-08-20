@@ -65,8 +65,8 @@
 								{u.canCode ? 'allowed' : 'blocked'}
 							</label>
 						</td>
-						<td class="when">{when(u.createdAt)}</td>
-						<td class="when">{when(u.lastSeenAt)}</td>
+						<td class="when num">{when(u.createdAt)}</td>
+						<td class="when num">{when(u.lastSeenAt)}</td>
 					</tr>
 				{:else}
 					<tr><td colspan="5" class="hint">No users yet.</td></tr>
