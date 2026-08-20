@@ -1,8 +1,18 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import CardDetail from '$lib/components/boards/CardDetail.svelte';
-	import { PRIORITY_MARK, type Board, type BoardView, type Card } from '$lib/board-types';
+	import {
+		EVERYONE,
+		PRIORITY_MARK,
+		UNASSIGNED,
+		matchesAssignee,
+		resolveAssignee,
+		type Board,
+		type BoardView,
+		type Card
+	} from '$lib/board-types';
 	import { dropIndex, isNoOp, movedBeyond, type CardBox } from '$lib/board-drag';
 
 	/**
@@ -12,6 +22,18 @@
 	 */
 	const HIDDEN_KEY = (boardId: string) => `galaxy:board-hidden-projects:${boardId}`;
 	let hidden = $state<Set<string>>(new Set());
+
+	/**
+	 * Whose cards are showing. Same reasoning as the project filter: it hides
+	 * cards from this view rather than changing the board, so it is a
+	 * per-browser preference — and a per-board one, because "just mine" makes
+	 * sense on a shared board and not on a private one.
+	 *
+	 * '' is everyone; UNASSIGNED is the cards nobody has picked up, which would
+	 * otherwise be unreachable once you filter by a person.
+	 */
+	const ASSIGNEE_KEY = (boardId: string) => `galaxy:board-assignee:${boardId}`;
+	let assignee = $state(EVERYONE);
 
 	let boards = $state<Board[]>([]);
 	let view = $state<BoardView | null>(null);
@@ -73,6 +95,7 @@
 		}
 		view = await res.json();
 		hidden = new Set<string>(JSON.parse(localStorage.getItem(HIDDEN_KEY(selectedId)) ?? '[]'));
+		assignee = resolveAssignee(localStorage.getItem(ASSIGNEE_KEY(selectedId)), view?.members ?? []);
 	}
 
 	function toggleProject(id: string) {
@@ -81,6 +104,11 @@
 		else next.add(id);
 		hidden = next;
 		if (selectedId) localStorage.setItem(HIDDEN_KEY(selectedId), JSON.stringify([...next]));
+	}
+
+	function setAssignee(value: string) {
+		assignee = value;
+		if (selectedId) localStorage.setItem(ASSIGNEE_KEY(selectedId), value);
 	}
 
 	async function addProject() {
@@ -300,13 +328,38 @@
 
 	const cardsIn = (laneId: string) =>
 		(view?.cards ?? [])
-			.filter((c) => c.laneId === laneId && !hidden.has(c.projectId ?? 'none'))
+			.filter(
+				(c) =>
+					c.laneId === laneId &&
+					!hidden.has(c.projectId ?? 'none') &&
+					matchesAssignee(c, assignee)
+			)
 			.sort((a, b) => a.position - b.position);
 	const projectOf = (card: Card) => view?.projects.find((p) => p.id === card.projectId);
 	const statusOf = (card: Card) => view?.statuses.find((s) => s.id === card.statusId);
 	const memberName = (id: string | null) =>
 		id ? (view?.members.find((m) => m.userId === id)?.username ?? '') : '';
 	const when = (ts: number | null) => (ts ? new Date(ts).toLocaleDateString() : '');
+
+	/** Whoever is looking, so their own row can say so. */
+	const myUserId = $derived(page.data.user?.id ?? '');
+
+	/**
+	 * Cards the filters are keeping off the board. Counted with the same
+	 * predicates the lanes use, so it cannot drift from what is on screen.
+	 * `view.cards` is already live-only — the archive comes back separately.
+	 */
+	const hiddenCount = $derived(
+		(view?.cards ?? []).filter(
+			(c) => hidden.has(c.projectId ?? 'none') || !matchesAssignee(c, assignee)
+		).length
+	);
+
+	function clearFilters() {
+		hidden = new Set();
+		setAssignee(EVERYONE);
+		if (selectedId) localStorage.removeItem(HIDDEN_KEY(selectedId));
+	}
 </script>
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && drag && abandon()} />
@@ -342,9 +395,25 @@
 
 	{#if error}<p class="error">{error}</p>{/if}
 
-	{#if view?.projects.length}
+	{#if view && (view.projects.length || view.members.length > 1)}
 		<div class="filters">
 			<span class="filter-label">Showing</span>
+
+			{#if view.members.length > 1}
+				<label class="assignee">
+					<span class="sr-only">filter by who a card is assigned to</span>
+					<select value={assignee} onchange={(e) => setAssignee(e.currentTarget.value)}>
+							<option value={EVERYONE}>Everyone</option>
+						{#each view.members as m (m.userId)}
+							<option value={m.userId}>
+								{m.username}{m.userId === myUserId ? ' (me)' : ''}
+							</option>
+						{/each}
+						<option value={UNASSIGNED}>Unassigned</option>
+					</select>
+				</label>
+			{/if}
+
 			{#each view.projects as p (p.id)}
 				<button
 					class="chip"
@@ -356,9 +425,18 @@
 					{p.name}
 				</button>
 			{/each}
-			<button class="chip" class:off={hidden.has('none')} onclick={() => toggleProject('none')}>
-				No project
-			</button>
+			{#if view.projects.length}
+				<button class="chip" class:off={hidden.has('none')} onclick={() => toggleProject('none')}>
+					No project
+				</button>
+			{/if}
+
+			{#if hiddenCount}
+				<!-- Without this, a filter that matches nothing looks like a board
+				     that lost its cards. -->
+				<span class="filter-count num">{hiddenCount} hidden</span>
+				<button class="link" onclick={clearFilters}>Show everything</button>
+			{/if}
 		</div>
 	{/if}
 
@@ -528,7 +606,7 @@
 		flex: 1;
 	}
 	.members {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		max-width: 16rem;
 		overflow: hidden;
@@ -541,7 +619,7 @@
 		border-radius: 5px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		padding: 0.3rem 0.5rem;
 		max-width: 14rem;
 	}
@@ -573,7 +651,7 @@
 	}
 	h3 {
 		margin: 0 0 0.5rem;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
 		color: var(--heading);
@@ -630,7 +708,7 @@
 		border: 1px solid var(--accent);
 		border-radius: 6px;
 		padding: 0.45rem 0.5rem;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -657,8 +735,31 @@
 		gap: 0.3rem;
 		padding: 0.5rem 1rem 0;
 	}
+	.assignee select {
+		background: var(--bg-pane);
+		color: var(--fg);
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
+		font-family: inherit;
+		font-size: var(--text-sm);
+		padding: 0.2rem 0.4rem;
+	}
+	.filter-count {
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
+	}
+	.filters .link {
+		background: none;
+		border: none;
+		padding: 0;
+		font: inherit;
+		font-size: var(--text-sm);
+		color: var(--accent);
+		cursor: pointer;
+		text-decoration: underline;
+	}
 	.filter-label {
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
 		color: var(--fg-dim);
@@ -671,7 +772,7 @@
 		border-radius: 999px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		padding: 0.15rem 0.6rem;
 		cursor: pointer;
 	}
@@ -690,7 +791,7 @@
 		border: none;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		text-align: left;
 		padding: 0;
 		cursor: pointer;
@@ -701,7 +802,7 @@
 		min-width: 0;
 	}
 	.prio {
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		letter-spacing: -0.05em;
 	}
@@ -720,7 +821,7 @@
 		border: none;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.66rem;
+		font-size: var(--text-sm);
 		padding: 0;
 		cursor: pointer;
 		/* The dot carries the status colour; the select itself stays plain so a
@@ -729,7 +830,7 @@
 		padding-left: 0.3rem;
 	}
 	.who {
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		color: var(--fg-dim);
 		margin-left: auto;
 	}
@@ -745,7 +846,7 @@
 		border-radius: 6px;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.74rem;
+		font-size: var(--text-base);
 		padding: 0.35rem 0.5rem;
 		cursor: pointer;
 		text-align: left;
@@ -765,7 +866,7 @@
 		border: none;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		letter-spacing: 0.1em;
 		text-transform: uppercase;
 		cursor: pointer;
@@ -786,7 +887,7 @@
 		border: none;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		text-align: left;
 		padding: 0.25rem 0;
 		cursor: pointer;
@@ -799,7 +900,7 @@
 		white-space: nowrap;
 	}
 	.meta {
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 	}
 
 	.empty-state {
@@ -808,22 +909,22 @@
 		text-align: center;
 	}
 	.empty-state h2 {
-		font-size: 1rem;
+		font-size: var(--text-xl);
 		margin-bottom: 0.4rem;
 	}
 	.empty-state p {
 		color: var(--fg-dim);
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		line-height: 1.6;
 		margin-bottom: 1rem;
 	}
 	.hint {
 		color: var(--fg-dim);
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 	}
 	.error {
 		color: var(--danger);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		padding: 0 1rem;
 	}
 
@@ -834,7 +935,7 @@
 		border-radius: 5px;
 		padding: 0.35rem 0.7rem;
 		font-family: inherit;
-		font-size: 0.74rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 		text-decoration: none;
 		display: inline-block;
@@ -865,7 +966,7 @@
 			border-radius: 4px;
 			color: var(--fg-dim);
 			font-family: inherit;
-			font-size: 0.66rem;
+			font-size: var(--text-sm);
 			padding: 0.2rem 0.3rem;
 		}
 	}

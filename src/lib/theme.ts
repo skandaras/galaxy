@@ -204,6 +204,25 @@ export function themeCss(t: Theme): string {
 		`--glow-size:${t.glowStrength};`,
 		'}',
 		`html{font-size:${t.baseFont};}`,
+		// One scale, six steps, instead of the twenty-five ad-hoc sizes this
+		// interface had grown. Every size in the app names a step, so the whole
+		// hierarchy can be tuned here rather than hunted through 390 rules.
+		//
+		// The floor is deliberate: `xs` at 0.78rem is about 12.5px at the default
+		// root size, and nothing may go below it. The old floor was 0.58rem —
+		// roughly 9px — which is not a size anyone should have to read, and the
+		// switch to Quicksand made it worse, since it has a smaller x-height than
+		// the monospace it replaced and so renders visually smaller at the same
+		// declared size.
+		':root{',
+		'--text-xs:0.78rem;',
+		'--text-sm:0.84rem;',
+		'--text-base:0.9rem;',
+		'--text-md:0.98rem;',
+		'--text-lg:1.06rem;',
+		'--text-xl:1.18rem;',
+		'--text-2xl:1.35rem;',
+		'}',
 		// Digits in a proportional face are not equal width, so figures in a
 		// column stop lining up. The monospace font is the fix; tabular-nums
 		// costs nothing and helps in any face that carries tabular figures.

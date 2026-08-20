@@ -294,20 +294,20 @@
 	}
 	h3 {
 		margin: 0 0 0.6rem;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
 	}
 	.hint {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		line-height: 1.5;
 		margin: 0 0 0.7rem;
 	}
 	.notice {
 		color: var(--accent);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.row {
 		display: flex;
@@ -316,14 +316,14 @@
 		flex-wrap: wrap;
 	}
 	.chk {
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
 	}
 	.meta {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
 	.footprint {
@@ -335,7 +335,7 @@
 	.merge {
 		border-top: 1px solid var(--border);
 		padding: 0.45rem 0;
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.merge-new {
 		color: var(--fg);
@@ -344,7 +344,7 @@
 	   shown so the merge can be judged rather than taken on trust. */
 	.merge-old {
 		color: var(--fg-dim);
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		text-decoration: line-through;
 		margin: 0.2rem 0 0 1rem;
 	}
@@ -354,7 +354,7 @@
 	}
 	.tag {
 		color: var(--danger);
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 		text-decoration: none;
@@ -369,7 +369,7 @@
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 	}
 	td {
 		padding: 0.4rem 0.5rem;
@@ -381,7 +381,7 @@
 	}
 	.kind {
 		color: var(--accent);
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 		text-transform: uppercase;
 		white-space: nowrap;
 	}
@@ -396,7 +396,7 @@
 		border-radius: 5px;
 		padding: 0.3rem 0.6rem;
 		font-family: inherit;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		cursor: pointer;
 	}
 	.btn.danger {
@@ -408,7 +408,7 @@
 		opacity: 0.5;
 	}
 	details summary {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		cursor: pointer;
 		margin-top: 0.6rem;
@@ -419,7 +419,7 @@
 		gap: 0.6rem;
 		padding: 0.35rem 0;
 		border-top: 1px solid var(--border);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.cand-name {
 		color: var(--fg);
@@ -427,10 +427,10 @@
 	.cand-desc {
 		flex: 1;
 		color: var(--fg-dim);
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 	}
 	.cand-status {
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.1em;
 		color: var(--fg-dim);

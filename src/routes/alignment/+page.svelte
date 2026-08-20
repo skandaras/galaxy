@@ -103,7 +103,7 @@
 		border-bottom: 2px solid transparent;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		padding: 0.5rem 0.8rem;
 		cursor: pointer;
 	}

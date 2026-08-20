@@ -128,7 +128,7 @@
 		display: inline-flex;
 		flex-direction: column;
 		gap: 0.2rem;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--label);
 	}
 	select {
@@ -137,7 +137,7 @@
 		border-radius: 5px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		padding: 0.35rem 0.5rem;
 	}
 	.tiles {
@@ -154,7 +154,7 @@
 	}
 	.tile span {
 		display: block;
-		font-size: 1.15rem;
+		font-size: var(--text-2xl);
 		color: var(--accent);
 	}
 	.tile.alert {
@@ -165,13 +165,13 @@
 		color: var(--danger);
 	}
 	.tile small {
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 		color: var(--fg-dim);
 		text-transform: uppercase;
 		letter-spacing: 0.1em;
 	}
 	h3 {
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		color: var(--heading);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
@@ -180,7 +180,7 @@
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 	}
 	th,
 	td {

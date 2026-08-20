@@ -289,13 +289,13 @@
 	}
 	h3 {
 		margin: 0 0 0.6rem;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
 	}
 	.hint {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		line-height: 1.5;
 		margin: 0 0 0.7rem;
@@ -305,7 +305,7 @@
 	}
 	.notice {
 		color: var(--accent);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	input,
 	textarea {
@@ -317,7 +317,7 @@
 		border-radius: 5px;
 		padding: 0.45rem 0.55rem;
 		font-family: inherit;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 	}
 	textarea {
 		line-height: 1.6;
@@ -328,7 +328,7 @@
 		margin: 0.5rem 0;
 	}
 	.title {
-		font-size: 0.85rem;
+		font-size: var(--text-lg);
 	}
 	.tags-field {
 		flex: 1;
@@ -356,7 +356,7 @@
 		gap: 0.2rem;
 	}
 	.mood-label {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		margin-right: 0.2rem;
 	}
@@ -374,7 +374,7 @@
 		border-color: var(--accent);
 	}
 	.chk {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		display: flex;
 		align-items: center;
@@ -390,7 +390,7 @@
 		border-radius: 5px;
 		padding: 0.3rem 0.6rem;
 		font-family: inherit;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		cursor: pointer;
 		white-space: nowrap;
 	}
@@ -425,18 +425,18 @@
 	}
 	.entry-title {
 		color: var(--fg);
-		font-size: 0.82rem;
+		font-size: var(--text-md);
 	}
 	.meta,
 	.tags-line {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
 	.tags-line {
 		margin: 0.3rem 0 0;
 	}
 	.tag {
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 		color: var(--fg-dim);
@@ -446,7 +446,7 @@
 	}
 	.preview,
 	.body {
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		line-height: 1.6;
 		color: var(--fg-dim);
 		margin: 0.5rem 0;
@@ -456,7 +456,7 @@
 		color: var(--fg);
 	}
 	.standing-line {
-		font-size: 0.73rem;
+		font-size: var(--text-base);
 		color: var(--accent);
 		margin: 0.3rem 0 0;
 	}

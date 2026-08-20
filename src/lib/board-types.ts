@@ -115,3 +115,36 @@ export const PRIORITY_MARK: Record<CardPriority, string> = {
 	low: '·',
 	none: ''
 };
+
+/**
+ * The assignee filter on a board.
+ *
+ * Pure and separate from the page for the same reason `board-drag` is: it has
+ * edge cases worth pinning down (nobody selected, cards nobody has picked up,
+ * a filter pointing at someone who has since left) and none of them need a
+ * browser to check.
+ */
+
+/** Cards nobody has picked up. A real choice, not the absence of one. */
+export const UNASSIGNED = '\u0000unassigned';
+
+/** No filter at all — everyone's cards. */
+export const EVERYONE = '';
+
+export function matchesAssignee(card: Pick<Card, 'assignedTo'>, assignee: string): boolean {
+	if (assignee === EVERYONE) return true;
+	if (assignee === UNASSIGNED) return !card.assignedTo;
+	return card.assignedTo === assignee;
+}
+
+/**
+ * Validate a filter restored from storage against who is actually on the board.
+ *
+ * A filter naming someone who has since been removed would hide every card
+ * with nothing on screen explaining why, so it falls back to everyone.
+ */
+export function resolveAssignee(saved: string | null, members: { userId: string }[]): string {
+	if (!saved) return EVERYONE;
+	if (saved === UNASSIGNED) return UNASSIGNED;
+	return members.some((m) => m.userId === saved) ? saved : EVERYONE;
+}

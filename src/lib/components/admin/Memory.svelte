@@ -170,7 +170,7 @@
 	}
 	h3 {
 		margin: 0 0 0.6rem;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
@@ -186,7 +186,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.25rem;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--label);
 	}
 	label.row {
@@ -209,14 +209,14 @@
 		flex-wrap: wrap;
 	}
 	.hint {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		line-height: 1.5;
 		margin: 0.5rem 0 0;
 	}
 	.notice {
 		color: var(--accent);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.btn {
 		background: var(--border);
@@ -225,7 +225,7 @@
 		border-radius: 5px;
 		padding: 0.32rem 0.65rem;
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 	}
 	.btn.primary {
@@ -245,14 +245,14 @@
 		border: none;
 		color: var(--accent);
 		cursor: pointer;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		font-family: inherit;
 		padding: 0;
 	}
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 	}
 	th,
 	td {
@@ -278,12 +278,12 @@
 		flex-wrap: wrap;
 	}
 	.cand-name {
-		font-size: 0.82rem;
+		font-size: var(--text-md);
 		color: var(--fg);
 	}
 	.cand-cat,
 	.cand-by {
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		border: 1px solid var(--border);
 		border-radius: 3px;
 		padding: 0 0.3rem;
@@ -293,11 +293,11 @@
 		flex: 1;
 	}
 	.cand-desc {
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		margin-top: 0.25rem;
 	}
 	.cand-rat {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		font-style: italic;
 		margin: 0.15rem 0 0.25rem;
@@ -305,17 +305,17 @@
 	.cand-body {
 		background: var(--bg-pane);
 		border-radius: 6px;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		padding: 0.6rem;
 		overflow-x: auto;
 	}
 	.decided {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		padding: 0.15rem 0;
 	}
 	details summary {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		cursor: pointer;
 		margin-top: 0.5rem;

@@ -148,7 +148,7 @@
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 	}
 	th,
 	td {
@@ -164,7 +164,7 @@
 		opacity: 0.45;
 	}
 	.url {
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		word-break: break-all;
 	}
@@ -176,10 +176,10 @@
 	}
 	.notice {
 		color: var(--accent);
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 	}
 	h3 {
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		color: var(--heading);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
@@ -195,12 +195,12 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.2rem;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--label);
 	}
 	.opt {
 		color: var(--fg-dim);
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 	}
 	input,
 	select {
@@ -209,7 +209,7 @@
 		border-radius: 5px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		padding: 0.35rem 0.5rem;
 	}
 	.btn {
@@ -219,7 +219,7 @@
 		border-radius: 5px;
 		padding: 0.35rem 0.6rem;
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 	}
 	.btn.primary {
@@ -237,7 +237,7 @@
 		border: none;
 		color: var(--accent);
 		cursor: pointer;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		font-family: inherit;
 	}
 </style>

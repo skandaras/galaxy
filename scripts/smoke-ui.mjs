@@ -421,6 +421,33 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/settings', '/obse
 	check('a click still opens the card', await page.locator('.card-detail, dialog, aside').count() > 0);
 }
 
+// 4b. The assignee filter. Bob's board has two members and a card assigned to
+//     alice, so it is the one that can actually be filtered by a person.
+{
+	await page.goto(`${B}/boards`);
+	await page.locator('header.bar select').first().waitFor();
+	await page.selectOption('header.bar select', { label: bobsBoard.name });
+	await page.locator('.assignee select').waitFor();
+	await page.waitForTimeout(400);
+
+	const titles = () => page.locator('article.card .card-title').allTextContents();
+	check('the board starts unfiltered', (await titles()).length > 0);
+
+	await page.selectOption('.assignee select', { label: `${ALICE} (me)` });
+	await page.waitForTimeout(300);
+	check('filtering to me keeps my card', await titles(), ['Take the bins out']);
+
+	await page.selectOption('.assignee select', { label: BOB });
+	await page.waitForTimeout(300);
+	check('filtering to someone else empties the board', await titles(), []);
+	check('and says how many it is hiding', await page.locator('.filter-count').textContent(), '1 hidden');
+
+	await page.locator('.filters .link').click();
+	await page.waitForTimeout(300);
+	check('showing everything brings them back', (await titles()).length, 1);
+	await shot('board-assignee-filter');
+}
+
 // 5. Alignment. Four tabs that each fetch on mount, a constellation drawn from
 //    scratch in SVG, and an editor that loads a principle's track record before
 //    it shows a single field. Plenty to render blank.

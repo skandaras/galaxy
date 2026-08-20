@@ -72,7 +72,7 @@
 		border-top: 1px solid var(--border);
 		margin-top: 0.75rem;
 		padding-top: 0.5rem;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 	}
 	.head {
 		display: flex;
@@ -83,7 +83,7 @@
 		border: none;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 		letter-spacing: 0.25em;
 		cursor: pointer;
 		padding: 0.2rem 0;
@@ -108,7 +108,7 @@
 		color: var(--bg);
 		border-radius: 999px;
 		padding: 0 0.35rem;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		letter-spacing: 0;
 	}
 	.caret {
@@ -152,7 +152,7 @@
 	}
 	.meta {
 		flex-shrink: 0;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 	}
 	.empty {
 		justify-content: center;
@@ -161,7 +161,7 @@
 		display: block;
 		color: var(--accent);
 		text-decoration: none;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		margin-top: 0.35rem;
 	}
 </style>

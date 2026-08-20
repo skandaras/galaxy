@@ -84,7 +84,7 @@
 		border-bottom: 2px solid transparent;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		padding: 0.5rem 0.8rem;
 		cursor: pointer;
 	}
@@ -102,7 +102,7 @@
 		}
 		.tabs button {
 			padding: 0.45rem 0.55rem;
-			font-size: 0.75rem;
+			font-size: var(--text-base);
 		}
 		/* Admin tab bodies are rendered by child components, so their tables
 		   need reaching into: let each section scroll horizontally rather than

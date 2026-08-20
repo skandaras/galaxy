@@ -614,21 +614,21 @@
 	}
 	h3 {
 		margin: 0 0 0.6rem;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
 	}
 	h4 {
 		margin: 0 0 0.4rem;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		letter-spacing: 0.1em;
 		text-transform: uppercase;
 		color: var(--heading);
 	}
 	.hint,
 	.field-hint {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		line-height: 1.5;
 		margin: 0 0 0.7rem;
@@ -636,7 +636,7 @@
 	.field-hint {
 		display: block;
 		margin: 0.1rem 0 0.25rem;
-		font-size: 0.67rem;
+		font-size: var(--text-sm);
 	}
 	.intro {
 		max-width: 40rem;
@@ -646,7 +646,7 @@
 	}
 	.notice {
 		color: var(--accent);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.row-item {
 		display: flex;
@@ -667,19 +667,19 @@
 	}
 	.row-title {
 		color: var(--fg);
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 	}
 	.row-statement {
 		color: var(--fg-dim);
-		font-size: 0.73rem;
+		font-size: var(--text-base);
 		line-height: 1.5;
 	}
 	.row-meta {
 		color: var(--fg-dim);
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 	}
 	.tag {
-		font-size: 0.6rem;
+		font-size: var(--text-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 		color: var(--accent);
@@ -699,7 +699,7 @@
 		margin-bottom: 0.7rem;
 	}
 	.label {
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--fg);
 	}
 	input,
@@ -713,7 +713,7 @@
 		border-radius: 5px;
 		padding: 0.4rem 0.5rem;
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 	}
 	textarea {
 		line-height: 1.6;
@@ -736,7 +736,7 @@
 		margin-bottom: 0.9rem;
 	}
 	.record-line {
-		font-size: 0.76rem;
+		font-size: var(--text-base);
 		margin: 0 0 0.3rem;
 	}
 	.record-line .rising {
@@ -761,15 +761,15 @@
 		gap: 0.1rem;
 		padding: 0.4rem 0;
 		border-top: 1px solid var(--border);
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 	}
 	.rev-when {
 		color: var(--fg-dim);
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 	}
 	.rev-fields {
 		color: var(--accent);
-		font-size: 0.66rem;
+		font-size: var(--text-sm);
 	}
 	.rev-note {
 		color: var(--fg);
@@ -785,7 +785,7 @@
 		flex-wrap: wrap;
 		border-top: 1px solid var(--border);
 		padding: 0.4rem 0;
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.pair {
 		color: var(--fg);
@@ -793,7 +793,7 @@
 	.tension-note {
 		flex: 1;
 		color: var(--fg-dim);
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 	}
 	.new-tension {
 		margin-top: 0.6rem;
@@ -816,7 +816,7 @@
 		flex: 1;
 	}
 	.vs {
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
 	.versions {
@@ -825,7 +825,7 @@
 		gap: 0.35rem;
 	}
 	.version {
-		font-size: 0.66rem;
+		font-size: var(--text-sm);
 		padding: 0.12rem 0.45rem;
 		border: 1px solid var(--border);
 		border-radius: 3px;
@@ -839,7 +839,7 @@
 		padding: 0.5rem 0;
 	}
 	.compare-title {
-		font-size: 0.76rem;
+		font-size: var(--text-base);
 		color: var(--fg);
 	}
 	.compare-cols {
@@ -850,17 +850,17 @@
 	}
 	.compare-label {
 		display: block;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.1em;
 		color: var(--fg-dim);
 	}
 	.compare-band {
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--accent);
 	}
 	.compare-standing {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		line-height: 1.5;
 		margin: 0.2rem 0 0;
@@ -872,7 +872,7 @@
 		border-radius: 5px;
 		padding: 0.3rem 0.6rem;
 		font-family: inherit;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		cursor: pointer;
 		white-space: nowrap;
 	}
@@ -893,7 +893,7 @@
 		border: none;
 		padding: 0;
 		font: inherit;
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		color: var(--accent);
 		cursor: pointer;
 		text-decoration: underline;

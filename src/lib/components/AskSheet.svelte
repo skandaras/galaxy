@@ -95,14 +95,14 @@
 	}
 	.who {
 		margin: 0 0 0.3rem;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		letter-spacing: 0.16em;
 		text-transform: uppercase;
 		color: var(--accent);
 	}
 	.prompt {
 		margin: 0 0 0.6rem;
-		font-size: 0.9rem;
+		font-size: var(--text-lg);
 		line-height: 1.5;
 	}
 	.options {
@@ -117,7 +117,7 @@
 		border-radius: 999px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		padding: 0.25rem 0.7rem;
 		cursor: pointer;
 	}
@@ -137,14 +137,14 @@
 		border-radius: 6px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.82rem;
+		font-size: var(--text-md);
 		line-height: 1.5;
 		padding: 0.4rem 0.5rem;
 		resize: none;
 	}
 	.hint {
 		margin: 0.4rem 0 0;
-		font-size: 0.66rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
 	.btn {
@@ -154,7 +154,7 @@
 		border-radius: 5px;
 		padding: 0.45rem 0.9rem;
 		font-family: inherit;
-		font-size: 0.76rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 	}
 	.btn.primary {

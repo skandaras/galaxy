@@ -140,12 +140,12 @@
 		margin-top: 0.6rem;
 		/* Reserved so naming a star does not shunt the page around. */
 		min-height: 2.9rem;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		line-height: 1.5;
 	}
 	.cap-name {
 		color: var(--fg);
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 	}
 	.cap-detail {
 		color: var(--fg-dim);
@@ -153,6 +153,6 @@
 	.cap-tradition {
 		color: var(--fg-dim);
 		opacity: 0.7;
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 	}
 </style>

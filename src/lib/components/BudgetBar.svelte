@@ -76,7 +76,7 @@
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		color: var(--fg-dim);
 	}
 	.amount {
