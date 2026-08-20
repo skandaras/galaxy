@@ -128,16 +128,16 @@
 		border-radius: 5px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		padding: 0.35rem 0.5rem;
 		min-width: 16rem;
 	}
 	.chk {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 	}
 	.count {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		margin-left: auto;
 	}
@@ -146,7 +146,7 @@
 		align-items: center;
 		gap: 0.6rem;
 		padding: 0.7rem 0.2rem;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 	}
 	.more-btn {
@@ -156,13 +156,13 @@
 		border-radius: 5px;
 		padding: 0.3rem 0.7rem;
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 	}
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 	}
 	th,
 	td {
@@ -178,7 +178,7 @@
 		opacity: 0.5;
 	}
 	.key {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
 	.badge {
@@ -186,7 +186,7 @@
 		border: 1px solid var(--accent);
 		color: var(--accent);
 		border-radius: 3px;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		padding: 0 0.25rem;
 		margin-right: 0.2rem;
 	}

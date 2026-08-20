@@ -296,7 +296,7 @@
 		border-bottom: 1px solid transparent;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.92rem;
+		font-size: var(--text-lg);
 		padding: 0.25rem 0;
 		outline: none;
 	}
@@ -317,7 +317,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.2rem;
-		font-size: 0.66rem;
+		font-size: var(--text-sm);
 		color: var(--label);
 	}
 	label.block {
@@ -331,7 +331,7 @@
 		border-radius: 5px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.76rem;
+		font-size: var(--text-base);
 		padding: 0.3rem 0.4rem;
 		width: 100%;
 		box-sizing: border-box;
@@ -342,7 +342,7 @@
 	}
 	h4 {
 		margin: 1rem 0 0.4rem;
-		font-size: 0.66rem;
+		font-size: var(--text-sm);
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
 		color: var(--heading);
@@ -351,7 +351,7 @@
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
-		font-size: 0.74rem;
+		font-size: var(--text-base);
 		padding: 0.15rem 0;
 	}
 	.file a {
@@ -363,7 +363,7 @@
 		white-space: nowrap;
 	}
 	.entry {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		padding: 0.3rem 0;
 		border-bottom: 1px solid var(--border);
 	}
@@ -374,7 +374,7 @@
 	.event {
 		color: var(--accent);
 		text-transform: uppercase;
-		font-size: 0.6rem;
+		font-size: var(--text-xs);
 		letter-spacing: 0.1em;
 		margin-right: 0.35rem;
 	}
@@ -384,7 +384,7 @@
 	.meta {
 		display: block;
 		color: var(--fg-dim);
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		margin-top: 0.15rem;
 	}
 	.file .meta {
@@ -398,7 +398,7 @@
 	}
 	.hint,
 	.archived-note {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		line-height: 1.5;
 	}
@@ -409,7 +409,7 @@
 	}
 	.error {
 		color: var(--danger);
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 	}
 	footer {
 		display: flex;
@@ -425,7 +425,7 @@
 		border-radius: 5px;
 		padding: 0.35rem 0.7rem;
 		font-family: inherit;
-		font-size: 0.74rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 	}
 	.btn.primary {
@@ -453,7 +453,7 @@
 		color: var(--fg-dim);
 		cursor: pointer;
 		/* Big enough to hit with a thumb — these used to be 0.6rem targets. */
-		font-size: 0.9rem;
+		font-size: var(--text-lg);
 		line-height: 1;
 		padding: 0.3rem 0.4rem;
 	}

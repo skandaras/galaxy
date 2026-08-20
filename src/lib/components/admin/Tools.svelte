@@ -405,14 +405,14 @@
 
 <style>
 	h3 {
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		color: var(--heading);
 		letter-spacing: 0.2em;
 		text-transform: uppercase;
 		margin: 1.4rem 0 0.3rem;
 	}
 	h4 {
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--heading);
 		letter-spacing: 0.12em;
 		text-transform: uppercase;
@@ -423,7 +423,7 @@
 	}
 	.hint {
 		color: var(--fg-dim);
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		margin: 0.2rem 0 0.6rem;
 		max-width: 46rem;
 	}
@@ -432,12 +432,12 @@
 	}
 	.error {
 		color: var(--danger);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 	}
 	td {
 		padding: 0.45rem 0.6rem;
@@ -469,7 +469,7 @@
 		border: none;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		padding: 0;
 		cursor: pointer;
 		text-align: left;
@@ -478,7 +478,7 @@
 		color: var(--accent);
 	}
 	.badge {
-		font-size: 0.58rem;
+		font-size: var(--text-xs);
 		border: 1px solid var(--accent);
 		color: var(--accent);
 		border-radius: 3px;
@@ -488,15 +488,15 @@
 	.note,
 	.dim {
 		color: var(--fg-dim);
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 	}
 	.desc {
 		color: var(--fg-dim);
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 	}
 	.err-line {
 		color: var(--danger);
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		margin-top: 0.2rem;
 	}
 	.detail {
@@ -521,7 +521,7 @@
 	}
 	.scope-label {
 		color: var(--fg-dim);
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 	}
 	.chip {
 		background: transparent;
@@ -529,7 +529,7 @@
 		border-radius: 999px;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		padding: 0.15rem 0.55rem;
 		cursor: pointer;
 		/* Without these a hyphenated label like "deep-research" wraps mid-word
@@ -545,7 +545,7 @@
 		display: flex;
 		gap: 0.4rem;
 		flex-wrap: wrap;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
 	.dot {
@@ -581,7 +581,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.2rem;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--label);
 	}
 	label.inline {
@@ -596,7 +596,7 @@
 		border: 1px solid var(--border);
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		padding: 0.35rem 0.5rem;
 		border-radius: 4px;
 	}
@@ -615,7 +615,7 @@
 		border-radius: 4px;
 		padding: 0.3rem 0.6rem;
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 	}
 	.btn.primary {

@@ -873,7 +873,7 @@
 		border: none;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		text-align: left;
 		padding: 0.45rem 0.5rem;
 		cursor: pointer;
@@ -892,7 +892,7 @@
 		border-radius: 4px;
 		color: var(--fg-dim);
 		cursor: pointer;
-		font-size: 0.95rem;
+		font-size: var(--text-xl);
 		line-height: 1;
 		padding: 0.2rem;
 		display: none;
@@ -913,7 +913,7 @@
 	}
 	.banner {
 		padding: 0.4rem 1rem;
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		border-bottom: 1px solid var(--border);
 	}
@@ -929,7 +929,7 @@
 		width: min(26rem, 90%);
 	}
 	.new-session h2 {
-		font-size: 0.9rem;
+		font-size: var(--text-lg);
 		letter-spacing: 0.25em;
 		color: var(--heading);
 		margin: 0;
@@ -938,7 +938,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.3rem;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
 	.new-session select,
@@ -948,7 +948,7 @@
 		border-radius: 6px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		padding: 0.45rem 0.6rem;
 	}
 	.mode-pick {
@@ -957,7 +957,7 @@
 	}
 	.dim {
 		color: var(--fg-dim);
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		margin: 0;
 	}
 
@@ -970,14 +970,14 @@
 		flex-wrap: wrap;
 	}
 	.repo {
-		font-size: 0.82rem;
+		font-size: var(--text-md);
 	}
 	.branch {
 		color: var(--fg-dim);
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 	}
 	.mode-badge {
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.15em;
 		border-radius: 3px;
@@ -1005,7 +1005,7 @@
 		color: var(--fg-dim);
 		cursor: pointer;
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		line-height: 1;
 		padding: 0.25rem 0.4rem;
 	}
@@ -1025,7 +1025,7 @@
 		border-bottom: 1px solid var(--border);
 		margin: 0;
 		padding: 0.7rem 1rem;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		line-height: 1.4;
 	}
 	.diff :global(.add) {
@@ -1048,14 +1048,14 @@
 	}
 	.empty {
 		color: var(--fg-dim);
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 	}
 	.empty.center {
 		margin: auto;
 	}
 	.msg {
 		max-width: 50rem;
-		font-size: 0.88rem;
+		font-size: var(--text-lg);
 		line-height: 1.55;
 	}
 	.msg.user {
@@ -1076,12 +1076,12 @@
 	.msg-model {
 		display: block;
 		color: var(--fg-dim);
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 		margin-top: 0.25rem;
 	}
 	.thinking {
 		color: var(--fg-dim);
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		animation: pulse 1.4s ease-in-out infinite;
 	}
 	@keyframes pulse {
@@ -1097,7 +1097,7 @@
 	.past-run > summary {
 		color: var(--fg-dim);
 		cursor: pointer;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		padding: 0.1rem 0;
 		white-space: nowrap;
 		overflow: hidden;
@@ -1120,7 +1120,7 @@
 		gap: 0.7rem;
 		flex-wrap: wrap;
 		color: var(--fg-dim);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		border-left: 2px solid var(--border);
 		padding: 0.2rem 0 0.2rem 0.6rem;
 	}
@@ -1137,7 +1137,7 @@
 		border-radius: 999px;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		padding: 0.25rem 0.7rem;
 		cursor: pointer;
 	}
@@ -1158,7 +1158,7 @@
 		background: var(--bg-pane);
 		border: 1px solid var(--border);
 		border-radius: 4px;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		padding: 0.15rem 0.4rem;
 		margin-top: 0.3rem;
 	}
@@ -1167,7 +1167,7 @@
 	}
 	.composer-hint {
 		color: var(--fg-dim);
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		margin-bottom: 0.4rem;
 	}
 	.composer-row {
@@ -1183,7 +1183,7 @@
 		border-radius: 8px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.88rem;
+		font-size: var(--text-lg);
 		line-height: 1.45;
 		padding: 0.6rem 0.8rem;
 		/* Grows with the text (see $lib/autoresize) from the two rows it starts
@@ -1211,7 +1211,7 @@
 		border-radius: 5px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		padding: 0.3rem 0.4rem;
 		max-width: 16rem;
 	}
@@ -1223,7 +1223,7 @@
 		border-radius: 5px;
 		padding: 0.4rem 0.7rem;
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		cursor: pointer;
 	}
 	.btn.primary {
@@ -1250,7 +1250,7 @@
 		border-radius: 999px;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		padding: 0.22rem 0.65rem;
 		cursor: pointer;
 	}

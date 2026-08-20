@@ -147,7 +147,7 @@
 	}
 	h3 {
 		margin: 0 0 0.6rem;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
@@ -160,21 +160,21 @@
 	}
 	.name {
 		color: var(--fg);
-		font-size: 0.85rem;
+		font-size: var(--text-lg);
 	}
 	.tradition {
-		font-size: 0.67rem;
+		font-size: var(--text-sm);
 		color: var(--accent);
 		padding-left: 1.4rem;
 	}
 	.definition {
-		font-size: 0.76rem;
+		font-size: var(--text-base);
 		line-height: 1.6;
 		color: var(--fg-dim);
 		margin: 0 0 0.6rem;
 	}
 	.hint {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		line-height: 1.5;
 		margin: 0 0 0.7rem;
@@ -196,7 +196,7 @@
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
 	.weight input {
@@ -211,14 +211,14 @@
 		padding-top: 0.6rem;
 	}
 	.evidence {
-		font-size: 0.73rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		line-height: 1.55;
 		margin: 0 0 0.6rem;
 	}
 	.lead {
 		display: block;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.1em;
 		color: var(--heading);
@@ -231,7 +231,7 @@
 	.anchors li {
 		display: flex;
 		gap: 0.5rem;
-		font-size: 0.73rem;
+		font-size: var(--text-base);
 		line-height: 1.5;
 		color: var(--fg-dim);
 		padding: 0.25rem 0;
@@ -247,7 +247,7 @@
 		gap: 0.35rem;
 	}
 	.mechanism {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		padding: 0.12rem 0.45rem;
 		border: 1px solid var(--border);
 		border-radius: 3px;
@@ -258,7 +258,7 @@
 		border: none;
 		padding: 0;
 		font: inherit;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--accent);
 		cursor: pointer;
 		text-decoration: underline;

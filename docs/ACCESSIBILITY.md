@@ -16,8 +16,9 @@ preset**, so a future palette edit cannot quietly undo them.
 ### Text colour
 
 `--fg-dim` and `--label` carry `.hint`, `.meta` and `.field-hint` across the
-whole interface, at 0.65–0.72rem. That is normal-size text, so the large-text
-allowance does not apply to it — and four of the five themes were failing:
+whole interface, at `--text-sm` and below. That is normal-size text, so the
+large-text allowance does not apply to it — and four of the five themes were
+failing:
 
 | Theme | was | now | worst surface |
 |---|---|---|---|
@@ -49,6 +50,33 @@ steps `--border` toward `--fg` until it clears 3:1 against `--bg`, and
 — including ones saved before today and any saved later — gets a visible field
 border without anyone configuring it.
 
+### Text size
+
+The interface had grown 25 ad-hoc sizes across 390 declarations, the smallest
+0.58rem — about 9px. Quicksand made that worse rather than better: it has a
+smaller x-height than the monospace it replaced, so the same declared size
+renders visually smaller.
+
+There is now one scale, defined once in `themeCss()`:
+
+| token | rem | for |
+|---|---|---|
+| `--text-xs` | 0.78 | uppercase micro-labels — the floor, nothing goes below it |
+| `--text-sm` | 0.84 | metadata, timestamps, hints |
+| `--text-base` | 0.90 | body text and controls |
+| `--text-md` | 0.98 | emphasis, card titles |
+| `--text-lg` | 1.06 | section headings |
+| `--text-xl` | 1.18 | page headings |
+| `--text-2xl` | 1.35 | the one display size |
+
+Every declaration in the app names a step, so the hierarchy is tuned in one
+place rather than hunted through hundreds of rules. The lift is weighted toward
+the bottom — the smallest text gained about 26%, body text about 20% — because
+that is where the problem was.
+
+The one exception is the ASCII backdrop, which sizes itself in `px` against the
+viewport and is deliberately outside all of this.
+
 ### Names for controls
 
 Controls identified only by a placeholder now have real labels. Placeholders are
@@ -69,19 +97,7 @@ cannot have one at all.
 
 Not fixed here, in rough priority order.
 
-### 1. Small text
-
-112 `font-size` declarations sit at or below 0.7rem, the smallest 0.58rem — about
-9px at the default root size. Repairing the colour raised the floor on contrast
-but not on size, and the two compound: dim text that is both faint and tiny is
-the app's most common readability problem.
-
-This got marginally worse with the font change. Quicksand has a smaller x-height
-than the monospace it replaced, so the same declared size renders visually
-smaller. A floor of about 0.75rem for anything carrying real content, with the
-sub-0.7rem sizes reserved for uppercase tracking labels, would settle it.
-
-### 2. Invisible keyboard focus
+### 1. Invisible keyboard focus
 
 Nine rules remove the focus outline without putting anything back, so a keyboard
 user loses their place entirely:
@@ -96,7 +112,7 @@ offset would match the interface and cost nothing.
 (`AlignmentConstellation.svelte:124` also sets `outline: none`, but it does
 restyle `:focus-visible`, so it is not in the list.)
 
-### 3. Disabled controls
+### 2. Disabled controls
 
 `opacity: 0.5` on a disabled button drops its label below AA. Disabled controls
 are exempt from the contrast requirement, so this is a judgement call rather than
@@ -104,7 +120,7 @@ a violation — but at these text sizes it makes "why is this greyed out?"
 genuinely hard to read. A dedicated disabled colour would read better than
 fading the text.
 
-### 4. Smaller things
+### 3. Smaller things
 
 - Touch targets: several buttons are around 24–28px tall, under the 44px that
   makes a control comfortable on a phone. The interface is used on mobile.

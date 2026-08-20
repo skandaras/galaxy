@@ -304,7 +304,7 @@
 		border-radius: 6px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		padding: 0.4rem 0.6rem;
 		margin-bottom: 0.6rem;
 	}
@@ -333,7 +333,7 @@
 		color: var(--fg-dim);
 		cursor: pointer;
 		font-family: inherit;
-		font-size: 0.66rem;
+		font-size: var(--text-sm);
 		letter-spacing: 0.1em;
 		text-transform: uppercase;
 		text-align: left;
@@ -343,7 +343,7 @@
 		color: var(--fg);
 	}
 	.caret {
-		font-size: 0.6rem;
+		font-size: var(--text-xs);
 	}
 	.count {
 		margin-left: auto;
@@ -356,7 +356,7 @@
 		border-radius: 4px;
 		color: var(--fg-dim);
 		cursor: pointer;
-		font-size: 0.9rem;
+		font-size: var(--text-lg);
 		line-height: 1;
 		padding: 0.15rem 0.3rem;
 		opacity: 0;
@@ -374,7 +374,7 @@
 		border-radius: 6px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.74rem;
+		font-size: var(--text-base);
 		padding: 0.3rem 0.5rem;
 	}
 	.folder-input:focus {
@@ -410,10 +410,10 @@
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 	}
 	.vis-badge {
-		font-size: 0.58rem;
+		font-size: var(--text-xs);
 		border: 1px solid var(--accent);
 		border-radius: 3px;
 		padding: 0 0.25rem;
@@ -422,7 +422,7 @@
 		vertical-align: middle;
 	}
 	.agent-badge {
-		font-size: 0.58rem;
+		font-size: var(--text-xs);
 		border: 1px solid var(--accent);
 		color: var(--accent);
 		border-radius: 3px;
@@ -432,7 +432,7 @@
 	.doc-snippet {
 		display: block;
 		color: var(--fg-dim);
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		margin-top: 0.15rem;
 		overflow: hidden;
 		white-space: nowrap;
@@ -440,7 +440,7 @@
 	}
 	.empty {
 		color: var(--fg-dim);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		padding: 0.5rem;
 	}
 
@@ -466,7 +466,7 @@
 		border-bottom: 1px solid transparent;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.95rem;
+		font-size: var(--text-xl);
 		padding: 0.3rem 0;
 		outline: none;
 	}
@@ -483,7 +483,7 @@
 		border: none;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.85rem;
+		font-size: var(--text-lg);
 		line-height: 1.6;
 		padding: 1rem;
 		resize: none;
@@ -493,7 +493,7 @@
 		flex: 1;
 		overflow-y: auto;
 		padding: 1rem;
-		font-size: 0.88rem;
+		font-size: var(--text-lg);
 	}
 
 	.btn {
@@ -503,7 +503,7 @@
 		border-radius: 5px;
 		padding: 0.35rem 0.7rem;
 		font-family: inherit;
-		font-size: 0.74rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 	}
 	.btn.primary {
@@ -530,7 +530,7 @@
 		border-radius: 999px;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		padding: 0.22rem 0.65rem;
 		cursor: pointer;
 	}

@@ -51,12 +51,12 @@
 		border: 1px solid var(--danger);
 		border-radius: 8px;
 		padding: 0.7rem;
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		overflow-x: auto;
 	}
 	.loading {
 		color: var(--fg-dim);
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		padding: 0.4rem 0;
 	}
 </style>

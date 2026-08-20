@@ -113,7 +113,7 @@
 	}
 	h2 {
 		margin: 0;
-		font-size: 0.9rem;
+		font-size: var(--text-lg);
 		letter-spacing: 0.3em;
 		color: var(--heading);
 	}
@@ -127,7 +127,7 @@
 		border-radius: 5px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		padding: 0.3rem 0.45rem;
 	}
 	.chip {
@@ -136,7 +136,7 @@
 		border-radius: 999px;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		padding: 0.25rem 0.7rem;
 		cursor: pointer;
 	}
@@ -164,7 +164,7 @@
 		border: none;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		padding: 0.4rem 0.3rem;
 		cursor: pointer;
 		text-align: left;
@@ -186,7 +186,7 @@
 	}
 	.task {
 		color: var(--fg-dim);
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 		border: 1px solid var(--border);
 		border-radius: 3px;
 		padding: 0 0.3rem;
@@ -209,7 +209,7 @@
 		font-family: var(--font-mono);
 		background: var(--bg-pane);
 		border-radius: 6px;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		padding: 0.6rem;
 		margin: 0 0 0.5rem;
 		overflow-x: auto;
@@ -226,13 +226,13 @@
 		.row {
 			flex-wrap: wrap;
 			gap: 0.35rem 0.6rem;
-			font-size: 0.72rem;
+			font-size: var(--text-base);
 		}
 		/* Event type is also conveyed by the name; drop the fixed column so
 		   the name and status stay readable on a phone. */
 		.type {
 			width: auto;
-			font-size: 0.65rem;
+			font-size: var(--text-xs);
 		}
 		.name {
 			flex-basis: 100%;

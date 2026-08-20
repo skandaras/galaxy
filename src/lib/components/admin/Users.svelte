@@ -90,25 +90,25 @@
 	}
 	h3 {
 		margin: 0 0 0.6rem;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
 	}
 	.hint {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		line-height: 1.5;
 		margin: 0.5rem 0;
 	}
 	.notice {
 		color: var(--accent);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 	}
 	th,
 	td {
@@ -125,7 +125,7 @@
 	   the span inside a cell — putting it on a <td> is what broke this table. */
 	.meta {
 		color: var(--fg-dim);
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		display: block;
 	}
 	/* The timestamp columns are dimmed the same way, but they are cells: a
@@ -133,14 +133,14 @@
 	   and no longer lines up under its <th>. Colour and size only. */
 	.when {
 		color: var(--fg-dim);
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		white-space: nowrap;
 	}
 	.toggle {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.35rem;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 	}
 </style>

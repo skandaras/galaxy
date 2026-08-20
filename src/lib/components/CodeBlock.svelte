@@ -48,7 +48,7 @@
 	}
 	.lang {
 		color: var(--fg-dim);
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
 	}
@@ -60,7 +60,7 @@
 		color: var(--fg-dim);
 		cursor: pointer;
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		line-height: 1;
 		padding: 0.25rem 0.4rem;
 		/* Dimmed rather than hidden: the point is that it's discoverable. */
@@ -95,7 +95,7 @@
 		/* Top padding reserves a strip for the language label and copy button. */
 		padding: 1.85rem 0.75rem 0.75rem;
 		overflow-x: auto;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		margin: 0.4rem 0;
 		/* Short snippets still read as a block rather than a tiny sliver. */
 		min-width: min(20rem, 100%);

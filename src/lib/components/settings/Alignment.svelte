@@ -200,13 +200,13 @@
 	}
 	h3 {
 		margin: 0 0 0.6rem;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
 	}
 	.hint {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		line-height: 1.5;
 		margin: 0 0 0.7rem;
@@ -216,7 +216,7 @@
 	}
 	.notice {
 		color: var(--accent);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.row {
 		display: flex;
@@ -225,14 +225,14 @@
 		flex-wrap: wrap;
 	}
 	.chk {
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
 	}
 	.meta {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
 	.dim {
@@ -248,11 +248,11 @@
 	}
 	.dim-name {
 		color: var(--fg);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.dim-tradition {
 		grid-column: 1;
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 		color: var(--fg-dim);
 		padding-left: 1.35rem;
 	}
@@ -262,7 +262,7 @@
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 		color: var(--fg-dim);
 	}
 	.weight input {
@@ -279,7 +279,7 @@
 		border-radius: 5px;
 		padding: 0.3rem 0.6rem;
 		font-family: inherit;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		cursor: pointer;
 		text-decoration: none;
 		display: inline-block;

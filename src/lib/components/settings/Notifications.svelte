@@ -241,13 +241,13 @@
 	}
 	h3 {
 		margin: 0 0 0.6rem;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
 	}
 	.hint {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		line-height: 1.5;
 		margin: 0.4rem 0 0.6rem;
@@ -260,21 +260,21 @@
 	}
 	.device {
 		flex: 1;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 	}
 	.meta {
 		display: block;
 		color: var(--fg-dim);
-		font-size: 0.64rem;
+		font-size: var(--text-xs);
 		margin-top: 0.1rem;
 	}
 	.notice {
 		color: var(--accent);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.error {
 		color: var(--danger);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.hint.enabled {
 		color: var(--accent);
@@ -286,7 +286,7 @@
 		border-radius: 5px;
 		padding: 0.35rem 0.7rem;
 		font-family: inherit;
-		font-size: 0.74rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 	}
 	.btn.primary {

@@ -1098,7 +1098,7 @@
 		border-radius: 5px;
 		padding: 0.4rem 0.7rem;
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		cursor: pointer;
 	}
 	.btn.ghost {
@@ -1143,7 +1143,7 @@
 		border: none;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		text-align: left;
 		padding: 0.45rem 0.5rem;
 		cursor: pointer;
@@ -1176,7 +1176,7 @@
 		border-radius: 4px;
 		color: var(--fg-dim);
 		cursor: pointer;
-		font-size: 0.95rem;
+		font-size: var(--text-xl);
 		line-height: 1;
 		padding: 0.2rem;
 	}
@@ -1192,7 +1192,7 @@
 		border-radius: 5px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		padding: 0.4rem 0.45rem;
 		margin: 0.05rem;
 		outline: none;
@@ -1203,7 +1203,7 @@
 		padding-top: 0.5rem;
 	}
 	.archive summary {
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		cursor: pointer;
 		padding: 0.25rem 0.15rem;
@@ -1224,7 +1224,7 @@
 	}
 	.banner {
 		padding: 0.4rem 1rem;
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		border-bottom: 1px solid var(--border);
 	}
@@ -1237,7 +1237,7 @@
 		border-radius: var(--radius);
 		color: inherit;
 		font-family: inherit;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		padding: 0.1rem 0.5rem;
 		margin-left: 0.5rem;
 		cursor: pointer;
@@ -1254,11 +1254,11 @@
 		margin: auto;
 		text-align: center;
 		color: var(--fg-dim);
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 	}
 	.msg {
 		max-width: 46rem;
-		font-size: 0.88rem;
+		font-size: var(--text-lg);
 		line-height: 1.55;
 		position: relative;
 	}
@@ -1284,14 +1284,14 @@
 	}
 	.msg-model {
 		color: var(--fg-dim);
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 	}
 	.save-doc {
 		background: none;
 		border: none;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		cursor: pointer;
 		opacity: 0;
 		transition: opacity 0.15s;
@@ -1307,7 +1307,7 @@
 		align-items: center;
 		gap: 0.4rem;
 		flex-wrap: wrap;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		margin-bottom: 0.5rem;
 	}
@@ -1320,7 +1320,7 @@
 	}
 	.thinking {
 		color: var(--fg-dim);
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		animation: pulse 1.4s ease-in-out infinite;
 	}
 	/* Stays put after the turn ends. Chat had no signal at all for a turn that
@@ -1331,7 +1331,7 @@
 		gap: 0.7rem;
 		flex-wrap: wrap;
 		color: var(--fg-dim);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		border-left: 2px solid var(--border);
 		padding: 0.2rem 0 0.2rem 0.6rem;
 	}
@@ -1342,7 +1342,7 @@
 	.past-run > summary {
 		color: var(--fg-dim);
 		cursor: pointer;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		padding: 0.1rem 0;
 		white-space: nowrap;
 		overflow: hidden;
@@ -1369,7 +1369,7 @@
 		border-radius: 999px;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		padding: 0.25rem 0.7rem;
 		cursor: pointer;
 	}
@@ -1388,7 +1388,7 @@
 	}
 	.composer-hint {
 		color: var(--fg-dim);
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		margin-bottom: 0.4rem;
 	}
 	.att-chip {
@@ -1398,7 +1398,7 @@
 		background: var(--bg-pane);
 		border: 1px solid var(--border);
 		border-radius: 4px;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		padding: 0.15rem 0.4rem;
 		margin-top: 0.3rem;
 	}
@@ -1415,7 +1415,7 @@
 		border-radius: 8px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.88rem;
+		font-size: var(--text-lg);
 		line-height: 1.45;
 		padding: 0.6rem 0.8rem;
 		/* Grows with the text (see $lib/autoresize) from the two rows it starts
@@ -1443,7 +1443,7 @@
 		border-radius: 999px;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		padding: 0.25rem 0.7rem;
 		cursor: pointer;
 	}
@@ -1462,7 +1462,7 @@
 		border-radius: 5px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		padding: 0.3rem 0.4rem;
 		max-width: 16rem;
 	}

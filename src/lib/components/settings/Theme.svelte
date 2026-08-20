@@ -379,7 +379,7 @@
 	}
 	h3 {
 		margin: 0 0 0.7rem;
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
@@ -393,7 +393,7 @@
 		border: 1px solid;
 		border-radius: 8px;
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		padding: 0.6rem 1rem;
 		cursor: pointer;
 	}
@@ -411,7 +411,7 @@
 		border: 1px solid var(--border);
 		background: var(--bg);
 		color: var(--fg-dim);
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		line-height: 1;
 		cursor: pointer;
 	}
@@ -439,7 +439,7 @@
 		border: 1px solid var(--border);
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		padding: 0.35rem 0.5rem;
 		flex: 1;
 		max-width: 16rem;
@@ -453,7 +453,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.3rem;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--label);
 	}
 	label.wide {
@@ -478,7 +478,7 @@
 	   and not at body size, and flattening that to "fail" would push people away
 	   from palettes that are actually fine where the colour is used. */
 	.contrast {
-		font-size: 0.6rem;
+		font-size: var(--text-xs);
 		letter-spacing: 0.04em;
 		white-space: nowrap;
 		opacity: 0.85;
@@ -512,14 +512,14 @@
 		border: 1px solid var(--border);
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		padding: 0.35rem 0.5rem;
 	}
 	.hex {
 		width: 6.5rem;
 	}
 	.field-hint {
-		font-size: 0.66rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		line-height: 1.45;
 		font-weight: normal;
@@ -536,12 +536,12 @@
 		border: 1px solid var(--border);
 		border-radius: 4px;
 		color: var(--fg);
-		font-size: 0.85rem;
+		font-size: var(--text-lg);
 		white-space: nowrap;
 		overflow-x: auto;
 	}
 	.hint {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		line-height: 1.5;
 		margin: -0.3rem 0 0.7rem;
@@ -566,7 +566,7 @@
 		border-radius: 999px;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		padding: 0.2rem 0.6rem;
 		cursor: pointer;
 	}
@@ -585,7 +585,7 @@
 		border: none;
 		padding: 0.4rem 0.8rem;
 		font-family: inherit;
-		font-size: 0.76rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 		display: inline-flex;
 		align-items: center;

@@ -91,7 +91,7 @@
 		font-family: var(--font-mono);
 		color: var(--accent);
 		letter-spacing: 0.35em;
-		font-size: 0.9rem;
+		font-size: var(--text-lg);
 		margin-bottom: 2rem;
 	}
 	.nav {
@@ -101,7 +101,7 @@
 	}
 	.nav-item {
 		color: var(--fg-dim);
-		font-size: 0.85rem;
+		font-size: var(--text-lg);
 		padding: 0.4rem 0.6rem;
 		border-radius: 4px;
 		text-decoration: none;
@@ -127,7 +127,7 @@
 		display: flex;
 		align-items: center;
 		gap: 0.6rem;
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		margin-top: 0.6rem;
 	}
 	.env-badge {
@@ -175,7 +175,7 @@
 		.brand {
 			margin-bottom: 0;
 			margin-right: 0.9rem;
-			font-size: 0.75rem;
+			font-size: var(--text-base);
 			letter-spacing: 0.2em;
 			flex-shrink: 0;
 		}
@@ -184,7 +184,7 @@
 			gap: 0.15rem;
 		}
 		.nav-item {
-			font-size: 0.75rem;
+			font-size: var(--text-base);
 			padding: 0.3rem 0.45rem;
 			white-space: nowrap;
 		}

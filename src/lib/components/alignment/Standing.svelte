@@ -229,14 +229,14 @@
 		margin-bottom: 1rem;
 	}
 	.line {
-		font-size: 1rem;
+		font-size: var(--text-xl);
 		line-height: 1.5;
 		margin: 0 0 0.5rem;
 		color: var(--fg);
 	}
 	.line.dim {
 		color: var(--fg-dim);
-		font-size: 0.85rem;
+		font-size: var(--text-lg);
 	}
 	.badges {
 		display: flex;
@@ -245,7 +245,7 @@
 		gap: 0.6rem;
 	}
 	.band {
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
 		padding: 0.1rem 0.4rem;
@@ -275,14 +275,14 @@
 	}
 	h3 {
 		margin: 0 0 0.6rem;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
 	}
 	.hint,
 	.meta {
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		line-height: 1.5;
 		margin: 0 0 0.7rem;
@@ -292,19 +292,19 @@
 	}
 	.notice {
 		color: var(--accent);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.flag {
 		border-left: 2px solid var(--danger);
 		padding-left: 0.6rem;
-		font-size: 0.76rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 		line-height: 1.5;
 	}
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.76rem;
+		font-size: var(--text-base);
 	}
 	td {
 		padding: 0.4rem 0.3rem;
@@ -316,7 +316,7 @@
 	}
 	.d-tradition {
 		display: block;
-		font-size: 0.63rem;
+		font-size: var(--text-xs);
 		color: var(--fg-dim);
 	}
 	.d-mean {
@@ -328,7 +328,7 @@
 		color: var(--fg-dim);
 		white-space: nowrap;
 		text-align: right;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 	}
 	.d-dir.rising {
 		color: var(--accent);
@@ -339,7 +339,7 @@
 	.d-count {
 		color: var(--fg-dim);
 		text-align: right;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		width: 2rem;
 	}
 	.boundaries,
@@ -351,7 +351,7 @@
 	}
 	.boundary,
 	.mechanism {
-		font-size: 0.66rem;
+		font-size: var(--text-sm);
 		padding: 0.12rem 0.45rem;
 		border: 1px solid var(--border);
 		border-radius: 3px;
@@ -362,7 +362,7 @@
 	}
 	.chip {
 		font-family: inherit;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		padding: 0.15rem 0.5rem;
 		border: 1px solid var(--border);
 		border-radius: 3px;
@@ -371,7 +371,7 @@
 		cursor: pointer;
 	}
 	.letter {
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		line-height: 1.6;
 		margin-bottom: 0.7rem;
 	}
@@ -382,7 +382,7 @@
 		border-radius: 5px;
 		padding: 0.3rem 0.6rem;
 		font-family: inherit;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		cursor: pointer;
 	}
 	.btn:disabled {

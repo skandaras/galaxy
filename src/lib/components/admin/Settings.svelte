@@ -535,7 +535,7 @@
 	}
 	h3 {
 		margin: 0 0 0.7rem;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
@@ -550,7 +550,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.3rem;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--label);
 	}
 	label.row {
@@ -558,7 +558,7 @@
 		align-items: center;
 	}
 	.hint {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		margin: 0 0 0.7rem;
 	}
@@ -569,7 +569,7 @@
 		border-radius: 5px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		padding: 0.35rem 0.5rem;
 		max-width: 14rem;
 	}
@@ -580,7 +580,7 @@
 		border-radius: 5px;
 		padding: 0.35rem 0.7rem;
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 	}
 	.btn.primary {
@@ -602,7 +602,7 @@
 		flex-wrap: wrap;
 	}
 	.deploy-msg {
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
 	.test-result {
@@ -610,7 +610,7 @@
 		border: 1px solid var(--border);
 		border-radius: 6px;
 		color: var(--fg-dim);
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		line-height: 1.5;
 		padding: 0.6rem;
 		margin: 0.6rem 0 0;

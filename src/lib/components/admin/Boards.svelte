@@ -103,13 +103,13 @@
 	}
 	h3 {
 		margin: 0 0 0.6rem;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
 	}
 	.hint {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		line-height: 1.5;
 		margin: 0.4rem 0 0.6rem;
@@ -124,7 +124,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.25rem;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--label);
 	}
 	label.row {
@@ -138,7 +138,7 @@
 		border-radius: 5px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.76rem;
+		font-size: var(--text-base);
 		padding: 0.3rem 0.45rem;
 	}
 	label.row input {
@@ -147,7 +147,7 @@
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 	}
 	th,
 	td {
@@ -164,11 +164,11 @@
 	}
 	.meta {
 		color: var(--fg-dim);
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 	}
 	.notice {
 		color: var(--accent);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.btn {
 		background: var(--border);
@@ -177,7 +177,7 @@
 		border-radius: 5px;
 		padding: 0.35rem 0.7rem;
 		font-family: inherit;
-		font-size: 0.74rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 	}
 </style>

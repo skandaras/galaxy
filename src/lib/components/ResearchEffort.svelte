@@ -168,7 +168,7 @@
 		border-radius: 999px;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		padding: 0.25rem 0.7rem;
 		cursor: pointer;
 	}
@@ -196,7 +196,7 @@
 	}
 	.title {
 		margin: 0 0 0.5rem;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		letter-spacing: 0.16em;
 		text-transform: uppercase;
 		color: var(--accent);
@@ -217,7 +217,7 @@
 		border: none;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		padding: 0.15rem 0;
 		cursor: pointer;
 	}
@@ -226,12 +226,12 @@
 	}
 	.resolved {
 		margin: 0.5rem 0 0;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg);
 	}
 	.hint {
 		margin: 0.35rem 0 0;
-		font-size: 0.66rem;
+		font-size: var(--text-sm);
 		line-height: 1.45;
 		color: var(--fg-dim);
 	}

@@ -58,7 +58,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.15rem;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 	}
 	.step summary,
 	.summary-line {
@@ -79,7 +79,7 @@
 	.step summary::before {
 		content: '▸';
 		color: var(--fg-dim);
-		font-size: 0.6rem;
+		font-size: var(--text-xs);
 		line-height: 1.5;
 	}
 	.step details[open] > summary::before {
@@ -146,7 +146,7 @@
 		color: var(--fg-dim);
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		padding: 0.3rem 0 0.1rem;
 	}
 	/* Inline and in position, rather than a banner at the top of the page

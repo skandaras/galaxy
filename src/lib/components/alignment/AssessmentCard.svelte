@@ -183,7 +183,7 @@
 		border-left: 2px solid var(--accent);
 		border-radius: 6px;
 		padding: 0.8rem;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		line-height: 1.55;
 	}
 	.reading.stale {
@@ -196,7 +196,7 @@
 	.care-body {
 		white-space: pre-wrap;
 		margin: 0 0 0.5rem;
-		font-size: 0.82rem;
+		font-size: var(--text-md);
 		line-height: 1.6;
 	}
 	header {
@@ -207,7 +207,7 @@
 		margin-bottom: 0.5rem;
 	}
 	.band {
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
 		padding: 0.1rem 0.4rem;
@@ -242,7 +242,7 @@
 	}
 	.meta,
 	.hint {
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
 	.hint {
@@ -260,7 +260,7 @@
 		border-left: 2px solid var(--fg-dim);
 		padding-left: 0.6rem;
 		margin: 0 0 0.7rem;
-		font-size: 0.74rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 	}
 	.scores {
@@ -280,7 +280,7 @@
 	}
 	.score-name {
 		color: var(--fg);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.score-value {
 		display: flex;
@@ -301,17 +301,17 @@
 		padding-left: 0.6rem;
 		border-left: 1px solid var(--border);
 		color: var(--fg-dim);
-		font-size: 0.73rem;
+		font-size: var(--text-base);
 		font-style: italic;
 	}
 	.score-note {
 		margin: 0.3rem 0 0;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		color: var(--fg-dim);
 	}
 	.engaged {
 		margin: 0.3rem 0 0;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
 	.principle {
@@ -324,7 +324,7 @@
 	}
 	h4 {
 		margin: 0 0 0.4rem;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		letter-spacing: 0.1em;
 		text-transform: uppercase;
 		color: var(--heading);
@@ -338,13 +338,13 @@
 	}
 	.chose {
 		color: var(--fg-dim);
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		margin-left: 0.4rem;
 	}
 	.declared {
 		display: inline-block;
 		margin-left: 0.4rem;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 		color: var(--accent);
@@ -355,7 +355,7 @@
 		gap: 0.3rem;
 	}
 	.mechanism {
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 		padding: 0.1rem 0.4rem;
 		border: 1px solid var(--border);
 		border-radius: 3px;
@@ -369,11 +369,11 @@
 	.next,
 	.question {
 		margin: 0 0 0.3rem;
-		font-size: 0.76rem;
+		font-size: var(--text-base);
 	}
 	.lead {
 		display: block;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.1em;
 		color: var(--heading);

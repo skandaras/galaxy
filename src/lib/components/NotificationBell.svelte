@@ -183,7 +183,7 @@
 		border: none;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		padding: 0.35rem 0.4rem;
 		cursor: pointer;
 		text-align: left;
@@ -195,7 +195,7 @@
 		color: var(--accent);
 	}
 	.glyph {
-		font-size: 0.85rem;
+		font-size: var(--text-lg);
 	}
 	.label {
 		flex: 1;
@@ -204,7 +204,7 @@
 		background: var(--accent);
 		color: var(--bg);
 		border-radius: 999px;
-		font-size: 0.6rem;
+		font-size: var(--text-xs);
 		padding: 0.05rem 0.35rem;
 		min-width: 1rem;
 		text-align: center;
@@ -240,7 +240,7 @@
 		gap: 0.6rem;
 		padding: 0.5rem 0.6rem;
 		border-bottom: 1px solid var(--border);
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
 		color: var(--accent);
@@ -252,7 +252,7 @@
 		border-radius: 4px;
 		color: var(--fg-dim);
 		font-family: inherit;
-		font-size: 0.62rem;
+		font-size: var(--text-xs);
 		padding: 0.2rem 0.45rem;
 		cursor: pointer;
 		text-transform: none;
@@ -297,7 +297,7 @@
 	}
 	.icon {
 		flex-shrink: 0;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 	}
 	.text {
 		min-width: 0;
@@ -305,12 +305,12 @@
 	}
 	.title {
 		display: block;
-		font-size: 0.74rem;
+		font-size: var(--text-base);
 		line-height: 1.35;
 	}
 	.body {
 		display: block;
-		font-size: 0.66rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		margin-top: 0.15rem;
 		overflow: hidden;
@@ -321,13 +321,13 @@
 	}
 	.when {
 		display: block;
-		font-size: 0.6rem;
+		font-size: var(--text-xs);
 		color: var(--fg-dim);
 		margin-top: 0.2rem;
 	}
 	.empty {
 		padding: 0.7rem 0.6rem;
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
 

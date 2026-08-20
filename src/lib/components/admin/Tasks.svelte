@@ -131,7 +131,7 @@
 	}
 	h3 {
 		margin: 0 0 0.5rem;
-		font-size: 0.85rem;
+		font-size: var(--text-lg);
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
@@ -142,7 +142,7 @@
 		flex-wrap: wrap;
 	}
 	label {
-		font-size: 0.7rem;
+		font-size: var(--text-sm);
 		color: var(--label);
 		display: flex;
 		align-items: center;
@@ -154,7 +154,7 @@
 		border-radius: 5px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		padding: 0.25rem 0.4rem;
 		max-width: 14rem;
 	}
@@ -166,7 +166,7 @@
 		border-radius: 6px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 		padding: 0.5rem 0.65rem;
 		margin: 0.5rem 0;
 		resize: vertical;
@@ -178,7 +178,7 @@
 		border-radius: 5px;
 		padding: 0.32rem 0.65rem;
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 	}
 	.btn.primary {
@@ -197,7 +197,7 @@
 		gap: 0.7rem;
 		padding: 0.4rem 0;
 		border-bottom: 1px solid var(--border);
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 	}
 	.meta {
 		color: var(--fg-dim);

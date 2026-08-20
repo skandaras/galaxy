@@ -155,7 +155,7 @@
 
 <style>
 	h3 {
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 		color: var(--heading);
 		letter-spacing: 0.2em;
 		text-transform: uppercase;
@@ -164,7 +164,7 @@
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 	}
 	td {
 		padding: 0.45rem 0.6rem;
@@ -184,10 +184,10 @@
 	}
 	.v {
 		color: var(--fg-dim);
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 	}
 	.agent-badge {
-		font-size: 0.58rem;
+		font-size: var(--text-xs);
 		border: 1px solid var(--accent);
 		color: var(--accent);
 		border-radius: 3px;
@@ -196,11 +196,11 @@
 	}
 	.desc {
 		color: var(--fg-dim);
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 	}
 	.trig {
 		color: var(--fg-dim);
-		font-size: 0.65rem;
+		font-size: var(--text-xs);
 		font-style: italic;
 	}
 	.actions {
@@ -209,11 +209,11 @@
 	}
 	.empty {
 		color: var(--fg-dim);
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 	}
 	.error {
 		color: var(--danger);
-		font-size: 0.75rem;
+		font-size: var(--text-base);
 	}
 	.form {
 		margin-top: 0.6rem;
@@ -228,7 +228,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.25rem;
-		font-size: 0.68rem;
+		font-size: var(--text-sm);
 		color: var(--label);
 	}
 	label.wide {
@@ -241,7 +241,7 @@
 		border-radius: 5px;
 		color: var(--fg);
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-md);
 		padding: 0.4rem 0.55rem;
 	}
 	textarea {
@@ -261,7 +261,7 @@
 		border-radius: 5px;
 		padding: 0.35rem 0.7rem;
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-base);
 		cursor: pointer;
 	}
 	.btn.primary {

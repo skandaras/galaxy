@@ -41,7 +41,7 @@
 		border-radius: 6px;
 		padding: 0.75rem;
 		overflow-x: auto;
-		font-size: 0.8rem;
+		font-size: var(--text-md);
 	}
 	.md :global(code) {
 		font-family: var(--font-mono);
@@ -69,13 +69,13 @@
 		margin-top: 0;
 	}
 	.md :global(h2) {
-		font-size: 0.95rem;
+		font-size: var(--text-xl);
 	}
 	.md :global(h3) {
-		font-size: 0.88rem;
+		font-size: var(--text-lg);
 	}
 	.md :global(h4) {
-		font-size: 0.82rem;
+		font-size: var(--text-md);
 		color: var(--fg-dim);
 	}
 	.md :global(ul),
