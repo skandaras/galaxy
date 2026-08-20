@@ -4,9 +4,11 @@ import {
 	PRESETS,
 	contrastGrade,
 	contrastRatio,
+	controlBorder,
 	normalizeTheme,
 	themeCss
 } from './theme';
+import { GALAXY_FONT_STACK } from './fonts';
 
 describe('normalizeTheme', () => {
 	it('accepts sane values', () => {
@@ -19,12 +21,12 @@ describe('normalizeTheme', () => {
 	it('rejects CSS/HTML breakout attempts, falling back to defaults', () => {
 		const t = normalizeTheme({
 			accent: 'red}</style><script>alert(1)</script>',
-			font: 'x; background: url(evil)',
+			fontUi: 'x; background: url(evil)',
 			bg: '#000{',
 			radius: '5px\\'
 		});
 		expect(t.accent).toBe(DEFAULT_THEME.accent);
-		expect(t.font).toBe(DEFAULT_THEME.font);
+		expect(t.fontUi).toBe(DEFAULT_THEME.fontUi);
 		expect(t.bg).toBe(DEFAULT_THEME.bg);
 		expect(t.radius).toBe(DEFAULT_THEME.radius);
 		expect(themeCss(t)).not.toContain('script');
@@ -141,5 +143,125 @@ describe('themeCss', () => {
 	it('cannot be broken out of by a hostile glow value', () => {
 		const t = normalizeTheme({ glow: 'red}body{display:none' });
 		expect(themeCss(t)).not.toContain('display:none');
+	});
+});
+
+describe('fonts', () => {
+	it('keeps a font id that is in the catalogue', () => {
+		const t = normalizeTheme({ fontUi: 'georgia', fontMono: 'consolas' });
+		expect(t.fontUi).toBe('georgia');
+		expect(t.fontMono).toBe('consolas');
+	});
+
+	it('falls back to the default for an id it does not know', () => {
+		// The failure mode the catalogue exists to remove: a value that does not
+		// name a real font renders the default rather than an unstyled page.
+		const t = normalizeTheme({ fontUi: 'comic-sans', fontMono: '' });
+		expect(t.fontUi).toBe(DEFAULT_THEME.fontUi);
+		expect(t.fontMono).toBe(DEFAULT_THEME.fontMono);
+	});
+
+	it('drops a raw CSS stack, which is what themes saved before the split hold', () => {
+		// Deliberate: those themes come back on the new defaults rather than
+		// carrying a stack that was only ever validated by a character blacklist.
+		const t = normalizeTheme({ font: "'SF Mono', ui-monospace, monospace" });
+		expect(t.fontUi).toBe(DEFAULT_THEME.fontUi);
+		expect(t.fontMono).toBe(DEFAULT_THEME.fontMono);
+		expect('font' in t).toBe(false);
+	});
+
+	it('emits a variable per role, plus the faces it bundles', () => {
+		const css = themeCss(DEFAULT_THEME);
+		expect(css).toContain('--font-ui:');
+		expect(css).toContain('--font-mono:');
+		expect(css).toContain('@font-face');
+		expect(css).toContain('/fonts/quicksand-latin.woff2');
+	});
+
+	it('gives numbers the monospace font so columns line up', () => {
+		expect(themeCss(DEFAULT_THEME)).toContain('.num{font-family:var(--font-mono)');
+	});
+});
+
+describe('the galaxy backdrop font', () => {
+	it('is identical for every preset', () => {
+		// It is art made of characters: the shape depends on every glyph being the
+		// same width, so it sits outside the theme system entirely.
+		for (const [name, preset] of Object.entries(PRESETS)) {
+			expect(themeCss(preset), name).toContain(`--font-galaxy:${GALAXY_FONT_STACK}`);
+		}
+	});
+
+	it('cannot be changed by a theme that tries to set it', () => {
+		// The assertion most likely to catch a future refactor quietly wiring the
+		// backdrop back into the themeable font.
+		const hostile = normalizeTheme({
+			...DEFAULT_THEME,
+			fontGalaxy: 'Comic Sans MS',
+			fontMono: 'courier'
+		});
+		const css = themeCss(hostile);
+		expect(css).toContain(`--font-galaxy:${GALAXY_FONT_STACK}`);
+		expect(css).not.toContain('Comic Sans');
+	});
+});
+
+describe('controlBorder', () => {
+	it('clears 3:1 against the page for every preset', () => {
+		// WCAG 1.4.11. The plain --border is 1.2:1 in most themes, which is a fine
+		// card separator and an invisible text field.
+		for (const [name, preset] of Object.entries(PRESETS)) {
+			const derived = controlBorder(preset);
+			expect(contrastRatio(derived, preset.bg), `${name} (${derived})`).toBeGreaterThanOrEqual(3);
+		}
+	});
+
+	it('leaves a border alone when it already passes', () => {
+		const strong = { ...DEFAULT_THEME, border: '#ffffff' };
+		expect(controlBorder(strong)).toBe('#ffffff');
+	});
+
+	it('falls back to the text colour rather than an invisible field', () => {
+		const broken = { ...DEFAULT_THEME, border: 'not-a-colour' };
+		expect(controlBorder(broken)).toBe(broken.fg);
+	});
+
+	it('is what the form controls actually get', () => {
+		expect(themeCss(DEFAULT_THEME)).toContain(
+			'input,select,textarea{border-color:var(--control-border);}'
+		);
+	});
+});
+
+describe('shipped palettes', () => {
+	it('clear AA for dim text and field labels on both surfaces', () => {
+		// These carry .hint, .meta and .field-hint across the whole app at
+		// body-size text, so the large-text allowance does not apply to them.
+		for (const [name, preset] of Object.entries(PRESETS)) {
+			for (const key of ['fgDim', 'label'] as const) {
+				for (const surface of ['bg', 'bgPane'] as const) {
+					const ratio = contrastRatio(preset[key], preset[surface]);
+					expect(ratio, `${name}.${key} on ${surface} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+				}
+			}
+		}
+	});
+
+	it('clear AA for headings, accent and danger', () => {
+		for (const [name, preset] of Object.entries(PRESETS)) {
+			for (const key of ['heading', 'accent', 'danger'] as const) {
+				const ratio = contrastRatio(preset[key], preset.bgPane);
+				expect(ratio, `${name}.${key} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+			}
+		}
+	});
+
+	it('clear AA for the text on a primary button', () => {
+		// Primary buttons put --bg on --accent, which is a pairing nothing else
+		// in the editor's contrast grid measures.
+		for (const [name, preset] of Object.entries(PRESETS)) {
+			const ratio = contrastRatio(preset.bg, preset.accent);
+			expect(ratio, `${name} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+		}
 	});
 });

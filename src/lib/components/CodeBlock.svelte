@@ -85,6 +85,10 @@
 		border-color: var(--danger);
 	}
 	.code-block pre {
+		/* The inner <code> already pins this; the <pre> needs it too, or the
+		   scrollbar width and any bare text in the block follow the interface
+		   font instead. */
+		font-family: var(--font-mono);
 		background: var(--bg-pane);
 		border: 1px solid var(--border);
 		border-radius: 6px;

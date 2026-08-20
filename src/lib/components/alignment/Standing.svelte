@@ -132,12 +132,12 @@
 									{d.name}
 									<span class="d-tradition">{d.tradition}</span>
 								</td>
-								<td class="d-mean">{d.recent?.toFixed(1) ?? '–'}</td>
+								<td class="d-mean num">{d.recent?.toFixed(1) ?? '–'}</td>
 								<td class="d-dir {d.direction}">
 									{DIRECTION_GLYPH[d.direction]}
 									{d.direction === 'unknown' ? 'too early' : d.direction}
 								</td>
-								<td class="d-count">{d.count}</td>
+								<td class="d-count num">{d.count}</td>
 							</tr>
 						{/each}
 					</tbody>
@@ -160,7 +160,7 @@
 				</p>
 				<div class="boundaries">
 					{#each standing.versionBoundaries as v (v.id)}
-						<span class="boundary">{when(v.at)}</span>
+						<span class="boundary num">{when(v.at)}</span>
 					{/each}
 				</div>
 			</article>

@@ -222,7 +222,7 @@
 			<div class="row">
 				<span class="device">
 					{describe(d.userAgent)}
-					<span class="meta">added {when(d.createdAt)} · last used {when(d.lastUsedAt)}</span>
+					<span class="meta num">added {when(d.createdAt)} · last used {when(d.lastUsedAt)}</span>
 				</span>
 				<button class="btn danger" onclick={() => remove(d)}>Remove</button>
 			</div>

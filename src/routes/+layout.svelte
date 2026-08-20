@@ -65,7 +65,7 @@
 		margin: 0;
 		background: var(--bg);
 		color: var(--fg);
-		font-family: var(--font-mono);
+		font-family: var(--font-ui);
 	}
 	.shell {
 		display: flex;
@@ -86,6 +86,9 @@
 		overflow-y: auto;
 	}
 	.brand {
+		/* The wordmark's letter-spacing was drawn against a monospace face and
+		   reads as loose in a proportional one. */
+		font-family: var(--font-mono);
 		color: var(--accent);
 		letter-spacing: 0.35em;
 		font-size: 0.9rem;

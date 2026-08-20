@@ -149,15 +149,24 @@
 			ordinary day. Nothing is read unless you press Assess, so this box does not need to be
 			written for anyone.
 		</p>
-		<input class="title" bind:value={draftTitle} placeholder="a title, if you want one" />
-		<textarea
-			bind:value={draft}
-			use:autoresize={draft}
-			rows="8"
-			placeholder="What happened, what you did, and what you made of it."
-		></textarea>
+		<label>
+			<span class="sr-only">entry title</span>
+			<input class="title" bind:value={draftTitle} placeholder="a title, if you want one" />
+		</label>
+		<label>
+			<span class="sr-only">what happened</span>
+			<textarea
+				bind:value={draft}
+				use:autoresize={draft}
+				rows="8"
+				placeholder="What happened, what you did, and what you made of it."
+			></textarea>
+		</label>
 		<div class="row">
-			<input class="tags" bind:value={draftTags} placeholder="tags — work, family, health" />
+			<label class="tags-field">
+				<span class="sr-only">tags</span>
+				<input class="tags" bind:value={draftTags} placeholder="tags — work, family, health" />
+			</label>
 			<div class="mood">
 				<span class="mood-label">mood</span>
 				{#each MOODS as m (m)}
@@ -191,7 +200,7 @@
 			<header>
 				<button class="entry-head" onclick={() => (openId = openId === entry.id ? null : entry.id)}>
 					<span class="entry-title">{entry.title || 'Untitled'}</span>
-					<span class="meta">{when(entry.createdAt)}</span>
+					<span class="meta num">{when(entry.createdAt)}</span>
 				</button>
 				<div class="entry-actions">
 					{#if entry.skipAssessment}
@@ -214,7 +223,10 @@
 
 			{#if openId === entry.id}
 				{#if editingId === entry.id}
-					<textarea bind:value={editBody} use:autoresize={editBody} rows="8"></textarea>
+					<label>
+						<span class="sr-only">edit this entry</span>
+						<textarea bind:value={editBody} use:autoresize={editBody} rows="8"></textarea>
+					</label>
 					<div class="row">
 						<button class="btn primary" onclick={() => saveEdit(entry)}>Save</button>
 						<button class="btn" onclick={() => (editingId = null)}>Cancel</button>
@@ -318,9 +330,19 @@
 	.title {
 		font-size: 0.85rem;
 	}
+	.tags-field {
+		flex: 1;
+		min-width: 9rem;
+		display: flex;
+	}
 	.tags {
 		flex: 1;
 		min-width: 9rem;
+	}
+	/* The composer's fields are wrapped in labels purely to carry a name for
+	   screen readers, so the label must lay out as the field did. */
+	.composer > label {
+		display: block;
 	}
 	.row {
 		display: flex;

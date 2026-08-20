@@ -35,6 +35,7 @@
 	   off CodeBlock's markup — without it the two rules tie on specificity and
 	   this one wins on source order, flattening CodeBlock's layout. */
 	.md :global(pre:not(.code-block *)) {
+		font-family: var(--font-mono);
 		background: var(--bg-pane);
 		border: 1px solid var(--border);
 		border-radius: 6px;

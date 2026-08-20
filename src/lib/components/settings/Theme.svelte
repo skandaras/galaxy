@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 	import { contrastGrade, contrastRatio, type Theme } from '$lib/theme';
+	import { fontStack, optionsFor, type FontRole } from '$lib/fonts';
+	import { probeFonts } from '$lib/font-probe';
 
 	let draft = $state<Theme | null>(null);
 	let presets = $state<Record<string, Theme>>({});
@@ -31,12 +33,33 @@
 		root.style.setProperty('--accent', draft.accent);
 		root.style.setProperty('--border', draft.border);
 		root.style.setProperty('--danger', draft.danger);
-		root.style.setProperty('--font-mono', draft.font);
+		root.style.setProperty('--font-ui', fontStack(draft.fontUi, 'ui'));
+		root.style.setProperty('--font-mono', fontStack(draft.fontMono, 'mono'));
 		root.style.setProperty('--radius', draft.radius);
 		root.style.setProperty('--glow', draft.glow);
 		root.style.setProperty('--glow-size', draft.glowStrength);
 		root.style.fontSize = draft.baseFont;
 	});
+
+	/**
+	 * Which faces are actually on this machine. Advisory only — an option is
+	 * marked, never removed, because a theme travels between machines and a font
+	 * missing on the laptop may well be on the phone.
+	 */
+	let available = $state<Record<string, boolean>>({});
+	$effect(() => {
+		available = probeFonts([...optionsFor('ui'), ...optionsFor('mono')]);
+	});
+
+	const fontGroups = (role: FontRole) => {
+		const options = optionsFor(role);
+		return role === 'ui'
+			? [
+					{ label: 'Interface', items: options.filter((f) => f.role === 'ui') },
+					{ label: 'Monospace', items: options.filter((f) => f.role === 'mono') }
+				]
+			: [{ label: 'Monospace', items: options }];
+	};
 
 	/**
 	 * The size control works in percent, because that is the unit people reason
@@ -178,7 +201,10 @@
 			{/if}
 
 			<div class="save-as">
-				<input placeholder="Name this theme…" bind:value={saveName} maxlength="40" />
+				<label class="save-as-label">
+					<span class="sr-only">name for this theme</span>
+					<input placeholder="Name this theme…" bind:value={saveName} maxlength="40" />
+				</label>
 				<button
 					class="btn"
 					disabled={!saveName.trim()}
@@ -204,7 +230,7 @@
 						<span class="field-head">
 							{f.label}
 							{#if c}
-								<span class="contrast {c.grade}" title="Contrast against {f.on === 'bg' ? 'the page background' : 'the panel background'}">
+								<span class="contrast num {c.grade}" title="Contrast against {f.on === 'bg' ? 'the page background' : 'the panel background'}">
 									{c.ratio.toFixed(1)}:1 {c.grade === 'AA-large' ? 'AA large only' : c.grade}
 								</span>
 							{/if}
@@ -226,9 +252,48 @@
 				with any size you have set there.
 			</p>
 			<div class="grid">
-				<label class="wide">
-					font stack
-					<input bind:value={draft.font} />
+				<label class="wide font-field">
+					interface font
+					<span class="field-hint">
+						Used for everything except code, preformatted text and numbers. Quicksand and Source
+						Code Pro ship with Galaxy, so they render the same on every machine; the rest depend
+						on what is installed here.
+					</span>
+					<select bind:value={draft.fontUi}>
+						{#each fontGroups('ui') as group (group.label)}
+							<optgroup label={group.label}>
+								{#each group.items as f (f.id)}
+									<option value={f.id}>
+										{f.label}{available[f.id] === false ? ' — not on this device' : ''}
+									</option>
+								{/each}
+							</optgroup>
+						{/each}
+					</select>
+					<span class="sample" style="font-family: {fontStack(draft.fontUi, 'ui')}">
+						The quick brown fox jumps over the lazy dog
+					</span>
+				</label>
+				<label class="wide font-field">
+					code font
+					<span class="field-hint">
+						Code blocks, diffs, the Observatory and every number in the interface, so figures in a
+						column line up. The ASCII backdrop keeps its own font and is not affected by this.
+					</span>
+					<select bind:value={draft.fontMono}>
+						{#each fontGroups('mono') as group (group.label)}
+							<optgroup label={group.label}>
+								{#each group.items as f (f.id)}
+									<option value={f.id}>
+										{f.label}{available[f.id] === false ? ' — not on this device' : ''}
+									</option>
+								{/each}
+							</optgroup>
+						{/each}
+					</select>
+					<span class="sample" style="font-family: {fontStack(draft.fontMono, 'mono')}">
+						const total = 1234567.89;  // 0123456789
+					</span>
 				</label>
 				<label>
 					corner radius
@@ -364,6 +429,11 @@
 		padding-top: 0.8rem;
 		border-top: 1px solid var(--border);
 	}
+	.save-as-label {
+		display: flex;
+		flex: 1;
+		max-width: 16rem;
+	}
 	.save-as input {
 		background: var(--bg-pane);
 		border: 1px solid var(--border);
@@ -436,7 +506,8 @@
 		background: none;
 		cursor: pointer;
 	}
-	input:not([type='color']):not([type='checkbox']):not([type='range']) {
+	input:not([type='color']):not([type='checkbox']):not([type='range']),
+	select {
 		background: var(--bg-pane);
 		border: 1px solid var(--border);
 		color: var(--fg);
@@ -446,6 +517,28 @@
 	}
 	.hex {
 		width: 6.5rem;
+	}
+	.field-hint {
+		font-size: 0.66rem;
+		color: var(--fg-dim);
+		line-height: 1.45;
+		font-weight: normal;
+	}
+	.font-field select {
+		width: 100%;
+	}
+	/* Rendered in the font it names, so the choice is visible before it is saved
+	   — including whether it fell back because the face is not installed. */
+	.sample {
+		display: block;
+		margin-top: 0.15rem;
+		padding: 0.4rem 0.5rem;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		color: var(--fg);
+		font-size: 0.85rem;
+		white-space: nowrap;
+		overflow-x: auto;
 	}
 	.hint {
 		font-size: 0.68rem;

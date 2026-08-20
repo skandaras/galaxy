@@ -37,11 +37,14 @@
 
 <section>
 	<div class="bar">
-		<select bind:value={days}>
+		<label>
+			period
+			<select bind:value={days}>
 			<option value={7}>last 7 days</option>
 			<option value={30}>last 30 days</option>
-			<option value={90}>last 90 days</option>
-		</select>
+				<option value={90}>last 90 days</option>
+			</select>
+		</label>
 	</div>
 
 	{#if data}
@@ -70,10 +73,10 @@
 					<tr>
 						<td>{row.modelKey}</td>
 						<td>{row.task}</td>
-						<td>{fmt(row.calls)}</td>
-						<td class:err={row.errors > 0}>{row.errors}</td>
-						<td>{fmt(row.prompt)} / {fmt(row.completion)}</td>
-						<td>{money(row.cost)}</td>
+						<td class="num">{fmt(row.calls)}</td>
+						<td class="num" class:err={row.errors > 0}>{row.errors}</td>
+						<td class="num">{fmt(row.prompt)} / {fmt(row.completion)}</td>
+						<td class="num">{money(row.cost)}</td>
 					</tr>
 				{:else}
 					<tr><td colspan="6" class="empty">No usage in this window.</td></tr>
@@ -120,6 +123,13 @@
 <style>
 	.bar {
 		margin-bottom: 0.8rem;
+	}
+	.bar label {
+		display: inline-flex;
+		flex-direction: column;
+		gap: 0.2rem;
+		font-size: 0.68rem;
+		color: var(--label);
 	}
 	select {
 		background: var(--bg-pane);

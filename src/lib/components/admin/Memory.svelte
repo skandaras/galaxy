@@ -114,9 +114,9 @@
 					<tr class:off={!s.enabled}>
 						<td>{s.username}</td>
 						<td>{s.enabled ? 'on' : 'opted out'}</td>
-						<td>{s.activeItems}</td>
-						<td>{when(s.lastRun)}</td>
-						<td>{s.enabled && settings.enabled ? when(s.nextDue) : '—'}</td>
+						<td class="num">{s.activeItems}</td>
+						<td class="num">{when(s.lastRun)}</td>
+						<td class="num">{s.enabled && settings.enabled ? when(s.nextDue) : '—'}</td>
 					</tr>
 				{:else}
 					<tr><td colspan="5" class="hint">No users yet.</td></tr>

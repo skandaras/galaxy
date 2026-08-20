@@ -84,7 +84,7 @@
 						<td>{b.owner}</td>
 						<td>{b.members}</td>
 						<td>{b.cards}</td>
-						<td class="meta">{when(b.createdAt)}</td>
+						<td class="meta num">{when(b.createdAt)}</td>
 					</tr>
 				{:else}
 					<tr><td colspan="5" class="hint">No boards yet.</td></tr>

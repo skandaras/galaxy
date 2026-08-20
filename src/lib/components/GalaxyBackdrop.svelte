@@ -47,6 +47,10 @@
 	}
 	pre {
 		margin: 0;
+		/* Deliberately not --font-mono. The art is made of characters and needs
+		   every glyph the same width; --font-galaxy is fixed in themeCss and no
+		   setting writes to it, so no font choice can distort the spiral. */
+		font-family: var(--font-galaxy);
 		/* Falls back to the accent, which is what this was pinned to before the
 		   backdrop had a colour of its own — so a theme saved without one is
 		   unchanged. */

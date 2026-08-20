@@ -307,16 +307,25 @@
 				</div>
 			{/each}
 			<div class="row new-tension">
-				<select bind:value={tensionA}>
-					<option value="">choose one…</option>
-					{#each live as p (p.id)}<option value={p.id}>{p.title}</option>{/each}
-				</select>
+				<label class="tension-pick">
+					<span class="sr-only">first principle in tension</span>
+					<select bind:value={tensionA}>
+						<option value="">choose one…</option>
+						{#each live as p (p.id)}<option value={p.id}>{p.title}</option>{/each}
+					</select>
+				</label>
 				<span class="vs">vs</span>
-				<select bind:value={tensionB}>
-					<option value="">and another…</option>
-					{#each live as p (p.id)}<option value={p.id}>{p.title}</option>{/each}
-				</select>
-				<input bind:value={tensionNote} placeholder="how you mean to resolve it" />
+				<label class="tension-pick">
+					<span class="sr-only">second principle in tension</span>
+					<select bind:value={tensionB}>
+						<option value="">and another…</option>
+						{#each live as p (p.id)}<option value={p.id}>{p.title}</option>{/each}
+					</select>
+				</label>
+				<label class="tension-note-field">
+					<span class="sr-only">how you mean to resolve it</span>
+					<input bind:value={tensionNote} placeholder="how you mean to resolve it" />
+				</label>
 				<button class="btn" disabled={!tensionA || !tensionB} onclick={addTension}>Declare</button>
 			</div>
 		</article>
@@ -331,7 +340,7 @@
 				</p>
 				<div class="versions">
 					{#each versions as v (v.id)}
-						<span class="version">{when(v.createdAt)}</span>
+						<span class="version num">{when(v.createdAt)}</span>
 					{/each}
 				</div>
 			</article>
@@ -523,7 +532,7 @@
 					<h4>History</h4>
 					{#each revisions as r (r.id)}
 						<div class="revision">
-							<span class="rev-when">{when(r.createdAt)}</span>
+							<span class="rev-when num">{when(r.createdAt)}</span>
 							<span class="rev-fields">{(r.changedFields ?? []).join(', ')}</span>
 							{#if r.note}<span class="rev-note">{r.note}</span>{/if}
 							{#if r.snapshot?.statement}
@@ -789,14 +798,22 @@
 	.new-tension {
 		margin-top: 0.6rem;
 	}
+	.tension-pick {
+		flex: 1;
+		min-width: 8rem;
+		display: flex;
+	}
+	.tension-note-field {
+		flex: 2;
+		min-width: 10rem;
+		display: flex;
+	}
 	.new-tension select {
 		width: auto;
 		flex: 1;
-		min-width: 8rem;
 	}
 	.new-tension input {
-		flex: 2;
-		min-width: 10rem;
+		flex: 1;
 	}
 	.vs {
 		font-size: 0.7rem;

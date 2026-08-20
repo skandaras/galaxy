@@ -45,6 +45,8 @@
 		height: auto;
 	}
 	.fallback {
+		/* Raw diagram source shown when mermaid fails to render it. */
+		font-family: var(--font-mono);
 		background: var(--bg-pane);
 		border: 1px solid var(--danger);
 		border-radius: 8px;
