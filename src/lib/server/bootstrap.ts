@@ -1,8 +1,10 @@
 import { db } from '$lib/server/db';
 import {
 	getSetting,
+	migrateResearchSettings,
 	migrateWebSearchSettings,
 	setSetting,
+	type ResearchSettings,
 	type WebSearchSettings
 } from '$lib/server/settings';
 import { taskConfigs, CORE_TASKS, skills } from '$lib/server/db/schema';
@@ -139,8 +141,12 @@ export function seedSkills(): void {
  * which moves a value only while it still equals the default it replaces.
  */
 export function migrateSettings(): void {
-	const next = migrateWebSearchSettings(
+	const search = migrateWebSearchSettings(
 		getSetting<Partial<WebSearchSettings> | null>('websearch', null)
 	);
-	if (next) setSetting('websearch', next);
+	if (search) setSetting('websearch', search);
+	const research = migrateResearchSettings(
+		getSetting<Partial<ResearchSettings> | null>('research', null)
+	);
+	if (research) setSetting('research', research);
 }

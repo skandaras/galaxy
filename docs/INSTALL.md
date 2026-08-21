@@ -332,6 +332,10 @@ chat turn makes at most `searches per turn`, default 6. Divide whatever
 allowance a provider currently offers by those numbers before assuming you need
 a paid tier — a personal instance often does not.
 
+Pages read per round is stored the same way and migrated the same way — it moved
+from six to ten once the search net widened, since six had become the narrow part
+of the pipeline rather than a sensible ceiling on it.
+
 Both of these are stored per install, and a stored value beats the default on
 every read — so raising a default in a new version reaches only installs that
 have never saved these settings. Galaxy closes that gap once, at startup: a
@@ -475,6 +479,7 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | Deep research returns nothing, or always searches "1 queries" | A reasoning model spending its whole token budget thinking. Both the planner and the synthesis now retry with more room automatically; if it persists, raise Max tokens in Admin → Research or pick a non-reasoning model |
 | Deep research reports "no sources could be retrieved" | Search returned nothing — check the provider in Admin → Settings with the Test button. The answer that follows is general knowledge, not research |
 | Deep research says "Consolidation returned no usable JSON" | The model could not produce the between-rounds brief in the shape asked for. The run falls back to searching the gaps it already had and only stops after two failures in a row, so the answer still lands — but a model that cannot follow a JSON contract will research shallowly. Pick a different one for the deep-research task |
+| Deep research says the brief "ran out of room mid-brief" | The reply was cut off before it closed, so there was no complete brief to read. Consolidation asks again with double the allowance, and salvages whatever findings were finished if that is cut off too — so this is a warning, not a lost round. Persisting means the model writes far past the limits it is given: raise **Max tokens** in Admin → Settings → Deep research, or pick a model that keeps to the shape |
 | Deep research says "Consolidation timed out" and stops after one round | Framing, planning and consolidation are bounded by *silence* rather than by total time, so a slow model is no longer cut off while it is still working; a call that does stall is retried once with a larger token budget, which is what a reasoning model needs to finish thinking and still answer. Round one gets a second attempt on the same sources — it has no brief yet, so it has no open gaps to continue from. Persisting past that means the model cannot produce the brief: pick another for the deep-research task |
 | Deep research always runs one round whatever the effort slider says | Admin → Settings → Deep research → "rounds per run" is the ceiling; effort spends a fraction of it, so a ceiling of 1 makes every level identical. The run says so in chat when that happens |
 | Deep research ignored the toggle and just did a web search | Fixed in this version. Creating a chat by pressing send used to clear the composer's per-message choices before the request was built, so the first message of a *new* chat silently lost Deep research, the effort level and the model picked in the dropdown |

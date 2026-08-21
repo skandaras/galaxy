@@ -28,6 +28,7 @@ import {
 	htmlToText,
 	mergeBrief,
 	parseBrief,
+	repairTruncatedJson,
 	parseQueries,
 	parseTriagePicks,
 	planQueries,
@@ -356,9 +357,9 @@ describe('roundBudget', () => {
 			const b = roundBudget(DEFAULT_RESEARCH, e);
 			return [b.rounds, b.queriesPerRound, b.pagesPerRound, b.searchBudget];
 		};
-		expect(at('quick')).toEqual([2, 2, 2, 4]);
-		expect(at('balanced')).toEqual([3, 3, 4, 9]);
-		expect(at('exhaustive')).toEqual([4, 4, 6, 16]);
+		expect(at('quick')).toEqual([2, 2, 4, 4]);
+		expect(at('balanced')).toEqual([3, 3, 7, 9]);
+		expect(at('exhaustive')).toEqual([4, 4, 10, 16]);
 	});
 
 	it('spends exactly the admin ceiling at exhaustive', () => {
@@ -2021,5 +2022,146 @@ describe('a consolidation that runs out of time', () => {
 		const out = await consolidate({ ...base, choice: spy.choice, signal: controller.signal });
 		expect(out.status).toBe('cancelled');
 		expect(spy.calls).toBe(1);
+	});
+});
+
+
+describe('repairTruncatedJson', () => {
+	const back = (raw: string) => {
+		const out = repairTruncatedJson(raw);
+		return out === null ? null : JSON.parse(out);
+	};
+
+	it('leaves complete JSON exactly as it was', () => {
+		const whole = '{"findings":[{"claim":"a","sources":[1]}],"gaps":["g"]}';
+		expect(back(whole)).toEqual(JSON.parse(whole));
+	});
+
+	it('keeps the findings written before a cut mid-string', () => {
+		// The shape a length-truncated brief actually has.
+		expect(back('{"findings":[{"claim":"a","sources":[1]},{"claim":"bb')).toEqual({
+			findings: [{ claim: 'a', sources: [1] }]
+		});
+	});
+
+	it('keeps them when the cut lands mid-array', () => {
+		expect(back('{"findings":[{"claim":"a","sources":[1]},{"claim":"b","sources":[2')).toEqual({
+			findings: [{ claim: 'a', sources: [1] }]
+		});
+	});
+
+	it('keeps them when the cut lands right after a closed element', () => {
+		expect(back('{"findings":[{"claim":"a","sources":[1]},')).toEqual({
+			findings: [{ claim: 'a', sources: [1] }]
+		});
+	});
+
+	it('is not fooled by braces or quotes inside a string', () => {
+		expect(back('{"findings":[{"claim":"say \\"hi\\" {x}","sources":[1]},{"claim":"n')).toEqual({
+			findings: [{ claim: 'say "hi" {x}', sources: [1] }]
+		});
+	});
+
+	it('stops at the real end when prose follows the JSON', () => {
+		expect(back('{"gaps":["a"]}  hope that helps {see 3}')).toEqual({ gaps: ['a'] });
+	});
+
+	it('gives up rather than guessing when nothing was ever closed', () => {
+		// Half a claim is not a finding, and inventing the rest of it would put
+		// words in a source's mouth.
+		expect(repairTruncatedJson('{"findings":[{"claim":"aaa')).toBeNull();
+		expect(repairTruncatedJson('sorry, I cannot produce that')).toBeNull();
+	});
+});
+
+describe('parseBrief on a brief that ran out of room', () => {
+	const opts = { knownSources: [1, 2], maxQueries: 3 };
+
+	it('carries forward what the model finished writing', () => {
+		// Before this, JSON.parse threw on the unbalanced slice and a round that
+		// had produced two good findings was worth nothing at all.
+		const cut =
+			'{"findings":[{"claim":"Nebulae form from molecular clouds","sources":[1]},' +
+			'{"claim":"They are mostly hydrogen","sources":[2]},{"claim":"A third one that was cut off mid';
+		const out = parseBrief(cut, opts);
+		expect(out?.brief.findings.map((f) => f.claim)).toEqual([
+			'Nebulae form from molecular clouds',
+			'They are mostly hydrogen'
+		]);
+	});
+
+	it('still refuses text with nothing complete in it', () => {
+		expect(parseBrief('{"findings":[{"claim":"only half of one', opts)).toBeNull();
+	});
+});
+
+
+describe('a consolidation that ran out of room', () => {
+	const base = {
+		systemPrompt: 'system',
+		asked: 'q',
+		question: 'q',
+		background: '',
+		prior: EMPTY_BRIEF,
+		fresh: [source(1)],
+		allEvidence: [source(1)],
+		ranQueries: [],
+		round: 1,
+		rounds: 3,
+		maxQueries: 3,
+		cfg: DEFAULT_RESEARCH,
+		track: () => {},
+		defaultLanguage: ''
+	};
+	const whole = '{"findings":[{"claim":"A holds","sources":[1]}],"gaps":["B?"],"next_queries":["B"]}';
+	/** Non-empty, stopped on length, and unusable — the failure that never retried. */
+	const cutOff: CompletionResult = {
+		text: '{"findings":[{"claim":"A holds","sources":[1]},{"claim":"half of a sec',
+		usage: null,
+		finishReason: 'length'
+	};
+
+	it('asks again with the larger budget, which the empty-text guard never did', async () => {
+		// `!res.text.trim()` was false for a truncated reply, so the one failure the
+		// bigger budget fixes was the one it could not reach.
+		const caps: number[] = [];
+		const choice = choiceOf(cutOff, ok(whole));
+		const inner = choice.adapter.stream;
+		choice.adapter.stream = ((req: { max_tokens?: number; maxTokens?: number }, signal: AbortSignal) => {
+			caps.push(Number(req.maxTokens ?? req.max_tokens));
+			return inner(req as never, signal);
+		}) as typeof inner;
+		const out = await consolidate({ ...base, choice });
+		expect(out.status).toBe('ok');
+		expect(caps).toHaveLength(2);
+		expect(caps[1]).toBeGreaterThan(caps[0]);
+	});
+
+	it('salvages the partial brief when the second attempt is cut off too', async () => {
+		const out = await consolidate({ ...base, choice: choiceOf(cutOff) });
+		expect(out.status).toBe('ok');
+		if (out.status !== 'ok') return;
+		expect(out.brief.findings.map((f) => f.claim)).toEqual(['A holds']);
+	});
+
+	it('reports the tail and the length when nothing can be salvaged', async () => {
+		// The head of a truncated reply is pristine JSON, so a sample from the
+		// front described every failure as well-formed and explained none.
+		const hopeless: CompletionResult = {
+			text: `sorry, I cannot do that. ${'x'.repeat(600)} END-OF-REPLY`,
+			usage: null,
+			finishReason: 'length'
+		};
+		const out = await consolidate({ ...base, choice: choiceOf(hopeless) });
+		expect(out.status).toBe('unparseable');
+		if (out.status !== 'unparseable') return;
+		expect(out.sample).toContain('END-OF-REPLY');
+		expect(out.chars).toBeGreaterThan(600);
+		expect(out.finishReason).toBe('length');
+	});
+
+	it('still retries an empty reasoned-out reply, as it always did', async () => {
+		const out = await consolidate({ ...base, choice: choiceOf(reasonedOut, ok(whole)) });
+		expect(out.status).toBe('ok');
 	});
 });

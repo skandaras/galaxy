@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+	DEFAULT_RESEARCH,
 	DEFAULT_WEB_SEARCH,
+	RESEARCH_SETTINGS_VERSION,
 	WEB_SEARCH_SETTINGS_VERSION,
+	migrateResearchSettings,
 	migrateWebSearchSettings,
 	normaliseWebSearchSettings
 } from './settings';
@@ -67,5 +70,43 @@ describe('normaliseWebSearchSettings', () => {
 		expect(normaliseWebSearchSettings({ maxResults: 'lots' }).maxResults).toBe(
 			DEFAULT_WEB_SEARCH.maxResults
 		);
+	});
+});
+
+
+describe('migrateResearchSettings', () => {
+	it('raises pages per round while it is only the old default', () => {
+		// Search widened to twenty results a query, which made six pages a round
+		// the narrow part of the pipeline rather than a sensible ceiling on it.
+		expect(migrateResearchSettings({ maxPages: 6, maxQueries: 4 })?.maxPages).toBe(10);
+	});
+
+	it('leaves a number someone chose', () => {
+		expect(migrateResearchSettings({ maxPages: 3 })?.maxPages).toBe(3);
+		expect(migrateResearchSettings({ maxPages: 15 })?.maxPages).toBe(15);
+	});
+
+	it('runs once, so a later choice of six survives the next boot', () => {
+		const first = migrateResearchSettings({ maxPages: 6 });
+		expect(first?.settingsVersion).toBe(RESEARCH_SETTINGS_VERSION);
+		expect(migrateResearchSettings({ ...first!, maxPages: 6 })).toBeNull();
+	});
+
+	it('does nothing without a row, since the defaults already apply', () => {
+		expect(migrateResearchSettings(null)).toBeNull();
+		expect(migrateResearchSettings({})).toBeNull();
+	});
+
+	it('fills and clamps everything else on the way through', () => {
+		const out = migrateResearchSettings({ maxPages: 6, maxQueries: 999 });
+		expect(out?.maxQueries).toBe(10);
+		expect(out?.maxRounds).toBe(DEFAULT_RESEARCH.maxRounds);
+	});
+
+	it('still folds away the legacy round key', () => {
+		// iterationCap counted rounds *after* the first, so it is +1, not a rename.
+		const out = migrateResearchSettings({ maxPages: 6, iterationCap: 2 });
+		expect(out?.maxRounds).toBe(3);
+		expect(out).not.toHaveProperty('iterationCap');
 	});
 });

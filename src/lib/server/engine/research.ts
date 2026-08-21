@@ -8,6 +8,7 @@ import type { ModelChoice } from '$lib/server/providers/registry';
 import { isRetryable, type Usage } from '$lib/server/providers/types';
 import {
 	DEFAULT_RESEARCH,
+	researchSettings,
 	webSearchSettings,
 	getSetting,
 	researchRoundCeiling,
@@ -134,7 +135,7 @@ export function startResearchTurn(opts: {
 }
 
 function resolveSearchCfg(): WebSearchSettings {
-	const research = getSetting<ResearchSettings>('research', DEFAULT_RESEARCH);
+	const research = researchSettings();
 	const base = webSearchSettings();
 	if (research.provider === 'searxng' && research.baseUrl) {
 		return { ...base, provider: 'searxng', baseUrl: research.baseUrl };
@@ -155,7 +156,7 @@ async function runResearch(
 	effort: ResearchEffort,
 	conversation: { history: StoredMessage[]; compactSummary?: string | null }
 ): Promise<void> {
-	const cfg = getSetting<ResearchSettings>('research', DEFAULT_RESEARCH);
+	const cfg = researchSettings();
 	const totalUsage: Usage = { promptTokens: 0, completionTokens: 0 };
 	const track = (u: Usage | null) => {
 		if (u) {
@@ -436,7 +437,8 @@ async function runResearch(
 			event('research.consolidate', 'error', Date.now() - startedAt, {
 				round,
 				reason: outcome.status,
-				retrying: true
+				retrying: true,
+				...failureDetail(outcome)
 			});
 			outcome = await runConsolidation();
 		}
@@ -487,7 +489,11 @@ async function runResearch(
 		// did.
 		consolidateFailures++;
 		const why = consolidateFailureReason(outcome);
-		event('research.consolidate', 'error', took, { round, reason: outcome.status });
+		event('research.consolidate', 'error', took, {
+			round,
+			reason: outcome.status,
+			...failureDetail(outcome)
+		});
 		const fallback = dedupeQueries(
 			gapQueries(brief, budget.queriesPerRound, defaultLanguage),
 			ranQueries
@@ -718,21 +724,23 @@ const PLAN_TOKENS = 400;
 const PLAN_TOKENS_RETRY = 4000;
 /** Floor for the synthesis retry, so a small configured cap still gets room. */
 const SYNTHESIS_RETRY_TOKENS = 8000;
-/** Consolidation writes a brief rather than a list, so it needs more room than
- *  the planner. Same retry, for the same reasoning models. */
-const CONSOLIDATE_TOKENS = 900;
-const CONSOLIDATE_TOKENS_RETRY = 4000;
 /** Deadline for one planning or consolidation call. */
 
 /**
  * Characters of *new* excerpt handed to one consolidation call.
+ *
+ * Raised with `maxPages`: the search net widened to twenty results a query, so
+ * reading six pages a round had become the narrow part — and reading ten of
+ * them against the old budget would only have meant reading each one more
+ * thinly. Ten sources at 2,000 characters is the same depth per source the six
+ * used to get.
  *
  * With the prior brief capped too (see MAX_FINDINGS and friends), every
  * consolidation prompt lands around the same size whether it is round 2 or
  * round 8 — the brief is carried instead of the transcript precisely so this
  * stays flat rather than growing with the round count.
  */
-const CONSOLIDATE_INPUT_CHARS = 12_000;
+const CONSOLIDATE_INPUT_CHARS = 20_000;
 const CONSOLIDATE_MIN_PER_SOURCE = 600;
 const CONSOLIDATE_MAX_PER_SOURCE = 2_400;
 
@@ -745,7 +753,7 @@ const CONSOLIDATE_MAX_PER_SOURCE = 2_400;
  * per-source maximum matches fetchPageText's own clip, so a small run is
  * unaffected.
  */
-const SYNTHESIS_EVIDENCE_CHARS = 60_000;
+const SYNTHESIS_EVIDENCE_CHARS = 90_000;
 const SYNTHESIS_MIN_PER_SOURCE = 800;
 /** Characters of page text one source contributes, after extraction. */
 export const PAGE_TEXT_CHARS = 6_000;
@@ -761,6 +769,28 @@ const MAX_GAPS = 6;
 const MAX_CONFLICTS = 4;
 const CLAIM_CHARS = 400;
 const GAP_CHARS = 240;
+
+/**
+ * Room for the brief the prompt actually asks for.
+ *
+ * Derived rather than chosen, because a chosen number is what went wrong: the
+ * prompt orders the model to restate the COMPLETE brief every round, the parser
+ * will keep MAX_FINDINGS claims of CLAIM_CHARS plus the gaps and conflicts, and
+ * the budget was 900 — about a third of that. Generation stopped mid-JSON, and
+ * a truncated object is not a smaller brief, it is no brief at all.
+ *
+ * So the two are tied together here and cannot drift apart again. ~3.5 chars
+ * per token is conservative for JSON, which is punctuation-heavy.
+ */
+const BRIEF_MAX_CHARS =
+	MAX_FINDINGS * (CLAIM_CHARS + 40) + (MAX_GAPS + MAX_CONFLICTS) * (GAP_CHARS + 8) + 400;
+const CONSOLIDATE_TOKENS = Math.ceil(BRIEF_MAX_CHARS / 3.5);
+/**
+ * Double, for the second attempt. Not a bigger brief — the same one, with room
+ * for a reasoning model to think first, since `max_tokens` covers the thinking
+ * and the answer together.
+ */
+const CONSOLIDATE_TOKENS_RETRY = CONSOLIDATE_TOKENS * 2;
 
 /** "1 source" / "3 sources", so notices don't read like machine output. */
 function plural(n: number, one: string, many = `${one}s`): string {
@@ -921,10 +951,31 @@ function briefSummary(brief: ResearchBrief): string {
 	return `Brief after ${plural(brief.round, 'round')}: ${parts.join(', ')}.`;
 }
 
+/**
+ * What to record about a consolidation that produced nothing usable.
+ *
+ * `sample` was already being computed and then dropped on the floor — the one
+ * piece of evidence that would have explained "no usable JSON" never left the
+ * function.
+ */
+function failureDetail(outcome: ConsolidateOutcome): Record<string, unknown> {
+	if (outcome.status !== 'unparseable') return {};
+	return {
+		sample: outcome.sample,
+		chars: outcome.chars,
+		...(outcome.finishReason ? { finishReason: outcome.finishReason } : {})
+	};
+}
+
 function consolidateFailureReason(outcome: ConsolidateOutcome): string {
 	switch (outcome.status) {
 		case 'unparseable':
-			return 'returned no usable JSON';
+			// Say which kind. "No usable JSON" read the same whether the model
+			// refused, rambled, or simply ran out of room mid-brief — and only the
+			// last of those is worth changing a setting over.
+			return outcome.finishReason === 'length'
+				? `ran out of room mid-brief (${outcome.chars} characters). Raise Max tokens in Admin → Settings → Deep research, or pick a model that keeps to the shape`
+				: 'returned no usable JSON';
 		case 'empty':
 			return outcome.reasonedOnly
 				? 'spent its whole token budget reasoning'
@@ -1108,7 +1159,21 @@ export function parseQueries(text: string, max: number, fallbackLanguage = ''): 
 	const start = text.indexOf('{');
 	const end = text.lastIndexOf('}');
 	if (start === -1 || end <= start) return [];
-	const parsed = JSON.parse(text.slice(start, end + 1));
+	// Unguarded, this threw on a truncated plan, and the throw was swallowed by
+	// planQueries' outer catch and reported as a failed *call* — so a plan cut
+	// short looked like a provider error and the run searched the raw question.
+	let parsed: { queries?: unknown };
+	try {
+		parsed = JSON.parse(text.slice(start, end + 1));
+	} catch {
+		const repaired = repairTruncatedJson(text);
+		if (!repaired) return [];
+		try {
+			parsed = JSON.parse(repaired);
+		} catch {
+			return [];
+		}
+	}
 	if (!Array.isArray(parsed.queries)) return [];
 	const out: PlannedQuery[] = [];
 	for (const raw of parsed.queries) {
@@ -1821,9 +1886,15 @@ export async function readPages(
  * the queries it returns come from gaps it identified in the text, not from
  * rephrasing the original question.
  */
+/** One consolidation call, and whether a brief could be read out of it. */
+interface Attempt {
+	res: CompletionResult;
+	brief: ReturnType<typeof parseBrief>;
+}
+
 export type ConsolidateOutcome =
 	| { status: 'ok'; brief: Omit<ResearchBrief, 'round'>; queries: PlannedQuery[] }
-	| { status: 'unparseable'; sample: string }
+	| { status: 'unparseable'; sample: string; chars: number; finishReason?: string }
 	| { status: 'empty'; reasonedOnly: boolean }
 	| { status: 'timeout' }
 	| { status: 'error'; error: string }
@@ -1876,6 +1947,10 @@ export async function consolidate(args: {
 		[
 			`Update the brief from what these sources actually say, not from what you already believe. Keep it answerable to WHAT WAS ASKED, not only to the restated question.`,
 			`findings: the COMPLETE brief as it now stands — every earlier finding that still holds, restated, plus whatever these sources add. Anything you leave out is treated as withdrawn, so drop a finding only when you mean to retract it, and correct one by restating it corrected. Each finding carries the source numbers supporting it, and they must come from the register above.`,
+			// The caps existed only in the parser, so the model wrote past them and
+			// everything beyond was silently discarded — tokens spent to be thrown
+			// away, and a reply long enough to be cut off before it closed.
+			`Stay inside these limits, because anything past them is dropped: at most ${MAX_FINDINGS} findings of ${CLAIM_CHARS} characters each, ${MAX_GAPS} gaps and ${MAX_CONFLICTS} conflicts of ${GAP_CHARS} characters each. If you have more to say than that, keep what matters most to the question — a brief that is cut off mid-sentence is thrown away entirely.`,
 			`Use the register to check a carried finding before restating it: if the sources it cites do not actually support it, correct it or turn it into a gap.`,
 			`A source marked SEARCH SNIPPET ONLY is a search engine's summary, not the page. Use it to establish that something exists and to aim the next search — do not rest a finding on it, and if it is the only support for a claim, write that claim as a gap instead.`,
 			`gaps: what the question still needs and no source has answered. Write each one specifically enough that a web search can be made of it as it stands.`,
@@ -1901,26 +1976,65 @@ export async function consolidate(args: {
 			args.signal
 		);
 
-	let res;
+	const read = (text: string) =>
+		parseBrief(text, {
+			knownSources: args.allEvidence.map((e) => e.n),
+			readSources: args.allEvidence.filter((e) => e.kind === 'page').map((e) => e.n),
+			maxQueries: args.maxQueries,
+			fallbackLanguage: args.defaultLanguage ?? ''
+		});
+
+	/**
+	 * One attempt, judged by whether a brief came out of it.
+	 *
+	 * The parse belongs inside the attempt, not after the last one. The retry
+	 * used to be guarded on `!res.text.trim()`, which meant the one failure the
+	 * larger budget actually fixes — a reply cut off mid-JSON, and so not empty —
+	 * was the one failure that could never reach it.
+	 */
+	const attempt = async (maxTokens: number): Promise<Attempt> => {
+		const res = await ask(maxTokens);
+		track(res.usage);
+		return { res, brief: res.text.trim() ? read(res.text) : null };
+	};
+
+	/**
+	 * Which of two attempts to keep.
+	 *
+	 * A brief that was not cut off beats everything, because a truncated one is
+	 * missing findings the model meant to include — salvage is the fallback when
+	 * the larger allowance did not help, never a reason to skip asking for it.
+	 */
+	const better = (a: Attempt, b: Attempt): Attempt => {
+		const whole = (x: Attempt) => x.brief && x.res.finishReason !== 'length';
+		if (whole(b)) return b;
+		if (whole(a)) return a;
+		if (b.brief) return b;
+		if (a.brief) return a;
+		return b;
+	};
+
+	let out;
+	// The larger allowance is spent once per consolidation, however the first
+	// attempt went wrong — otherwise a timeout followed by a truncation would ask
+	// the same expensive question three times over.
+	let escalated = false;
 	try {
 		try {
-			res = await ask(CONSOLIDATE_TOKENS);
-			track(res.usage);
+			out = await attempt(CONSOLIDATE_TOKENS);
 		} catch (err) {
-			// A first attempt that ran out of time is the *same* failure the retry
-			// below exists for — a model still thinking when its allowance ran out —
-			// and it used to be the one form of it that never got a second chance,
-			// because a throw skips the retry branch entirely. Give it the larger
-			// budget, which is what lets it finish thinking and still answer.
+			// A first attempt that ran out of time is the same failure the retry
+			// exists for — a model still thinking when its allowance ran out — and
+			// a throw would otherwise skip the retry entirely.
 			if (args.signal?.aborted || !isTimeout(err)) throw err;
-			res = await ask(CONSOLIDATE_TOKENS_RETRY);
-			track(res.usage);
+			escalated = true;
+			out = await attempt(CONSOLIDATE_TOKENS_RETRY);
 		}
-		// Same reasoning-model allowance the planner makes: a model that spent the
-		// first budget thinking gets one retry with real headroom.
-		if (!res.text.trim() && (res.reasonedOnly || res.finishReason === 'length')) {
-			res = await ask(CONSOLIDATE_TOKENS_RETRY);
-			track(res.usage);
+		// Nothing usable, or usable only because it was patched up: silence,
+		// thinking, and a brief that ran past the end of its allowance all want the
+		// same larger budget.
+		if (!escalated && (!out.brief || out.res.finishReason === 'length')) {
+			out = better(out, await attempt(CONSOLIDATE_TOKENS_RETRY));
 		}
 	} catch (err) {
 		if (args.signal?.aborted) return { status: 'cancelled' };
@@ -1928,15 +2042,29 @@ export async function consolidate(args: {
 		return { status: 'error', error: String(err) };
 	}
 
+	const { res, brief } = out;
+	if (brief) return { status: 'ok', brief: brief.brief, queries: brief.queries };
 	if (!res.text.trim()) return { status: 'empty', reasonedOnly: Boolean(res.reasonedOnly) };
-	const parsed = parseBrief(res.text, {
-		knownSources: args.allEvidence.map((e) => e.n),
-		readSources: args.allEvidence.filter((e) => e.kind === 'page').map((e) => e.n),
-		maxQueries: args.maxQueries,
-		fallbackLanguage: args.defaultLanguage ?? ''
-	});
-	if (!parsed) return { status: 'unparseable', sample: res.text.slice(0, 200) };
-	return { status: 'ok', brief: parsed.brief, queries: parsed.queries };
+	return { status: 'unparseable', ...unusable(res) };
+}
+
+/**
+ * What a reply that could not be read actually looked like.
+ *
+ * The head of a truncated reply is pristine JSON, so a 200-character sample from
+ * the front described every failure as "well-formed" and explained none of them.
+ * The tail is where the evidence is, and the length and finish reason are what
+ * say whether it was cut off at all.
+ */
+function unusable(res: CompletionResult): { sample: string; chars: number; finishReason?: string } {
+	const text = res.text.trim();
+	const sample =
+		text.length <= 400 ? text : `${text.slice(0, 200)}\n…\n${text.slice(-200)}`;
+	return {
+		sample,
+		chars: text.length,
+		...(res.finishReason ? { finishReason: res.finishReason } : {})
+	};
 }
 
 /**
@@ -1948,6 +2076,69 @@ export async function consolidate(args: {
  * is genuinely nothing to carry forward — the caller treats that as a failed
  * round and says so, instead of ending the run in silence.
  */
+/**
+ * Close a JSON object that stopped mid-way, so what did arrive can still be read.
+ *
+ * A truncated brief is not a smaller brief — `JSON.parse` rejects the whole
+ * thing, and a round that produced four good findings before the cut used to be
+ * worth exactly nothing. This walks the text tracking string state and nesting,
+ * rewinds to the last point where a complete element had just been closed, and
+ * shuts whatever is still open.
+ *
+ * Deliberately not a general JSON repairer: it never invents a value, never
+ * closes a string to salvage half a word, and returns null rather than guess.
+ * Everything it produces is text the model actually finished writing.
+ */
+export function repairTruncatedJson(raw: string): string | null {
+	const start = raw.indexOf('{');
+	if (start === -1) return null;
+	const stack: ('{' | '[')[] = [];
+	let inString = false;
+	let escaped = false;
+	// The last index at which nothing was half-written: not inside a string, and
+	// the character just closed an element rather than opening one.
+	let safe = -1;
+	let safeDepth = 0;
+
+	for (let i = start; i < raw.length; i++) {
+		const ch = raw[i];
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (ch === '\\') escaped = true;
+			else if (ch === '"') inString = false;
+			continue;
+		}
+		if (ch === '"') {
+			inString = true;
+			continue;
+		}
+		if (ch === '{' || ch === '[') {
+			stack.push(ch);
+			continue;
+		}
+		if (ch === '}' || ch === ']') {
+			const open = stack.pop();
+			if (!open || (ch === '}') !== (open === '{')) return null; // mismatched
+			if (!stack.length) return raw.slice(start, i + 1); // it was complete
+			safe = i;
+			safeDepth = stack.length;
+			continue;
+		}
+	}
+
+	// Nothing ever closed, so there is no complete element to keep.
+	if (safe === -1 || !stack.length) return null;
+	// Trim back to the last closed element and shut everything still open, in the
+	// order it was opened.
+	const kept = raw.slice(start, safe + 1);
+	const closers = stack
+		.slice(0, safeDepth)
+		.reverse()
+		.map((open) => (open === '{' ? '}' : ']'))
+		.join('');
+	return kept + closers;
+}
+
 export function parseBrief(
 	text: string,
 	opts: {
@@ -1965,7 +2156,15 @@ export function parseBrief(
 	try {
 		parsed = JSON.parse(text.slice(start, end + 1));
 	} catch {
-		return null;
+		// Most often a reply that stopped mid-JSON: `lastIndexOf('}')` then lands
+		// on an inner brace and the slice is unbalanced. Keep what was finished.
+		const repaired = repairTruncatedJson(text);
+		if (!repaired) return null;
+		try {
+			parsed = JSON.parse(repaired);
+		} catch {
+			return null;
+		}
 	}
 	if (!parsed || typeof parsed !== 'object') return null;
 

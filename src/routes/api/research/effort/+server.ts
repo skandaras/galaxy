@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
 import { RESEARCH_EFFORTS, type ResearchEffort } from '$lib/research-effort';
 import { roundBudget, type RoundBudget } from '$lib/server/engine/research';
-import { DEFAULT_RESEARCH, getSetting, type ResearchSettings } from '$lib/server/settings';
+import { researchSettings } from '$lib/server/settings';
 
 /**
  * What each effort level would actually buy, given the current admin ceiling.
@@ -15,7 +15,7 @@ import { DEFAULT_RESEARCH, getSetting, type ResearchSettings } from '$lib/server
  */
 export const GET: RequestHandler = ({ locals }) => {
 	requireUser(locals);
-	const cfg = getSetting<ResearchSettings>('research', DEFAULT_RESEARCH);
+	const cfg = researchSettings();
 	const levels = {} as Record<ResearchEffort, RoundBudget>;
 	for (const effort of RESEARCH_EFFORTS) levels[effort] = roundBudget(cfg, effort);
 	return json({ roundCeiling: levels.exhaustive.roundCeiling, levels });
