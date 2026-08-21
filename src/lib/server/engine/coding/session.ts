@@ -18,7 +18,7 @@ import {
 	DEFAULT_CODING,
 	DEFAULT_COMPACTION,
 	DEFAULT_FETCH,
-	DEFAULT_WEB_SEARCH,
+	webSearchSettings,
 	getSetting,
 	type CodingSettings,
 	type FetchSettings,
@@ -143,7 +143,7 @@ export function startCodingTurn(opts: {
 	// Read once, before the first leg: it describes the run *before* this one,
 	// and must not start describing this turn's own legs partway through.
 	const priorRun = previousRunNote(chat.id);
-	const searchCfg = getSetting<WebSearchSettings>('websearch', DEFAULT_WEB_SEARCH);
+	const searchCfg = webSearchSettings();
 	/**
 	 * Assembled per leg, not per turn.
 	 *

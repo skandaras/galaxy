@@ -61,7 +61,15 @@ async function freePort(from = 18904, to = 18960) {
 }
 
 const PORT = await freePort();
+const MOCK_PORT = await freePort(PORT + 1);
 const B = `http://127.0.0.1:${PORT}`;
+
+// The bash smoke proves the engine emits what it should. It cannot see whether
+// any of it is drawn, which is the whole reason this file exists — so a mock
+// provider runs here too, and a real research run is watched in the browser.
+const mock = spawn('node', [join('scripts', 'mock-provider.mjs'), String(MOCK_PORT)], {
+	stdio: 'ignore'
+});
 
 const dataDir = mkdtempSync(join(tmpdir(), 'galaxy-ui-'));
 mkdirSync(SHOTS, { recursive: true });
@@ -85,6 +93,7 @@ app.on('exit', (code) => (appExited = code ?? true));
 
 const cleanup = () => {
 	app.kill();
+	mock.kill();
 	rmSync(dataDir, { recursive: true, force: true });
 };
 process.on('exit', cleanup);
@@ -570,6 +579,71 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/settings', '/obse
 		});
 		check('the .num utility resolves to the code font', declared.includes('Source Code Pro'));
 	}
+}
+
+// N. A run's searches are drawn, live and afterwards.
+//
+// Every layer of this is asserted server-side already: the chunk is pushed, the
+// SSE carries it, the reducer folds it. None of that stops the box being
+// invisible, which is exactly what happened twice — once because the step it
+// sits in collapsed the moment the search succeeded, once because a selector
+// meant for tool rows also matched the result rows inside them and broke every
+// title onto its own line.
+{
+	const prov = await asAdmin('/api/admin/providers', {
+		method: 'POST',
+		body: JSON.stringify({
+			kind: 'openai-compatible',
+			name: 'mock',
+			baseUrl: `http://127.0.0.1:${MOCK_PORT}/v1`
+		})
+	});
+	await asAdmin(`/api/admin/providers/${prov.id}/sync`, { method: 'POST' });
+	const models = await asAdmin('/api/admin/models');
+	await asAdmin(`/api/admin/models/${models[0].id}`, {
+		method: 'PATCH',
+		body: JSON.stringify({ enabled: true })
+	});
+	await asAdmin('/api/admin/settings', {
+		method: 'PUT',
+		body: JSON.stringify({
+			key: 'websearch',
+			value: { provider: 'searxng', baseUrl: `http://127.0.0.1:${MOCK_PORT}/searxng` }
+		})
+	});
+
+	problems = [];
+	await page.goto(`${B}/chat`);
+	// Polling races a run that finishes in well under a second against a local
+	// mock, so record from inside the page and read the trail afterwards.
+	await page.evaluate(() => {
+		window.__seen = { boxes: 0, rows: 0 };
+		const snap = () => {
+			window.__seen.boxes = Math.max(window.__seen.boxes, document.querySelectorAll('li.search').length);
+			window.__seen.rows = Math.max(window.__seen.rows, document.querySelectorAll('.results li').length);
+		};
+		new MutationObserver(snap).observe(document.body, { subtree: true, childList: true });
+	});
+	await page.getByRole('button', { name: /Deep research/ }).click();
+	await page.getByRole('textbox').first().fill('How do nebulae form?');
+	await page.keyboard.press('Enter');
+	await page
+		.locator('.banner', { hasText: 'Deep research finished' })
+		.waitFor({ timeout: 60_000 })
+		.catch(() => {});
+
+	const seen = await page.evaluate(() => window.__seen);
+	check('a research round draws a box per query', seen.boxes > 0);
+	check('and the results inside it', seen.rows > 0);
+
+	// The live timeline is cleared when the run ends, so anything still on
+	// screen has to have come from the trace the run saved.
+	const past = page.locator('.past-run').first();
+	await past.waitFor({ timeout: 15_000 }).catch(() => {});
+	if (await past.count()) await page.locator('.past-run > summary').first().click();
+	check('the searches survive the run that made them', (await page.locator('.results li').count()) > 0);
+	check('the chat page stayed quiet during a research run', problems, []);
+	if (fail.length) await shot('research-searches');
 }
 
 if (fail.length) await shot('final-state');

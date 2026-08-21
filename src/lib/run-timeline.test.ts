@@ -142,6 +142,18 @@ describe('search results in the timeline', () => {
 		expect(steps(items)[0].tools[0].detail).toBe('freight');
 	});
 
+	it('keeps a failed search apart from one that found nothing', () => {
+		// Conflating them is how a provider outage gets shown as a fact about the
+		// world — the same distinction the search tool makes for the model.
+		const items = fold([
+			{ type: 'search', query: 'broke', results: [], failed: true },
+			{ type: 'search', query: 'nothing there', results: [] }
+		]);
+		const searches = items.filter((i): i is TimelineSearch => i.kind === 'search');
+		expect(searches[0].failed).toBe(true);
+		expect(searches[1].failed).toBeUndefined();
+	});
+
 	it('draws a pipeline search that belongs to no step', () => {
 		// Deep research is not the agent loop: its queries are not tool calls and
 		// arrive with no step to hang under.

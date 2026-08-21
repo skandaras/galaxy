@@ -52,18 +52,36 @@ import {
 	type ResearchBrief
 } from './research';
 import type { StoredMessage } from '$lib/server/chats';
+import { StreamTimeoutError } from '$lib/server/providers/types';
 import { createPacer, type SearchResult } from './tools/web-search';
 import { DEFAULT_WEB_SEARCH, type WebSearchSettings } from '$lib/server/settings';
 
-/** Adapter whose complete() is scripted per call. */
+/**
+ * Adapter scripted per call, answering the same script down either path.
+ *
+ * Framing, planning and consolidation stream now — they are bounded by silence
+ * rather than by a flat deadline — while other callers still use `complete`.
+ * One shared counter, so a script of two replies means two calls whichever way
+ * the caller asks for them, and the stream replays a CompletionResult as the
+ * events `completeIdleBounded` reassembles it from.
+ */
 function choiceOf(...replies: CompletionResult[]): ModelChoice {
 	let i = 0;
+	const next = () => replies[Math.min(i++, replies.length - 1)];
 	return {
 		model: { modelKey: 'm' },
 		provider: {},
 		adapter: {
-			complete: async () => replies[Math.min(i++, replies.length - 1)],
-			stream: async function* () {},
+			complete: async () => next(),
+			stream: async function* () {
+				const reply = next();
+				// An empty answer with `reasonedOnly` is a model that spent the whole
+				// budget thinking: chain-of-thought on its own channel, no text.
+				if (reply.reasonedOnly) yield { type: 'reasoning', delta: 'thinking…' };
+				if (reply.text) yield { type: 'text', delta: reply.text };
+				if (reply.usage) yield { type: 'usage', usage: reply.usage };
+				yield { type: 'done', finishReason: reply.finishReason ?? 'stop' };
+			},
 			listModels: async () => []
 		}
 	} as unknown as ModelChoice;
@@ -77,14 +95,28 @@ const reasonedOut: CompletionResult = {
 	reasonedOnly: true
 };
 
-/** Capture the last user prompt an adapter was handed. */
+/**
+ * Capture the last user prompt an adapter was handed, down either path.
+ *
+ * Hooking only `complete` stopped seeing anything the moment framing, planning
+ * and consolidation moved to streaming — the assertions still ran, against an
+ * empty string.
+ */
 function spyOn(choice: ModelChoice): () => string {
 	let prompt = '';
-	const inner = choice.adapter.complete;
-	choice.adapter.complete = ((req: { messages: { content: string }[] }, signal: AbortSignal) => {
+	const seen = (req: { messages: { content: string }[] }) => {
 		prompt = req.messages[req.messages.length - 1].content;
-		return inner(req as never, signal);
-	}) as typeof inner;
+	};
+	const innerComplete = choice.adapter.complete;
+	choice.adapter.complete = ((req: { messages: { content: string }[] }, signal: AbortSignal) => {
+		seen(req);
+		return innerComplete(req as never, signal);
+	}) as typeof innerComplete;
+	const innerStream = choice.adapter.stream;
+	choice.adapter.stream = ((req: { messages: { content: string }[] }, signal: AbortSignal) => {
+		seen(req);
+		return innerStream(req as never, signal);
+	}) as typeof innerStream;
 	return () => prompt;
 }
 
@@ -709,9 +741,9 @@ describe('consolidate', () => {
 
 	it('reports a failed call instead of throwing', async () => {
 		const choice = choiceOf();
-		choice.adapter.complete = (async () => {
+		choice.adapter.stream = (async function* () {
 			throw new Error('provider down');
-		}) as typeof choice.adapter.complete;
+		}) as typeof choice.adapter.stream;
 		const out = await consolidate({ ...base, choice });
 		expect(out.status).toBe('error');
 		if (out.status === 'error') expect(out.error).toContain('provider down');
@@ -764,8 +796,8 @@ describe('consolidate', () => {
 	it('carries the system prompt, which the review step it replaces never did', async () => {
 		const choice = choiceOf(ok(valid));
 		let role = '';
-		const inner = choice.adapter.complete;
-		choice.adapter.complete = ((req: { messages: { role: string }[] }, signal: AbortSignal) => {
+		const inner = choice.adapter.stream;
+		choice.adapter.stream = ((req: { messages: { role: string }[] }, signal: AbortSignal) => {
 			role = req.messages[0].role;
 			return inner(req as never, signal);
 		}) as typeof inner;
@@ -1915,5 +1947,79 @@ describe('what a research round shows and reads', () => {
 		expect(shown.pool).toBeLessThan(shown.candidates);
 		expect(shown.opened).toBeLessThanOrEqual(shown.pool);
 		expect(shown.opened).toBe(6);
+	});
+});
+
+
+describe('a consolidation that runs out of time', () => {
+	const valid =
+		'{"findings":[{"claim":"A holds","sources":[1]}],"gaps":["B?"],"next_queries":["B"]}';
+
+	/** An adapter whose first n stream attempts stall, then answers. */
+	function stalling(n: number, then: CompletionResult) {
+		let calls = 0;
+		const choice = choiceOf(then);
+		choice.adapter.stream = (async function* () {
+			if (calls++ < n) throw new StreamTimeoutError('the model sent nothing for 90s');
+			yield { type: 'text', delta: then.text };
+			yield { type: 'done', finishReason: 'stop' };
+		}) as typeof choice.adapter.stream;
+		return {
+			choice,
+			get calls() {
+				return calls;
+			}
+		};
+	}
+
+	const base = {
+		systemPrompt: 'system',
+		asked: 'q',
+		question: 'q',
+		background: '',
+		prior: EMPTY_BRIEF,
+		fresh: [source(1)],
+		allEvidence: [source(1)],
+		ranQueries: [],
+		round: 1,
+		rounds: 3,
+		maxQueries: 3,
+		cfg: DEFAULT_RESEARCH,
+		track: () => {},
+		defaultLanguage: ''
+	};
+
+	it('gets the larger allowance rather than being abandoned', async () => {
+		// A first attempt that ran out of time is the same failure the retry was
+		// written for — a model still thinking when its budget ran out — and a
+		// throw used to skip that branch entirely.
+		const spy = stalling(1, ok(valid));
+		const out = await consolidate({ ...base, choice: spy.choice });
+		expect(out.status).toBe('ok');
+		expect(spy.calls).toBe(2);
+	});
+
+	it('gives up after the second attempt also stalls', async () => {
+		const spy = stalling(2, ok(valid));
+		const out = await consolidate({ ...base, choice: spy.choice });
+		expect(out.status).toBe('timeout');
+		expect(spy.calls).toBe(2);
+	});
+
+	it('reports a stalled stream as a timeout, not a generic error', async () => {
+		// Two names for one condition: AbortSignal.timeout raises TimeoutError,
+		// the idle watchdog raises StreamTimeoutError.
+		const spy = stalling(9, ok(valid));
+		const out = await consolidate({ ...base, choice: spy.choice });
+		expect(out.status).toBe('timeout');
+	});
+
+	it('does not retry once the user has stopped the run', async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const spy = stalling(1, ok(valid));
+		const out = await consolidate({ ...base, choice: spy.choice, signal: controller.signal });
+		expect(out.status).toBe('cancelled');
+		expect(spy.calls).toBe(1);
 	});
 });

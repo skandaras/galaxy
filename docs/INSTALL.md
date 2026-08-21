@@ -332,6 +332,13 @@ chat turn makes at most `searches per turn`, default 6. Divide whatever
 allowance a provider currently offers by those numbers before assuming you need
 a paid tier — a personal instance often does not.
 
+Both of these are stored per install, and a stored value beats the default on
+every read — so raising a default in a new version reaches only installs that
+have never saved these settings. Galaxy closes that gap once, at startup: a
+value still equal to the default it replaces is raised and the row is stamped,
+while anything you chose yourself is left alone. After that the stored value is
+yours, and Admin → Settings is the only thing that changes it.
+
 `max results` is not part of that arithmetic. Providers bill the request, not
 the row: Brave returns up to 20 for the same call, and SearXNG and DuckDuckGo
 have theirs parsed either way. Lowering it saves no quota and only narrows what
@@ -468,6 +475,7 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | Deep research returns nothing, or always searches "1 queries" | A reasoning model spending its whole token budget thinking. Both the planner and the synthesis now retry with more room automatically; if it persists, raise Max tokens in Admin → Research or pick a non-reasoning model |
 | Deep research reports "no sources could be retrieved" | Search returned nothing — check the provider in Admin → Settings with the Test button. The answer that follows is general knowledge, not research |
 | Deep research says "Consolidation returned no usable JSON" | The model could not produce the between-rounds brief in the shape asked for. The run falls back to searching the gaps it already had and only stops after two failures in a row, so the answer still lands — but a model that cannot follow a JSON contract will research shallowly. Pick a different one for the deep-research task |
+| Deep research says "Consolidation timed out" and stops after one round | Framing, planning and consolidation are bounded by *silence* rather than by total time, so a slow model is no longer cut off while it is still working; a call that does stall is retried once with a larger token budget, which is what a reasoning model needs to finish thinking and still answer. Round one gets a second attempt on the same sources — it has no brief yet, so it has no open gaps to continue from. Persisting past that means the model cannot produce the brief: pick another for the deep-research task |
 | Deep research always runs one round whatever the effort slider says | Admin → Settings → Deep research → "rounds per run" is the ceiling; effort spends a fraction of it, so a ceiling of 1 makes every level identical. The run says so in chat when that happens |
 | Deep research ignored the toggle and just did a web search | Fixed in this version. Creating a chat by pressing send used to clear the composer's per-message choices before the request was built, so the first message of a *new* chat silently lost Deep research, the effort level and the model picked in the dropdown |
 | Deep research seems to ignore the conversation | It no longer does: a follow-up is first restated as a standalone question (the `framing` stage, skipped on a chat's first message). If it still looks wrong, the chat shows the resolved question as a `Researching: …` notice — that is exactly what was searched |

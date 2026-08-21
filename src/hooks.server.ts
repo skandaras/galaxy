@@ -2,13 +2,14 @@ import type { Handle } from '@sveltejs/kit';
 import { error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { runMigrations } from '$lib/server/db';
-import { seedTaskConfigs, seedSkills } from '$lib/server/bootstrap';
+import { seedTaskConfigs, seedSkills, migrateSettings } from '$lib/server/bootstrap';
 import { ensureSkillsRepo } from '$lib/server/skills';
 import { startScheduler } from '$lib/server/engine/scheduler';
 import { isTrustedProxy, parseAuthHeaders, isAdminFromGroups } from '$lib/server/auth';
 import { provisionUser } from '$lib/server/users';
 
 runMigrations();
+migrateSettings();
 seedTaskConfigs();
 ensureSkillsRepo();
 seedSkills();

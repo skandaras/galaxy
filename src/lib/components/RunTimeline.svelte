@@ -107,11 +107,13 @@
 				{/if}
 			</li>
 		{:else if item.kind === 'search'}
-			<li class="search">
+			<li class="search" class:t-error={item.failed}>
 				<div class="t-line">
 					<span class="t-name">web_search</span>
 					<span class="t-detail">{item.query}{item.language ? ` [${item.language}]` : ''}</span>
-					<span class="r-count">{plural(item.results.length)}</span>
+					<!-- "failed" rather than "0 results": a search that broke and a
+					     search that genuinely found nothing are different claims. -->
+					<span class="r-count">{item.failed ? 'failed' : plural(item.results.length)}</span>
 				</div>
 				{#if item.results.length}{@render resultBox(item.results)}{/if}
 			</li>
@@ -216,7 +218,8 @@
 		animation: pulse 1.2s ease-in-out infinite;
 	}
 	.t-error .t-name,
-	.t-error .t-detail {
+	.t-error .t-detail,
+	.t-error .r-count {
 		color: var(--danger);
 	}
 	.t-detail {

@@ -97,6 +97,11 @@ export interface TimelineSearch {
 	query: string;
 	language?: string;
 	results: SearchResultRow[];
+	/**
+	 * The search failed, rather than running and finding nothing. Conflating the
+	 * two is how an outage gets shown as a fact about the world.
+	 */
+	failed?: boolean;
 }
 
 export type TimelineItem = TimelineStep | TimelineStage | TimelineNotice | TimelineSearch;
@@ -121,7 +126,13 @@ export type TimelineChunk =
 	  }
 	| { type: 'stage'; name: string; detail?: string }
 	| { type: 'notice'; text: string }
-	| { type: 'search'; query: string; language?: string; results: SearchResultRow[] };
+	| {
+			type: 'search';
+			query: string;
+			language?: string;
+			results: SearchResultRow[];
+			failed?: boolean;
+	  };
 
 /** Chunks this reducer handles; anything else is somebody else's business. */
 export function isTimelineChunk(chunk: { type?: string }): chunk is TimelineChunk {
@@ -152,7 +163,13 @@ export function applyChunk(items: TimelineItem[], chunk: TimelineChunk): Timelin
 	if (chunk.type === 'search') {
 		return [
 			...items,
-			{ kind: 'search', query: chunk.query, language: chunk.language, results: chunk.results }
+			{
+				kind: 'search',
+				query: chunk.query,
+				language: chunk.language,
+				results: chunk.results,
+				...(chunk.failed ? { failed: true } : {})
+			}
 		];
 	}
 

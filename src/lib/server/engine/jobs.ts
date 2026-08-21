@@ -52,7 +52,14 @@ export type JobChunk =
 	| { type: 'notice'; text: string }
 	// A search that belongs to no tool call: deep research runs a pipeline rather
 	// than the agent loop, so its queries arrive with no step to hang them under.
-	| { type: 'search'; query: string; language?: string; results: SearchResultRow[] }
+	| {
+			type: 'search';
+			query: string;
+			language?: string;
+			results: SearchResultRow[];
+			/** The search itself failed, as distinct from finding nothing. */
+			failed?: boolean;
+	  }
 	// The agent is waiting on a person. `answer` closes the question it names —
 	// which matters on replay, since a reconnecting client would otherwise
 	// re-open a question that has already been dealt with.

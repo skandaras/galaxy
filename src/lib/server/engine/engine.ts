@@ -10,7 +10,7 @@ import {
 import {
 	DEFAULT_COMPACTION,
 	DEFAULT_FETCH,
-	DEFAULT_WEB_SEARCH,
+	webSearchSettings,
 	getSetting,
 	type FetchSettings,
 	type WebSearchSettings
@@ -89,7 +89,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	const persist = !chat.hidden;
 	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'chat', persist });
 
-	const searchCfg = getSetting<WebSearchSettings>('websearch', DEFAULT_WEB_SEARCH);
+	const searchCfg = webSearchSettings();
 	const tools: LoopTool[] = [
 		...knowledgeTools(opts.userId),
 		...attachmentTools(chat.id),

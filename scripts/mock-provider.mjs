@@ -16,6 +16,14 @@ import { createServer } from 'node:http';
 
 const port = Number(process.argv[2] ?? 39400);
 
+/**
+ * Consolidations already refused, for questions asking to be refused.
+ *
+ * Keyed off the question rather than an env var so one mock instance serves
+ * both the ordinary research checks and the flaky one in the same smoke run.
+ */
+let firstConsolidations = 0;
+
 const MODEL = {
 	id: 'mock/orion-1',
 	name: 'Orion 1 (mock)',
@@ -48,6 +56,184 @@ function delta(res, d, finish = null) {
 		object: 'chat.completion.chunk',
 		choices: [{ index: 0, delta: d, finish_reason: finish }]
 	});
+}
+
+/**
+ * The canned reply for a prompt one of the suites scripts by marker, or null
+ * when nothing matches and the caller should behave normally.
+ *
+ * Shared by both request paths deliberately. Framing, planning and
+ * consolidation moved from complete() to streaming when their flat deadline
+ * became an idle one, and this chain used to live inside the non-streaming
+ * branch — so the moment they moved, every one of them was answered with
+ * "Mock completion." and the whole research suite failed at once.
+ */
+async function scriptedReply(userText) {
+	let content = null;
+		if (userText.includes('RESEARCH-FRAME')) {
+			// Echoes the subject from the conversation, so a test can prove the
+			// follow-up was resolved against it rather than researched literally.
+			content = JSON.stringify({
+				question: userText.includes('nebulae')
+					? 'How do nebulae form, focusing on helium content?'
+					: 'A standalone research question',
+				background: 'Earlier turns already covered formation.'
+			});
+		} else if (userText.includes('RESEARCH-TRIAGE')) {
+			content = JSON.stringify({ open: [1, 2] });
+		} else if (userText.includes('RESEARCH-PLAN')) {
+			content = JSON.stringify({ queries: ['nebula formation', 'nebula composition'] });
+		} else if (userText.includes('RESEARCH-CONSOLIDATE')) {
+			// Scripted to exercise the narrowing the loop exists for: the first
+			// round establishes something and names a gap to chase, and the
+			// round after that calls it done. Keyed off the round header in the
+			// prompt, so it works whatever the effort level allows.
+			const first = /RESEARCH-CONSOLIDATE — round 1 of/.test(userText);
+			// One flaky first consolidation, to prove a run survives it. Round one
+			// has no brief yet and so no open gaps to continue from, which is why
+			// a single failure there used to end the whole run rather than cost it
+			// one round. Answered properly on the retry.
+			const flaky =
+				first && userText.includes('FLAKY-CONSOLIDATION') && firstConsolidations++ === 0;
+			content = flaky
+				? 'sorry, I cannot produce that'
+				: first
+				? JSON.stringify({
+						findings: [{ claim: 'Nebulae form from collapsing molecular clouds', sources: [1] }],
+						gaps: ['what proportion of a nebula is helium'],
+						conflicts: [],
+						sufficient: false,
+						next_queries: [{ q: 'nebula helium fraction', language: '' }]
+					})
+				: JSON.stringify({
+						findings: [
+							{ claim: 'Nebulae form from collapsing molecular clouds', sources: [1] },
+							{ claim: 'Composition is roughly 90% hydrogen, 10% helium', sources: [2] }
+						],
+						gaps: [],
+						conflicts: [],
+						sufficient: true
+					});
+		} else if (userText.includes('--- BEGIN ENTRY ---')) {
+			// Alignment assessment. Quotes are pulled out of the entry itself and
+			// ids out of the prompt, because the parser drops any score whose
+			// evidence is not verbatim and any principle id it does not
+			// recognise — a canned reply would be silently discarded and the
+			// smoke would pass while proving nothing.
+			const entry = userText.split('--- BEGIN ENTRY ---')[1].split('--- END ENTRY ---')[0].trim();
+			const quote = entry.split(/(?<=\.)\s+/)[0] ?? entry.slice(0, 60);
+			const principleIds = [...userText.matchAll(/^- id: (\S+)$/gm)].map((m) => m[1]);
+			const dimensionIds = [...userText.matchAll(/^### (\S+) — /gm)].map((m) => m[1]);
+			content = JSON.stringify({
+				care: false,
+				rumination: false,
+				confidence: 'medium',
+				band: 'mixed',
+				standing: 'MOCK-STANDING: honest about it after the fact',
+				summary: 'A mock reading.',
+				dimensions: dimensionIds.slice(0, 2).map((id, i) => ({
+					id,
+					score: i === 0 ? 2 : 4,
+					evidence: quote,
+					principles: principleIds.slice(0, 1),
+					note: 'mock note'
+				})),
+				tensions:
+					principleIds.length >= 2
+						? [{ between: principleIds.slice(0, 2), chose: principleIds[1], note: 'mock trade-off' }]
+						: [],
+				gaps: principleIds.length
+					? [{ principle: principleIds[0], observation: 'mock gap', evidence: quote }]
+					: [],
+				disengagement: ['euphemistic-labelling'],
+				next_step: 'If it happens again, then say the true thing first.',
+				question: 'What made the easy answer feel necessary?'
+			});
+		} else if (userText.includes('Recent readings, oldest first')) {
+			const neglected = [...userText.matchAll(/^- (\S+) — /gm)].map((m) => m[1]);
+			content = JSON.stringify({
+				body: 'MOCK-LETTER\n\nA mock letter about the direction of travel.',
+				highlights: ['steadier on honesty', 'presence still slipping'],
+				neglected: neglected.slice(0, 1)
+			});
+		} else if (userText.includes('MEMORY-AUDIT')) {
+			// Echo a marker drawn from the audited activity so a test can prove
+			// each user's memory came from their own chats and nobody else's.
+			const marker = userText.includes('alpha-topic')
+				? 'ALPHA-MEM'
+				: userText.includes('beta-topic')
+					? 'BETA-MEM'
+					: null;
+			content = JSON.stringify({
+				memories: [
+					...(marker ? [{ kind: 'fact', content: `Observed marker ${marker}` }] : []),
+					{ kind: 'preference', content: 'User prefers concise replies' },
+					{ kind: 'fact', content: 'Prod restarts via systemctl restart galaxy' }
+				],
+				skill_candidates: [
+					{
+						name: 'release-checklist',
+						category: 'ops',
+						description: 'Steps to follow when releasing',
+						triggers: 'release, deploy',
+						body: '## Steps\n1. Back up the volume\n2. Promote dev to prod',
+						rationale: 'Deployment steps recurred in recent activity'
+					}
+				]
+			});
+		} else if (userText.includes('CHAT-TITLE')) {
+			// Titling happens after the reply, so a real (remote) model takes a
+			// beat. Simulated here, because an instant local answer hides whether
+			// the UI ever picks the new title up.
+			if (process.env.MOCK_SLOW_TITLE) await new Promise((r) => setTimeout(r, 2500));
+			// Deliberately decorated: the titler is expected to strip quotes and
+			// a "Title:" prefix rather than store them.
+			content = '"Title: Mock conversation name"';
+		} else if (userText.includes('UX-AUDIT')) {
+			// Echo back something only a reader of the real prompt could know,
+			// so the smoke test can prove the audit was handed live telemetry
+			// and the actual interface source. The titles are fixed on purpose:
+			// running the audit twice must file these once and then recognise
+			// them as already proposed.
+			const sawComposer = userText.includes('class="composer"');
+			const sawTelemetry = userText.includes('USAGE TELEMETRY');
+			content = JSON.stringify({
+				ideas: [
+					{
+						title: 'Explain why a run stopped',
+						area: 'chat',
+						severity: 'high',
+						effort: 'm',
+						problem: 'A cancelled run leaves no explanation behind.',
+						proposal: 'Show the stop reason inline in the thread.',
+						evidence: `telemetry:${sawTelemetry} composer-source:${sawComposer}`
+					},
+					{
+						title: 'Make the model picker reachable on a phone',
+						area: 'mobile',
+						severity: 'medium',
+						effort: 's',
+						problem: 'The picker sits below the fold on a small screen.',
+						proposal: 'Move it into the composer options row.',
+						evidence: 'mock'
+					}
+				]
+			});
+		} else if (userText.includes('SKILL-OPTIMISE')) {
+			content = JSON.stringify({
+				skill_candidates: [
+					{
+						name: 'demo-skill',
+						category: 'general',
+						description: 'Demonstrates the skill system (clarified)',
+						triggers: 'demo, example',
+						body: '## When to use\n\nImproved by the optimiser.',
+						rationale: 'Description was vague'
+					}
+				]
+			});
+		}
+	return content;
 }
 
 const server = createServer(async (req, res) => {
@@ -228,162 +414,7 @@ const server = createServer(async (req, res) => {
 		// compaction summaries, etc.
 		if (!parsed.stream) {
 			const userText = String(last?.content ?? '');
-			let content = 'Mock completion.';
-			if (userText.includes('RESEARCH-FRAME')) {
-				// Echoes the subject from the conversation, so a test can prove the
-				// follow-up was resolved against it rather than researched literally.
-				content = JSON.stringify({
-					question: userText.includes('nebulae')
-						? 'How do nebulae form, focusing on helium content?'
-						: 'A standalone research question',
-					background: 'Earlier turns already covered formation.'
-				});
-			} else if (userText.includes('RESEARCH-TRIAGE')) {
-				content = JSON.stringify({ open: [1, 2] });
-			} else if (userText.includes('RESEARCH-PLAN')) {
-				content = JSON.stringify({ queries: ['nebula formation', 'nebula composition'] });
-			} else if (userText.includes('RESEARCH-CONSOLIDATE')) {
-				// Scripted to exercise the narrowing the loop exists for: the first
-				// round establishes something and names a gap to chase, and the
-				// round after that calls it done. Keyed off the round header in the
-				// prompt, so it works whatever the effort level allows.
-				const first = /RESEARCH-CONSOLIDATE — round 1 of/.test(userText);
-				content = first
-					? JSON.stringify({
-							findings: [{ claim: 'Nebulae form from collapsing molecular clouds', sources: [1] }],
-							gaps: ['what proportion of a nebula is helium'],
-							conflicts: [],
-							sufficient: false,
-							next_queries: [{ q: 'nebula helium fraction', language: '' }]
-						})
-					: JSON.stringify({
-							findings: [
-								{ claim: 'Nebulae form from collapsing molecular clouds', sources: [1] },
-								{ claim: 'Composition is roughly 90% hydrogen, 10% helium', sources: [2] }
-							],
-							gaps: [],
-							conflicts: [],
-							sufficient: true
-						});
-			} else if (userText.includes('--- BEGIN ENTRY ---')) {
-				// Alignment assessment. Quotes are pulled out of the entry itself and
-				// ids out of the prompt, because the parser drops any score whose
-				// evidence is not verbatim and any principle id it does not
-				// recognise — a canned reply would be silently discarded and the
-				// smoke would pass while proving nothing.
-				const entry = userText.split('--- BEGIN ENTRY ---')[1].split('--- END ENTRY ---')[0].trim();
-				const quote = entry.split(/(?<=\.)\s+/)[0] ?? entry.slice(0, 60);
-				const principleIds = [...userText.matchAll(/^- id: (\S+)$/gm)].map((m) => m[1]);
-				const dimensionIds = [...userText.matchAll(/^### (\S+) — /gm)].map((m) => m[1]);
-				content = JSON.stringify({
-					care: false,
-					rumination: false,
-					confidence: 'medium',
-					band: 'mixed',
-					standing: 'MOCK-STANDING: honest about it after the fact',
-					summary: 'A mock reading.',
-					dimensions: dimensionIds.slice(0, 2).map((id, i) => ({
-						id,
-						score: i === 0 ? 2 : 4,
-						evidence: quote,
-						principles: principleIds.slice(0, 1),
-						note: 'mock note'
-					})),
-					tensions:
-						principleIds.length >= 2
-							? [{ between: principleIds.slice(0, 2), chose: principleIds[1], note: 'mock trade-off' }]
-							: [],
-					gaps: principleIds.length
-						? [{ principle: principleIds[0], observation: 'mock gap', evidence: quote }]
-						: [],
-					disengagement: ['euphemistic-labelling'],
-					next_step: 'If it happens again, then say the true thing first.',
-					question: 'What made the easy answer feel necessary?'
-				});
-			} else if (userText.includes('Recent readings, oldest first')) {
-				const neglected = [...userText.matchAll(/^- (\S+) — /gm)].map((m) => m[1]);
-				content = JSON.stringify({
-					body: 'MOCK-LETTER\n\nA mock letter about the direction of travel.',
-					highlights: ['steadier on honesty', 'presence still slipping'],
-					neglected: neglected.slice(0, 1)
-				});
-			} else if (userText.includes('MEMORY-AUDIT')) {
-				// Echo a marker drawn from the audited activity so a test can prove
-				// each user's memory came from their own chats and nobody else's.
-				const marker = userText.includes('alpha-topic')
-					? 'ALPHA-MEM'
-					: userText.includes('beta-topic')
-						? 'BETA-MEM'
-						: null;
-				content = JSON.stringify({
-					memories: [
-						...(marker ? [{ kind: 'fact', content: `Observed marker ${marker}` }] : []),
-						{ kind: 'preference', content: 'User prefers concise replies' },
-						{ kind: 'fact', content: 'Prod restarts via systemctl restart galaxy' }
-					],
-					skill_candidates: [
-						{
-							name: 'release-checklist',
-							category: 'ops',
-							description: 'Steps to follow when releasing',
-							triggers: 'release, deploy',
-							body: '## Steps\n1. Back up the volume\n2. Promote dev to prod',
-							rationale: 'Deployment steps recurred in recent activity'
-						}
-					]
-				});
-			} else if (userText.includes('CHAT-TITLE')) {
-				// Titling happens after the reply, so a real (remote) model takes a
-				// beat. Simulated here, because an instant local answer hides whether
-				// the UI ever picks the new title up.
-				if (process.env.MOCK_SLOW_TITLE) await new Promise((r) => setTimeout(r, 2500));
-				// Deliberately decorated: the titler is expected to strip quotes and
-				// a "Title:" prefix rather than store them.
-				content = '"Title: Mock conversation name"';
-			} else if (userText.includes('UX-AUDIT')) {
-				// Echo back something only a reader of the real prompt could know,
-				// so the smoke test can prove the audit was handed live telemetry
-				// and the actual interface source. The titles are fixed on purpose:
-				// running the audit twice must file these once and then recognise
-				// them as already proposed.
-				const sawComposer = userText.includes('class="composer"');
-				const sawTelemetry = userText.includes('USAGE TELEMETRY');
-				content = JSON.stringify({
-					ideas: [
-						{
-							title: 'Explain why a run stopped',
-							area: 'chat',
-							severity: 'high',
-							effort: 'm',
-							problem: 'A cancelled run leaves no explanation behind.',
-							proposal: 'Show the stop reason inline in the thread.',
-							evidence: `telemetry:${sawTelemetry} composer-source:${sawComposer}`
-						},
-						{
-							title: 'Make the model picker reachable on a phone',
-							area: 'mobile',
-							severity: 'medium',
-							effort: 's',
-							problem: 'The picker sits below the fold on a small screen.',
-							proposal: 'Move it into the composer options row.',
-							evidence: 'mock'
-						}
-					]
-				});
-			} else if (userText.includes('SKILL-OPTIMISE')) {
-				content = JSON.stringify({
-					skill_candidates: [
-						{
-							name: 'demo-skill',
-							category: 'general',
-							description: 'Demonstrates the skill system (clarified)',
-							triggers: 'demo, example',
-							body: '## When to use\n\nImproved by the optimiser.',
-							rationale: 'Description was vague'
-						}
-					]
-				});
-			}
+			const content = (await scriptedReply(userText)) ?? 'Mock completion.';
 			res.writeHead(200, { 'content-type': 'application/json' });
 			if (isReasoning(parsed.model)) {
 				// Thinks first, answers second. With a small cap the whole budget
@@ -425,6 +456,34 @@ const server = createServer(async (req, res) => {
 			'content-type': 'text/event-stream',
 			'cache-control': 'no-cache'
 		});
+
+		// A prompt one of the suites scripts by marker. Framing, planning and
+		// consolidation arrive here now that they are bounded by silence rather
+		// than by a flat deadline, and they want the same canned reply they got
+		// from complete() — including the reasoning-model behaviour, so the
+		// planner's retry is exercised rather than bypassed.
+		const scripted = await scriptedReply(String(last?.content ?? ''));
+		if (scripted !== null) {
+			const cap = parsed.max_tokens ?? 300;
+			const thinks = isReasoning(parsed.model);
+			// Same threshold the non-streaming path uses: a small budget goes
+			// entirely on thinking and comes back empty, stopped on length.
+			const room = !thinks || cap >= 1000;
+			if (thinks) {
+				for (let i = 0; i < 3; i++) delta(res, { reasoning_content: `step ${i} of thinking… ` });
+			}
+			if (room) delta(res, { content: scripted });
+			delta(res, {}, room ? 'stop' : 'length');
+			sseChunk(res, {
+				id: 'mock',
+				object: 'chat.completion.chunk',
+				choices: [],
+				usage: { prompt_tokens: 50, completion_tokens: room ? 40 : cap }
+			});
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
 
 		// Reasoning model: streams `reasoning_content` only, never `content`, and
 		// stops on length. Reproduces a run that burns its whole budget thinking
