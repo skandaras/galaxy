@@ -15,6 +15,7 @@ import {
 	DEFAULT_WEB_SEARCH,
 	getSetting,
 	normaliseResearchSettings,
+	normaliseWebSearchSettings,
 	setSetting
 } from '$lib/server/settings';
 import { emitEvent } from '$lib/server/engine/events';
@@ -55,11 +56,14 @@ const DEFAULTS: Record<string, unknown> = {
  * written straight back as null.
  *
  * A normaliser returns the whole object, so a key that also appears in
- * SECRET_FIELDS would need its encrypted field carried through explicitly.
- * None does today.
+ * SECRET_FIELDS must carry its encrypted field through. `websearch` does both:
+ * `normaliseWebSearchSettings` spreads the raw value before overriding the
+ * numbers, which keeps `apiKeyEnc` (on the way out) and the plaintext `apiKey`
+ * the loop below is about to consume (on the way in).
  */
 const NORMALISERS: Record<string, (v: Record<string, unknown>) => Record<string, unknown>> = {
-	research: (v) => normaliseResearchSettings(v) as unknown as Record<string, unknown>
+	research: (v) => normaliseResearchSettings(v) as unknown as Record<string, unknown>,
+	websearch: (v) => normaliseWebSearchSettings(v) as unknown as Record<string, unknown>
 };
 
 /**

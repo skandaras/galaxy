@@ -264,6 +264,16 @@ check "research runs a second, narrowed round" "$RSTREAM" '"name":"searching","d
 check "research shows each query it ran" "$RSTREAM" '"type":"search","query":"'
 check "research shows what each query found" "$RSTREAM" '"results":[{"title":"Mock result one"'
 check "research shows the triage funnel" "$RSTREAM" '"name":"triage","detail":"'
+
+# A consolidation that fails in round one used to end the whole run: round one
+# has no brief, so no gap queries, so the "a lost round is not a lost run"
+# allowance could never be reached. It retries the same sources instead.
+FCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+FJOB=$(api -X POST $B/api/chats/$FCHAT/messages -d '{"content":"How do nebulae form? FLAKY-CONSOLIDATION","deepResearch":true}' | jqn .jobId)
+FSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$FJOB/stream)
+check "a flaky first consolidation is retried" "$FSTREAM" 'trying once more on the same sources'
+check "and the run goes on to a second round" "$FSTREAM" '"name":"searching","detail":"round 2/'
+check_absent "rather than ending on round one" "$FSTREAM" 'answering from the'
 check "research stops early once evidence suffices" "$RSTREAM" 'Evidence judged sufficient after 2 of 3 rounds'
 check "research reports the brief it built" "$RSTREAM" 'Brief after 2 rounds: 2 findings'
 # The Observatory keeps the full record — the stream shows the queries and their

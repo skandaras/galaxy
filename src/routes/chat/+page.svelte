@@ -577,9 +577,29 @@
 				toolCalls: s.tools.map((t) => ({
 					name: t.name,
 					summary: t.detail,
-					status: t.status === 'error' ? ('error' as const) : ('ok' as const)
+					status: t.status === 'error' ? ('error' as const) : ('ok' as const),
+					// Carried, or a finished turn's search boxes vanish the instant it
+					// ends and only come back on a reload — the server's own trace has
+					// them, but this optimistic copy is what the screen shows first.
+					...(t.results ? { results: t.results } : {})
 				}))
 			}));
+		// Searches with no step to belong to — a research run's rounds. Kept as
+		// one step so they survive the run the same way a chat turn's do.
+		const searches = timeline.filter((i) => i.kind === 'search');
+		if (searches.length) {
+			steps.push({
+				id: 'searches',
+				label: `${searches.length} search${searches.length === 1 ? '' : 'es'}`,
+				status: 'ok' as const,
+				toolCalls: searches.map((q) => ({
+					name: 'web_search',
+					summary: q.language ? `${q.query} [${q.language}]` : q.query,
+					status: 'ok' as const,
+					...(q.results.length ? { results: q.results } : {})
+				}))
+			});
+		}
 		return steps.length ? { steps } : null;
 	}
 

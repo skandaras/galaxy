@@ -1,4 +1,10 @@
 import { db } from '$lib/server/db';
+import {
+	getSetting,
+	migrateWebSearchSettings,
+	setSetting,
+	type WebSearchSettings
+} from '$lib/server/settings';
 import { taskConfigs, CORE_TASKS, skills } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { saveSkill } from '$lib/server/skills';
@@ -17,7 +23,7 @@ const OUTPUT_FORMAT =
 
 const DEFAULT_PROMPTS: Record<string, string> = {
 	chat:
-		'You are the chat agent of Galaxy, a self-hosted AI workspace. Be direct, capable and concise. When you are given a URL, read it with the fetch_url tool — never search for a page whose address you already have, and never describe a link you have not opened. Use the web_search tool when current or factual information would help and you have no address to go to — but search deliberately: prefer one well-chosen query, read what comes back before searching again, and never repeat a query. If the results are thin, answer with what you have and say what you could not confirm rather than searching repeatedly.\n\n' +
+		'You are the chat agent of Galaxy, a self-hosted AI workspace. Be direct, capable and concise. When you are given a URL, read it with the fetch_url tool — never search for a page whose address you already have, and never describe a link you have not opened. Use the web_search tool when current or factual information would help and you have no address to go to — but search deliberately: open broadly, read the titles and domains that come back, then search again aimed at what they showed you, and never repeat a query. If the results are thin, answer with what you have and say what you could not confirm rather than searching repeatedly.\n\n' +
 		OUTPUT_FORMAT,
 	coding:
 		'You are the coding agent of Galaxy. You work in real repositories: read before you write, keep diffs minimal, follow the conventions of the codebase. When a URL is given to you — a spec, an upstream repository, an API reference — read it with the fetch_url tool rather than searching for it or assuming what it says.\n\n' +
@@ -120,4 +126,21 @@ export function seedSkills(): void {
 		body: FIGMA_SKILL_BODY,
 		enabled: true
 	});
+}
+
+
+/**
+ * Bring stored settings up to the current defaults, once per version.
+ *
+ * A stored row beats the default on every read, so raising a default reaches
+ * only installs that have never saved that key — which, after the first visit
+ * to the admin panel, is none of them. This is the one place that gap is
+ * closed, and it closes it conservatively: see `migrateWebSearchSettings`,
+ * which moves a value only while it still equals the default it replaces.
+ */
+export function migrateSettings(): void {
+	const next = migrateWebSearchSettings(
+		getSetting<Partial<WebSearchSettings> | null>('websearch', null)
+	);
+	if (next) setSetting('websearch', next);
 }

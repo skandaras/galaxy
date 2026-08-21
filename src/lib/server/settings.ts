@@ -67,7 +67,26 @@ export interface WebSearchSettings {
 	 * globally would quietly narrow every search on the platform.
 	 */
 	defaultLanguage?: string;
+	/**
+	 * Which round of default changes this row has already been brought up to.
+	 *
+	 * A stored row wins over `DEFAULT_WEB_SEARCH` on every read, which is right
+	 * for a number someone chose and wrong for one that is merely the default
+	 * they were shown years ago — so raising a default here does nothing for any
+	 * install that has ever pressed Save. This is how a change can reach those
+	 * installs once, and only once: `migrateWebSearchSettings` moves a value only
+	 * while it still equals the default it is replacing, then stamps this. An
+	 * admin who later chooses that same value keeps it, because the stamp is
+	 * already set.
+	 */
+	settingsVersion?: number;
 }
+
+/**
+ * Bump when a default here changes in a way existing installs should inherit,
+ * and add the corresponding step to `migrateWebSearchSettings`.
+ */
+export const WEB_SEARCH_SETTINGS_VERSION = 1;
 
 export const DEFAULT_WEB_SEARCH: WebSearchSettings = {
 	provider: 'none',
@@ -75,8 +94,72 @@ export const DEFAULT_WEB_SEARCH: WebSearchSettings = {
 	maxResults: 20,
 	timeoutMs: 10_000,
 	maxSearchesPerTurn: 6,
-	defaultLanguage: ''
+	defaultLanguage: '',
+	settingsVersion: WEB_SEARCH_SETTINGS_VERSION
 };
+
+/**
+ * The stored web-search settings, filled out to a whole object.
+ *
+ * `getSetting` hands back the stored JSON untouched, so a row written before a
+ * field existed leaves that field `undefined` in the engine — and `undefined`
+ * is not harmless here: `parseDuckDuckGoHtml` stops at `results.length < max`,
+ * which is false immediately, so an absent `maxResults` returned no results at
+ * all. The admin API has always filled its own reads (`fill` in
+ * api/admin/settings); this is the same guarantee for everything else.
+ */
+export function webSearchSettings(): WebSearchSettings {
+	return { ...DEFAULT_WEB_SEARCH, ...getSetting<Partial<WebSearchSettings>>('websearch', {}) };
+}
+
+/**
+ * Raise a stored row to the current defaults, once.
+ *
+ * Only values still equal to the default they are replacing move: someone who
+ * deliberately set 12 results keeps 12. Returns null when there is nothing to
+ * do, so a boot that changes nothing writes nothing.
+ */
+export function migrateWebSearchSettings(
+	stored: Partial<WebSearchSettings> | null
+): WebSearchSettings | null {
+	// No row at all is not a migration — the defaults already apply.
+	if (!stored || !Object.keys(stored).length) return null;
+	const from = Number(stored.settingsVersion ?? 0);
+	if (from >= WEB_SEARCH_SETTINGS_VERSION) return null;
+
+	const next: WebSearchSettings = { ...DEFAULT_WEB_SEARCH, ...stored };
+	if (from < 1) {
+		// v1 — the search net widened. Providers bill the request, not the row,
+		// so five was never a saving; and one more search per turn is what makes
+		// looking, then narrowing, possible.
+		if (stored.maxResults === 5) next.maxResults = 20;
+		if (stored.maxSearchesPerTurn === 4) next.maxSearchesPerTurn = 6;
+	}
+	next.settingsVersion = WEB_SEARCH_SETTINGS_VERSION;
+	return next;
+}
+
+/**
+ * Clamp every numeric field, for the same reason `normaliseResearchSettings`
+ * does: the form's `min`/`max` attributes are not validation, and a raw PUT
+ * ignores them entirely.
+ */
+export function normaliseWebSearchSettings(raw: Record<string, unknown>): WebSearchSettings {
+	const num = (v: unknown, fallback: number, min: number, max: number) => {
+		const n = Number(v);
+		return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.floor(n))) : fallback;
+	};
+	const merged = { ...DEFAULT_WEB_SEARCH, ...raw } as WebSearchSettings;
+	return {
+		...merged,
+		maxResults: num(raw.maxResults, DEFAULT_WEB_SEARCH.maxResults, 1, 20),
+		maxSearchesPerTurn: num(raw.maxSearchesPerTurn, DEFAULT_WEB_SEARCH.maxSearchesPerTurn, 1, 20),
+		timeoutMs: num(raw.timeoutMs, DEFAULT_WEB_SEARCH.timeoutMs, 1_000, 120_000),
+		// An admin who has been through the form has seen the current defaults,
+		// so a save is itself the migration for anything still outstanding.
+		settingsVersion: WEB_SEARCH_SETTINGS_VERSION
+	};
+}
 
 export interface FetchSettings {
 	/** Per-request deadline for reading one address. */

@@ -8,7 +8,7 @@ import type { ModelChoice } from '$lib/server/providers/registry';
 import { isRetryable, type Usage } from '$lib/server/providers/types';
 import {
 	DEFAULT_RESEARCH,
-	DEFAULT_WEB_SEARCH,
+	webSearchSettings,
 	getSetting,
 	researchRoundCeiling,
 	type ResearchSettings,
@@ -27,7 +27,13 @@ import {
 	pushChunk,
 	type LiveJob
 } from './jobs';
+import type { RunToolCall } from '$lib/run-timeline';
 import { streamWithIdleTimeout } from './loop';
+import {
+	StreamTimeoutError,
+	type CompletionResult,
+	type ProviderMessage
+} from '$lib/server/providers/types';
 import {
 	BROWSER_UA,
 	createPacer,
@@ -129,7 +135,7 @@ export function startResearchTurn(opts: {
 
 function resolveSearchCfg(): WebSearchSettings {
 	const research = getSetting<ResearchSettings>('research', DEFAULT_RESEARCH);
-	const base = getSetting<WebSearchSettings>('websearch', DEFAULT_WEB_SEARCH);
+	const base = webSearchSettings();
 	if (research.provider === 'searxng' && research.baseUrl) {
 		return { ...base, provider: 'searxng', baseUrl: research.baseUrl };
 	}
@@ -263,6 +269,15 @@ async function runResearch(
 	let stopCause: StopCause = 'rounds';
 	let roundsUsed = 0;
 	let consolidateFailures = 0;
+	/**
+	 * Every query the run made, with what it found.
+	 *
+	 * The live boxes are cleared with the timeline the moment the run ends, and
+	 * research — unlike a chat turn — wrote no trace at all, so what it searched
+	 * was gone as soon as it finished answering. One tool call per query, which
+	 * is the shape `RunTimeline` already draws.
+	 */
+	const searchTrace: RunToolCall[] = [];
 
 	for (let round = 1; round <= budget.rounds; round++) {
 		roundsUsed = round;
@@ -306,13 +321,22 @@ async function runResearch(
 			// One box per query, as it lands. A round used to be a single opaque
 			// line naming how many queries it was about to run; this shows which
 			// ones, and what each of them actually turned up.
-			({ q, language }, found) =>
+			({ q, language }, found, status) => {
+				const results = displayRows(found);
+				searchTrace.push({
+					name: 'web_search',
+					summary: language ? `${q} [${language}]` : q,
+					status,
+					results
+				});
 				pushChunk(job, {
 					type: 'search',
 					query: q,
 					...(language ? { language } : {}),
-					results: displayRows(found)
-				})
+					...(status === 'error' ? { failed: true } : {}),
+					results
+				});
+			}
 		);
 		ranQueries.push(...pending.map((p) => p.q));
 
@@ -375,24 +399,47 @@ async function runResearch(
 			detail: `round ${round} · ${plural(fresh.length, 'new source')}`
 		});
 		const startedAt = Date.now();
-		const outcome = await consolidate({
-			choice,
-			systemPrompt,
-			asked,
-			question,
-			background,
-			prior: brief,
-			fresh,
-			allEvidence: evidence,
-			ranQueries,
-			round,
-			rounds: budget.rounds,
-			maxQueries: budget.queriesPerRound,
-			cfg,
-			track,
-			defaultLanguage,
-			signal: job.controller.signal
-		});
+		const runConsolidation = () =>
+			consolidate({
+				choice,
+				systemPrompt,
+				asked,
+				question,
+				background,
+				prior: brief,
+				fresh,
+				allEvidence: evidence,
+				ranQueries,
+				round,
+				rounds: budget.rounds,
+				maxQueries: budget.queriesPerRound,
+				cfg,
+				track,
+				defaultLanguage,
+				signal: job.controller.signal
+			});
+		let outcome = await runConsolidation();
+		// Round one gets a second attempt on the same sources.
+		//
+		// Every other round survives a failed consolidation by searching the
+		// previous brief's open gaps — but before the first consolidation there is
+		// no brief, so there are no gaps, and the failure branch below has nothing
+		// to continue from. That made one flaky consolidation in round one end a
+		// four-round run, which is the opposite of what "a lost round is not a lost
+		// run" was meant to guarantee. There is nothing new to search here, but the
+		// sources are already in hand: reading them again is the whole retry.
+		if (round === 1 && outcome.status !== 'ok' && outcome.status !== 'cancelled') {
+			pushChunk(job, {
+				type: 'notice',
+				text: `Consolidation ${consolidateFailureReason(outcome)} in round 1; trying once more on the same sources.`
+			});
+			event('research.consolidate', 'error', Date.now() - startedAt, {
+				round,
+				reason: outcome.status,
+				retrying: true
+			});
+			outcome = await runConsolidation();
+		}
 		const took = Date.now() - startedAt;
 
 		if (outcome.status === 'cancelled') {
@@ -631,7 +678,20 @@ async function runResearch(
 	const saved = appendMessage(opts.chatId, {
 		role: 'assistant',
 		content: answer,
-		modelKey: choice.model.modelKey
+		modelKey: choice.model.modelKey,
+		trace: searchTrace.length
+			? {
+					summary: `${plural(roundsUsed, 'round')} · ${plural(searchTrace.length, 'search', 'searches')} · ${plural(evidence.length, 'source')}`,
+					steps: [
+						{
+							id: 'searches',
+							label: plural(searchTrace.length, 'search', 'searches'),
+							status: 'ok',
+							toolCalls: searchTrace
+						}
+					]
+				}
+			: null
 	});
 	logUsage({ ...opts, persist }, choice, totalUsage, 'ok');
 	emitEvent(
@@ -663,7 +723,6 @@ const SYNTHESIS_RETRY_TOKENS = 8000;
 const CONSOLIDATE_TOKENS = 900;
 const CONSOLIDATE_TOKENS_RETRY = 4000;
 /** Deadline for one planning or consolidation call. */
-const CALL_TIMEOUT_MS = 60_000;
 
 /**
  * Characters of *new* excerpt handed to one consolidation call.
@@ -840,7 +899,7 @@ const STOP_NOTICE: Partial<
 	'no-new-sources': (s) =>
 		`Round ${s.round} found nothing that had not already been read — moving to the answer.`,
 	'search-budget': (s) =>
-		`Used all ${plural(s.searches, 'search')} allowed for this run before the round budget ran out. Raise "searches per run" in Admin → Settings.`,
+		`Used all ${plural(s.searches, 'search', 'searches')} allowed for this run before the round budget ran out. Raise "searches per run" in Admin → Settings.`,
 	sufficient: (s) => `Evidence judged sufficient after ${s.round} of ${s.rounds} rounds.`,
 	'no-gaps': (s) => `No open gaps left to search after ${plural(s.round, 'round')}.`
 };
@@ -1141,16 +1200,16 @@ export async function frameQuestion(args: {
 		.join('\n\n');
 
 	const ask = (maxTokens: number) =>
-		args.choice.adapter.complete(
+		completeIdleBounded(
+			args.choice,
 			{
-				modelKey: args.choice.model.modelKey,
 				messages: [
 					{ role: 'system', content: args.systemPrompt },
 					{ role: 'user', content }
 				],
 				maxTokens
 			},
-			callSignal(args.signal)
+			args.signal
 		);
 
 	const asIs = (fellBack: Framing['fellBack']): Framing => ({
@@ -1187,14 +1246,58 @@ export async function frameQuestion(args: {
 }
 
 /**
- * Deadline for a model call, cancelled early when the job is stopped.
+ * A model call that ran out of time rather than failing.
  *
- * Planning and consolidation used to pass a bare timeout, so pressing Stop left
- * a call running for up to a minute before anything noticed.
+ * Two names for one condition: `TimeoutError` is what an `AbortSignal.timeout`
+ * raises, `StreamTimeoutError` is what the idle watchdog raises. Treating only
+ * the first as a timeout would have quietly reclassified every stalled call as
+ * a generic error the moment these calls started streaming.
  */
-function callSignal(signal?: AbortSignal): AbortSignal {
-	const deadline = AbortSignal.timeout(CALL_TIMEOUT_MS);
-	return signal ? AbortSignal.any([signal, deadline]) : deadline;
+function isTimeout(err: unknown): boolean {
+	return (
+		err instanceof StreamTimeoutError ||
+		(err instanceof Error && (err.name === 'TimeoutError' || err.name === 'StreamTimeoutError'))
+	);
+}
+
+/**
+ * `adapter.complete`'s result, obtained by streaming and bounded by silence
+ * rather than by total time.
+ *
+ * The flat deadline this replaces is the same defect synthesis already fixed
+ * (see the note on `synthesise`) and the chat and coding loops before it: a
+ * model that is working steadily is indistinguishable, to a total deadline,
+ * from one that has died. It bit hardest here because these calls are
+ * non-streaming, so there was no evidence of progress at all — a reasoning
+ * model thinking for over a minute on a 900-token budget was killed having
+ * produced nothing, and because a thrown timeout skips the retry branch, the
+ * larger allowance that exists for exactly that model never got its turn.
+ *
+ * The job signal still cancels immediately, and `streamTotalTimeoutMs` remains
+ * the backstop against a provider that trickles forever.
+ */
+async function completeIdleBounded(
+	choice: ModelChoice,
+	req: { messages: ProviderMessage[]; maxTokens: number },
+	signal?: AbortSignal
+): Promise<CompletionResult> {
+	let text = '';
+	let reasoning = '';
+	let usage: Usage | null = null;
+	let finishReason: string | null = null;
+	for await (const ev of streamWithIdleTimeout(
+		choice.adapter,
+		{ modelKey: choice.model.modelKey, messages: req.messages, maxTokens: req.maxTokens },
+		signal ?? new AbortController().signal
+	)) {
+		if (ev.type === 'text') text += ev.delta;
+		else if (ev.type === 'reasoning') reasoning += ev.delta;
+		else if (ev.type === 'usage') usage = ev.usage;
+		else if (ev.type === 'done') finishReason = ev.finishReason;
+	}
+	// Same judgement the adapters make on a non-streamed reply: thought, but no
+	// answer, is what earns the retry.
+	return { text, usage, finishReason, reasonedOnly: !text.trim() && Boolean(reasoning) };
 }
 
 export async function planQueries(
@@ -1208,9 +1311,9 @@ export async function planQueries(
 ): Promise<PlanOutcome> {
 	const maxQueries = Math.max(1, opts.maxQueries ?? cfg.maxQueries);
 	const ask = (maxTokens: number) =>
-		choice.adapter.complete(
+		completeIdleBounded(
+			choice,
 			{
-				modelKey: choice.model.modelKey,
 				messages: [
 					{ role: 'system', content: systemPrompt },
 					{
@@ -1220,7 +1323,7 @@ export async function planQueries(
 				],
 				maxTokens
 			},
-			callSignal(opts.signal)
+			opts.signal
 		);
 
 	const asked = (fellBack: PlanOutcome['fellBack'], reasonedOnly: boolean): PlanOutcome => ({
@@ -1298,7 +1401,7 @@ export async function runSearches(
 	 * third result of the second query because the first query found it too would
 	 * make the boxes disagree with the counts for no stated reason.
 	 */
-	onResults?: (query: PlannedQuery, results: SearchResult[]) => void
+	onResults?: (query: PlannedQuery, results: SearchResult[], status: 'ok' | 'error') => void
 ): Promise<SearchResult[]> {
 	const granted = allowance.take(queries.length);
 	if (granted < queries.length) {
@@ -1316,7 +1419,7 @@ export async function runSearches(
 			// Engines that refused are the only signal a search carries about how
 			// hard it is being pushed; feed them back before the next claim.
 			if (pacer.observe(outcome.degraded?.engines ?? [])) onThrottled(pacer);
-			onResults?.({ q, language }, outcome.results);
+			onResults?.({ q, language }, outcome.results, 'ok');
 			event('web_search', 'ok', Date.now() - started, {
 				query: q,
 				results: outcome.results.length,
@@ -1332,8 +1435,10 @@ export async function runSearches(
 		} catch (err) {
 			if (pacer.observe([String(err)])) onThrottled(pacer);
 			// Drawn even so: a query that ran and found nothing is a fact about the
-			// round, and an absent box reads as a query that was never tried.
-			onResults?.({ q, language }, []);
+			// round, and an absent box reads as a query that was never tried. Marked
+			// as the failure it was, because a search that broke and a search that
+			// genuinely found nothing are not the same claim about the world.
+			onResults?.({ q, language }, [], 'error');
 			event('web_search', 'error', Date.now() - started, {
 				query: q,
 				error: String(err),
@@ -1782,9 +1887,9 @@ export async function consolidate(args: {
 	].join('\n\n');
 
 	const ask = (maxTokens: number) =>
-		choice.adapter.complete(
+		completeIdleBounded(
+			choice,
 			{
-				modelKey: choice.model.modelKey,
 				// The old review call sent no system prompt at all, unlike planning
 				// and synthesis — part of why its judgement was poor.
 				messages: [
@@ -1793,13 +1898,24 @@ export async function consolidate(args: {
 				],
 				maxTokens
 			},
-			callSignal(args.signal)
+			args.signal
 		);
 
 	let res;
 	try {
-		res = await ask(CONSOLIDATE_TOKENS);
-		track(res.usage);
+		try {
+			res = await ask(CONSOLIDATE_TOKENS);
+			track(res.usage);
+		} catch (err) {
+			// A first attempt that ran out of time is the *same* failure the retry
+			// below exists for — a model still thinking when its allowance ran out —
+			// and it used to be the one form of it that never got a second chance,
+			// because a throw skips the retry branch entirely. Give it the larger
+			// budget, which is what lets it finish thinking and still answer.
+			if (args.signal?.aborted || !isTimeout(err)) throw err;
+			res = await ask(CONSOLIDATE_TOKENS_RETRY);
+			track(res.usage);
+		}
 		// Same reasoning-model allowance the planner makes: a model that spent the
 		// first budget thinking gets one retry with real headroom.
 		if (!res.text.trim() && (res.reasonedOnly || res.finishReason === 'length')) {
@@ -1808,7 +1924,7 @@ export async function consolidate(args: {
 		}
 	} catch (err) {
 		if (args.signal?.aborted) return { status: 'cancelled' };
-		if (err instanceof Error && err.name === 'TimeoutError') return { status: 'timeout' };
+		if (isTimeout(err)) return { status: 'timeout' };
 		return { status: 'error', error: String(err) };
 	}
 
