@@ -50,6 +50,9 @@ jqn() { node -pe "JSON.parse(require('fs').readFileSync(0))$1"; }
 check() { # check <label> <actual> <expected-substring>
   if [[ "$2" == *"$3"* ]]; then echo "ok: $1"; else echo "FAIL: $1 — got: $2"; FAIL=1; fi
 }
+check_absent() { # check_absent <label> <actual> <substring-that-must-not-appear>
+  if [[ "$2" != *"$3"* ]]; then echo "ok: $1"; else echo "FAIL: $1 — found: $3"; FAIL=1; fi
+}
 
 check "healthz" "$(curl -s $B/healthz)" '"status":"ok"'
 
@@ -65,6 +68,11 @@ CHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
 JOB=$(api -X POST $B/api/chats/$CHAT/messages -d '{"content":"Please search for galaxy news"}' | jqn .jobId)
 STREAM=$(curl -sN --max-time 30 $B/api/jobs/$JOB/stream)
 check "chat stream tool call" "$STREAM" '"type":"tool","name":"web_search","status":"ok"'
+# The rows the browser draws its result box from. They ride on the tool chunk
+# *after* the keys above, which is why the assertion on that prefix still holds.
+check "chat stream carries the results it found" "$STREAM" '"results":[{"title":"Mock result one"'
+# ...and only what the box draws: no snippet, which is the model's business.
+check_absent "the stream carries no snippets" "$STREAM" 'Snippet about'
 check "chat stream completes" "$STREAM" '"type":"done"'
 
 # A blocked provider must surface a visible error, never a silent empty list.
@@ -250,9 +258,16 @@ check "research cites evidence" "$RSTREAM" 'FACT-42 confirmed'
 # the gap it named rather than the original breadth again.
 check "research consolidates between rounds" "$RSTREAM" '"name":"consolidating"'
 check "research runs a second, narrowed round" "$RSTREAM" '"name":"searching","detail":"round 2/'
+# A round used to be one opaque line naming how many queries it was about to
+# run. Each query now draws its own box, and the funnel that turns eighty
+# results into six opened pages is stated rather than left in the event log.
+check "research shows each query it ran" "$RSTREAM" '"type":"search","query":"'
+check "research shows what each query found" "$RSTREAM" '"results":[{"title":"Mock result one"'
+check "research shows the triage funnel" "$RSTREAM" '"name":"triage","detail":"'
 check "research stops early once evidence suffices" "$RSTREAM" 'Evidence judged sufficient after 2 of 3 rounds'
 check "research reports the brief it built" "$RSTREAM" 'Brief after 2 rounds: 2 findings'
-# The searches themselves are recorded in the Observatory, not on the stream.
+# The Observatory keeps the full record — the stream shows the queries and their
+# results, the events carry the provider, counts and pacing behind them.
 # This is the assertion the whole change exists for: round two searched the gap
 # consolidation named, not the question's original breadth again.
 REVENTS=$(api "$B/api/events?chatId=$RCHAT&limit=200")

@@ -328,9 +328,20 @@ that flap.
 **How much would you actually use?** One deep-research run makes at most
 `rounds × queries per round` searches: 16 at Exhaustive effort, about 9 at
 Balanced, with the ceiling set in Admin → Settings → Deep research. An ordinary
-chat turn makes at most `searches per turn`, default 4. Divide whatever
+chat turn makes at most `searches per turn`, default 6. Divide whatever
 allowance a provider currently offers by those numbers before assuming you need
 a paid tier — a personal instance often does not.
+
+`max results` is not part of that arithmetic. Providers bill the request, not
+the row: Brave returns up to 20 for the same call, and SearXNG and DuckDuckGo
+have theirs parsed either way. Lowering it saves no quota and only narrows what
+the model and the reader get to see. What it does spend is context, which is why
+the snippet shown per result shrinks as the count rises.
+
+Searches against a provider with a published rate limit are spaced out rather
+than fired back to back — `SEARCH_PROVIDER_GAP_MS` (default 1200ms) is the gap,
+and exists for Brave's per-second free tier. If a provider starts refusing
+anyway, the run tightens itself to `SEARCH_THROTTLED_GAP_MS` and says so once.
 
 Brave's current tiers and rate limits are on their pricing page
 (<https://brave.com/search/api/>); they change, so check rather than trusting a

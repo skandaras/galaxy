@@ -43,6 +43,15 @@ export interface WebSearchSettings {
 	/** AES-encrypted API key (see $lib/server/crypto); set via admin settings. */
 	apiKeyEnc?: string;
 	baseUrl?: string; // searxng instance
+	/**
+	 * Results asked of the provider, and shown, per query.
+	 *
+	 * Free: every provider bills the request, not the row. Brave returns up to
+	 * 20 for the same call, and SearXNG and DuckDuckGo have theirs parsed and
+	 * discarded — a low number here buys nothing and only narrows what the model
+	 * and the reader get to see. What it does cost is context, so the snippet
+	 * shrinks as this grows (see renderSnippetChars in tools/web-search).
+	 */
 	maxResults: number;
 	timeoutMs: number;
 	/**
@@ -63,9 +72,9 @@ export interface WebSearchSettings {
 export const DEFAULT_WEB_SEARCH: WebSearchSettings = {
 	provider: 'none',
 	fallbackProvider: 'none',
-	maxResults: 5,
+	maxResults: 20,
 	timeoutMs: 10_000,
-	maxSearchesPerTurn: 4,
+	maxSearchesPerTurn: 6,
 	defaultLanguage: ''
 };
 

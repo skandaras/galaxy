@@ -4,6 +4,7 @@ import {
 	itemsFromTrace,
 	type TimelineChunk,
 	type TimelineItem,
+	type TimelineSearch,
 	type TimelineStep
 } from './run-timeline';
 
@@ -101,5 +102,86 @@ describe('itemsFromTrace', () => {
 	it('copes with a message that has no trace', () => {
 		expect(itemsFromTrace(null)).toEqual([]);
 		expect(itemsFromTrace(undefined)).toEqual([]);
+	});
+});
+
+
+describe('search results in the timeline', () => {
+	const ROWS = [
+		{ title: 'How to Choose a Freight Forwarder', url: 'https://smartbuy.alibaba.com/guide' },
+		{ title: 'Queenstown Customs Broker', url: 'https://platinumfreight.co.nz/queenstown' }
+	];
+
+	it('keeps the rows a terminal chunk does not repeat', () => {
+		// The running chunk is not the one that carries results, and an `ok` chunk
+		// that merely says the call finished must not blank the box it drew.
+		const items = fold([
+			{ type: 'step', id: 's1', label: 'Searching', status: 'running' },
+			{ type: 'tool', name: 'web_search', status: 'running', callId: 'a', stepId: 's1', detail: 'freight' },
+			{
+				type: 'tool',
+				name: 'web_search',
+				status: 'ok',
+				callId: 'a',
+				stepId: 's1',
+				detail: 'freight',
+				results: ROWS
+			},
+			{ type: 'step', id: 's1', label: 'Searching', status: 'ok' }
+		]);
+		expect(steps(items)[0].tools[0].results).toEqual(ROWS);
+	});
+
+	it('does not erase results when a later chunk carries none', () => {
+		const items = fold([
+			{ type: 'step', id: 's1', label: 'Searching', status: 'running' },
+			{ type: 'tool', name: 'web_search', status: 'running', callId: 'a', stepId: 's1', results: ROWS },
+			{ type: 'tool', name: 'web_search', status: 'ok', callId: 'a', stepId: 's1', detail: 'freight' }
+		]);
+		expect(steps(items)[0].tools[0].results).toEqual(ROWS);
+		expect(steps(items)[0].tools[0].detail).toBe('freight');
+	});
+
+	it('draws a pipeline search that belongs to no step', () => {
+		// Deep research is not the agent loop: its queries are not tool calls and
+		// arrive with no step to hang under.
+		const items = fold([
+			{ type: 'stage', name: 'searching', detail: 'round 1/4' },
+			{ type: 'search', query: 'freight forwarder China to NZ', language: 'en', results: ROWS }
+		]);
+		const search = items.find((i): i is TimelineSearch => i.kind === 'search');
+		expect(search).toMatchObject({ query: 'freight forwarder China to NZ', language: 'en' });
+		expect(search?.results).toEqual(ROWS);
+		// And it did not invent a step to hold it.
+		expect(steps(items)).toHaveLength(0);
+	});
+
+	it('folds the same history twice to the same timeline', () => {
+		// subscribeJob replays a job's whole chunk history to every reconnecting
+		// client, so a round of searches must not double on reconnect.
+		const history: TimelineChunk[] = [
+			{ type: 'step', id: 's1', label: 'Searching', status: 'running' },
+			{ type: 'tool', name: 'web_search', status: 'ok', callId: 'a', stepId: 's1', results: ROWS }
+		];
+		expect(fold(history)).toEqual(fold(history));
+	});
+
+	it('redraws boxes from a stored trace, and leaves older traces alone', () => {
+		const items = itemsFromTrace({
+			steps: [
+				{
+					id: 's1',
+					label: 'Searching',
+					status: 'ok',
+					toolCalls: [
+						{ name: 'web_search', summary: 'freight', status: 'ok', results: ROWS },
+						{ name: 'fetch_url', summary: 'example.com', status: 'ok' }
+					]
+				}
+			]
+		});
+		expect(steps(items)[0].tools[0].results).toEqual(ROWS);
+		// A call that never had results still has none, rather than an empty box.
+		expect(steps(items)[0].tools[1].results).toBeUndefined();
 	});
 });

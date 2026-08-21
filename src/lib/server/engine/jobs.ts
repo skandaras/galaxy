@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
+import type { SearchResultRow } from '$lib/run-timeline';
 import { db } from '$lib/server/db';
 import { jobs } from '$lib/server/db/schema';
 import { notify } from '$lib/server/notifications';
@@ -39,9 +40,19 @@ export type JobChunk =
 			callId?: string;
 			/** The step this call belongs under. Absent for callers with no steps. */
 			stepId?: string;
+			/**
+			 * What a search returned, drawn as a scrollable box under the call.
+			 *
+			 * Last on purpose. The key order of this chunk is load-bearing — see the
+			 * note in executeToolCall — so anything new goes on the end.
+			 */
+			results?: SearchResultRow[];
 	  }
 	| { type: 'stage'; name: string; detail?: string }
 	| { type: 'notice'; text: string }
+	// A search that belongs to no tool call: deep research runs a pipeline rather
+	// than the agent loop, so its queries arrive with no step to hang them under.
+	| { type: 'search'; query: string; language?: string; results: SearchResultRow[] }
 	// The agent is waiting on a person. `answer` closes the question it names —
 	// which matters on replay, since a reconnecting client would otherwise
 	// re-open a question that has already been dealt with.

@@ -31,6 +31,7 @@ import { streamWithIdleTimeout } from './loop';
 import {
 	BROWSER_UA,
 	createPacer,
+	displayRows,
 	normaliseLanguage,
 	runPaced,
 	runWebSearch,
@@ -301,11 +302,27 @@ async function runResearch(
 					gapMs: p.pacing.gapMs,
 					concurrency: p.pacing.concurrency
 				});
-			}
+			},
+			// One box per query, as it lands. A round used to be a single opaque
+			// line naming how many queries it was about to run; this shows which
+			// ones, and what each of them actually turned up.
+			({ q, language }, found) =>
+				pushChunk(job, {
+					type: 'search',
+					query: q,
+					...(language ? { language } : {}),
+					results: displayRows(found)
+				})
 		);
 		ranQueries.push(...pending.map((p) => p.q));
 
 		const fresh = await readPages(results, evidence, budget.pagesPerRound, cfg.timeoutMs, event, {
+			onTriage: ({ candidates, pool, opened }) =>
+				pushChunk(job, {
+					type: 'stage',
+					name: 'triage',
+					detail: `${candidates} found → ${pool} shortlisted → ${opened} opened`
+				}),
 			// Gated on open gaps as well as pool size: that means round two or
 			// later, where "which of these answers *this* hole" is a judgement
 			// grounded in something the run actually found.
@@ -1272,7 +1289,16 @@ export async function runSearches(
 	event: (name: string, status: 'ok' | 'error', d: number, detail?: Record<string, unknown>) => void,
 	pacer: Pacer,
 	/** Called the one time the run tips into throttling, never per query. */
-	onThrottled: (pacer: Pacer) => void
+	onThrottled: (pacer: Pacer) => void,
+	/**
+	 * Called per query with what that query alone returned.
+	 *
+	 * Before the cross-query dedupe below, deliberately: this is what the reader
+	 * sees drawn under the query they can see was run, and silently dropping the
+	 * third result of the second query because the first query found it too would
+	 * make the boxes disagree with the counts for no stated reason.
+	 */
+	onResults?: (query: PlannedQuery, results: SearchResult[]) => void
 ): Promise<SearchResult[]> {
 	const granted = allowance.take(queries.length);
 	if (granted < queries.length) {
@@ -1290,6 +1316,7 @@ export async function runSearches(
 			// Engines that refused are the only signal a search carries about how
 			// hard it is being pushed; feed them back before the next claim.
 			if (pacer.observe(outcome.degraded?.engines ?? [])) onThrottled(pacer);
+			onResults?.({ q, language }, outcome.results);
 			event('web_search', 'ok', Date.now() - started, {
 				query: q,
 				results: outcome.results.length,
@@ -1304,6 +1331,9 @@ export async function runSearches(
 			return outcome.results;
 		} catch (err) {
 			if (pacer.observe([String(err)])) onThrottled(pacer);
+			// Drawn even so: a query that ran and found nothing is a fact about the
+			// round, and an absent box reads as a query that was never tried.
+			onResults?.({ q, language }, []);
 			event('web_search', 'error', Date.now() - started, {
 				query: q,
 				error: String(err),
@@ -1574,6 +1604,14 @@ export interface ReadPagesDeps {
 	chooser?: (pool: SearchResult[], limit: number) => Promise<SearchResult[]>;
 	/** Injected in tests so no suite depends on the network. */
 	readPage?: (url: string, timeoutMs: number) => Promise<string>;
+	/**
+	 * The shape of the round's funnel, once it is settled.
+	 *
+	 * These numbers were computed and emitted to the Observatory already, but
+	 * nowhere a reader would look. They are the answer to "why did it only read
+	 * six of the eighty things it found", which is otherwise invisible.
+	 */
+	onTriage?: (funnel: { candidates: number; pool: number; opened: number }) => void;
 }
 
 export async function readPages(
@@ -1605,6 +1643,12 @@ export async function readPages(
 		});
 		if (chosen.length) toRead = chosen;
 	}
+	// After the chooser, so `opened` is what is actually about to be read.
+	deps.onTriage?.({
+		candidates: results.length,
+		pool: triage.pool.length,
+		opened: toRead.length
+	});
 
 	const readPage = deps.readPage ?? fetchPageText;
 	let n = existing.length;

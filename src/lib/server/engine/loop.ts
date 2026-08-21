@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { RunStep, RunToolCall } from '$lib/run-timeline';
+import type { RunStep, RunToolCall, SearchResultRow } from '$lib/run-timeline';
 import { db } from '$lib/server/db';
 import { usageLog } from '$lib/server/db/schema';
 import type { ModelChoice } from '$lib/server/providers/registry';
@@ -19,12 +19,28 @@ import { streamIdleTimeoutMs, streamTotalTimeoutMs, toolOutputBudgetChars } from
 
 const ELIDED = '[earlier tool output dropped to stay within the context budget]';
 
+/**
+ * The one key in a tool's `report` that is not Observatory detail.
+ *
+ * Everything else reported is folded into the persisted event; this is lifted
+ * out and pushed to the browser instead. Twenty search results on every event
+ * row would bloat a table nobody queries that way, and the point of the split is
+ * that these three audiences want different things: the model gets the tool's
+ * return string, the Observatory gets counts and provider names, and the reader
+ * gets something to look at.
+ */
+export interface ToolDisplay {
+	/** Rows to draw under the call, rather than compress into its one-line detail. */
+	results?: SearchResultRow[];
+}
+
 export interface LoopTool {
 	def: ToolDef;
 	/**
 	 * Execute a call and return the tool-result string handed back to the model.
 	 * `report` attaches structured detail (provider used, counts, failover) to
-	 * the Observatory event — the model never sees it.
+	 * the Observatory event — the model never sees it. The reserved `display`
+	 * key is the exception: see ToolDisplay.
 	 */
 	execute: (
 		args: Record<string, unknown>,
@@ -567,8 +583,11 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			const record: ToolCallRecord = { name: call.name, summary: tool?.describe?.(args) };
 			toolCallRecords.push(record);
 			stepCalls.push(record);
-			const { output, ok } = await executeToolCall(opts, call, tool, stepId);
+			const { output, ok, display } = await executeToolCall(opts, call, tool, stepId);
 			record.status = ok ? 'ok' : 'error';
+			// Onto the record, so the box survives a reload: the live chunk is gone
+			// the moment the job is, and the trace is all a finished reply keeps.
+			if (display?.results) record.results = display.results;
 			messages.push({ role: 'tool', content: output, tool_call_id: call.id });
 		}
 
@@ -661,7 +680,7 @@ async function executeToolCall(
 	call: ToolCall,
 	tool: LoopTool | undefined,
 	stepId: string
-): Promise<{ output: string; ok: boolean }> {
+): Promise<{ output: string; ok: boolean; display?: ToolDisplay }> {
 	const { job, persist } = opts;
 	const args = safeParseArgs(call.arguments);
 	const summary = tool?.describe?.(args);
@@ -676,8 +695,16 @@ async function executeToolCall(
 	 * prefix object put the ids between `name` and `status` and broke seven of
 	 * those assertions at once. New fields go on the end.
 	 */
-	const emit = (status: 'running' | 'ok' | 'error', detail?: string) =>
-		pushChunk(job, { type: 'tool', name: call.name, status, detail, callId: call.id, stepId });
+	const emit = (status: 'running' | 'ok' | 'error', detail?: string, results?: SearchResultRow[]) =>
+		pushChunk(job, {
+			type: 'tool',
+			name: call.name,
+			status,
+			detail,
+			callId: call.id,
+			stepId,
+			results
+		});
 	emit('running', summary);
 
 	if (!tool) {
@@ -685,9 +712,13 @@ async function executeToolCall(
 		return { output: JSON.stringify({ error: `Unknown tool: ${call.name}` }), ok: false };
 	}
 	let meta: Record<string, unknown> = {};
+	let display: ToolDisplay | undefined;
 	try {
 		const result = await tool.execute(args, (m) => {
-			meta = m;
+			// `display` is the browser's; everything else is the Observatory's.
+			const { display: shown, ...rest } = m;
+			display = shown as ToolDisplay | undefined;
+			meta = rest;
 		});
 		emitEvent(
 			{
@@ -702,8 +733,8 @@ async function executeToolCall(
 			},
 			{ persist }
 		);
-		emit('ok', summary);
-		return { output: result, ok: true };
+		emit('ok', summary, display?.results);
+		return { output: result, ok: true, display };
 	} catch (err) {
 		emitEvent(
 			{

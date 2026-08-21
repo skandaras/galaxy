@@ -7,12 +7,36 @@
  * and they drifted apart the moment they were written down separately.
  */
 
+/**
+ * One row of a rendered search result list.
+ *
+ * Title and URL only. The domain shown beside each row is derived from the URL
+ * client-side, and the snippet is deliberately absent: this shape travels over
+ * SSE, is replayed in full to every reconnecting subscriber, and is stored on
+ * the message trace, so it carries what the box draws and nothing more.
+ *
+ * Defined here rather than beside the search tool because both sides need it and
+ * only this half of the tree is importable from client code — the same reason
+ * RunToolCall lives here rather than in the engine.
+ */
+export interface SearchResultRow {
+	title: string;
+	url: string;
+}
+
 export interface RunToolCall {
 	name: string;
 	/** Whatever the tool's `describe` yielded — a path, a command, a query. */
 	summary?: string;
 	/** Absent while the call is still running. */
 	status?: 'ok' | 'error';
+	/**
+	 * What a search returned, for the tools that return something worth drawing
+	 * rather than describing. Absent on every other tool, and on traces written
+	 * before searches were rendered — which is why it is optional rather than
+	 * defaulted: an old row should draw as it always did, not as an empty box.
+	 */
+	results?: SearchResultRow[];
 }
 
 /** One model round-trip that ended in tool calls, and the calls it made. */
@@ -38,6 +62,7 @@ export interface TimelineTool {
 	name: string;
 	status: 'running' | 'ok' | 'error';
 	detail?: string;
+	results?: SearchResultRow[];
 }
 
 export interface TimelineStep {
@@ -59,7 +84,22 @@ export interface TimelineNotice {
 	text: string;
 }
 
-export type TimelineItem = TimelineStep | TimelineStage | TimelineNotice;
+/**
+ * A search drawn on its own, for producers that have no steps to hang it under.
+ *
+ * Deep research runs a hardcoded pipeline rather than the agent loop, so its
+ * queries are not tool calls and never arrive with a step id. Folding them in as
+ * orphan tool calls would open an unlabelled step per query; this draws the same
+ * box without inventing a step that did not happen.
+ */
+export interface TimelineSearch {
+	kind: 'search';
+	query: string;
+	language?: string;
+	results: SearchResultRow[];
+}
+
+export type TimelineItem = TimelineStep | TimelineStage | TimelineNotice | TimelineSearch;
 
 export type TimelineChunk =
 	| {
@@ -77,9 +117,11 @@ export type TimelineChunk =
 			detail?: string;
 			callId?: string;
 			stepId?: string;
+			results?: SearchResultRow[];
 	  }
 	| { type: 'stage'; name: string; detail?: string }
-	| { type: 'notice'; text: string };
+	| { type: 'notice'; text: string }
+	| { type: 'search'; query: string; language?: string; results: SearchResultRow[] };
 
 /** Chunks this reducer handles; anything else is somebody else's business. */
 export function isTimelineChunk(chunk: { type?: string }): chunk is TimelineChunk {
@@ -87,7 +129,8 @@ export function isTimelineChunk(chunk: { type?: string }): chunk is TimelineChun
 		chunk.type === 'step' ||
 		chunk.type === 'tool' ||
 		chunk.type === 'stage' ||
-		chunk.type === 'notice'
+		chunk.type === 'notice' ||
+		chunk.type === 'search'
 	);
 }
 
@@ -105,6 +148,12 @@ export function applyChunk(items: TimelineItem[], chunk: TimelineChunk): Timelin
 	}
 	if (chunk.type === 'notice') {
 		return [...items, { kind: 'notice', text: chunk.text }];
+	}
+	if (chunk.type === 'search') {
+		return [
+			...items,
+			{ kind: 'search', query: chunk.query, language: chunk.language, results: chunk.results }
+		];
 	}
 
 	if (chunk.type === 'step') {
@@ -131,7 +180,8 @@ export function applyChunk(items: TimelineItem[], chunk: TimelineChunk): Timelin
 		callId: chunk.callId,
 		name: chunk.name,
 		status: chunk.status,
-		detail: chunk.detail
+		detail: chunk.detail,
+		results: chunk.results
 	};
 
 	if (stepIdx === -1) {
@@ -157,7 +207,15 @@ export function applyChunk(items: TimelineItem[], chunk: TimelineChunk): Timelin
 
 	const tools = [...step.tools];
 	if (toolIdx === -1) tools.push(row);
-	else tools[toolIdx] = { ...tools[toolIdx], ...row, detail: chunk.detail ?? tools[toolIdx].detail };
+	else
+		tools[toolIdx] = {
+			...tools[toolIdx],
+			...row,
+			detail: chunk.detail ?? tools[toolIdx].detail,
+			// Same reason as `detail`: the running chunk may be the one carrying the
+			// results, and a terminal chunk without them must not erase the box.
+			results: chunk.results ?? tools[toolIdx].results
+		};
 
 	const next = [...items];
 	next[stepIdx] = { ...step, tools };
@@ -191,7 +249,8 @@ export function itemsFromTrace(trace: MessageTrace | null | undefined): Timeline
 		tools: s.toolCalls.map((c) => ({
 			name: c.name,
 			status: c.status ?? 'ok',
-			detail: c.summary
+			detail: c.summary,
+			results: c.results
 		}))
 	}));
 }
