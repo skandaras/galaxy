@@ -1,3 +1,4 @@
+import type { SearchResultRow } from '$lib/run-timeline';
 import type { ToolDef } from '$lib/server/providers/types';
 import type { SearchProvider, WebSearchSettings } from '$lib/server/settings';
 import { decryptSecret } from '$lib/server/crypto';
@@ -110,11 +111,17 @@ export class SearchProviderError extends Error {
 export const webSearchToolDef: ToolDef = {
 	name: 'web_search',
 	description:
-		'Search the web for current information. Returns ranked results with title, URL and snippet. ' +
+		'Search the web for current information. Returns ranked results with title, URL and a short ' +
+		'snippet. ' +
 		'Queries may be written in any language, and should be: to find German sources, search in ' +
 		'German. Set `language` as well to bias the engine towards that language\'s index. ' +
-		'Searches per request are limited, so prefer one well-chosen query over several narrow ones, ' +
-		'and do not repeat a query you have already run — it returns the same results.',
+		'Work in two stages: open with a broad query, read the titles and domains it returns to see ' +
+		'how the subject is actually covered, then search again aimed at what they revealed. A ' +
+		'second, better-aimed query is usually worth more than a first, longer one. ' +
+		'Snippets are short by design — they are for choosing what to open, not for answering from. ' +
+		'Use fetch_url to read anything a claim will rest on. ' +
+		'Searches per request are limited, and repeating a query already run returns the same ' +
+		'results without helping.',
 	parameters: {
 		type: 'object',
 		properties: {
@@ -135,6 +142,33 @@ export const webSearchToolDef: ToolDef = {
 
 /** Snippets are provider-controlled and occasionally enormous. */
 const MAX_SNIPPET_CHARS = 240;
+const MIN_SNIPPET_CHARS = 80;
+
+/**
+ * Total snippet text one rendered listing aims for, across all of its results.
+ *
+ * The listing is not paid for once. It stays in the message array and is re-sent
+ * on every later round-trip of the turn, so its size is multiplied by whatever
+ * the model does next — which is why it is budgeted as a whole rather than per
+ * row.
+ */
+const SNIPPET_BUDGET_CHARS = 2_000;
+
+/**
+ * How much snippet each result gets, given how many are being rendered.
+ *
+ * Twenty results at the old flat 240 would have been four times the snippet text
+ * of five, for the same single provider request. Twenty at 100 is 1.7 times it,
+ * and buys fifteen more places to look — and the snippet is the right thing to
+ * spend first, being the one part of a result its own publisher wrote to be
+ * picked. Few results still get the full length: an admin who has deliberately
+ * narrowed `maxResults` should not also lose the detail.
+ */
+export function renderSnippetChars(resultCount: number): number {
+	if (resultCount <= 0) return MAX_SNIPPET_CHARS;
+	const share = Math.floor(SNIPPET_BUDGET_CHARS / resultCount);
+	return Math.min(MAX_SNIPPET_CHARS, Math.max(MIN_SNIPPET_CHARS, share));
+}
 
 /**
  * Render results for the model. A compact numbered list rather than raw JSON:
@@ -170,13 +204,14 @@ export function formatSearchResults(
 		}
 		return `No results for "${query}". The search worked — there is simply nothing indexed for these terms. Try broader or different wording, or answer from what you already know and say the search found nothing. Do not repeat this query.${note}`;
 	}
+	const snippetChars = renderSnippetChars(results.length);
 	return (
 		degraded +
 		results
 			.map((r, i) => {
 				const snippet = r.snippet.replace(/\s+/g, ' ').trim();
 				const trimmed =
-					snippet.length > MAX_SNIPPET_CHARS ? `${snippet.slice(0, MAX_SNIPPET_CHARS)}…` : snippet;
+					snippet.length > snippetChars ? `${snippet.slice(0, snippetChars)}…` : snippet;
 				return `${i + 1}. ${r.title.trim() || '(untitled)'}\n   ${r.url}\n   ${trimmed}`;
 			})
 			.join('\n') + note
@@ -205,7 +240,19 @@ export interface SearchToolDeps {
 	 * model sees. A chat turn is one request; a coding leg is one leg of one.
 	 */
 	scope?: 'request' | 'leg';
+	/** Injectable for tests; defaults to the provider's own pacing. */
+	pacer?: Pacer;
 }
+
+/** What a memo hit has to replay: the model's text, and the rows the box drew. */
+interface MemoEntry {
+	text: string;
+	rows: SearchResultRow[];
+}
+
+/** Provider results reduced to what the timeline box draws. */
+export const displayRows = (results: readonly SearchResult[]): SearchResultRow[] =>
+	results.map((r) => ({ title: r.title.trim() || '(untitled)', url: r.url }));
 
 /**
  * Build the web_search tool for one turn. State lives in the closure, so the
@@ -216,7 +263,11 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 	const search = deps.search ?? runWebSearch;
 	const scope = deps.scope ?? 'request';
 	const budget = Math.max(1, cfg.maxSearchesPerTurn ?? DEFAULT_MAX_SEARCHES);
-	const memo = new Map<string, string>();
+	const memo = new Map<string, MemoEntry>();
+	// Per turn, like the memo and the allowance: a turn that tripped a rate limit
+	// should not hand its throttle to the next message.
+	const pacer = deps.pacer ?? createPacer(cfg.provider);
+	const gate = createGate(pacer);
 	let used = 0;
 
 	return {
@@ -234,8 +285,17 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 			const key = memoKey(query, language);
 			const cached = memo.get(key);
 			if (cached !== undefined) {
-				report?.({ cached: true, searchesUsed: used, searchBudget: budget, scope, language });
-				return `(already searched "${query}" this ${scope} — unchanged results below)\n${cached}`;
+				report?.({
+					cached: true,
+					searchesUsed: used,
+					searchBudget: budget,
+					scope,
+					language,
+					// Replayed so the second call draws its own box rather than an
+					// empty row: the results are the same, and saying so is the point.
+					display: { results: cached.rows }
+				});
+				return `(already searched "${query}" this ${scope} — unchanged results below)\n${cached.text}`;
 			}
 
 			if (used >= budget) {
@@ -246,19 +306,36 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 				return `Search budget for this ${scope} is spent (${budget} searches). Answer with what you have and be explicit about anything you could not confirm. A new message starts a fresh allowance.`;
 			}
 
+			// Claim the allowance, then wait for the provider's gap. Claiming first
+			// is what stops two calls deciding they both have the last search.
 			used++;
-			const outcome = await search(query, cfg, language);
+			await gate();
+			let outcome: SearchOutcome;
+			try {
+				outcome = await search(query, cfg, language);
+			} catch (err) {
+				// A refusal is the only thing that tells us how hard we are pushing;
+				// feed it back before the next search claims its turn.
+				pacer.observe([String(err)]);
+				throw err;
+			}
+			pacer.observe(outcome.degraded?.engines ?? []);
+			const rows = displayRows(outcome.results);
 			report?.({
 				provider: outcome.provider,
 				results: outcome.results.length,
 				searchesUsed: used,
 				searchBudget: budget,
 				scope,
+				...(pacer.pacing.throttled ? { pacing: 'throttled' } : {}),
 				...(language ? { language, languageApplied: outcome.languageApplied !== false } : {}),
 				...(outcome.failedOver ? { failedOver: outcome.failedOver } : {}),
 				// Named in the Observatory so a partly-blocked provider shows as a
 				// pattern across a run rather than as consistently thin results.
-				...(outcome.degraded ? { unresponsiveEngines: outcome.degraded.engines } : {})
+				...(outcome.degraded ? { unresponsiveEngines: outcome.degraded.engines } : {}),
+				// Split off in the loop: this reaches the browser, never the events
+				// table, and never the model.
+				display: { results: rows }
 			});
 			const remaining = budget - used;
 			const tally = remaining
@@ -270,13 +347,13 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 			// world, and caching one froze a transient engine outage in as fact
 			// for the rest of the turn. The tally is outside the memo so a replay
 			// doesn't restate a count that has since moved.
-			if (!outcome.degraded) memo.set(key, text);
+			if (!outcome.degraded) memo.set(key, { text, rows });
 			return text + tally;
 		}
 	};
 }
 
-const DEFAULT_MAX_SEARCHES = 4;
+const DEFAULT_MAX_SEARCHES = 6;
 
 /**
  * Some browsers' UA. A bot-shaped UA is itself a reason to get blocked.
@@ -398,6 +475,39 @@ export function createPacer(provider: SearchProvider): Pacer {
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Wait for your turn to search, under a pacer.
+ *
+ * `runPaced` cannot serve this: it owns a whole batch up front and retires
+ * workers against the concurrency, whereas the agent loop hands over tool calls
+ * one at a time and only needs the next one to wait out the gap. That gap is the
+ * part chat was missing — the loop already executes a batch serially, so
+ * concurrency was never the problem, but with nothing between them two searches
+ * fired as fast as the first returned, which is exactly what Brave's
+ * one-per-second free tier refuses.
+ *
+ * Chained rather than clock-checked, so that two callers who both read the time
+ * before either has started cannot both conclude the gap has elapsed. The pacer
+ * is read on every claim rather than captured, so a rate limit seen by one
+ * search tightens the ones behind it.
+ */
+export function createGate(pacer: Pacer): () => Promise<void> {
+	let lastStart = 0;
+	let queue: Promise<void> = Promise.resolve();
+	return () => {
+		const turn = queue.then(async () => {
+			const gap = pacer.pacing.gapMs;
+			const now = Date.now();
+			const startAt = gap > 0 ? Math.max(now, lastStart + gap) : now;
+			lastStart = startAt;
+			if (startAt > now) await sleep(startAt - now);
+		});
+		// A caller that gives up must not wedge the queue for everyone after it.
+		queue = turn.catch(() => {});
+		return turn;
+	};
+}
 
 /**
  * Run `task` over `items` under a pacer, returning results in *item* order

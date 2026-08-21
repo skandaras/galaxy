@@ -1797,3 +1797,123 @@ describe('runSearches pacing', () => {
 		expect(skipped[0]?.skipped).toBe(4);
 	});
 });
+
+
+describe('what a research round shows and reads', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	const cfg: WebSearchSettings = {
+		...DEFAULT_WEB_SEARCH,
+		provider: 'searxng',
+		baseUrl: 'http://s:8080',
+		fallbackProvider: 'none'
+	};
+
+	/** Answer each SearXNG query with `perQuery` results of its own. */
+	function stubRounds(perQuery: number, failOn: string[] = []) {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string) => {
+				const q = decodeURIComponent(new URL(url).searchParams.get('q') ?? '');
+				if (failOn.includes(q)) return new Response('nope', { status: 503 });
+				return new Response(
+					JSON.stringify({
+						results: Array.from({ length: perQuery }, (_, i) => ({
+							title: `${q} result ${i + 1}`,
+							url: `https://site${i + 1}.example/${encodeURIComponent(q)}`,
+							content: 'x'
+						}))
+					}),
+					{ status: 200, headers: { 'content-type': 'application/json' } }
+				);
+			})
+		);
+	}
+
+	it('reports each query with what that query alone found', async () => {
+		// One box per query, drawn before the cross-query dedupe: the counts a
+		// reader sees have to match the query they can see was run.
+		stubRounds(3);
+		const drawn: { query: string; found: number }[] = [];
+		await runSearches(
+			[
+				{ q: 'freight forwarder China NZ', language: '' },
+				{ q: 'customs broker Queenstown', language: 'en' }
+			],
+			cfg,
+			searchAllowance(8),
+			() => {},
+			createPacer('searxng'),
+			() => {},
+			({ q }, found) => drawn.push({ query: q, found: found.length })
+		);
+		expect(drawn).toEqual([
+			{ query: 'freight forwarder China NZ', found: 3 },
+			{ query: 'customs broker Queenstown', found: 3 }
+		]);
+	});
+
+	it('still reports a query whose search failed', async () => {
+		// An absent box reads as a query that was never tried, which is a
+		// different and worse claim than one that came home empty.
+		stubRounds(2, ['dead query']);
+		const drawn: { query: string; found: number }[] = [];
+		await runSearches(
+			[
+				{ q: 'dead query', language: '' },
+				{ q: 'live query', language: '' }
+			],
+			cfg,
+			searchAllowance(8),
+			() => {},
+			createPacer('searxng'),
+			() => {},
+			({ q }, found) => drawn.push({ query: q, found: found.length })
+		);
+		expect(drawn).toContainEqual({ query: 'dead query', found: 0 });
+		expect(drawn).toContainEqual({ query: 'live query', found: 2 });
+	});
+
+	it('carries every result through to triage, not just the first few', async () => {
+		// The point of widening maxResults: triage is deterministic and local, so
+		// a bigger pool costs no searches, no page reads and no model tokens.
+		stubRounds(20);
+		const results = await runSearches(
+			[
+				{ q: 'one', language: '' },
+				{ q: 'two', language: '' }
+			],
+			cfg,
+			searchAllowance(8),
+			() => {},
+			createPacer('searxng'),
+			() => {}
+		);
+		expect(results.length).toBe(40);
+	});
+
+	it('reports the funnel it already measured, after the chooser has settled it', async () => {
+		const many = Array.from({ length: 40 }, (_, i) => ({
+			url: `https://site${i % 8}.example/page${i}`,
+			title: `Result ${i}`,
+			snippet: 's'
+		}));
+		let funnel: { candidates: number; pool: number; opened: number } | null = null;
+		await readPages(many, [], 6, 100, () => {}, {
+			readPage: async (url) => `body of ${url}`,
+			onTriage: (f) => {
+				funnel = f;
+			}
+		});
+		expect(funnel).not.toBeNull();
+		const shown = funnel as unknown as { candidates: number; pool: number; opened: number };
+		expect(shown.candidates).toBe(40);
+		// Narrowing, in that order: everything found, the shortlist that survived
+		// dedupe and the domain cap, and what was actually opened.
+		expect(shown.pool).toBeLessThan(shown.candidates);
+		expect(shown.opened).toBeLessThanOrEqual(shown.pool);
+		expect(shown.opened).toBe(6);
+	});
+});

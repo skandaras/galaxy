@@ -4,9 +4,9 @@
 		fallbackProvider: 'none',
 		apiKey: '',
 		baseUrl: '',
-		maxResults: 5,
+		maxResults: 20,
 		timeoutMs: 10000,
-		maxSearchesPerTurn: 4,
+		maxSearchesPerTurn: 6,
 		defaultLanguage: ''
 	});
 	let compaction = $state({ ratio: 0.7, keepRecent: 8 });

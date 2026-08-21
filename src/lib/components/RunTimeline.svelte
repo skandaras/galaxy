@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { TimelineItem } from '$lib/run-timeline';
+	import type { SearchResultRow, TimelineItem, TimelineTool } from '$lib/run-timeline';
 
 	/**
 	 * A run as a list of steps, stages and notices in the order they happened.
@@ -12,25 +12,89 @@
 	let { items, live = false }: { items: TimelineItem[]; live?: boolean } = $props();
 
 	const mark = (status: string) => (status === 'ok' ? '✓' : status === 'error' ? '✗' : '');
+
+	const plural = (n: number) => `${n} result${n === 1 ? '' : 's'}`;
+
+	/**
+	 * Whether a step has something to look at rather than merely something to
+	 * report.
+	 *
+	 * The collapse rule below hides machinery once it has succeeded, which is
+	 * right for a file read whose one-line summary says everything. A list of
+	 * search results is not machinery — it is the thing the reader wants — and
+	 * folding it away the instant the search returned made the box unreachable
+	 * without a click nobody knew to make.
+	 */
+	const drawsResults = (tools: TimelineTool[]) => tools.some((t) => t.results?.length);
+
+	/**
+	 * The host a result sits on, shown beside its title.
+	 *
+	 * The full hostname rather than the registrable domain: `docs.` and `blog.` of
+	 * one company are different sources to a reader deciding what to trust, and
+	 * collapsing them hides the thing the column exists to show. Research's own
+	 * domain cap works on the registrable domain, which is a different judgement
+	 * for a different purpose.
+	 */
+	function host(url: string): string {
+		try {
+			return new URL(url).hostname;
+		} catch {
+			return '';
+		}
+	}
 </script>
+
+{#snippet resultBox(results: SearchResultRow[])}
+	<!-- Scrolls within itself: twenty results is worth having and worth not
+	     pushing the rest of the run off the screen. -->
+	<ol class="results">
+		{#each results as r, i (`${i}-${r.url}`)}
+			<li>
+				<a class="r-title" href={r.url} target="_blank" rel="noreferrer noopener">{r.title}</a>
+				<span class="r-host">{host(r.url)}</span>
+			</li>
+		{/each}
+	</ol>
+{/snippet}
 
 <ul class="timeline">
 	{#each items as item, i (item.kind === 'step' ? item.id : `${item.kind}-${i}`)}
 		{#if item.kind === 'step'}
 			<li class="step s-{item.status}">
 				{#if item.tools.length}
+					<!-- A step whose only call drew a box already says that call's name
+					     and query in its own label — describeBatch built it from exactly
+					     that. Repeating it underneath was invisible while the step
+					     collapsed on success, and became a doubled header the moment
+					     boxes started keeping it open. -->
+					{@const solo =
+						item.tools.length === 1 && item.tools[0].status !== 'error' && item.tools[0].results
+							? item.tools[0]
+							: null}
 					<!-- Open while it runs so the work is visible, closed once it
-					     succeeded, left open on failure — the one state worth reading. -->
-					<details open={live ? item.status !== 'ok' : item.status === 'error'}>
+					     succeeded, left open on failure — the one state worth reading —
+					     and left open when it drew results, which are worth reading too. -->
+					<details
+						open={drawsResults(item.tools) ||
+							(live ? item.status !== 'ok' : item.status === 'error')}
+					>
 						<summary>
 							<span class="mark">{mark(item.status)}</span>
 							<span class="label">{item.label || `${item.tools.length} tool calls`}</span>
+							{#if solo?.results}<span class="r-count">{plural(solo.results.length)}</span>{/if}
 						</summary>
 						<ul class="tools">
 							{#each item.tools as tool, t (tool.callId ?? `${tool.name}-${t}`)}
 								<li class="t-{tool.status}">
-									<span class="t-name">{tool.name}</span>
-									{#if tool.detail}<span class="t-detail">{tool.detail}</span>{/if}
+									{#if tool !== solo}
+										<div class="t-line">
+											<span class="t-name">{tool.name}</span>
+											{#if tool.detail}<span class="t-detail">{tool.detail}</span>{/if}
+											{#if tool.results}<span class="r-count">{plural(tool.results.length)}</span>{/if}
+										</div>
+									{/if}
+									{#if tool.results?.length}{@render resultBox(tool.results)}{/if}
 								</li>
 							{/each}
 						</ul>
@@ -41,6 +105,15 @@
 						<span class="label">{item.label}</span>
 					</div>
 				{/if}
+			</li>
+		{:else if item.kind === 'search'}
+			<li class="search">
+				<div class="t-line">
+					<span class="t-name">web_search</span>
+					<span class="t-detail">{item.query}{item.language ? ` [${item.language}]` : ''}</span>
+					<span class="r-count">{plural(item.results.length)}</span>
+				</div>
+				{#if item.results.length}{@render resultBox(item.results)}{/if}
 			</li>
 		{:else if item.kind === 'stage'}
 			<li class="stage">{item.name}{item.detail ? ` · ${item.detail}` : ''}</li>
@@ -118,7 +191,18 @@
 		border-left: 1px solid var(--border);
 		margin-left: 0.28rem;
 	}
-	.tools li {
+	/* A column, so a call that carries a result box can put it under its own
+	   line rather than beside it. Without a box this renders as it always did.
+	   Direct children only: the result rows nested inside are `li`s too, and an
+	   unscoped `.tools li` turned every one of them into a column, breaking the
+	   title beside its domain onto two lines. */
+	.tools > li,
+	.search {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
+	.t-line {
 		display: flex;
 		gap: 0.45rem;
 		align-items: baseline;
@@ -141,6 +225,52 @@
 		overflow: hidden;
 		white-space: nowrap;
 		text-overflow: ellipsis;
+	}
+	/* Pushed to the far end so the counts line up down a round of searches. */
+	.r-count {
+		margin-left: auto;
+		padding-left: 0.6rem;
+		flex-shrink: 0;
+		color: var(--fg-dim);
+		font-size: var(--text-xs);
+	}
+	.search {
+		padding: 0.12rem 0 0.12rem 0.28rem;
+	}
+	.results {
+		list-style: none;
+		margin: 0.25rem 0 0.35rem;
+		padding: 0.15rem 0;
+		border: 1px solid var(--border);
+		border-radius: 0.35rem;
+		max-height: 9.5rem;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+	}
+	.results li {
+		display: flex;
+		gap: 0.6rem;
+		align-items: baseline;
+		min-width: 0;
+		padding: 0.16rem 0.55rem;
+	}
+	.r-title {
+		min-width: 0;
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+		color: inherit;
+		text-decoration: none;
+	}
+	.r-title:hover,
+	.r-title:focus-visible {
+		text-decoration: underline;
+	}
+	.r-host {
+		margin-left: auto;
+		flex-shrink: 0;
+		color: var(--fg-dim);
+		font-size: var(--text-xs);
 	}
 	.stage {
 		color: var(--fg-dim);

@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WebSearchSettings } from '$lib/server/settings';
 import {
+	basePacing,
+	createGate,
+	createPacer,
 	ddgRegion,
 	formatSearchResults,
 	memoKey,
 	normaliseLanguage,
 	normaliseQuery,
+	renderSnippetChars,
 	webSearchTool,
 	type SearchOutcome,
 	type SearchResult
@@ -329,5 +333,167 @@ describe('memoKey', () => {
 	it('separates the same words in different languages', () => {
 		expect(memoKey('parliament', 'de')).not.toBe(memoKey('parliament', 'fr'));
 		expect(memoKey('  Parliament ', 'de')).toBe(memoKey('parliament', 'de'));
+	});
+});
+
+
+describe('renderSnippetChars', () => {
+	it('gives a short listing the full snippet', () => {
+		// An admin who has deliberately narrowed maxResults should keep the detail;
+		// the budget is there to stop a wide listing running away, not to punish a
+		// narrow one.
+		expect(renderSnippetChars(1)).toBe(240);
+		expect(renderSnippetChars(5)).toBe(240);
+	});
+
+	it('shrinks the snippet as the listing widens, so the whole stays bounded', () => {
+		// The listing is re-sent on every later round-trip of the turn, so what
+		// matters is its total size, not any one row's.
+		expect(renderSnippetChars(20)).toBe(100);
+		expect(renderSnippetChars(20) * 20).toBeLessThanOrEqual(renderSnippetChars(5) * 5 * 1.7);
+	});
+
+	it('keeps a floor, so a very wide listing still says something per result', () => {
+		expect(renderSnippetChars(200)).toBe(80);
+	});
+
+	it('does not divide by zero', () => {
+		expect(renderSnippetChars(0)).toBe(240);
+	});
+});
+
+describe('web_search result display', () => {
+	const twenty = Array.from({ length: 20 }, (_, i) => result(i + 1));
+
+	/** A result shaped like a real one: providers write long descriptions. */
+	const realistic = (n: number): SearchResult => ({
+		title: `Best Freight Forwarder China to New Zealand — Door-to-Door DDP ${n}`,
+		url: `https://www.example-forwarder.com/services/lcl-consolidation/${n}`,
+		snippet: `Door-to-door DDP shipping from China to New Zealand. ${'Consolidation, customs clearance and last-mile delivery. '.repeat(8)}`
+	});
+
+	it('renders twenty results for well under twice what five used to cost', () => {
+		// The whole trade: the snippet is the expensive part of a result and the
+		// least trustworthy, so it is what shrinks to pay for the extra fifteen
+		// places to look.
+		const five = formatSearchResults([1, 2, 3, 4, 5].map(realistic), 'q');
+		const wide = formatSearchResults(
+			Array.from({ length: 20 }, (_, i) => realistic(i + 1)),
+			'q'
+		);
+		expect(wide.length / five.length).toBeLessThan(3);
+		// Four times the results for well under three times the tokens.
+		expect(wide.length / five.length).toBeGreaterThan(1);
+	});
+
+	it('reports rows for the box without putting them in the model text', () => {
+		// Three audiences, three payloads: the model gets the return string, the
+		// Observatory gets counts, the reader gets something to look at.
+		const { search } = stubSearch(twenty);
+		const tool = webSearchTool(cfg({ maxSearchesPerTurn: 5 }), { search });
+		const meta: Record<string, unknown>[] = [];
+		return tool.execute({ query: 'freight' }, (m) => meta.push(m)).then(() => {
+			const display = meta[0].display as { results: { title: string; url: string }[] };
+			expect(display.results).toHaveLength(20);
+			expect(display.results[0]).toEqual({ title: 'Title 1', url: 'https://example.com/1' });
+			expect(display.results[0]).not.toHaveProperty('snippet');
+		});
+	});
+
+	it('replays the rows on a memo hit, so a repeat still draws its box', async () => {
+		const { search } = stubSearch(twenty);
+		const tool = webSearchTool(cfg(), { search });
+		const meta: Record<string, unknown>[] = [];
+		await tool.execute({ query: 'freight' }, (m) => meta.push(m));
+		await tool.execute({ query: 'Freight ' }, (m) => meta.push(m));
+		expect(search).toHaveBeenCalledTimes(1);
+		expect(meta[1]).toMatchObject({ cached: true });
+		expect((meta[1].display as { results: unknown[] }).results).toHaveLength(20);
+	});
+
+	it('names an untitled result rather than drawing a blank row', () => {
+		const { search } = stubSearch([{ title: '  ', url: 'https://example.com/x', snippet: 's' }]);
+		const tool = webSearchTool(cfg(), { search });
+		const meta: Record<string, unknown>[] = [];
+		return tool.execute({ query: 'a' }, (m) => meta.push(m)).then(() => {
+			const display = meta[0].display as { results: { title: string }[] };
+			expect(display.results[0].title).toBe('(untitled)');
+		});
+	});
+});
+
+describe('search pacing on the chat path', () => {
+	it('leaves at least a second between searches on Brave', () => {
+		// The requirement, asserted without sleeping for it: Brave's free tier is
+		// metered per second, and this is the number the gate will wait out.
+		expect(basePacing('brave').gapMs).toBeGreaterThanOrEqual(1000);
+		expect(basePacing('brave').concurrency).toBe(1);
+	});
+
+	it('spaces searches out by whatever gap the pacer states', async () => {
+		// Tool calls in a batch already run serially, so concurrency was never the
+		// problem — the absence of any wait between them was.
+		const gate = createGate({ pacing: { concurrency: 1, gapMs: 60, throttled: false }, observe: () => false });
+		const started: number[] = [];
+		for (let i = 0; i < 3; i++) {
+			await gate();
+			started.push(Date.now());
+		}
+		expect(started[1] - started[0]).toBeGreaterThanOrEqual(55);
+		expect(started[2] - started[1]).toBeGreaterThanOrEqual(55);
+	});
+
+	it('reads the pacer on every claim, so a mid-run throttle catches the rest', async () => {
+		let gapMs = 0;
+		const gate = createGate({
+			get pacing() {
+				return { concurrency: 1, gapMs, throttled: gapMs > 0 };
+			},
+			observe: () => false
+		});
+		await gate();
+		gapMs = 60;
+		const began = Date.now();
+		await gate();
+		expect(Date.now() - began).toBeGreaterThanOrEqual(55);
+	});
+
+	it('does not make a provider with no published limit wait', async () => {
+		const gate = createGate(createPacer('searxng'));
+		const began = Date.now();
+		await gate();
+		await gate();
+		expect(Date.now() - began).toBeLessThan(200);
+	});
+
+	it('tightens after a provider says it is being asked too often', async () => {
+		const pacer = createPacer('searxng');
+		expect(pacer.pacing.throttled).toBe(false);
+		const search = vi.fn(
+			async (): Promise<SearchOutcome> => ({
+				results: [result(1)],
+				provider: 'searxng',
+				degraded: { engines: ['brave (too many requests)'], reason: 'engines did not answer' }
+			})
+		);
+		const tool = webSearchTool(cfg({ maxSearchesPerTurn: 3 }), { search, pacer });
+		const meta: Record<string, unknown>[] = [];
+		await tool.execute({ query: 'a' }, (m) => meta.push(m));
+		expect(pacer.pacing.throttled).toBe(true);
+		// Reported so a throttled run is legible in the Observatory rather than
+		// just mysteriously slow.
+		expect(meta[0]).toMatchObject({ pacing: 'throttled' });
+	});
+
+	it('feeds a failed search back to the pacer before the next one starts', async () => {
+		// A refusal is the clearest signal there is about how hard we are pushing,
+		// and it arrives as a thrown error rather than a degraded result.
+		const pacer = createPacer('searxng');
+		const search = vi.fn(async () => {
+			throw new Error('rejected: too many requests');
+		});
+		const tool = webSearchTool(cfg(), { search, pacer });
+		await expect(tool.execute({ query: 'a' })).rejects.toThrow(/too many requests/);
+		expect(pacer.pacing.throttled).toBe(true);
 	});
 });
