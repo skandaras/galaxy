@@ -32,6 +32,13 @@ export interface SearchOutcome {
 	 * the model needs telling, or it reads thin results as the tool misbehaving.
 	 */
 	languageApplied?: boolean;
+	/**
+	 * The value the provider was actually given, which is not the tag that was
+	 * asked for — Brave calls Chinese `zh-hans`. Logged because without it a
+	 * rejected search says only which language was *wanted*, and the question in
+	 * front of you is always which value was *sent*.
+	 */
+	languageSent?: string;
 }
 
 /**
@@ -423,6 +430,7 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 				scope,
 				...(pacer.pacing.throttled ? { pacing: 'throttled' } : {}),
 				...(language ? { language, languageApplied: outcome.languageApplied !== false } : {}),
+				...(outcome.languageSent ? { languageSent: outcome.languageSent } : {}),
 				...(outcome.failedOver ? { failedOver: outcome.failedOver } : {}),
 				// Named in the Observatory so a partly-blocked provider shows as a
 				// pattern across a run rather than as consistently thin results.
@@ -675,12 +683,14 @@ export async function runWebSearch(
 	const outcome = (
 		answer: ProviderAnswer,
 		provider: SearchProvider,
-		applied: boolean
+		applied: boolean,
+		sent?: string | null
 	): SearchOutcome => ({
 		results: answer.results,
 		provider,
 		...(answer.degraded ? { degraded: answer.degraded } : {}),
-		...(lang ? { language: lang, languageApplied: applied } : {})
+		...(lang ? { language: lang, languageApplied: applied } : {}),
+		...(sent ? { languageSent: sent } : {})
 	});
 
 	/**
@@ -693,19 +703,23 @@ export async function runWebSearch(
 	 */
 	const ask = async (
 		provider: SearchProvider
-	): Promise<{ answer: ProviderAnswer; applied: boolean }> => {
+	): Promise<{ answer: ProviderAnswer; applied: boolean; sent: string | null }> => {
 		const wanted = providerLanguage(provider, lang);
 		try {
-			return { answer: await searchWith(provider, query, cfg, lang), applied: Boolean(wanted) };
+			return {
+				answer: await searchWith(provider, query, cfg, lang),
+				applied: Boolean(wanted),
+				sent: wanted
+			};
 		} catch (err) {
 			if (!wanted || !(err instanceof SearchProviderError) || !isRejection(err)) throw err;
-			return { answer: await searchWith(provider, query, cfg, ''), applied: false };
+			return { answer: await searchWith(provider, query, cfg, ''), applied: false, sent: null };
 		}
 	};
 
 	try {
 		const first = await ask(cfg.provider);
-		return outcome(first.answer, cfg.provider, first.applied);
+		return outcome(first.answer, cfg.provider, first.applied, first.sent);
 	} catch (err) {
 		const fallback = cfg.fallbackProvider;
 		if (
@@ -719,7 +733,7 @@ export async function runWebSearch(
 		}
 		const second = await ask(fallback);
 		return {
-			...outcome(second.answer, fallback, second.applied),
+			...outcome(second.answer, fallback, second.applied, second.sent),
 			failedOver: { from: cfg.provider, reason: err.reason }
 		};
 	}
@@ -876,7 +890,10 @@ async function fetchOrThrow(
 		const body = await res.text().catch(() => '');
 		throw new SearchProviderError(
 			provider,
-			body.trim() ? `rejected: ${body.slice(0, 200).replace(/\s+/g, ' ')}` : 'rejected',
+			// Long enough to reach the useful part. A validation error opens with
+			// boilerplate and names the values it wanted at the end, so clipping at
+			// 200 characters reliably kept the boilerplate and threw the answer away.
+			body.trim() ? `rejected: ${body.slice(0, 900).replace(/\s+/g, ' ')}` : 'rejected',
 			res.status,
 			body.length
 		);

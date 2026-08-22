@@ -102,7 +102,19 @@ export function sseResponse(setup: (channel: SseChannel) => () => void): Respons
 					teardown();
 				}
 			}, HEARTBEAT_MS);
-			cleanup = setup({ send, close });
+			// `setup` subscribes, and subscribing replays the job's history
+			// *synchronously* — so a reconnect to a job that already finished runs
+			// straight through the terminal chunk and calls `close()` before `setup`
+			// has returned. Assigning afterwards meant `teardown` saw a null cleanup
+			// and the unsubscribe it then stored was never called, leaking a
+			// subscriber per reconnect until the job aged out.
+			let unsubscribed = false;
+			cleanup = () => {
+				unsubscribed = true;
+			};
+			const unsubscribe = setup({ send, close });
+			if (unsubscribed) unsubscribe();
+			else cleanup = unsubscribe;
 		},
 		cancel() {
 			if (heartbeat) clearInterval(heartbeat);
@@ -117,7 +129,14 @@ export function sseResponse(setup: (channel: SseChannel) => () => void): Respons
 		headers: {
 			'content-type': 'text/event-stream',
 			'cache-control': 'no-cache',
-			connection: 'keep-alive'
+			connection: 'keep-alive',
+			// The heartbeat below is a bare `: ping` comment, and a proxy that
+			// buffers proxied responses — nginx does by default — holds it rather
+			// than passing it on. The client-facing hop then goes genuinely idle for
+			// as long as a consolidation or a synthesis takes to think, and whatever
+			// timeout sits on that hop fires. Invisible in dev, where there is no
+			// proxy at all.
+			'x-accel-buffering': 'no'
 		}
 	});
 }

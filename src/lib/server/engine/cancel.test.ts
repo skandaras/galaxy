@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { db, runMigrations } from '$lib/server/db';
 import { jobs } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
+import { sseResponse } from '$lib/server/api';
 import {
 	cancelJob,
 	completeJob,
@@ -11,6 +12,7 @@ import {
 	isCancellation,
 	jobAgeMinutes,
 	JobCancelledError,
+	pushChunk,
 	RUNNING_JOB_MAX_MS,
 	subscribeJob,
 	type JobChunk
@@ -142,6 +144,28 @@ describe('findRunningJobForChat', () => {
 		expect(job.chunks.at(-1)).toMatchObject({ type: 'error' });
 	});
 
+	it('measures quiet rather than age, so a long busy run survives', () => {
+		// The watchdog's own message says the run "went quiet", but it used to
+		// clock the job's age — so a deep research run that had been reporting
+		// progress for 45 minutes was failed for taking a while, by whoever
+		// happened to open the chat.
+		const job = jobFor('watchdog-busy', 'deep-research');
+		// Started long enough ago to trip the old check, and still reporting.
+		job.createdAt = Date.now() - RUNNING_JOB_MAX_MS - 60_000;
+		pushChunk(job, { type: 'stage', name: 'searching' });
+		expect(findRunningJobForChat('watchdog-busy')?.id).toBe(job.id);
+		expect(job.status).toBe('running');
+	});
+
+	it('still fails one that has genuinely gone quiet', () => {
+		const job = jobFor('watchdog-quiet', 'deep-research');
+		pushChunk(job, { type: 'stage', name: 'searching' });
+		// Last sign of life long ago, whatever the job's own age.
+		job.lastChunkAt = Date.now() - RUNNING_JOB_MAX_MS - 1;
+		expect(findRunningJobForChat('watchdog-quiet')).toBeNull();
+		expect(job.status).toBe('error');
+	});
+
 	it('leaves a long-but-not-abandoned run alone', () => {
 		const job = jobFor('watchdog-d');
 		const later = Date.now() + RUNNING_JOB_MAX_MS - 1000;
@@ -153,5 +177,29 @@ describe('findRunningJobForChat', () => {
 		const job = jobFor('watchdog-e');
 		expect(jobAgeMinutes(job, job.createdAt)).toBe(0);
 		expect(jobAgeMinutes(job, job.createdAt + 14 * 60_000)).toBe(14);
+	});
+});
+
+
+describe('reconnecting to a job that already finished', () => {
+	it('unsubscribes even though replay closes the stream synchronously', async () => {
+		// subscribeJob replays the history before returning, so a terminal chunk
+		// runs `close()` while `setup` is still on the stack. Assigning the
+		// unsubscribe afterwards meant teardown saw nothing to call, and every
+		// reconnect left a subscriber behind until the job aged out.
+		const job = createJob({ chatId: 'sse-done', userId: 'u1', task: 'chat', persist: false });
+		completeJob(job);
+		const before = job.subscribers.size;
+
+		const res = sseResponse(({ close }) => {
+			const stop = subscribeJob(job, (chunk) => {
+				if (chunk.type === 'done') close();
+			});
+			return stop;
+		});
+		// Drain, so the stream actually runs.
+		await res.text().catch(() => '');
+
+		expect(job.subscribers.size).toBe(before);
 	});
 });

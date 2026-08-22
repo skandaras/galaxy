@@ -6,6 +6,7 @@ import {
 	appendMessage,
 	createChat,
 	deleteChat,
+	deleteEmptyChats,
 	getChat,
 	getMessages,
 	listArchivedChats,
@@ -131,5 +132,40 @@ describe('title ownership', () => {
 		const chat = createChat({ userId: USER });
 		updateChat(chat.id, { title: 'Agent-written title' });
 		expect(getChat(chat.id, USER)?.titleCustom).toBe(false);
+	});
+});
+
+
+describe('deleteEmptyChats', () => {
+	it('removes a chat nobody ever wrote in', () => {
+		const blank = createChat({ userId: USER });
+		expect(deleteEmptyChats()).toBeGreaterThanOrEqual(1);
+		expect(getChat(blank.id, USER)).toBeNull();
+	});
+
+	it('keeps one that has a message', () => {
+		const used = createChat({ userId: USER });
+		appendMessage(used.id, { role: 'user', content: 'hello' });
+		deleteEmptyChats();
+		expect(getChat(used.id, USER)).not.toBeNull();
+	});
+
+	it('keeps one someone named, even with nothing in it', () => {
+		// A title is a decision. Emptiness alone is not enough to bin it.
+		const named = createChat({ userId: USER, title: 'Plumber quotes' });
+		deleteEmptyChats();
+		expect(getChat(named.id, USER)).not.toBeNull();
+	});
+
+	it('keeps one that was archived', () => {
+		const filed = createChat({ userId: USER });
+		setArchived(filed.id, USER, true);
+		deleteEmptyChats();
+		expect(getChat(filed.id, USER)).not.toBeNull();
+	});
+
+	it('is safe to run when there is nothing to do', () => {
+		deleteEmptyChats();
+		expect(deleteEmptyChats()).toBe(0);
 	});
 });

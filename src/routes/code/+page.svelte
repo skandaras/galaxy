@@ -126,12 +126,19 @@
 	let diffText = $state<string | null>(null);
 	let source: EventSource | null = null;
 	/**
-	 * Reconnects spent on the current run. Recovery reattaches to a run that is
-	 * still going, so a stream endpoint that is broken rather than merely
-	 * interrupted would otherwise reattach, fail, and reattach forever.
+	 * Consecutive failed reattaches. Any chunk arriving resets it, so a run that
+	 * reconnects cleanly and then streams for ten minutes starts from a full
+	 * allowance if it drops again.
+	 *
+	 * It used to be a lifetime count carried across every reattach and never
+	 * reset, so three drops spread over a long run exhausted it however healthy
+	 * the stream had been in between — and reattaching was immediate, so an
+	 * endpoint failing instantly burned all three inside a second.
 	 */
 	let recoveries = 0;
-	const MAX_RECOVERIES = 3;
+	const MAX_RECOVERIES = 6;
+	/** Backoff between reattaches, capped so a long run keeps trying. */
+	const recoveryDelayMs = (attempt: number) => Math.min(15_000, 500 * 2 ** attempt);
 
 	onMount(async () => {
 		const [chatsRes, modelsRes, reposRes] = await Promise.all([
@@ -308,6 +315,8 @@
 	/** `carriedRecoveries` keeps the reconnect budget across a reattach. */
 	function attach(jobId: string, carriedRecoveries = 0) {
 		closeStream();
+		// Clears the reconnecting notice; a real failure sets its own.
+		errorBanner = null;
 		recoveries = carriedRecoveries;
 		activeJobId = jobId;
 		stopping = false;
@@ -320,6 +329,8 @@
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
 			const chunk = JSON.parse(ev.data);
+			// Proof the stream works: whatever it cost to get here, it is spent.
+			recoveries = 0;
 			if (chunk.type === 'meta') {
 				// New (re)attempt: drop partial text from a failed attempt. The
 				// timeline is left alone — "tried, failed over, retried" is exactly
@@ -378,7 +389,11 @@
 		const data = await res.json();
 		messages = data.messages.filter((m: Msg) => m.role !== 'tool');
 		if (data.runningJobId && recoveries < MAX_RECOVERIES) {
+			// Still going: reattach rather than stranding the user on a dead view.
+			const wait = recoveryDelayMs(recoveries);
 			recoveries++;
+			errorBanner = `Reconnecting to this run…`;
+			await new Promise((resolve) => setTimeout(resolve, wait));
 			attach(data.runningJobId, recoveries);
 			return;
 		}

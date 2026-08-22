@@ -10,6 +10,7 @@ import {
 import { taskConfigs, CORE_TASKS, skills } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { saveSkill } from '$lib/server/skills';
+import { deleteEmptyChats } from '$lib/server/chats';
 
 /**
  * Formatting rules shared by the agents whose replies a person reads in the
@@ -140,6 +141,22 @@ export function seedSkills(): void {
  * closed, and it closes it conservatively: see `migrateWebSearchSettings`,
  * which moves a value only while it still equals the default it replaces.
  */
+/**
+ * One-time cleanups that belong with the settings migrations.
+ *
+ * Stamped like them, so a sweep runs on the boot after the change that needs it
+ * and never again — a person who later wants an empty chat is entitled to keep
+ * one.
+ */
+export function migrateChats(): void {
+	if (getSetting<number>(EMPTY_CHAT_SWEEP_KEY, 0) >= 1) return;
+	const removed = deleteEmptyChats();
+	setSetting(EMPTY_CHAT_SWEEP_KEY, 1);
+	if (removed) console.log(`Removed ${removed} chat(s) that were created and never used.`);
+}
+
+const EMPTY_CHAT_SWEEP_KEY = 'chats.emptySweepVersion';
+
 export function migrateSettings(): void {
 	const search = migrateWebSearchSettings(
 		getSetting<Partial<WebSearchSettings> | null>('websearch', null)

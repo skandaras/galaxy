@@ -1494,6 +1494,7 @@ export async function runSearches(
 				scope: 'research-run',
 				...(pacer.pacing.throttled ? { pacing: 'throttled' } : {}),
 				...(language ? { language, languageApplied: outcome.languageApplied !== false } : {}),
+				...(outcome.languageSent ? { languageSent: outcome.languageSent } : {}),
 				...(outcome.failedOver ? { failedOver: outcome.failedOver } : {})
 			});
 			return outcome.results;

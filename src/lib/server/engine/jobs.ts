@@ -83,6 +83,8 @@ export interface LiveJob {
 	controller: AbortController;
 	/** Full chunk history — replayed to late/reconnecting subscribers. */
 	chunks: JobChunk[];
+	/** When this job last produced anything. See RUNNING_JOB_MAX_MS. */
+	lastChunkAt?: number;
 	subscribers: Set<(chunk: JobChunk) => void>;
 	persist: boolean;
 	createdAt: number;
@@ -128,6 +130,8 @@ export function createJob(opts: {
 }
 
 export function pushChunk(job: LiveJob, chunk: JobChunk): void {
+	// What the watchdog reads: evidence that this run is still working.
+	job.lastChunkAt = Date.now();
 	job.chunks.push(chunk);
 	for (const sub of job.subscribers) sub(chunk);
 }
@@ -222,6 +226,12 @@ export function getLiveJob(id: string): LiveJob | null {
  *
  * Comfortably past streamTotalTimeoutMs (30 min), so this only ever catches
  * runs that are genuinely stuck rather than merely slow.
+ *
+ * Measured from the last chunk the job produced, not from when it started. The
+ * message below has always said "went quiet", but the clock ran on the job's
+ * *age* — so a long research run that was steadily reporting progress got
+ * failed for the crime of taking a while, and by whoever happened to look at
+ * it, since this check runs from a plain read of the chat.
  */
 export const RUNNING_JOB_MAX_MS = 45 * 60 * 1000;
 
@@ -235,7 +245,7 @@ export const RUNNING_JOB_MAX_MS = 45 * 60 * 1000;
 export function findRunningJobForChat(chatId: string, now = Date.now()): LiveJob | null {
 	for (const job of live.values()) {
 		if (job.chatId !== chatId || job.status !== 'running') continue;
-		if (now - job.createdAt > RUNNING_JOB_MAX_MS) {
+		if (now - (job.lastChunkAt ?? job.createdAt) > RUNNING_JOB_MAX_MS) {
 			failJob(
 				job,
 				'This run was abandoned — it went quiet for over 45 minutes without finishing. Send your message again.'
