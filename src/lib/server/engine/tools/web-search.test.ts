@@ -178,11 +178,13 @@ describe('runWebSearch language', () => {
 		expect(calls[0].url).toContain('&language=de');
 	});
 
-	it('splits a region tag into Brave search_lang and country', async () => {
+	it('sends a regional tag to Brave whole, rather than in pieces', async () => {
+		// This used to be split into `search_lang=pt` + `country=BR`, and Brave
+		// takes neither half — `pt-br` is one of its values, and bare `pt` is not.
 		const calls = captureFetch({ web: { results: [] } });
 		await runWebSearch('camara', cfg({ provider: 'brave', apiKeyEnc: undefined }), 'pt-br');
-		expect(calls[0].url).toContain('search_lang=pt');
-		expect(calls[0].url).toContain('country=BR');
+		expect(calls[0].url).toContain('search_lang=pt-br');
+		expect(calls[0].url).not.toContain('country=');
 	});
 
 	it('sends only search_lang for a bare language', async () => {
@@ -190,6 +192,45 @@ describe('runWebSearch language', () => {
 		await runWebSearch('Bundestag', cfg({ provider: 'brave' }), 'de');
 		expect(calls[0].url).toContain('search_lang=de');
 		expect(calls[0].url).not.toContain('country=');
+	});
+
+	it("uses Brave's own names for the languages that have their own names", async () => {
+		// The failure that started this: every `[zh]` query came back empty because
+		// Brave has no bare `zh`, and answers an unlisted value with a 422.
+		const url = async (lang: string) => {
+			const calls = captureFetch({ web: { results: [] } });
+			await runWebSearch('x', cfg({ provider: 'brave' }), lang);
+			return calls[0].url;
+		};
+		expect(await url('zh')).toContain('search_lang=zh-hans');
+		expect(await url('zh-cn')).toContain('search_lang=zh-hans');
+		expect(await url('zh-tw')).toContain('search_lang=zh-hant');
+		expect(await url('zh-hant')).toContain('search_lang=zh-hant');
+		expect(await url('ja')).toContain('search_lang=jp');
+		expect(await url('pt')).toContain('search_lang=pt-pt');
+		expect(await url('en-gb')).toContain('search_lang=en-gb');
+	});
+
+	it('falls back to the base language when the region has no Brave value', async () => {
+		const calls = captureFetch({ web: { results: [] } });
+		await runWebSearch('x', cfg({ provider: 'brave' }), 'de-at');
+		expect(calls[0].url).toContain('search_lang=de');
+	});
+
+	it('omits the parameter, and says so, for a language Brave cannot express', async () => {
+		// Sending it anyway is a 422 and an empty round; the model needs to know
+		// the results are unfiltered rather than that nothing exists.
+		const calls = captureFetch({ web: { results: [] } });
+		const outcome = await runWebSearch('x', cfg({ provider: 'brave' }), 'cy');
+		expect(calls[0].url).not.toContain('search_lang=');
+		expect(outcome.language).toBe('cy');
+		expect(outcome.languageApplied).toBe(false);
+	});
+
+	it('reports that Brave applied a language it does support', async () => {
+		captureFetch({ web: { results: [] } });
+		const outcome = await runWebSearch('x', cfg({ provider: 'brave' }), 'zh');
+		expect(outcome.languageApplied).toBe(true);
 	});
 
 	it("puts DuckDuckGo's region-language pair in the form body", async () => {
@@ -594,5 +635,90 @@ describe('runPaced', () => {
 			[]
 		);
 		expect(task).not.toHaveBeenCalled();
+	});
+});
+
+
+describe('a language the provider rejects', () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	const cfg = (over: Partial<WebSearchSettings> = {}): WebSearchSettings => ({
+		...DEFAULT_WEB_SEARCH,
+		provider: 'brave',
+		apiKeyEnc: undefined,
+		...over
+	});
+
+	/** Answer 422 while `search_lang` is present, and normally once it is gone. */
+	function braveRejectingLanguage() {
+		const calls: string[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string) => {
+				calls.push(url);
+				if (url.includes('search_lang=')) {
+					return new Response("Input should be 'ar', 'eu', … 'zh-hans', 'zh-hant'", {
+						status: 422
+					});
+				}
+				return new Response(
+					JSON.stringify({ web: { results: [{ title: 'T', url: 'https://e.com', description: 'd' }] } }),
+					{ status: 200, headers: { 'content-type': 'application/json' } }
+				);
+			})
+		);
+		return calls;
+	}
+
+	it('asks again without it rather than losing the query', async () => {
+		// providerLanguage already declines a tag Brave has no value for; this is
+		// for the case it cannot know about — an allowlist that has moved.
+		const calls = braveRejectingLanguage();
+		const outcome = await runWebSearch('x', cfg({ provider: 'brave' }), 'de');
+		expect(outcome.results).toHaveLength(1);
+		expect(calls).toHaveLength(2);
+		expect(calls[1]).not.toContain('search_lang=');
+	});
+
+	it('tells the caller the results are unfiltered', async () => {
+		braveRejectingLanguage();
+		const outcome = await runWebSearch('x', cfg({ provider: 'brave' }), 'de');
+		expect(outcome.language).toBe('de');
+		expect(outcome.languageApplied).toBe(false);
+	});
+
+	it('does not retry a failure that is not a refusal', async () => {
+		// A 5xx or a rate limit is not the language's fault, and retrying without
+		// it would just spend a second request to fail the same way.
+		const calls: string[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string) => {
+				calls.push(url);
+				return new Response('upstream is down', { status: 503 });
+			})
+		);
+		await expect(
+			runWebSearch('x', cfg({ provider: 'brave', fallbackProvider: 'none' }), 'de')
+		).rejects.toThrow(/brave/);
+		expect(calls).toHaveLength(1);
+	});
+
+	it('treats a body with no web results object as a failure, not an empty answer', async () => {
+		// `data.web?.results ?? []` turned any unexpected shape into a clean zero,
+		// which reads to the model as "nothing exists".
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(
+				async () =>
+					new Response(JSON.stringify({ query: { original: 'x' } }), {
+						status: 200,
+						headers: { 'content-type': 'application/json' }
+					})
+			)
+		);
+		await expect(
+			runWebSearch('x', cfg({ provider: 'brave', fallbackProvider: 'none' }))
+		).rejects.toThrow(/no web results object/);
 	});
 });

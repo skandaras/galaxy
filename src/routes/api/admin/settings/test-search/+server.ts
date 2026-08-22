@@ -1,9 +1,17 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireAdmin } from '$lib/server/api';
-import { DEFAULT_WEB_SEARCH, getSetting, type WebSearchSettings } from '$lib/server/settings';
+import {
+	DEFAULT_RESEARCH,
+	DEFAULT_WEB_SEARCH,
+	getSetting,
+	type ResearchSettings,
+	type WebSearchSettings
+} from '$lib/server/settings';
 import {
 	SearchProviderError,
+	braveAlternatives,
+	languageSupport,
 	runWebSearch,
 	webSearchConfigured
 } from '$lib/server/engine/tools/web-search';
@@ -32,6 +40,24 @@ export const POST: RequestHandler = async ({ locals }) => {
 		});
 	}
 
+	// The configured language codes, read the way the provider will read them.
+	// An unsupported code is not an error — the search still runs, just without
+	// the constraint — but it is worth saying, because nothing else ever would.
+	const research = getSetting<ResearchSettings>('research', DEFAULT_RESEARCH);
+	const configured = languageSupport(
+		cfg.provider,
+		[cfg.defaultLanguage ?? '', research.extraLanguages ?? ''].filter(Boolean).join(',')
+	);
+	const unsupported = configured
+		.filter((l) => !l.sentAs)
+		.map((l) => {
+			const near = cfg.provider === 'brave' ? braveAlternatives(l.code) : [];
+			return near.length ? `${l.code} (${cfg.provider} uses ${near.join(' or ')})` : l.code;
+		});
+	const languageWarning = unsupported.length
+		? `${cfg.provider} cannot filter by ${unsupported.join(', ')}. Searches tagged with those run without a language constraint.`
+		: null;
+
 	const started = Date.now();
 	try {
 		const outcome = await runWebSearch(PROBE_QUERY, cfg);
@@ -57,6 +83,7 @@ export const POST: RequestHandler = async ({ locals }) => {
 			// be a guess ("may be silently rate-limiting") purely because nothing
 			// read the diagnosis the provider was already sending.
 			unresponsiveEngines: outcome.degraded?.engines ?? null,
+			languageWarning,
 			warning: outcome.degraded
 				? `Answered, but these engines did not: ${outcome.degraded.engines.join(', ')}. Results are incomplete.`
 				: outcome.results.length === 0
@@ -77,6 +104,6 @@ export const POST: RequestHandler = async ({ locals }) => {
 			durationMs: Date.now() - started,
 			detail
 		});
-		return json({ ok: false, durationMs: Date.now() - started, ...detail });
+		return json({ ok: false, durationMs: Date.now() - started, languageWarning, ...detail });
 	}
 };

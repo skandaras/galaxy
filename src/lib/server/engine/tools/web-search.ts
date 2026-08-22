@@ -82,9 +82,103 @@ export function ddgRegion(lang: string): string {
 	return region ? `${region}-${base}` : `${base}-${base}`;
 }
 
-/** Providers that can genuinely constrain results to a language. */
-function supportsLanguage(provider: SearchProvider): boolean {
-	return provider === 'searxng' || provider === 'brave' || provider === 'duckduckgo';
+/**
+ * Every value Brave's `search_lang` accepts.
+ *
+ * It is an allowlist, and it is not BCP-47: Chinese is `zh-hans`/`zh-hant` and
+ * never bare `zh`, Japanese is `jp` rather than `ja`, and Portuguese exists only
+ * as `pt-br`/`pt-pt`. Anything else comes back HTTP 422 with this list in the
+ * body, so it is the allowlist here too — a tag that is not in it is one we must
+ * not send.
+ */
+const BRAVE_LANGUAGES = new Set([
+	'ar', 'eu', 'bn', 'bg', 'ca', 'zh-hans', 'zh-hant', 'hr', 'cs', 'da', 'nl',
+	'en', 'en-gb', 'et', 'fi', 'fr', 'gl', 'de', 'el', 'gu', 'he', 'hi', 'hu',
+	'is', 'it', 'jp', 'kn', 'ko', 'lv', 'lt', 'ms', 'ml', 'mr', 'nb', 'pl',
+	'pt-br', 'pt-pt', 'pa', 'ro', 'ru', 'sr', 'sk', 'sl', 'es', 'sv', 'ta', 'te',
+	'th', 'tr', 'uk', 'vi'
+]);
+
+/**
+ * BCP-47 tags whose Brave equivalent is not derivable from them.
+ *
+ * The same shape as DDG_REGIONS above, for the same reason. Simplified Chinese
+ * is the default reading of an untagged `zh` because it is the larger index;
+ * `zh-tw` and `zh-hk` are the traditional-script regions.
+ */
+const BRAVE_LANGUAGE_ALIASES: Record<string, string> = {
+	zh: 'zh-hans',
+	'zh-cn': 'zh-hans',
+	'zh-sg': 'zh-hans',
+	'zh-tw': 'zh-hant',
+	'zh-hk': 'zh-hant',
+	'zh-mo': 'zh-hant',
+	ja: 'jp',
+	pt: 'pt-pt'
+};
+
+/**
+ * What Brave should be asked for, or null when it has no way to express this.
+ *
+ * Deliberately no `country`: Brave's list already carries the regional variants
+ * it supports, and splitting the tag to derive a market is what destroyed the
+ * ones that were already valid — `pt-br` became `search_lang=pt&country=BR`,
+ * and neither half is a value Brave takes.
+ */
+export function braveLanguage(lang: string): string | null {
+	if (!lang) return null;
+	const alias = BRAVE_LANGUAGE_ALIASES[lang];
+	if (alias) return alias;
+	if (BRAVE_LANGUAGES.has(lang)) return lang;
+	// `de-at` has no Brave equivalent, but `de` does; a region we cannot express
+	// is better dropped than sent.
+	const base = lang.split('-')[0];
+	return BRAVE_LANGUAGES.has(base) ? base : null;
+}
+
+/**
+ * How a provider will read a list of language codes an admin has configured.
+ *
+ * The settings fields are free text, and their own placeholders suggested `ja`
+ * and `pt-br` — two codes Brave does not take in that form. A code that quietly
+ * does nothing is worse than one that is refused, because every search carrying
+ * it comes back empty and is reported to the model as "nothing exists".
+ */
+export function languageSupport(
+	provider: SearchProvider,
+	codes: string
+): { code: string; sentAs: string | null }[] {
+	return codes
+		.split(',')
+		.map((raw) => normaliseLanguage(raw))
+		.filter(Boolean)
+		.map((code) => ({ code, sentAs: providerLanguage(provider, code) }));
+}
+
+/**
+ * The Brave value nearest to a code it cannot take, for an error message.
+ * Chinese and Japanese are the two anyone actually hits.
+ */
+export function braveAlternatives(code: string): string[] {
+	const base = code.split('-')[0];
+	return [...BRAVE_LANGUAGES].filter((v) => v.split('-')[0] === base || (base === 'ja' && v === 'jp'));
+}
+
+/**
+ * The value a provider wants for this language, or null when it cannot honour
+ * the tag at all.
+ *
+ * This replaced a per-provider boolean, which was the second half of the bug:
+ * Brave answered `true` for every tag including the ones it rejects, so
+ * `languageApplied` was reported true for a parameter that never took effect and
+ * the one warning the system has was never raised.
+ */
+export function providerLanguage(provider: SearchProvider, lang: string): string | null {
+	if (!lang) return null;
+	if (provider === 'brave') return braveLanguage(lang);
+	if (provider === 'duckduckgo') return ddgRegion(lang) || null;
+	if (provider === 'searxng') return lang;
+	return null;
 }
 
 /**
@@ -413,6 +507,18 @@ export function isRateLimitReason(reason: unknown): boolean {
 }
 
 /**
+ * The provider refused the request itself, as opposed to failing to answer it.
+ *
+ * A 4xx that is not a rate limit means it did not like something we sent — which
+ * for a search carrying a language is almost always the language. Worth one more
+ * attempt without it; a 5xx or a timeout is not.
+ */
+export function isRejection(err: SearchProviderError): boolean {
+	return typeof err.status === 'number' && err.status >= 400 && err.status < 500 && err.status !== 429;
+}
+
+
+/**
  * What a provider tolerates before anything has gone wrong.
  *
  * Brave is metered per second on its free tier, so it starts serial with a gap
@@ -566,14 +672,40 @@ export async function runWebSearch(
 	language?: string
 ): Promise<SearchOutcome> {
 	const lang = normaliseLanguage(language) || normaliseLanguage(cfg.defaultLanguage);
-	const outcome = (answer: ProviderAnswer, provider: SearchProvider): SearchOutcome => ({
+	const outcome = (
+		answer: ProviderAnswer,
+		provider: SearchProvider,
+		applied: boolean
+	): SearchOutcome => ({
 		results: answer.results,
 		provider,
 		...(answer.degraded ? { degraded: answer.degraded } : {}),
-		...(lang ? { language: lang, languageApplied: supportsLanguage(provider) } : {})
+		...(lang ? { language: lang, languageApplied: applied } : {})
 	});
+
+	/**
+	 * Ask one provider, dropping the language if it turns out to refuse it.
+	 *
+	 * `providerLanguage` already declines a tag the provider has no value for, so
+	 * this is for the case it cannot know about: an allowlist that has moved.
+	 * Results in the wrong language beat no results, and it means a future change
+	 * to Brave's enum degrades instead of silently emptying every tagged search.
+	 */
+	const ask = async (
+		provider: SearchProvider
+	): Promise<{ answer: ProviderAnswer; applied: boolean }> => {
+		const wanted = providerLanguage(provider, lang);
+		try {
+			return { answer: await searchWith(provider, query, cfg, lang), applied: Boolean(wanted) };
+		} catch (err) {
+			if (!wanted || !(err instanceof SearchProviderError) || !isRejection(err)) throw err;
+			return { answer: await searchWith(provider, query, cfg, ''), applied: false };
+		}
+	};
+
 	try {
-		return outcome(await searchWith(cfg.provider, query, cfg, lang), cfg.provider);
+		const first = await ask(cfg.provider);
+		return outcome(first.answer, cfg.provider, first.applied);
 	} catch (err) {
 		const fallback = cfg.fallbackProvider;
 		if (
@@ -585,8 +717,9 @@ export async function runWebSearch(
 		) {
 			throw err;
 		}
+		const second = await ask(fallback);
 		return {
-			...outcome(await searchWith(fallback, query, cfg, lang), fallback),
+			...outcome(second.answer, fallback, second.applied),
 			failedOver: { from: cfg.provider, reason: err.reason }
 		};
 	}
@@ -614,6 +747,7 @@ async function searchWith(
 	switch (provider) {
 		case 'duckduckgo': {
 			// Keyless: DuckDuckGo's no-JS HTML endpoint, parsed directly.
+			const ddgLang = providerLanguage(provider, language);
 			const res = await fetchOrThrow(
 				provider,
 				'https://html.duckduckgo.com/html/',
@@ -627,7 +761,7 @@ async function searchWith(
 					// `kl` is DuckDuckGo's region-language selector.
 					body:
 						`q=${encodeURIComponent(query)}` +
-						(language ? `&kl=${encodeURIComponent(ddgRegion(language))}` : ''),
+						(ddgLang ? `&kl=${encodeURIComponent(ddgLang)}` : ''),
 					signal
 				}
 			);
@@ -636,18 +770,25 @@ async function searchWith(
 			return { results: parseDuckDuckGoHtml(html, cfg.maxResults) };
 		}
 		case 'brave': {
-			// Brave splits the two: search_lang is the content language, country
-			// the market. A bare 'de' sets only the former.
-			const [base, region] = language ? language.split('-') : [];
+			const searchLang = braveLanguage(language);
 			const res = await fetchOrThrow(
 				provider,
 				`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${cfg.maxResults}` +
-					(base ? `&search_lang=${encodeURIComponent(base)}` : '') +
-					(region ? `&country=${encodeURIComponent(region.toUpperCase())}` : ''),
+					(searchLang ? `&search_lang=${encodeURIComponent(searchLang)}` : ''),
 				{ headers: { 'X-Subscription-Token': apiKey(cfg), accept: 'application/json' }, signal }
 			);
 			const data = await parseJsonOrThrow(provider, res);
-			const rows: Record<string, string>[] = data.web?.results ?? [];
+			// Brave answers a query with no hits as `web: { results: [] }`, so a
+			// body with no `web` at all is a shape we do not understand rather than
+			// an empty result — the same distinction SearXNG and DuckDuckGo get.
+			if (!data.web || !Array.isArray(data.web.results)) {
+				throw new SearchProviderError(
+					provider,
+					'response carried no web results object (the API shape may have changed, or the key may lack access to web search)',
+					res.status
+				);
+			}
+			const rows: Record<string, string>[] = data.web.results;
 			return {
 				results: rows.slice(0, cfg.maxResults).map((r) => ({
 					title: r.title ?? '',
@@ -676,10 +817,11 @@ async function searchWith(
 		case 'searxng': {
 			const base = (cfg.baseUrl ?? '').replace(/\/$/, '');
 			if (!base) throw new SearchProviderError(provider, 'no instance URL configured');
+			const searxLang = providerLanguage(provider, language);
 			const res = await fetchOrThrow(
 				provider,
 				`${base}/search?q=${encodeURIComponent(query)}&format=json` +
-					(language ? `&language=${encodeURIComponent(language)}` : ''),
+					(searxLang ? `&language=${encodeURIComponent(searxLang)}` : ''),
 				{ headers: { accept: 'application/json', 'user-agent': BROWSER_UA }, signal }
 			);
 			const data = await parseJsonOrThrow(provider, res, 'is the JSON format enabled? SearXNG needs `search.formats` to include `json`');

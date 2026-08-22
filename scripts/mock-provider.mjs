@@ -348,6 +348,27 @@ const server = createServer(async (req, res) => {
 		return;
 	}
 
+	// A backend that refuses the language parameter and answers fine without it —
+	// Brave's behaviour for a code outside its allowlist, which it rejects with a
+	// 422 rather than an empty result. The retry that drops the constraint is
+	// provider-agnostic, so it can be exercised through the configurable one.
+	if (req.method === 'GET' && url.pathname === '/searxng-langreject/search') {
+		if (url.searchParams.has('language')) {
+			res.writeHead(422, { 'content-type': 'application/json' });
+			res.end(JSON.stringify({ detail: "Input should be 'ar', 'eu', … 'zh-hans', 'zh-hant'" }));
+			return;
+		}
+		res.writeHead(200, { 'content-type': 'application/json' });
+		res.end(
+			JSON.stringify({
+				results: [
+					{ title: 'Unconstrained result', url: `http://127.0.0.1:${port}/page/one`, content: 'x' }
+				]
+			})
+		);
+		return;
+	}
+
 	// A "blocked" search backend: HTTP 200 with a bot-check body and no results
 	// markup — exactly how DuckDuckGo refuses a datacenter IP.
 	if (req.method === 'GET' && url.pathname === '/searxng-blocked/search') {

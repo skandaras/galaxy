@@ -81,6 +81,14 @@ BLOCKED=$(api -X POST $B/api/admin/settings/test-search)
 check "blocked provider reports failure" "$BLOCKED" '"ok":false'
 check "blocked provider gives a reason" "$BLOCKED" 'expected JSON, got HTML'
 
+# A provider that refuses the language parameter. Brave answers 422 for any code
+# outside its allowlist — bare `zh` among them — and every tagged search used to
+# come back empty and be reported to the model as "nothing exists".
+api -X PUT $B/api/admin/settings -d "{\"key\":\"websearch\",\"value\":{\"provider\":\"searxng\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/searxng-langreject\",\"fallbackProvider\":\"none\",\"defaultLanguage\":\"de\"}}" > /dev/null
+LANGREJECT=$(api -X POST $B/api/admin/settings/test-search)
+check "a refused language does not lose the search" "$LANGREJECT" '"ok":true'
+check "and it comes back with results" "$LANGREJECT" '"results":1'
+
 # A SearXNG whose engines are all down answers 200 with an empty result list.
 # That used to be indistinguishable from "the web has nothing on this": the
 # probe reported ok, the fallback never fired, and the model was told the search
