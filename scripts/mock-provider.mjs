@@ -68,8 +68,10 @@ function delta(res, d, finish = null) {
  * branch — so the moment they moved, every one of them was answered with
  * "Mock completion." and the whole research suite failed at once.
  */
-async function scriptedReply(userText) {
+async function scriptedReply(userText, maxTokens = 0) {
 	let content = null;
+	// Set by a branch that models generation being cut off rather than finishing.
+	let stoppedOnLength = false;
 		if (userText.includes('RESEARCH-FRAME')) {
 			// Echoes the subject from the conversation, so a test can prove the
 			// follow-up was resolved against it rather than researched literally.
@@ -89,14 +91,24 @@ async function scriptedReply(userText) {
 			// round after that calls it done. Keyed off the round header in the
 			// prompt, so it works whatever the effort level allows.
 			const first = /RESEARCH-CONSOLIDATE — round 1 of/.test(userText);
-			// One flaky first consolidation, to prove a run survives it. Round one
-			// has no brief yet and so no open gaps to continue from, which is why
-			// a single failure there used to end the whole run rather than cost it
-			// one round. Answered properly on the retry.
+			// Refuse the first *two* calls, so both recovery layers are exercised:
+			// consolidate() retries with a larger allowance, and when that fails too
+			// the round itself is retried. Round one has no brief yet and so no open
+			// gaps to continue from, which is why a single failure there used to end
+			// the whole run rather than cost it one round.
 			const flaky =
-				first && userText.includes('FLAKY-CONSOLIDATION') && firstConsolidations++ === 0;
+				first && userText.includes('FLAKY-CONSOLIDATION') && firstConsolidations++ < 2;
+			// A brief cut off mid-JSON: what a real model does when the budget is
+			// smaller than the brief the prompt asks for. Only on the smaller of the
+			// two allowances, so asking again with room is what fixes it.
+			const cutOff = userText.includes('TRUNCATED-CONSOLIDATION') && maxTokens < 4000;
+			// Stopped on length, as a real truncation is — the caller cannot tell it
+			// apart from a short answer otherwise.
+			if (cutOff) stoppedOnLength = true;
 			content = flaky
 				? 'sorry, I cannot produce that'
+				: cutOff
+				? '{"findings":[{"claim":"Nebulae form from collapsing molecular clouds","sources":[1]},{"claim":"a second finding that stops mid-sen'
 				: first
 				? JSON.stringify({
 						findings: [{ claim: 'Nebulae form from collapsing molecular clouds', sources: [1] }],
@@ -233,7 +245,7 @@ async function scriptedReply(userText) {
 				]
 			});
 		}
-	return content;
+	return content === null ? null : { content, finishReason: stoppedOnLength ? 'length' : 'stop' };
 }
 
 const server = createServer(async (req, res) => {
@@ -414,7 +426,7 @@ const server = createServer(async (req, res) => {
 		// compaction summaries, etc.
 		if (!parsed.stream) {
 			const userText = String(last?.content ?? '');
-			const content = (await scriptedReply(userText)) ?? 'Mock completion.';
+			const content = (await scriptedReply(userText, parsed.max_tokens ?? 0))?.content ?? 'Mock completion.';
 			res.writeHead(200, { 'content-type': 'application/json' });
 			if (isReasoning(parsed.model)) {
 				// Thinks first, answers second. With a small cap the whole budget
@@ -462,8 +474,9 @@ const server = createServer(async (req, res) => {
 		// than by a flat deadline, and they want the same canned reply they got
 		// from complete() — including the reasoning-model behaviour, so the
 		// planner's retry is exercised rather than bypassed.
-		const scripted = await scriptedReply(String(last?.content ?? ''));
+		const scripted = await scriptedReply(String(last?.content ?? ''), parsed.max_tokens ?? 0);
 		if (scripted !== null) {
+			const scriptedFinish = scripted.finishReason;
 			const cap = parsed.max_tokens ?? 300;
 			const thinks = isReasoning(parsed.model);
 			// Same threshold the non-streaming path uses: a small budget goes
@@ -472,8 +485,8 @@ const server = createServer(async (req, res) => {
 			if (thinks) {
 				for (let i = 0; i < 3; i++) delta(res, { reasoning_content: `step ${i} of thinking… ` });
 			}
-			if (room) delta(res, { content: scripted });
-			delta(res, {}, room ? 'stop' : 'length');
+			if (room) delta(res, { content: scripted.content });
+			delta(res, {}, room ? scriptedFinish : 'length');
 			sseChunk(res, {
 				id: 'mock',
 				object: 'chat.completion.chunk',

@@ -274,6 +274,15 @@ FSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$FJOB/stream)
 check "a flaky first consolidation is retried" "$FSTREAM" 'trying once more on the same sources'
 check "and the run goes on to a second round" "$FSTREAM" '"name":"searching","detail":"round 2/'
 check_absent "rather than ending on round one" "$FSTREAM" 'answering from the'
+
+# A brief cut off mid-JSON. Non-empty text meant the old guard (`!text.trim()`)
+# short-circuited before it ever looked at finishReason, so the larger allowance
+# was unreachable for the one failure it fixes.
+TCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+TJOB=$(api -X POST $B/api/chats/$TCHAT/messages -d '{"content":"How do nebulae form? TRUNCATED-CONSOLIDATION","deepResearch":true}' | jqn .jobId)
+TSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$TJOB/stream)
+check "a brief cut off mid-JSON is asked for again with room" "$TSTREAM" '"name":"searching","detail":"round 2/'
+check_absent "and does not end the run" "$TSTREAM" 'no usable JSON'
 check "research stops early once evidence suffices" "$RSTREAM" 'Evidence judged sufficient after 2 of 3 rounds'
 check "research reports the brief it built" "$RSTREAM" 'Brief after 2 rounds: 2 findings'
 # The Observatory keeps the full record — the stream shows the queries and their

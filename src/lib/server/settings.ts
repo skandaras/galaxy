@@ -239,12 +239,20 @@ export interface ResearchSettings {
 	 * question's own language.
 	 */
 	extraLanguages?: string;
+	/** See the note on `WebSearchSettings.settingsVersion`. */
+	settingsVersion?: number;
 }
+
+/**
+ * Bump when a default here changes in a way existing installs should inherit,
+ * and add the corresponding step to `migrateResearchSettings`.
+ */
+export const RESEARCH_SETTINGS_VERSION = 1;
 
 export const DEFAULT_RESEARCH: ResearchSettings = {
 	provider: 'inherit',
 	maxQueries: 4,
-	maxPages: 6,
+	maxPages: 10,
 	maxTokens: 2048,
 	timeoutMs: 20_000,
 	maxRounds: 4,
@@ -252,8 +260,38 @@ export const DEFAULT_RESEARCH: ResearchSettings = {
 	// rather than tripping the run cap halfway through.
 	maxSearchesPerRun: 16,
 	modelTriage: false,
-	extraLanguages: ''
+	extraLanguages: '',
+	settingsVersion: RESEARCH_SETTINGS_VERSION
 };
+
+/** The stored research settings, filled out. Same reasoning as `webSearchSettings`. */
+export function researchSettings(): ResearchSettings {
+	return { ...DEFAULT_RESEARCH, ...getSetting<Partial<ResearchSettings>>('research', {}) };
+}
+
+/**
+ * Raise a stored research row to the current defaults, once.
+ *
+ * Same contract as `migrateWebSearchSettings`: only a value still equal to the
+ * default it replaces moves, and the stamp means it happens once.
+ */
+export function migrateResearchSettings(
+	stored: Partial<ResearchSettings> | null
+): ResearchSettings | null {
+	if (!stored || !Object.keys(stored).length) return null;
+	const from = Number(stored.settingsVersion ?? 0);
+	if (from >= RESEARCH_SETTINGS_VERSION) return null;
+
+	const next = normaliseResearchSettings(stored as Record<string, unknown>);
+	if (from < 1) {
+		// v1 — the search net widened to twenty results a query, which made six
+		// pages a round the narrow part of the pipeline rather than a sensible
+		// ceiling on it.
+		if (stored.maxPages === 6) next.maxPages = 10;
+	}
+	next.settingsVersion = RESEARCH_SETTINGS_VERSION;
+	return next;
+}
 
 /**
  * Total rounds allowed, honouring a legacy `iterationCap` row.
@@ -302,7 +340,10 @@ export function normaliseResearchSettings(raw: Record<string, unknown>): Researc
 		maxRounds: researchRoundCeiling(raw as Partial<ResearchSettings>),
 		maxSearchesPerRun: num(raw.maxSearchesPerRun, DEFAULT_RESEARCH.maxSearchesPerRun, 1, 40),
 		modelTriage: raw.modelTriage === true,
-		extraLanguages: typeof raw.extraLanguages === 'string' ? raw.extraLanguages : ''
+		extraLanguages: typeof raw.extraLanguages === 'string' ? raw.extraLanguages : '',
+		// An admin who has been through the form has seen the current defaults, so
+		// a save is itself the migration for anything still outstanding.
+		settingsVersion: RESEARCH_SETTINGS_VERSION
 	};
 }
 
