@@ -41,6 +41,8 @@
 		bytes?: number;
 		durationMs?: number;
 		warning?: string | null;
+		/** A configured language code the provider cannot honour. */
+		languageWarning?: string | null;
 		failedOver?: { from: string; reason: string } | null;
 		unresponsiveEngines?: string[] | null;
 		sample?: { title: string; url: string }[];
@@ -66,6 +68,7 @@
 				lines.push(`  ! fell back from ${t.failedOver.from}: ${t.failedOver.reason}`);
 			}
 			if (t.warning) lines.push(`  ! ${t.warning}`);
+			if (t.languageWarning) lines.push(`  ! ${t.languageWarning}`);
 			// Named individually: "some engines are blocked" is actionable, "0
 			// results" is not.
 			for (const e of t.unresponsiveEngines ?? []) lines.push(`  ✗ engine down: ${e}`);
@@ -75,6 +78,7 @@
 			if (t.reason) lines.push(`  reason: ${t.reason}`);
 			if (t.status !== undefined) lines.push(`  http status: ${t.status}`);
 			if (t.bytes !== undefined) lines.push(`  response bytes: ${t.bytes}`);
+			if (t.languageWarning) lines.push(`  ! ${t.languageWarning}`);
 		}
 		return lines.join('\n');
 	}
@@ -239,8 +243,12 @@
 			<strong>Default language</strong> is a BCP-47 code (<code>de</code>, <code>ja</code>,
 			<code>pt-br</code>) used when a search doesn't name one; leave it blank for no constraint.
 			Agents can set the language per search regardless, and should — the query's own wording
-			matters as much as the setting. Tavily has no language parameter, so results there are
-			steered by the query alone.
+			matters as much as the setting. Each provider names languages its own way and Galaxy
+			translates: Brave calls Chinese <code>zh-hans</code>/<code>zh-hant</code> and Japanese
+			<code>jp</code>, so write the ordinary code here and let it map. A code the provider has no
+			equivalent for is dropped rather than sent — the search still runs, unconstrained — and
+			<strong>Test search</strong> names any you have configured.
+			Tavily has no language parameter at all, so results there are steered by the query alone.
 		</p>
 		<p class="hint">
 			The fallback is used only when the primary <em>fails</em> — blocked, unreachable or
@@ -316,6 +324,13 @@
 			from them per message — Exhaustive spends the full ceiling. Results are always deduplicated
 			and spread across sites before reading; the checkbox adds a model call on top of that, which
 			costs a round-trip per round and is worth watching in the Observatory before leaving on.
+		</p>
+		<p class="hint">
+			<strong>Also search in</strong> makes the planner write at least one query per round in each
+			language listed, as ordinary BCP-47 codes — Galaxy translates them to whatever the search
+			provider calls them. Use <strong>Test search</strong> above to check: it names any code the
+			configured provider has no equivalent for, and those searches run unconstrained rather than
+			failing.
 		</p>
 		<button class="btn primary" onclick={() => save('research', research)}>
 			{saved === 'research' ? 'Saved ✓' : 'Save'}
