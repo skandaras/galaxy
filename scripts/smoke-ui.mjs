@@ -646,6 +646,29 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/settings', '/obse
 	if (fail.length) await shot('research-searches');
 }
 
+// N+1. "+ New chat" must not create anything until a message is sent.
+{
+	problems = [];
+	// As the browser sees them: the page browses as Alice, so an admin listing
+	// would be somebody else's chats entirely.
+	const mine = async () => (await as(ALICE, '/api/chats')).length;
+	await page.goto(`${B}/chat`);
+	const before = await mine();
+	await page.getByRole('button', { name: '+ New chat' }).click();
+	await page.waitForTimeout(500);
+	check('+ New chat creates no row on its own', await mine(), before);
+
+	// And the draft typed before there is a chat has to survive the send that
+	// creates one — it is written against a placeholder key until then.
+	await page.getByRole('textbox').first().fill('remember me');
+	await page.keyboard.press('Enter');
+	for (let i = 0; i < 40 && (await mine()) === before; i++) {
+		await page.waitForTimeout(250);
+	}
+	check('sending creates exactly one', await mine(), before + 1);
+	if (fail.length) await shot('new-chat');
+}
+
 if (fail.length) await shot('final-state');
 await browser.close();
 

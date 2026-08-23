@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { and, asc, desc, eq, isNotNull, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull, notExists, sql } from 'drizzle-orm';
 import { db, dataDir } from '$lib/server/db';
 import { chats, messages, attachments, type AttachmentRef } from '$lib/server/db/schema';
 import type { MessageTrace } from '$lib/run-timeline';
@@ -358,6 +358,42 @@ export function deleteChat(chatId: string, userId: string): boolean {
 	db.delete(chats).where(eq(chats.id, chatId)).run();
 	rmSync(uploadsDir(chatId), { recursive: true, force: true });
 	return true;
+}
+
+/**
+ * Delete chats that were created and never used.
+ *
+ * Pressing "+ New chat" used to create the row immediately, so a list could
+ * fill with untitled conversations nobody ever wrote in. Creation is deferred
+ * to the first message now; this clears what that left behind.
+ *
+ * Deliberately narrow. A chat qualifies only with no messages at all, no title
+ * anyone chose, and no archive date — so anything named, put away or written in
+ * is out of range, whatever else is true of it. Returns how many went.
+ */
+export function deleteEmptyChats(): number {
+	const empty = db
+		.select({ id: chats.id })
+		.from(chats)
+		.where(
+			and(
+				eq(chats.titleCustom, false),
+				isNull(chats.archivedAt),
+				notExists(
+					db.select({ one: sql`1` }).from(messages).where(eq(messages.chatId, chats.id))
+				)
+			)
+		)
+		.all();
+	for (const row of empty) {
+		// Through the same path a person's delete takes, so uploads and
+		// attachment rows go with it rather than being orphaned.
+		db.delete(messages).where(eq(messages.chatId, row.id)).run();
+		db.delete(attachments).where(eq(attachments.chatId, row.id)).run();
+		db.delete(chats).where(eq(chats.id, row.id)).run();
+		rmSync(uploadsDir(row.id), { recursive: true, force: true });
+	}
+	return empty.length;
 }
 
 // --- attachments -----------------------------------------------------------

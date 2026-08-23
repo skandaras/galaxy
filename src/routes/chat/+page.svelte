@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
 	import { ATTACHMENT_ACCEPT, attachmentIcon, screenFiles } from '$lib/attachment-types';
-	import { clearDraft, draftKey, getDraft, setDraft } from '$lib/composer-drafts.svelte';
+	import { clearDraft, draftKey, getDraft, renameDraft, setDraft } from '$lib/composer-drafts.svelte';
 	import { createAutoscroll } from '$lib/autoscroll.svelte';
 	import { autoresize } from '$lib/autoresize';
 	import { hasFinePointer } from '$lib/pointer';
@@ -67,6 +67,14 @@
 	let messages = $state<Msg[]>([]);
 	let listOpen = $state(false);
 
+	/**
+	 * Hidden, chosen before the chat exists.
+	 *
+	 * "+ Hidden" used to create the row and set the flag on it in one go. With
+	 * creation deferred to the first message there is nothing to set it on yet,
+	 * so it is held here and handed to `createChat`.
+	 */
+	let pendingHidden = $state(false);
 	const NEW_KEY = draftKey('chat', null);
 	let activeKey = $state(NEW_KEY);
 	let input = $state(getDraft(NEW_KEY));
@@ -144,12 +152,19 @@
 	let savedDocId = $state<string | null>(null);
 	let source: EventSource | null = null;
 	/**
-	 * Reconnects spent on the current turn. Recovery reattaches to a run that is
-	 * still going, so a stream endpoint that is broken rather than merely
-	 * interrupted would otherwise reattach, fail, and reattach forever.
+	 * Consecutive failed reattaches. Any chunk arriving resets it, so a run that
+	 * reconnects cleanly and then streams for ten minutes starts from a full
+	 * allowance if it drops again.
+	 *
+	 * It used to be a lifetime count carried across every reattach and never
+	 * reset, so three drops spread over a long run exhausted it however healthy
+	 * the stream had been in between — and reattaching was immediate, so an
+	 * endpoint failing instantly burned all three inside a second.
 	 */
 	let recoveries = 0;
-	const MAX_RECOVERIES = 3;
+	const MAX_RECOVERIES = 6;
+	/** Backoff between reattaches, capped so a long run keeps trying. */
+	const recoveryDelayMs = (attempt: number) => Math.min(15_000, 500 * 2 ** attempt);
 
 	/**
 	 * Width of the chat list, draggable by the divider. Clamped so it can never
@@ -219,7 +234,7 @@
 
 	/** Park the current composer text against the chat it was written for. */
 	function stashDraft() {
-		setDraft(activeKey, input, { ephemeral: currentChat?.hidden === true });
+		setDraft(activeKey, input, { ephemeral: currentChat?.hidden ?? pendingHidden });
 	}
 
 	function loadDraft(key: string) {
@@ -266,10 +281,37 @@
 	/** Navigate to another conversation: load it, and drop per-message intent. */
 	async function selectChat(id: string) {
 		resetComposerIntent();
+		// A hidden choice belongs to the chat it was made for; opening another
+		// conversation is not that chat.
+		pendingHidden = false;
 		await loadChat(id);
 	}
 
-	async function newChat(hidden: boolean) {
+	/**
+	 * Clear the pane for a conversation that does not exist yet.
+	 *
+	 * Pressing this used to create the chat immediately, so every stray click
+	 * left a permanent untitled row at the top of the list. Sending is what
+	 * creates it now — `send` already had the branch for the case where a first
+	 * message arrives with no chat open, because attachments and the composer's
+	 * own options always had to survive that ordering.
+	 */
+	function newChat(hidden: boolean) {
+		// Detach from a run in progress without committing its partial text. The
+		// job keeps going server-side and is re-read on the way back; closing the
+		// socket without this left `streaming` stuck true and the composer dead.
+		if (streaming) finalizeStream(false);
+		currentChat = null;
+		messages = [];
+		pendingHidden = hidden;
+		activeKey = NEW_KEY;
+		input = getDraft(NEW_KEY);
+		errorBanner = null;
+		lastStopReason = null;
+	}
+
+	/** Create the chat a first message is being sent to. */
+	async function createChat(hidden: boolean) {
 		// A brand-new chat has no remembered model, so loadChat's applyChatModel
 		// would reset the picker to the task default — discarding a model the
 		// user chose before there was a conversation to hang it on. The server
@@ -283,6 +325,10 @@
 		const chat = await res.json();
 		chats = [chat, ...chats];
 		await loadChat(chat.id);
+		// The draft was written against the `new` placeholder; move it onto the
+		// chat that has just come into existence rather than losing it. The
+		// ephemeral marking follows the key, so a hidden draft stays hidden.
+		renameDraft(NEW_KEY, draftKey('chat', chat.id));
 		if (chosen) selectedModelId = chosen;
 	}
 
@@ -309,7 +355,7 @@
 			webSearch
 		};
 
-		if (!currentChat) await newChat(false);
+		if (!currentChat) await createChat(pendingHidden);
 		const chat = currentChat;
 		if (!chat) return;
 
@@ -410,6 +456,8 @@
 	/** `carriedRecoveries` keeps the reconnect budget across a reattach. */
 	function attachStream(jobId: string, carriedRecoveries = 0) {
 		closeStream();
+		// Clears the reconnecting notice; a real failure sets its own.
+		errorBanner = null;
 		recoveries = carriedRecoveries;
 		activeJobId = jobId;
 		stopping = false;
@@ -424,6 +472,8 @@
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
 			const chunk = JSON.parse(ev.data);
+			// Proof the stream works: whatever it cost to get here, it is spent.
+			recoveries = 0;
 			if (chunk.type === 'meta') {
 				// A meta chunk marks the start of a (re)attempt — discard any
 				// partial text from a failed attempt so it isn't duplicated.
@@ -512,7 +562,10 @@
 		messages = data.messages;
 		if (data.runningJobId && recoveries < MAX_RECOVERIES) {
 			// Still going: reattach rather than stranding the user on a dead view.
+			const wait = recoveryDelayMs(recoveries);
 			recoveries++;
+			errorBanner = `Reconnecting to this run…`;
+			await new Promise((resolve) => setTimeout(resolve, wait));
 			attachStream(data.runningJobId, recoveries);
 			return;
 		}
@@ -1006,7 +1059,7 @@
 			<div class="composer-row">
 				<textarea
 					rows="2"
-					placeholder={currentChat?.hidden
+					placeholder={(currentChat?.hidden ?? pendingHidden)
 						? 'Hidden chat — nothing here is stored'
 						: 'Message Galaxy…'}
 					bind:value={input}
