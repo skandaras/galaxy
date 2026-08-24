@@ -498,10 +498,10 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/settings', '/obse
 	// lets one schema serve six kinds.
 	await page.selectOption('.editor select', 'belief');
 	await page.waitForTimeout(150);
-	check('a belief asks what would falsify it', await page
+	check('a belief asks what would change your mind', await page
 		.locator('.editor .label')
 		.allTextContents()
-		.then((t) => t.some((x) => x.includes('What would make me doubt it'))));
+		.then((t) => t.some((x) => x.includes('What would change my mind'))));
 
 	await shot('alignment-editor');
 
