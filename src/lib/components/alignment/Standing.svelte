@@ -121,8 +121,8 @@
 			<article class="card">
 				<h3>Movement</h3>
 				<p class="hint">
-					Where each dimension has been going lately, not where it stands. A single reading is
-					weather; the direction is the thing worth looking at.
+					Where each dimension has been going lately, rather than where it stands. One reading
+					says very little on its own; the direction is the part worth looking at.
 				</p>
 				<table>
 					<tbody>

@@ -10,7 +10,7 @@ import {
 import { saveEntry, savePrinciple } from '$lib/server/alignment';
 import { RUBRIC_DIMENSIONS, type ActiveDimension } from '$lib/server/alignment-rubric';
 import { CARE_FALLBACK, checkDistress } from '$lib/server/alignment-distress';
-import { assessEntry, parseAssessment } from './alignment';
+import { assessEntry, constitutionForPrompt, parseAssessment } from './alignment';
 
 const ALICE = 'user-alice';
 
@@ -390,5 +390,90 @@ describe('assessEntry — refusals before any model call', () => {
 		expect(result.ran).toBe(false);
 		expect(result.reason).toBe('no model configured');
 		expect(db.select().from(alignmentAssessments).all()).toEqual([]);
+	});
+});
+
+describe('constitutionForPrompt', () => {
+	const principle = (kind: string, over: Record<string, unknown> = {}) =>
+		({
+			id: `p-${kind}`,
+			userId: ALICE,
+			kind,
+			title: `A ${kind}`,
+			statement: 'the statement',
+			body: '',
+			exemplar: 'the first field',
+			counterExemplar: 'the second field',
+			weight: 3,
+			conviction: 3,
+			origin: '',
+			status: 'active',
+			reviewAfter: null,
+			position: 0,
+			createdAt: new Date(),
+			updatedAt: new Date(),
+			...over
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		}) as any;
+
+	it('says so when there is nothing to judge against', () => {
+		expect(constitutionForPrompt([], [])).toBe('(nothing written yet)');
+	});
+
+	it('labels a failure mode as how they go wrong, not as keeping it', () => {
+		// The bug this whole change exists for. A failure mode's first field
+		// describes the failure happening; describing it to the model as "keeping
+		// it looks like" meant someone doing the exact thing they had flagged
+		// could read as living their values.
+		const out = constitutionForPrompt([principle('failure-mode')], []);
+		expect(out).not.toMatch(/keeping it looks like/i);
+		expect(out).toMatch(/It usually starts when: the first field/);
+		expect(out).toMatch(/The early signs: the second field/);
+	});
+
+	it('tells the model how to read a failure mode at all', () => {
+		const out = constitutionForPrompt([principle('failure-mode')], []);
+		expect(out).toMatch(/not the principle being kept/i);
+	});
+
+	it("asks each kind's own question rather than one for all six", () => {
+		const of = (kind: string) => constitutionForPrompt([principle(kind)], []);
+		expect(of('value')).toMatch(/In practice this looks like:/);
+		expect(of('belief')).toMatch(/What would change my mind:/);
+		expect(of('role')).toMatch(/What I owe here:/);
+		expect(of('aspiration')).toMatch(/What usually gets in the way:/);
+	});
+
+	it('keeps values, principles and roles asking what they always asked', () => {
+		// These three were correct under the old fixed labels and carry real data,
+		// so the fix must not have quietly reworded them.
+		for (const kind of ['value', 'principle']) {
+			expect(constitutionForPrompt([principle(kind)], [])).toMatch(
+				/In practice this looks like:.*\n.*I've broken this when:/s
+			);
+		}
+		expect(constitutionForPrompt([principle('role')], [])).toMatch(/How I let this role down:/);
+	});
+
+	it('leaves an empty field out rather than labelling nothing', () => {
+		const out = constitutionForPrompt([principle('value', { counterExemplar: '' })], []);
+		expect(out).toMatch(/In practice this looks like:/);
+		expect(out).not.toMatch(/I've broken this when:/);
+	});
+
+	it('carries the ids, because every citation comes back as one', () => {
+		expect(constitutionForPrompt([principle('value')], [])).toMatch(/id: p-value/);
+	});
+
+	it('marks a declared tension as one they have already thought about', () => {
+		const a = principle('value', { id: 'a', title: 'Ambition' });
+		const b = principle('value', { id: 'b', title: 'Presence' });
+		const out = constitutionForPrompt(
+			[a, b],
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			[{ id: 't', userId: ALICE, aId: 'a', bId: 'b', note: 'honesty first', createdAt: new Date() } as any]
+		);
+		expect(out).toMatch(/Ambition vs Presence/);
+		expect(out).toMatch(/not a discovery/);
 	});
 });

@@ -44,53 +44,115 @@ export const KIND_ORDER: PrincipleKind[] = [
  * obvious, and a form that doesn't say gets filled with six of the same thing.
  */
 export const KIND_BLURBS: Record<PrincipleKind, string> = {
-	value: 'What you care about, named. The short word and what you actually mean by it.',
-	principle: 'A rule you hold yourself to. Actionable — you can tell whether you kept it.',
-	belief: 'A claim about how things are. Worth stating what would change your mind.',
-	role: 'Who you are to someone else, and what that obliges. Alignment is role-relative.',
-	'failure-mode': 'How you go wrong, in your own words. The most useful thing here.',
-	aspiration: 'Who you are trying to become. Judged gently — this is the growing edge.'
+	value: 'What you care about, named. The word, and what you actually mean by it.',
+	principle: 'A rule you hold yourself to. You can tell whether you kept it.',
+	belief: 'Something you hold to be true. Worth saying what would change your mind.',
+	role: 'Who you are to someone, and what you owe them.',
+	'failure-mode': 'How you go wrong. Saying it plainly is what makes it useful.',
+	aspiration: 'Who you are trying to become. Judged by movement, not by whether you are there yet.'
 };
 
 /**
  * The two exemplar fields ask a different question per kind, which is what lets
  * one pair of columns serve six quite different things.
+ *
+ * The prompt reads these too (see constitutionForPrompt), so the model is told
+ * the same question the person was asked. It used to describe all six as
+ * "keeping it" and "breaking it", which was right for values, principles and
+ * roles and wrong for the rest — a failure mode's first field is how you go
+ * wrong, and calling that "keeping it" inverts the whole entry.
  */
 export const EXEMPLAR_LABELS: Record<PrincipleKind, { exemplar: string; counter: string }> = {
 	value: { exemplar: 'In practice this looks like…', counter: "I've broken this when…" },
 	principle: { exemplar: 'In practice this looks like…', counter: "I've broken this when…" },
-	belief: { exemplar: 'What follows from this…', counter: 'What would make me doubt it…' },
+	belief: { exemplar: 'What follows from this…', counter: 'What would change my mind…' },
 	role: { exemplar: 'What I owe here…', counter: 'How I let this role down…' },
-	'failure-mode': { exemplar: 'It shows up when…', counter: 'Early warning signs…' },
-	aspiration: { exemplar: 'Progress looks like…', counter: 'Still true of me…' }
+	'failure-mode': { exemplar: 'It usually starts when…', counter: 'The early signs…' },
+	aspiration: { exemplar: 'A step towards it looks like…', counter: 'What usually gets in the way…' }
 };
 
 /** Hints under the two exemplar boxes — concrete beats abstract, every time. */
 export const EXEMPLAR_HINTS: Record<PrincipleKind, { exemplar: string; counter: string }> = {
 	value: {
-		exemplar: 'Name a real occasion. This is what makes it detectable in an entry.',
-		counter: 'Without this the agent invents its own idea of breaking it.'
+		exemplar: 'A real occasion, not the value restated. This is what a reading looks for.',
+		counter: 'The times you did not. Without it, a reading guesses at what breaking it means.'
 	},
 	principle: {
-		exemplar: 'A specific instance beats a restatement of the rule.',
+		exemplar: 'A specific time you kept it, rather than the rule again.',
 		counter: 'The times you did not keep it, described plainly.'
 	},
 	belief: {
 		exemplar: 'If this is true, what else follows?',
-		counter: 'The observation that would count against it. This is the honest half.'
+		counter: 'What you would have to see to think you were wrong.'
 	},
 	role: {
-		exemplar: 'The duties, in the words you would use to the person themselves.',
-		counter: 'How the failure usually looks from their side.'
+		exemplar: 'In the words you would use to them.',
+		counter: "What it looks like from their side when you don't."
 	},
 	'failure-mode': {
-		exemplar: 'The trigger. What is happening when this starts?',
-		counter: 'The first signs, before it is obvious. What you would want flagged.'
+		exemplar: 'What is usually happening when it starts.',
+		counter: 'The first signs, before it is obvious.'
 	},
 	aspiration: {
-		exemplar: 'What a step towards it would actually look like this week.',
-		counter: 'What is still true of you today, said without flinching.'
+		exemplar: 'Something small and real you could do this week.',
+		counter: 'The thing that tends to stop you. Naming it lets a reading notice when it is happening.'
 	}
+};
+
+/**
+ * Example title and statement per kind, shown as placeholders.
+ *
+ * These were a single hard-coded pair — "Honesty" and a value statement — on all
+ * six forms, so a failure mode suggested "Honesty" as a name and a value's
+ * sentence as its shape. A placeholder is not a question and holds no data, but
+ * a wrong example is worse than none: it is the first thing read and it sets
+ * what the field appears to want.
+ */
+export const KIND_PLACEHOLDERS: Record<PrincipleKind, { title: string; statement: string }> = {
+	value: {
+		title: 'Honesty',
+		statement: 'I say the uncomfortable thing kindly rather than the comfortable thing smoothly.'
+	},
+	principle: {
+		title: 'No promises I cannot keep',
+		statement: 'I would rather disappoint someone now than later.'
+	},
+	belief: {
+		title: 'Meaning is made',
+		statement: 'It is built by what I repeatedly do, not found somewhere and picked up.'
+	},
+	role: {
+		title: 'Father',
+		statement: 'The one job I do not get to redo.'
+	},
+	'failure-mode': {
+		title: 'Conflict avoidance',
+		statement: 'I go quiet rather than disagree in a room.'
+	},
+	aspiration: {
+		title: 'Patience',
+		statement: 'I want to be slower to answer and quicker to ask.'
+	}
+};
+
+/**
+ * How the agent should read each kind, sent alongside the entry.
+ *
+ * The labels alone cannot carry this. A failure mode's first field describes the
+ * failure *occurring*, so without being told, a model reading it beside a value's
+ * "in practice this looks like" treats both as evidence of living well.
+ */
+export const KIND_READING_NOTES: Record<PrincipleKind, string> = {
+	value: 'Something they care about. Living it is alignment; acting against it is a gap.',
+	principle:
+		'A rule they hold themselves to. They can tell whether they kept it, and so can you.',
+	belief:
+		'A claim they hold. Judge whether they acted consistently with it, not whether it is correct — and treat the second field as what would change their mind, not as a failure.',
+	role: 'An obligation to a particular person. Judge against what they said that role owes.',
+	'failure-mode':
+		'How they go wrong. The first field is the failure happening, not the principle being kept — seeing it in an entry is a gap, and the second field is the early warning they asked to have flagged.',
+	aspiration:
+		'Who they are trying to become. Judge by movement towards it, never by whether they have arrived, and treat the second field as the obstacle rather than as a failing.'
 };
 
 export type AssessmentBand = 'aligned' | 'mixed' | 'diverging' | 'insufficient';

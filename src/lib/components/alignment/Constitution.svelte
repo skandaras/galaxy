@@ -6,6 +6,7 @@
 		KIND_BLURBS,
 		KIND_HEADINGS,
 		KIND_ORDER,
+		KIND_PLACEHOLDERS,
 		PRINCIPLE_KINDS,
 		type Principle,
 		type PrincipleKind,
@@ -255,6 +256,9 @@
 	const hints = $derived(
 		EXEMPLAR_HINTS[(form.kind as PrincipleKind) ?? 'value'] ?? EXEMPLAR_HINTS.value
 	);
+	const eg = $derived(
+		KIND_PLACEHOLDERS[(form.kind as PrincipleKind) ?? 'value'] ?? KIND_PLACEHOLDERS.value
+	);
 	const when = (ts: number | null) => (ts ? new Date(ts).toLocaleDateString() : 'never');
 	const editing = $derived(!!openId || !!creatingKind);
 </script>
@@ -265,8 +269,8 @@
 	{#if !editing}
 		<p class="hint intro">
 			What you actually hold, in your own words. Every reading of a journal entry is made against
-			this and nothing else — the agent has no standing to bring its own morality, so what is
-			written here is the whole of what you are measured by.
+			this and nothing else, so what is written here is the whole of what you are measured
+			against.
 		</p>
 
 		{#each KIND_ORDER as kind (kind)}
@@ -426,20 +430,17 @@
 			<label>
 				<span class="label">Title</span>
 				<span class="field-hint">
-					Short. This is the name you will read in every assessment that cites it.
+					Short. This is the name you'll see whenever a reading mentions it.
 				</span>
-				<input bind:value={form.title} placeholder="Honesty" />
+				<input bind:value={form.title} placeholder={eg.title} />
 			</label>
 
 			<label>
 				<span class="label">Statement</span>
 				<span class="field-hint">
-					One line, in your own words. This is the sentence actually judged against.
+					One line, in your own words. This is the sentence a reading is made against.
 				</span>
-				<input
-					bind:value={form.statement}
-					placeholder="I say the uncomfortable thing kindly rather than the comfortable thing smoothly."
-				/>
+				<input bind:value={form.statement} placeholder={eg.statement} />
 			</label>
 
 			<label>
@@ -469,14 +470,14 @@
 			<div class="sliders">
 				<label>
 					<span class="label">Weight — {form.weight}</span>
-					<span class="field-hint">Who wins when this collides with another of yours.</span>
+					<span class="field-hint">Which one wins when this and another of yours collide.</span>
 					<input type="range" min="1" max="5" bind:value={form.weight} />
 				</label>
 				<label>
 					<span class="label">Conviction — {form.conviction}</span>
 					<span class="field-hint">
-						How settled you are. Low means it is engaged as an open question rather than held to
-						as a commitment.
+						How settled you are on it. A low number tells a reading to treat it as something
+						you are still working out.
 					</span>
 					<input type="range" min="1" max="5" bind:value={form.conviction} />
 				</label>

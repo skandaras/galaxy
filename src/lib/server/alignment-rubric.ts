@@ -16,8 +16,15 @@ import { getSetting, setSetting } from '$lib/server/settings';
  * Bump RUBRIC_VERSION whenever the dimensions or their anchors change in a way
  * that makes old scores non-comparable. Assessments record the version they were
  * written under, so a trend line can tell "you changed" from "the ruler changed".
+ *
+ * 2 — the dimensions did not move, but the constitution reaching the model did:
+ * every kind's two fields used to be labelled "keeping it looks like" and
+ * "breaking it looks like" regardless of what the person was actually asked, so
+ * a failure mode's trigger arrived as evidence of living well. Readings written
+ * before this were made from mislabelled input and are not comparable with ones
+ * after it.
  */
-export const RUBRIC_VERSION = 1;
+export const RUBRIC_VERSION = 2;
 
 export interface RubricDimension {
 	id: string;

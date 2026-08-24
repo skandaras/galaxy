@@ -85,7 +85,7 @@
 		{#if assessment.rumination}
 			<p class="flag">
 				This reads more like circling than reflecting. That is worth noticing in itself — going
-				over it again tends to deepen the groove rather than get you out of it.
+				over it again usually makes it heavier rather than clearer.
 			</p>
 		{/if}
 
@@ -154,7 +154,7 @@
 				<h4>Language worth a second look</h4>
 				<p class="hint">
 					Ways of describing something that let it sit more comfortably than it should. Noticing
-					them is the whole use of them.
+					them is the point.
 				</p>
 				<div class="mechanisms">
 					{#each assessment.disengagement as m (m)}

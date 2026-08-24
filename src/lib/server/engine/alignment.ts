@@ -23,6 +23,11 @@ import {
 	type PrincipleTension
 } from '$lib/server/alignment';
 import {
+	EXEMPLAR_LABELS,
+	KIND_READING_NOTES,
+	type PrincipleKind
+} from '$lib/alignment-types';
+import {
 	activeDimensions,
 	RUBRIC_VERSION,
 	rubricForPrompt,
@@ -62,9 +67,28 @@ export interface AssessResult {
  * Ids are included because every citation comes back as an id — a paraphrased
  * title cannot be linked to a row, and an assessment that cannot name which
  * principle it engaged is just an opinion.
+ *
+ * The two exemplar fields are labelled with the question the person was actually
+ * asked, taken from the same table the form renders from. This used to describe
+ * all six kinds as "keeping it looks like" and "breaking it looks like", which is
+ * right for values, principles and roles and wrong for the other three — worst
+ * for a failure mode, whose first field is how they go wrong. Calling that
+ * "keeping it" told the model that someone doing the exact thing they had flagged
+ * was living their values.
+ *
+ * Exported for the test that pins that down.
  */
-function constitutionForPrompt(principles: Principle[], tensions: PrincipleTension[]): string {
+export function constitutionForPrompt(
+	principles: Principle[],
+	tensions: PrincipleTension[]
+): string {
 	if (!principles.length) return '(nothing written yet)';
+	// The trailing ellipsis reads as a prompt to a person and as noise to a
+	// model, so the label becomes a plain field name here.
+	const label = (kind: PrincipleKind) => {
+		const l = EXEMPLAR_LABELS[kind] ?? EXEMPLAR_LABELS.value;
+		return { exemplar: `${l.exemplar.replace(/…$/, '')}:`, counter: `${l.counter.replace(/…$/, '')}:` };
+	};
 	const byId = new Map(principles.map((p) => [p.id, p]));
 	const lines = principles.map((p) =>
 		[
@@ -72,8 +96,9 @@ function constitutionForPrompt(principles: Principle[], tensions: PrincipleTensi
 			`  kind: ${p.kind}${p.status === 'provisional' ? ' (provisional — being tried on)' : ''}`,
 			`  title: ${p.title}`,
 			`  statement: ${p.statement}`,
-			p.exemplar ? `  keeping it looks like: ${p.exemplar}` : '',
-			p.counterExemplar ? `  breaking it looks like: ${p.counterExemplar}` : '',
+			`  how to read this kind: ${KIND_READING_NOTES[p.kind]}`,
+			p.exemplar ? `  ${label(p.kind).exemplar} ${p.exemplar}` : '',
+			p.counterExemplar ? `  ${label(p.kind).counter} ${p.counterExemplar}` : '',
 			p.body ? `  context: ${p.body}` : '',
 			`  weight: ${p.weight}/5 (priority when principles collide)`,
 			`  conviction: ${p.conviction}/5 (how settled they are on it)`
