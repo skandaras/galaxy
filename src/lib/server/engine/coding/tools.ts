@@ -3,6 +3,7 @@ import { dirname, join, relative } from 'node:path';
 import type { LoopTool } from '../loop';
 import { toolResultMaxChars } from '../limits';
 import { getExecutor } from './executor';
+import { openPullRequest } from './pull-request';
 import { gitAuthArgs, safeJoin, scrubSecrets, shellQuote, workspaceAbs } from './workspace';
 
 /** Hard ceiling on one tool result; `maxFileChars()` is the softer default. */
@@ -25,6 +26,10 @@ export interface CodingToolContext {
 	workspaceRel: string;
 	mode: 'plan' | 'implement';
 	repoUrl: string;
+	/** Branch the session was cut from — the base a pull request targets. */
+	baseBranch: string;
+	/** Branch this session works on, and the head of any pull request. */
+	workBranch: string;
 }
 
 /**
@@ -375,6 +380,36 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 				);
 				if (res.code !== 0) throw new Error(scrubSecrets(res.stderr || res.stdout));
 				return scrubSecrets(res.stdout);
+			}
+		},
+		{
+			def: {
+				name: 'open_pull_request',
+				description:
+					'Push the work branch and open a pull request against the base branch. Use this once ' +
+					'the work is committed and you are ready for it to be reviewed. Calling it again on a ' +
+					'session that already has one returns the existing pull request rather than failing.',
+				parameters: {
+					type: 'object',
+					properties: {
+						title: { type: 'string', description: 'One line saying what the change does' },
+						body: {
+							type: 'string',
+							description: 'What changed and why, as the reviewer would want it'
+						}
+					},
+					required: ['title']
+				}
+			},
+			describe: (a) => String(a.title ?? '').slice(0, 80),
+			execute: async (a) => {
+				const pr = await openPullRequest(ctx, {
+					title: String(a.title ?? ''),
+					body: a.body === undefined ? undefined : String(a.body)
+				});
+				return pr.existing
+					? `This branch already had an open pull request: ${pr.url}`
+					: `Opened pull request #${pr.number}: ${pr.url}`;
 			}
 		},
 		{

@@ -55,7 +55,8 @@ const EXPECTED = [
 	'edit_file',
 	'bash',
 	'git_commit',
-	'git_push'
+	'git_push',
+	'open_pull_request'
 ];
 
 beforeAll(() => {

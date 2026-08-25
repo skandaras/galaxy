@@ -11,7 +11,9 @@ const abs = (...parts: string[]) => join(dataDir, WS, ...parts);
 const ctx: CodingToolContext = {
 	workspaceRel: WS,
 	mode: 'implement',
-	repoUrl: 'https://example.invalid/x/y.git'
+	repoUrl: 'https://example.invalid/x/y.git',
+	baseBranch: 'main',
+	workBranch: 'galaxy/session-test'
 };
 
 const tool = (name: string) => {

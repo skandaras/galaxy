@@ -106,7 +106,13 @@ export function builtinDescriptors(): ToolDescriptor[] {
 	);
 
 	// Constructing both modes is how we know which tools plan mode withholds.
-	const ctx = { workspaceRel: '', mode: 'plan' as const, repoUrl: '' };
+	const ctx = {
+		workspaceRel: '',
+		mode: 'plan' as const,
+		repoUrl: '',
+		baseBranch: '',
+		workBranch: ''
+	};
 	const planTools = codingTools(ctx);
 	const planNames = new Set(planTools.map((t) => t.def.name));
 	add(planTools, 'coding', ['coding']);

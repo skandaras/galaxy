@@ -3,7 +3,14 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { dataDir, runMigrations } from '$lib/server/db';
-import { captureState, clearState, formatState, isDirty, loadState } from './state';
+import {
+	captureState,
+	clearState,
+	formatState,
+	isDirty,
+	loadState,
+	setApprovedPlan
+} from './state';
 
 const WS = 'workspaces/state-test';
 const abs = join(dataDir, WS);
@@ -116,5 +123,60 @@ describe('formatState', () => {
 			updatedAt: Date.now()
 		});
 		expect(block).toContain('Working tree is clean');
+	});
+});
+
+describe('the approved plan', () => {
+	const CHAT = 'plan-chat';
+
+	beforeEach(() => clearState(CHAT));
+
+	it('is remembered once the plan is approved', () => {
+		setApprovedPlan(CHAT, '1. Add the tool\n2. Wire it up');
+		expect(loadState(CHAT)?.approvedPlan).toContain('Wire it up');
+	});
+
+	it('ignores an empty plan rather than storing a blank one', () => {
+		setApprovedPlan(CHAT, '   \n  ');
+		expect(loadState(CHAT)).toBeNull();
+	});
+
+	it('survives the state being rebuilt on a later leg', async () => {
+		// captureState builds a fresh object every leg, so anything not carried
+		// forward by name is silently dropped — which is how the plan would have
+		// gone missing halfway through implementing it.
+		setApprovedPlan(CHAT, 'Do the thing');
+		await captureState({
+			chatId: CHAT,
+			workspaceRel: WS,
+			baseBranch: 'main',
+			toolCalls: [{ name: 'read_file', summary: 'a.ts' }]
+		});
+		expect(loadState(CHAT)?.approvedPlan).toBe('Do the thing');
+		expect(loadState(CHAT)?.filesRead).toEqual(['a.ts']);
+	});
+
+	it('leads the state block, and says it is what is being built', () => {
+		setApprovedPlan(CHAT, 'Do the thing');
+		const block = formatState(loadState(CHAT));
+		expect(block).toContain('[Approved plan');
+		expect(block.indexOf('[Approved plan')).toBeLessThan(block.indexOf('[Session state'));
+		expect(block).toContain('Do the thing');
+	});
+
+	it('is absent from the block when no plan was approved', () => {
+		expect(formatState({
+			filesRead: [],
+			filesChanged: [],
+			status: '',
+			commits: '',
+			diffStat: '',
+			updatedAt: 0
+		})).not.toContain('Approved plan');
+	});
+
+	it('truncates a plan that is really a document', () => {
+		setApprovedPlan(CHAT, 'x'.repeat(20_000));
+		expect(loadState(CHAT)?.approvedPlan?.length).toBe(6_000);
 	});
 });
