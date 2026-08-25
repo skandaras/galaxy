@@ -3,6 +3,7 @@ import { db } from '$lib/server/db';
 import { toolSettings } from '$lib/server/db/schema';
 import type { LoopTool } from '../loop';
 import { codingTools } from '../coding/tools';
+import { exploreToolDef } from '../coding/explore';
 import { askUserToolDef } from '../ask-user';
 import { attachmentTools } from './attachments';
 import { boardTools } from './boards';
@@ -121,6 +122,14 @@ export function builtinDescriptors(): ToolDescriptor[] {
 		'coding',
 		['coding'],
 		'implement mode only'
+	);
+	// Built by exploreTool from a live job, so only its declaration is listed
+	// here — same as ask_user and web_search above.
+	add(
+		[{ def: exploreToolDef, execute: async () => '' }],
+		'coding',
+		['coding'],
+		'runs a read-only sub-agent on its own model and step budget'
 	);
 
 	return out;

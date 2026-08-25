@@ -56,7 +56,9 @@ const EXPECTED = [
 	'bash',
 	'git_commit',
 	'git_push',
-	'open_pull_request'
+	'open_pull_request',
+	// coding, a sub-agent rather than a tool of its own
+	'dispatch_explore'
 ];
 
 beforeAll(() => {

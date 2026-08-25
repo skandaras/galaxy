@@ -55,6 +55,16 @@ export const toolConcurrency = () => num('TOOL_CONCURRENCY', 4);
 export const codingMaxSteps = () => num('CODING_MAX_STEPS', 50);
 
 /**
+ * Model round-trips the explore sub-agent may take before it must answer.
+ *
+ * Deliberately small. A sub-agent earns its keep by returning an answer instead
+ * of a transcript; one that wanders for fifty steps has spent more than the
+ * reading it saved, and the honest failure is "I could not establish that in
+ * the budget I had".
+ */
+export const exploreMaxSteps = () => num('EXPLORE_MAX_STEPS', 12);
+
+/**
  * Model round-trips one chat turn may take. Six was hardcoded, which is two
  * pages read and an answer — a question needing four sources ran out with
  * nothing to show. Raising it helps, but the real economy is that a round-trip

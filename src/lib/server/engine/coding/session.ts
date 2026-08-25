@@ -46,6 +46,7 @@ import { bootstrapContext, knowledgeTools } from '../tools/knowledge';
 import { mcpLoopTools } from '../tools/mcp';
 import { applyToolPolicy } from '../tools/registry';
 import { getExecutor } from './executor';
+import { exploreTool } from './explore';
 import {
 	captureState,
 	clearState,
@@ -277,6 +278,18 @@ export function startCodingTurn(opts: {
 					repoUrl: session.repoUrl,
 					baseBranch: session.baseBranch,
 					workBranch: session.workBranch
+				}),
+				// Reading the repository at arm's length: the sub-agent's own file
+				// reads never enter this context, only its answer.
+				exploreTool({
+					workspaceRel: session.workspaceRel,
+					mode: session.mode,
+					repoUrl: session.repoUrl,
+					baseBranch: session.baseBranch,
+					workBranch: session.workBranch,
+					parentJob: job,
+					userId: opts.userId,
+					chatId: chat.id
 				}),
 				...knowledgeTools(opts.userId),
 				...attachmentTools(chat.id),

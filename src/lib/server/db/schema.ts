@@ -208,6 +208,7 @@ export const CORE_TASKS = [
 	'ux-audit',
 	'chat-title',
 	'run-summary',
+	'subagent',
 	'board',
 	'alignment',
 	'alignment-synthesis'
