@@ -56,6 +56,7 @@ const EXPECTED = [
 	'bash',
 	'git_commit',
 	'git_push',
+	'update_plan',
 	'open_pull_request',
 	// coding, a sub-agent rather than a tool of its own
 	'dispatch_explore'

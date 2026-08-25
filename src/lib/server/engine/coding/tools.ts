@@ -4,6 +4,7 @@ import type { LoopTool } from '../loop';
 import { toolResultMaxChars } from '../limits';
 import { getExecutor } from './executor';
 import { openPullRequest } from './pull-request';
+import { setPlan, type PlanItem } from './state';
 import { gitAuthArgs, safeJoin, scrubSecrets, shellQuote, workspaceAbs } from './workspace';
 
 /** Hard ceiling on one tool result; `maxFileChars()` is the softer default. */
@@ -23,6 +24,12 @@ function clampInt(raw: unknown, fallback: number, min: number, max: number): num
 }
 
 export interface CodingToolContext {
+	/**
+	 * The session's chat, for the tools that write to session state rather than
+	 * to the workspace. Optional so the tool catalogue can construct a context
+	 * without one; update_plan is simply not offered when it is absent.
+	 */
+	chatId?: string;
 	workspaceRel: string;
 	mode: 'plan' | 'implement';
 	repoUrl: string;
@@ -96,6 +103,32 @@ export function renderLines(
 export function globPathspec(pattern: string): string {
 	// Leave a pathspec the caller has already made magic alone.
 	return pattern.startsWith(':') ? pattern : `:(glob)${pattern}`;
+}
+
+/** Read the plan out of tool arguments, dropping anything malformed. */
+function readPlan(args: Record<string, unknown>): PlanItem[] {
+	const raw = Array.isArray(args.items) ? (args.items as Record<string, unknown>[]) : [];
+	return raw
+		.map((i) => ({
+			text: String(i?.text ?? '').trim(),
+			// Anything unrecognised is work still to do, which is the reading that
+			// cannot quietly lose a step.
+			status: (['todo', 'doing', 'done'].includes(String(i?.status)) ? i.status : 'todo') as
+				PlanItem['status']
+		}))
+		.filter((i) => i.text);
+}
+
+/** "2 done, 1 doing, 3 to do" — the line the run timeline shows. */
+function summarisePlan(items: PlanItem[]): string {
+	const count = (s: PlanItem['status']) => items.filter((i) => i.status === s).length;
+	return [
+		count('done') ? `${count('done')} done` : '',
+		count('doing') ? `${count('doing')} doing` : '',
+		count('todo') ? `${count('todo')} to do` : ''
+	]
+		.filter(Boolean)
+		.join(', ') || 'empty';
 }
 
 /** One replacement against an in-memory string, so a failure writes nothing. */
@@ -382,6 +415,45 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 				return scrubSecrets(res.stdout);
 			}
 		},
+		...(ctx.chatId
+			? [
+					{
+						def: {
+							name: 'update_plan',
+							description:
+								'Keep a short checklist of the work in front of you, carried across turns and ' +
+								'shown back to you in the session state. Write it out when you start a task of ' +
+								'more than a couple of steps, and call this again as you finish each item or ' +
+								'find work you had not accounted for. Send the whole list each time — it ' +
+								'replaces the previous one. Exactly one item should be "doing".',
+							parameters: {
+								type: 'object',
+								properties: {
+									items: {
+										type: 'array',
+										items: {
+											type: 'object',
+											properties: {
+												text: { type: 'string', description: 'One step, in a few words' },
+												status: { type: 'string', enum: ['todo', 'doing', 'done'] }
+											},
+											required: ['text', 'status']
+										}
+									}
+								},
+								required: ['items']
+							}
+						},
+						describe: (a: Record<string, unknown>) => summarisePlan(readPlan(a)),
+						execute: async (a: Record<string, unknown>) => {
+							const items = readPlan(a);
+							if (!items.length) throw new Error('items is required');
+							setPlan(ctx.chatId as string, items);
+							return `Plan updated — ${summarisePlan(items)}.`;
+						}
+					} satisfies LoopTool
+				]
+			: []),
 		{
 			def: {
 				name: 'open_pull_request',

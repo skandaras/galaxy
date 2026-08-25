@@ -9,7 +9,8 @@ import {
 	formatState,
 	isDirty,
 	loadState,
-	setApprovedPlan
+	setApprovedPlan,
+	setPlan
 } from './state';
 
 const WS = 'workspaces/state-test';
@@ -178,5 +179,62 @@ describe('the approved plan', () => {
 	it('truncates a plan that is really a document', () => {
 		setApprovedPlan(CHAT, 'x'.repeat(20_000));
 		expect(loadState(CHAT)?.approvedPlan?.length).toBe(6_000);
+	});
+});
+
+describe('the working plan', () => {
+	const CHAT = 'working-plan-chat';
+
+	beforeEach(() => clearState(CHAT));
+
+	it('is kept and rendered as a checklist', () => {
+		setPlan(CHAT, [
+			{ text: 'Read the loop', status: 'done' },
+			{ text: 'Add the helper', status: 'doing' },
+			{ text: 'Write tests', status: 'todo' }
+		]);
+		const block = formatState(loadState(CHAT));
+		expect(block).toContain('[x] Read the loop');
+		expect(block).toContain('[~] Add the helper');
+		expect(block).toContain('[ ] Write tests');
+	});
+
+	it('survives the state being rebuilt on a later leg', async () => {
+		// The whole point is tracking work *within* a long run, which spans legs.
+		setPlan(CHAT, [{ text: 'Add the helper', status: 'doing' }]);
+		await captureState({
+			chatId: CHAT,
+			workspaceRel: WS,
+			baseBranch: 'main',
+			toolCalls: []
+		});
+		expect(loadState(CHAT)?.plan).toEqual([{ text: 'Add the helper', status: 'doing' }]);
+	});
+
+	it('replaces the list rather than appending to it', () => {
+		setPlan(CHAT, [{ text: 'One', status: 'todo' }]);
+		setPlan(CHAT, [{ text: 'Two', status: 'done' }]);
+		expect(loadState(CHAT)?.plan).toEqual([{ text: 'Two', status: 'done' }]);
+	});
+
+	it('caps a checklist that has become a backlog', () => {
+		setPlan(
+			CHAT,
+			Array.from({ length: 50 }, (_, i) => ({ text: `step ${i}`, status: 'todo' as const }))
+		);
+		expect(loadState(CHAT)?.plan).toHaveLength(20);
+	});
+
+	it('is absent from the block when there is no plan', () => {
+		expect(
+			formatState({
+				filesRead: [],
+				filesChanged: [],
+				status: '',
+				commits: '',
+				diffStat: '',
+				updatedAt: 0
+			})
+		).not.toContain('Working plan');
 	});
 });

@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { dataDir } from '$lib/server/db';
+import { dataDir, runMigrations } from '$lib/server/db';
 import { getExecutor } from './executor';
 import { codingTools, readOnlyCodingTools, renderLines, type CodingToolContext } from './tools';
 
@@ -9,6 +9,7 @@ const WS = 'workspaces/tools-test';
 const abs = (...parts: string[]) => join(dataDir, WS, ...parts);
 
 const ctx: CodingToolContext = {
+	chatId: 'tools-test-chat',
 	workspaceRel: WS,
 	mode: 'implement',
 	repoUrl: 'https://example.invalid/x/y.git',
@@ -23,6 +24,8 @@ const tool = (name: string) => {
 };
 
 beforeAll(async () => {
+	// update_plan writes to the settings table.
+	runMigrations();
 	rmSync(abs(), { recursive: true, force: true });
 	mkdirSync(abs('src', 'deep'), { recursive: true });
 	writeFileSync(abs('src', 'a.ts'), 'export const a = 1;\n');
@@ -214,5 +217,44 @@ describe('the toolset offered', () => {
 		// Learned by failing before this: cd and exports vanished with the
 		// container, and nothing said so.
 		expect(tool('bash').def.description).toMatch(/fresh shell/);
+	});
+});
+
+describe('update_plan', () => {
+	const run = (args: Record<string, unknown>) => tool('update_plan').execute(args);
+
+	it('keeps the checklist and reports what is left', async () => {
+		const out = await run({
+			items: [
+				{ text: 'Read the loop', status: 'done' },
+				{ text: 'Add the helper', status: 'doing' },
+				{ text: 'Write tests', status: 'todo' }
+			]
+		});
+		expect(out).toContain('1 done, 1 doing, 1 to do');
+	});
+
+	it('treats an unrecognised status as work still to do', async () => {
+		// The reading that cannot quietly lose a step.
+		await run({ items: [{ text: 'Something', status: 'nonsense' }] });
+		expect(await run({ items: [{ text: 'Something', status: 'nonsense' }] })).toContain('1 to do');
+	});
+
+	it('drops items with no text rather than storing blanks', async () => {
+		expect(await run({ items: [{ text: 'Real', status: 'todo' }, { text: '  ', status: 'todo' }] }))
+			.toContain('1 to do');
+	});
+
+	it('refuses an empty list', async () => {
+		await expect(run({ items: [] })).rejects.toThrow(/items is required/);
+	});
+
+	it('is withheld in plan mode, where the plan is the output', () => {
+		expect(codingTools({ ...ctx, mode: 'plan' }).map((t) => t.def.name)).not.toContain('update_plan');
+	});
+
+	it('is not offered without a session to attach it to', () => {
+		const { chatId: _drop, ...noChat } = ctx;
+		expect(codingTools(noChat).map((t) => t.def.name)).not.toContain('update_plan');
 	});
 });

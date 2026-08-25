@@ -9,6 +9,9 @@ const MAX_FILES = 40;
 const MAX_GIT_CHARS = 2_000;
 /** A plan long enough to need more than this is not a plan any more. */
 const MAX_PLAN_CHARS = 6_000;
+/** Working-plan limits. A checklist longer than this is a different problem. */
+const MAX_PLAN_ITEMS = 20;
+const MAX_ITEM_CHARS = 120;
 
 export interface CodingSessionState {
 	/** Files the agent has already read, so it need not read them again blind. */
@@ -32,7 +35,22 @@ export interface CodingSessionState {
 	 * outside the compacted transcript, which is exactly why it belongs here.
 	 */
 	approvedPlan?: string;
+	/**
+	 * The agent's own checklist for the work in front of it.
+	 *
+	 * Session state is carried *between* turns; nothing tracked progress
+	 * *within* one, and a leg can run for fifty model steps (codingMaxSteps).
+	 * Long runs drift — a step or two gets quietly skipped on the way to the
+	 * thing that seemed most interesting. A list the agent maintains itself
+	 * costs a couple of hundred tokens and gives it something to come back to.
+	 */
+	plan?: PlanItem[];
 	updatedAt: number;
+}
+
+export interface PlanItem {
+	text: string;
+	status: 'todo' | 'doing' | 'done';
 }
 
 /** Tool names whose `describe` yields a path worth remembering. */
@@ -67,6 +85,7 @@ export async function captureState(opts: {
 		// Carried forward explicitly: this is rebuilt from scratch every leg, and
 		// anything not named here is silently dropped.
 		...(previous?.approvedPlan ? { approvedPlan: previous.approvedPlan } : {}),
+		...(previous?.plan?.length ? { plan: previous.plan } : {}),
 		updatedAt: Date.now()
 	};
 	setSetting(KEY, state, opts.chatId);
@@ -95,6 +114,28 @@ export function setApprovedPlan(chatId: string, plan: string): void {
 			diffStat: '',
 			...previous,
 			approvedPlan: text.slice(0, MAX_PLAN_CHARS),
+			updatedAt: Date.now()
+		} satisfies CodingSessionState,
+		chatId
+	);
+}
+
+/** Replace the working plan. The agent owns this list; it is not validated. */
+export function setPlan(chatId: string, items: PlanItem[]): void {
+	const previous = loadState(chatId);
+	setSetting(
+		KEY,
+		{
+			filesRead: [],
+			filesChanged: [],
+			status: '',
+			commits: '',
+			diffStat: '',
+			...previous,
+			plan: items.slice(0, MAX_PLAN_ITEMS).map((i) => ({
+				text: i.text.trim().slice(0, MAX_ITEM_CHARS),
+				status: i.status
+			})),
 			updatedAt: Date.now()
 		} satisfies CodingSessionState,
 		chatId
@@ -150,6 +191,15 @@ export function formatState(state: CodingSessionState | null): string {
 			'',
 			'[Approved plan — this is what you are building. It was agreed before implementation started; follow it, and say so plainly if you need to depart from it.]',
 			state.approvedPlan
+		);
+	}
+	if (state.plan?.length) {
+		lines.push(
+			'',
+			'[Working plan — your own checklist, kept across turns. Update it with update_plan as you finish each item, and add to it when you find work you had not accounted for.]',
+			...state.plan.map(
+				(i) => `${i.status === 'done' ? '[x]' : i.status === 'doing' ? '[~]' : '[ ]'} ${i.text}`
+			)
 		);
 	}
 	lines.push('', '[Session state — carried over from your earlier turns]');

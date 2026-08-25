@@ -108,6 +108,9 @@ export function builtinDescriptors(): ToolDescriptor[] {
 
 	// Constructing both modes is how we know which tools plan mode withholds.
 	const ctx = {
+		// A placeholder, as with attachmentTools('*') above: the id only scopes
+		// execution, and update_plan must appear in the catalogue either way.
+		chatId: '*',
 		workspaceRel: '',
 		mode: 'plan' as const,
 		repoUrl: '',

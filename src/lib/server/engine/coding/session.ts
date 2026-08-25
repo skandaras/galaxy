@@ -273,6 +273,7 @@ export function startCodingTurn(opts: {
 		applyToolPolicy(
 			[
 				...codingTools({
+					chatId: chat.id,
 					workspaceRel: session.workspaceRel,
 					mode: session.mode,
 					repoUrl: session.repoUrl,
