@@ -1,7 +1,7 @@
 import { getBudgetStatus } from '../budget';
 import { getTaskConfig, pickModel } from '../engine';
 import { emitEvent } from '../events';
-import { createJob, subscribeJob, type LiveJob } from '../jobs';
+import { createJob, pushChunk, subscribeJob, type LiveJob } from '../jobs';
 import { exploreMaxSteps } from '../limits';
 import { runAgentLoop, type LoopTool } from '../loop';
 import type { ToolDef } from '$lib/server/providers/types';
@@ -110,10 +110,20 @@ async function explore(ctx: ExploreContext, question: string, hint: string): Pro
 	const off = subscribeJob(job, (chunk) => {
 		// Only the tool calls are forwarded, and as the parent's own chunks, so
 		// the timeline shows what the sub-agent actually did rather than a pause.
+		//
+		// The child's stepId goes: it names a step in the child's timeline that
+		// the parent has never heard of, and an unrecognised one opens a blank
+		// orphan step (see applyChunk). Without it these hang under the parent's
+		// current step, which is the one holding the dispatch_explore call —
+		// exactly where they belong.
+		//
+		// Through pushChunk rather than straight to the subscribers, so they are
+		// recorded for replay on reconnect and keep the parent's lastChunkAt
+		// fresh — a parent silent for the whole dispatch is what the abandoned-run
+		// watchdog is looking for.
 		if (chunk.type === 'tool') {
-			ctx.parentJob.subscribers.forEach((sub) =>
-				sub({ ...chunk, name: `explore · ${chunk.name}` })
-			);
+			const { stepId: _childStep, ...rest } = chunk;
+			pushChunk(ctx.parentJob, { ...rest, name: `explore · ${chunk.name}` });
 		}
 	});
 	// The parent stopping must stop this too, or a cancelled run keeps spending.
@@ -164,7 +174,16 @@ async function explore(ctx: ExploreContext, question: string, hint: string): Pro
 		detail: { question, steps, answerChars: answer.length, model: choice.model.modelKey }
 	});
 
-	if (!answer) return 'The sub-agent found nothing to report. Look yourself if it matters.';
+	if (!answer) {
+		// runAgentLoop reports a failed model call by failing its own job rather
+		// than throwing, so without this a provider outage came back as "found
+		// nothing" — an answer the parent would reasonably act on.
+		const failure = job.chunks.findLast((c) => c.type === 'error');
+		if (failure && failure.type === 'error') {
+			throw new Error(`The sub-agent could not run: ${failure.message}`);
+		}
+		return 'The sub-agent found nothing to report. Look yourself if it matters.';
+	}
 	// Truncated rather than refused: a long answer is still worth having, and
 	// the point of the cap is that it cannot grow the parent's context without
 	// bound however chatty the model is.

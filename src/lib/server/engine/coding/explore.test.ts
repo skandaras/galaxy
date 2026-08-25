@@ -15,7 +15,7 @@ const abs = (...p: string[]) => join(dataDir, WS, ...p);
  * round-trip unless told to keep calling tools, which is how the step cap is
  * exercised.
  */
-let script: { calls: number; neverStops: boolean; answer: string };
+let script: { calls: number; neverStops: boolean; answer: string; fail?: boolean };
 
 beforeAll(() => {
 	runMigrations();
@@ -69,6 +69,11 @@ const server = createServer((req, res) => {
 	req.on('data', (c) => (body += c));
 	req.on('end', () => {
 		script.calls++;
+		if (script.fail) {
+			res.writeHead(500, { 'content-type': 'application/json' });
+			res.end('{"error":"provider is down"}');
+			return;
+		}
 		res.writeHead(200, { 'content-type': 'text/event-stream' });
 		const send = (delta: Record<string, unknown>, finish?: string) =>
 			res.write(
@@ -168,6 +173,38 @@ describe('dispatching one', () => {
 		const { chunks, tool } = harness();
 		await tool.execute({ question: 'Where?' });
 		expect(chunks.some((c) => c.type === 'tool' && c.name.startsWith('explore · '))).toBe(true);
+	});
+
+	it('records the forwarded calls on the parent, so a reload still shows them', async () => {
+		script = { calls: 0, neverStops: false, answer: 'Found it.' };
+		const { parentJob, tool } = harness();
+		const before = parentJob.lastChunkAt;
+		await tool.execute({ question: 'Where?' });
+		expect(parentJob.chunks.some((c) => c.type === 'tool' && c.name.startsWith('explore · '))).toBe(
+			true
+		);
+		// And the parent counts as alive, which the abandoned-run watchdog reads.
+		expect(parentJob.lastChunkAt).not.toBe(before);
+	});
+
+	it('drops the child step id, which the parent timeline has never heard of', async () => {
+		// An unrecognised step id opens a blank orphan step; without one these
+		// hang under the step holding the dispatch_explore call.
+		script = { calls: 0, neverStops: false, answer: 'Found it.' };
+		const { chunks, tool } = harness();
+		await tool.execute({ question: 'Where?' });
+		const forwarded = chunks.filter((c) => c.type === 'tool' && c.name.startsWith('explore · '));
+		expect(forwarded.length).toBeGreaterThan(0);
+		expect(forwarded.every((c) => c.type === 'tool' && c.stepId === undefined)).toBe(true);
+	});
+
+	it('reports a failed sub-agent as a failure, not as an empty answer', async () => {
+		// runAgentLoop fails its own job rather than throwing, so a provider
+		// outage used to come back as "found nothing" — which the parent would
+		// reasonably act on.
+		script = { calls: 0, neverStops: false, answer: '', fail: true };
+		const { tool } = harness();
+		await expect(tool.execute({ question: 'Where?' })).rejects.toThrow(/could not run/);
 	});
 
 	it('truncates an answer that is really a transcript', async () => {

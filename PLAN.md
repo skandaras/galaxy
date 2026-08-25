@@ -139,11 +139,11 @@ Internet ─► Proxy ──┤
 - ~~**SearXNG self-hosted search** as default provider~~ — **shipped**: runs in compose on an internal network, with primary/fallback providers and an admin "Test search" probe.
 - **Local model endpoints** (Ollama / llama.cpp) via the OpenAI-compatible adapter.
 - **Embeddings + RAG** over Library and past chats (semantic search) once FTS5 stops being enough.
-- **GitHub App + PR watching** — review agent, CI auto-fix via webhooks, replacing the PAT.
+- **GitHub App + PR watching** — review agent, CI auto-fix via webhooks, replacing the PAT. Opening the pull request itself is shipped (`open_pull_request`, and a button on the session header).
 - **Artifacts pane** — sandboxed iframe rendering of interactive HTML/SVG the agents produce.
 - **Image generation providers** + a gallery surface in the Library; deep image analysis (OCR, structured extraction).
 - **Generic scheduled tasks** — user-defined cron agents beyond the memory job (morning brief, repo health check).
-- **Multi-agent orchestration** — agents spawning subagents; pipelines (research → draft → review).
+- **Multi-agent orchestration** — *partly shipped*: the coding agent can dispatch a read-only `explore` sub-agent (its own model and step budget under the `subagent` task, no recursion, usage broken out in Admin → Usage). Still outstanding: sub-agents that can write, and pipelines (research → draft → review).
 - **Voice** — dictation input and TTS replies, mobile-first.
 - **Per-user spending caps** and model-access policies.
 - **Skill eval harness** — A/B test skill versions; pairs naturally with the skill-optimiser agent.
