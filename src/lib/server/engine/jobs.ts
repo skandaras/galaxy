@@ -85,6 +85,13 @@ export interface LiveJob {
 	chunks: JobChunk[];
 	/** When this job last produced anything. See RUNNING_JOB_MAX_MS. */
 	lastChunkAt?: number;
+	/**
+	 * Waiting on a person rather than working. Set by `ask_user` while a
+	 * question is open, and the reason the staleness watchdog below leaves this
+	 * job alone: a run parked on a question is silent precisely because it is
+	 * behaving correctly.
+	 */
+	parked?: boolean;
 	subscribers: Set<(chunk: JobChunk) => void>;
 	persist: boolean;
 	createdAt: number;
@@ -221,8 +228,13 @@ export function getLiveJob(id: string): LiveJob | null {
  * A job only leaves `running` through completeJob or failJob, so anything that
  * neither finishes nor throws holds the chat forever: every later message is
  * refused with "a response is already running", and the only cure was a
- * restart. `ask_user` is the honest way in — it parks the turn on a promise
- * until the browser answers, and a closed tab never answers.
+ * restart.
+ *
+ * A run parked on an `ask_user` question is the one silence that is not a
+ * fault, and it is unbounded — so it carries `parked` and is skipped here
+ * rather than being failed for waiting. Otherwise removing the ten-minute
+ * ask timeout would merely have moved the deadline to this one. Stopping the
+ * run is how a parked job is abandoned.
  *
  * Comfortably past streamTotalTimeoutMs (30 min), so this only ever catches
  * runs that are genuinely stuck rather than merely slow.
@@ -245,7 +257,7 @@ export const RUNNING_JOB_MAX_MS = 45 * 60 * 1000;
 export function findRunningJobForChat(chatId: string, now = Date.now()): LiveJob | null {
 	for (const job of live.values()) {
 		if (job.chatId !== chatId || job.status !== 'running') continue;
-		if (now - (job.lastChunkAt ?? job.createdAt) > RUNNING_JOB_MAX_MS) {
+		if (!job.parked && now - (job.lastChunkAt ?? job.createdAt) > RUNNING_JOB_MAX_MS) {
 			failJob(
 				job,
 				'This run was abandoned — it went quiet for over 45 minutes without finishing. Send your message again.'

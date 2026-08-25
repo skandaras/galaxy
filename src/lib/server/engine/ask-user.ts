@@ -13,13 +13,16 @@ import { notify, resolveEntity } from '$lib/server/notifications';
  * which resolves the promise, and the turn carries on with the answer as the
  * tool result.
  *
+ * The wait is unbounded. It used to give up after ten minutes and tell the
+ * model nobody was watching, which meant a question asked while you were away
+ * from the screen was answered by nobody and the run carried on guessing — the
+ * one outcome asking was supposed to prevent. A parked run now waits for an
+ * answer or for you to press Stop, and nothing else ends it.
+ *
  * Nothing here is persisted. A question is only meaningful while the run that
  * asked it is alive, and a server restart loses it exactly as it loses any
  * other in-flight job.
  */
-
-/** How long a question stays open before the agent is told nobody answered. */
-export const ASK_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** Options are a convenience for the person answering, not a constraint. */
 const MAX_OPTIONS = 6;
@@ -35,7 +38,7 @@ const pending = new Map<string, Pending>();
 export const askUserToolDef: ToolDef = {
 	name: 'ask_user',
 	description:
-		'Ask the person you are working for a question and wait for their answer. Use this when you are missing something only they can tell you, or when you have hit a blocker they should know about — not to check in, confirm the obvious, or narrate progress. Ask one focused question at a time. If you can reasonably work it out yourself, do that instead.',
+		'Ask the person you are working for a question and wait for their answer. Use this when you are missing something only they can tell you, or when you have hit a blocker they should know about — not to check in, confirm the obvious, or narrate progress. Ask one focused question at a time. If you can reasonably work it out yourself, do that instead. The run parks until they answer, however long that takes, so only ask when the answer is worth waiting for.',
 	parameters: {
 		type: 'object',
 		properties: {
@@ -77,37 +80,34 @@ function waitForAnswer(job: LiveJob, prompt: string, options: string[]): Promise
 			if (done) return;
 			done = true;
 			pending.delete(id);
-			clearTimeout(timer);
+			// The run is doing work again, so the watchdog applies again.
+			job.parked = false;
 			job.controller.signal.removeEventListener('abort', onAbort);
 			// Always close the question on the stream, however it ended, so a
 			// reconnecting client doesn't reopen a sheet nobody can answer.
 			pushChunk(job, { type: 'answer', id, text: note ?? answer });
 			// And clear the bell, however it ended — a badge still demanding an
-			// answer to a question that has timed out teaches people to ignore it.
+			// answer to a question that has been dealt with teaches people to
+			// ignore it.
 			resolveEntity(id, job.userId);
 			resolve(answer);
 		};
 
-		const timer = setTimeout(
-			() =>
-				finish(
-					`No answer after ${Math.round(ASK_TIMEOUT_MS / 60000)} minutes — nobody is watching. Do what you safely can without this, and say plainly what you could not settle.`,
-					'(no answer — timed out)'
-				),
-			ASK_TIMEOUT_MS
-		);
-		timer.unref?.();
-
 		// A stopped run must not leave the loop parked on a promise; the loop
-		// winds down at its next check once this returns.
+		// winds down at its next check once this returns. With no timeout, this
+		// is the only way out other than answering.
 		const onAbort = () => finish('The run was stopped before this was answered.', '(run stopped)');
 		job.controller.signal.addEventListener('abort', onAbort, { once: true });
 
 		pending.set(id, { jobId: job.id, userId: job.userId, settle: (answer) => finish(answer) });
+		// Set before the chunk, so a job read the instant the question lands is
+		// already exempt from the staleness watchdog. A parked job produces no
+		// chunks by definition, which is exactly what the watchdog looks for.
+		job.parked = true;
 		pushChunk(job, { type: 'question', id, prompt, options });
 
 		// The only notification urgent enough to wake a phone: the run is parked
-		// until this is answered, and it gives up after ASK_TIMEOUT_MS. Anyone not
+		// until this is answered, and it will wait indefinitely. Anyone not
 		// looking at this exact chat has no other way to find out.
 		notify({
 			userId: job.userId,
@@ -123,8 +123,8 @@ function waitForAnswer(job: LiveJob, prompt: string, options: string[]): Promise
 
 /**
  * Answer an open question. Returns false when there is nothing to answer —
- * already answered, timed out, or never asked — which the client treats as a
- * lost race rather than an error.
+ * already answered, the run was stopped, or it was never asked — which the
+ * client treats as a lost race rather than an error.
  */
 export function answerQuestion(questionId: string, userId: string, answer: string): boolean {
 	const entry = pending.get(questionId);
