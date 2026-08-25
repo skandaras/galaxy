@@ -31,6 +31,7 @@ export interface CodingToolContext {
 export function codingTools(ctx: CodingToolContext): LoopTool[] {
 	const readOnly: LoopTool[] = [
 		{
+			parallelSafe: true,
 			def: {
 				name: 'list_files',
 				description: 'List files in the repository (recursive, common junk dirs skipped).',
@@ -48,6 +49,7 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 			}
 		},
 		{
+			parallelSafe: true,
 			def: {
 				name: 'read_file',
 				description:
@@ -78,6 +80,7 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 			}
 		},
 		{
+			parallelSafe: true,
 			def: {
 				name: 'grep_files',
 				description: 'Search file contents with a regex (git grep).',
@@ -97,6 +100,7 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 			}
 		},
 		{
+			parallelSafe: true,
 			def: {
 				name: 'git_status',
 				description: 'Show git status and the diff of uncommitted changes.',

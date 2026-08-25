@@ -107,6 +107,7 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 
 	const read: LoopTool[] = [
 		{
+			parallelSafe: true,
 			def: {
 				name: 'board_read',
 				description:
@@ -158,6 +159,7 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 			}
 		},
 		{
+			parallelSafe: true,
 			def: {
 				name: 'card_read',
 				description:

@@ -13,6 +13,7 @@ const MAX_LIMIT = 60_000;
 export function attachmentTools(chatId: string): LoopTool[] {
 	return [
 		{
+			parallelSafe: true,
 			def: {
 				name: 'list_attachments',
 				description:
@@ -31,6 +32,7 @@ export function attachmentTools(chatId: string): LoopTool[] {
 			}
 		},
 		{
+			parallelSafe: true,
 			def: {
 				name: 'read_attachment',
 				description:

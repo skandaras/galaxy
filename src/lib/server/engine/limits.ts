@@ -37,6 +37,16 @@ export const toolOutputBudgetChars = () => num('TOOL_OUTPUT_BUDGET_CHARS', 240_0
 export const toolResultMaxChars = () => num('TOOL_RESULT_MAX_CHARS', 30_000);
 
 /**
+ * Tool calls from one model round-trip that may run at once.
+ *
+ * Only tools that declare `parallelSafe` are ever batched (see loop.ts); the
+ * cap is here because the coding tools run one throwaway container per call
+ * under the docker executor, and an unbounded batch would ask the daemon for
+ * as many containers as the model felt like naming.
+ */
+export const toolConcurrency = () => num('TOOL_CONCURRENCY', 4);
+
+/**
  * Model round-trips one coding turn may take — *not* tool calls, since a round
  * can carry several. A model that calls one tool at a time spends these fast:
  * a dozen file reads, a few edits and a test run left the old cap of 24 with
