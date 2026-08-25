@@ -1,13 +1,15 @@
 <script lang="ts">
 	interface UsageData {
 		days: number;
-		totals: { prompt: number; completion: number; cost: number; calls: number };
+		totals: { prompt: number; completion: number; cached: number; cost: number; calls: number };
 		byDay: { day: string; prompt: number; completion: number; cost: number; calls: number }[];
 		byModel: {
 			modelKey: string;
 			task: string;
 			prompt: number;
 			completion: number;
+			/** Prompt tokens the provider served from its cache, where it says so. */
+			cached: number;
 			cost: number;
 			calls: number;
 			errors: number;
@@ -33,6 +35,14 @@
 
 	const fmt = (n: number) => n.toLocaleString();
 	const money = (n: number) => `$${n.toFixed(4)}`;
+	/**
+	 * Cache hits as a share of prompt tokens — the only reading of prompt caching
+	 * that means anything, since the absolute number scales with how much work was
+	 * done. A dash rather than 0% when nothing has been sent at all: providers vary
+	 * wildly in whether they cache, and "no data" must not look like "not working".
+	 */
+	const cachedShare = (cached: number, prompt: number) =>
+		prompt > 0 ? `${Math.round((cached / prompt) * 100)}%` : '—';
 </script>
 
 <section>
@@ -61,12 +71,19 @@
 			<div class="tile">
 				<span>{fmt(data.totals.completion)}</span><small>completion tokens</small>
 			</div>
+			<div class="tile">
+				<span>{cachedShare(data.totals.cached, data.totals.prompt)}</span>
+				<small>prompt served from cache</small>
+			</div>
 		</div>
 
 		<h3>By model</h3>
 		<table>
 			<thead>
-				<tr><th>Model</th><th>Task</th><th>Calls</th><th>Errors</th><th>Tokens in/out</th><th>Cost</th></tr>
+				<tr>
+					<th>Model</th><th>Task</th><th>Calls</th><th>Errors</th><th>Tokens in/out</th>
+					<th>Cached</th><th>Cost</th>
+				</tr>
 			</thead>
 			<tbody>
 				{#each data.byModel as row (row.modelKey + row.task)}
@@ -76,10 +93,11 @@
 						<td class="num">{fmt(row.calls)}</td>
 						<td class="num" class:err={row.errors > 0}>{row.errors}</td>
 						<td class="num">{fmt(row.prompt)} / {fmt(row.completion)}</td>
+						<td class="num">{cachedShare(row.cached, row.prompt)}</td>
 						<td class="num">{money(row.cost)}</td>
 					</tr>
 				{:else}
-					<tr><td colspan="6" class="empty">No usage in this window.</td></tr>
+					<tr><td colspan="7" class="empty">No usage in this window.</td></tr>
 				{/each}
 			</tbody>
 		</table>

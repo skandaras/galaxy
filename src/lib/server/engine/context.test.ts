@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addAttachment, appendMessage, createChat, getMessages } from '$lib/server/chats';
-import { INLINE_DOC_CHARS, messageContent } from './context';
+import { buildContext, INLINE_DOC_CHARS, messageContent } from './context';
 
 /**
  * Hidden chats live entirely in memory, so these exercise the real storage
@@ -107,5 +107,80 @@ describe('messageContent', () => {
 		const out = messageContent(getMessages(chat.id)[0], false) as string;
 		expect(out).toContain('cannot view images');
 		expect(out).not.toContain('[Attached file');
+	});
+});
+
+describe('buildContext', () => {
+	function conversation() {
+		const chat = createChat({ userId: 'u1', hidden: true });
+		appendMessage(chat.id, { role: 'user', content: 'Add a feature' });
+		appendMessage(chat.id, { role: 'assistant', content: 'Done.' });
+		return chat;
+	}
+
+	const build = (tail?: string) => {
+		const chat = conversation();
+		return buildContext({
+			systemPrompt: 'BASE PROMPT',
+			chat,
+			history: getMessages(chat.id),
+			supportsVision: false,
+			tail
+		});
+	};
+
+	it('leads with the system prompt and follows with the history', () => {
+		const out = build();
+		expect(out[0]).toEqual({ role: 'system', content: 'BASE PROMPT' });
+		expect(out.map((m) => m.role)).toEqual(['system', 'user', 'assistant']);
+	});
+
+	it('adds nothing at all when there is no tail', () => {
+		// The common case, and it must not gain an empty note.
+		expect(build('   ')).toHaveLength(3);
+	});
+
+	it('keeps volatile context out of the system message, which stays cacheable', () => {
+		// The whole point: anything that changes between turns has to sit behind
+		// everything a provider might have cached.
+		const out = build('Already read: a.ts');
+		expect(out[0].content).toBe('BASE PROMPT');
+		expect(out.filter((m) => String(m.content).includes('Already read: a.ts'))).toHaveLength(1);
+	});
+
+	it('leaves the last word to the person, not to the notes', () => {
+		// A model weighs the final message most heavily, and that place belongs
+		// to what was actually asked — a session-state dump sitting there reads
+		// as the request.
+		const chat = createChat({ userId: 'u1', hidden: true });
+		appendMessage(chat.id, { role: 'assistant', content: 'Done.' });
+		appendMessage(chat.id, { role: 'user', content: 'Now add tests' });
+		const out = buildContext({
+			systemPrompt: 'BASE PROMPT',
+			chat,
+			history: getMessages(chat.id),
+			supportsVision: false,
+			tail: 'Already read: a.ts'
+		});
+		expect(out.at(-1)?.content).toBe('Now add tests');
+		expect(String(out.at(-2)?.content)).toContain('Already read: a.ts');
+	});
+
+	it('frames the note as context rather than a request', () => {
+		// build()'s conversation ends on the assistant, so the note lands last.
+		expect(String(build('git status: clean').at(-1)?.content)).toMatch(/context, not a new request/);
+	});
+
+	it('appends the note when the conversation does not end on the user', () => {
+		const chat = createChat({ userId: 'u1', hidden: true });
+		appendMessage(chat.id, { role: 'assistant', content: 'Done.' });
+		const out = buildContext({
+			systemPrompt: 'BASE PROMPT',
+			chat,
+			history: getMessages(chat.id),
+			supportsVision: false,
+			tail: 'git status: clean'
+		});
+		expect(String(out.at(-1)?.content)).toContain('git status: clean');
 	});
 });

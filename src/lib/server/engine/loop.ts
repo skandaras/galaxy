@@ -489,7 +489,12 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		try {
 			const stream = streamWithIdleTimeout(
 				choice.adapter,
-				{ modelKey: choice.model.modelKey, messages, tools: toolDefs },
+				{
+						modelKey: choice.model.modelKey,
+						messages,
+						tools: toolDefs,
+						cacheMode: choice.model.cacheMode
+					},
 				// The user pressing stop drops the provider connection immediately;
 				// the idle watchdog inside handles a connection that goes quiet.
 				job.controller.signal
@@ -848,10 +853,22 @@ function safeParseArgs(raw: string): Record<string, unknown> {
 }
 
 function addUsage(a: Usage | null, b: Usage): Usage {
+	// The cache fields stay absent unless at least one side reported them, so a
+	// provider that says nothing about caching is never recorded as a zero-hit
+	// — which would read as "caching is on and doing nothing".
+	const cached = sumReported(a?.cachedPromptTokens, b.cachedPromptTokens);
+	const discount = sumReported(a?.cacheDiscountUsd, b.cacheDiscountUsd);
 	return {
 		promptTokens: (a?.promptTokens ?? 0) + b.promptTokens,
-		completionTokens: (a?.completionTokens ?? 0) + b.completionTokens
+		completionTokens: (a?.completionTokens ?? 0) + b.completionTokens,
+		...(cached !== undefined ? { cachedPromptTokens: cached } : {}),
+		...(discount !== undefined ? { cacheDiscountUsd: discount } : {})
 	};
+}
+
+function sumReported(a: number | undefined, b: number | undefined): number | undefined {
+	if (a === undefined && b === undefined) return undefined;
+	return (a ?? 0) + (b ?? 0);
 }
 
 function logUsage(
@@ -861,12 +878,19 @@ function logUsage(
 	status: 'ok' | 'error',
 	choice?: ModelChoice
 ): void {
-	const cost =
+	const listPrice =
 		usage && choice?.model.promptCostPerMTok != null && choice.model.completionCostPerMTok != null
 			? (usage.promptTokens * choice.model.promptCostPerMTok +
 					usage.completionTokens * choice.model.completionCostPerMTok) /
 				1_000_000
 			: null;
+	// A gateway that prices caching for us knows better than list price does.
+	// The discount is signed: negative on the turn that *writes* the cache,
+	// because a write costs more than plain input, and positive on later reads.
+	const cost =
+		listPrice === null
+			? null
+			: Math.max(0, listPrice - (usage?.cacheDiscountUsd ?? 0));
 	db.insert(usageLog)
 		.values({
 			id: randomUUID(),
@@ -881,6 +905,7 @@ function logUsage(
 			modelKey,
 			promptTokens: usage?.promptTokens ?? 0,
 			completionTokens: usage?.completionTokens ?? 0,
+			cachedPromptTokens: usage?.cachedPromptTokens ?? 0,
 			costUsd: cost,
 			status
 		})

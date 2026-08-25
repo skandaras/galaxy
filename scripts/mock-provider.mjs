@@ -697,9 +697,13 @@ const server = createServer(async (req, res) => {
 		// attempt — the thing that stops a follow-up blindly re-running a turn
 		// that already failed.
 		if (String(last?.content ?? '').includes('echo-prior')) {
-			const m = system.match(/\[Previous attempt[^\]]*\]\n([^\n]*)/);
+			// Scanned across every message, not just the system prompt: the note is
+			// carried as a tail note now so it cannot invalidate the cacheable
+			// prefix. What matters to the test is that the turn was told, not where.
+			const all = parsed.messages.map((x) => String(x.content ?? '')).join('\n');
+			const m = all.match(/\[Previous attempt[^\]]*\]\n([^\n]*)/);
 			delta(res, {
-				content: `PRIORCHECK present=${system.includes('[Previous attempt')} says=${m ? m[1] : 'none'}`
+				content: `PRIORCHECK present=${all.includes('[Previous attempt')} says=${m ? m[1] : 'none'}`
 			});
 			delta(res, {}, 'stop');
 			res.write('data: [DONE]\n\n');

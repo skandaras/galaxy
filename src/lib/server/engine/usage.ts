@@ -11,7 +11,11 @@ import { usageLog } from '$lib/server/db/schema';
 export function logUsage(
 	task: string,
 	modelKey: string,
-	usage: { promptTokens: number; completionTokens: number } | null,
+	usage: {
+		promptTokens: number;
+		completionTokens: number;
+		cachedPromptTokens?: number;
+	} | null,
 	status: 'ok' | 'error',
 	userId?: string
 ): void {
@@ -25,6 +29,7 @@ export function logUsage(
 			modelKey,
 			promptTokens: usage?.promptTokens ?? 0,
 			completionTokens: usage?.completionTokens ?? 0,
+			cachedPromptTokens: usage?.cachedPromptTokens ?? 0,
 			costUsd: null,
 			status
 		})

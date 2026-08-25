@@ -1,0 +1,1 @@
+ALTER TABLE `models` ADD `cache_mode` text DEFAULT 'auto' NOT NULL;

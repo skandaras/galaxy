@@ -31,6 +31,22 @@ export interface ToolDef {
 export interface Usage {
 	promptTokens: number;
 	completionTokens: number;
+	/**
+	 * Prompt tokens the provider served from its cache, when it says so.
+	 *
+	 * Reported as `prompt_tokens_details.cached_tokens`, which is the OpenAI
+	 * field OpenRouter and most gateways mirror. Absent means "the provider did
+	 * not say" — never "nothing was cached", which is why it is optional rather
+	 * than defaulted to zero.
+	 */
+	cachedPromptTokens?: number;
+	/**
+	 * What caching saved on this call, in USD, when the gateway prices it for us
+	 * (OpenRouter's `cache_discount`). Can be *negative* on the turn that writes
+	 * the cache, because a write costs more than plain input; later reads turn it
+	 * positive.
+	 */
+	cacheDiscountUsd?: number;
 }
 
 export type StreamEvent =
@@ -46,12 +62,16 @@ export type StreamEvent =
 	| { type: 'usage'; usage: Usage }
 	| { type: 'done'; finishReason: string | null };
 
+export type CacheMode = 'auto' | 'explicit' | 'none';
+
 export interface ChatRequest {
 	modelKey: string;
 	messages: ProviderMessage[];
 	tools?: ToolDef[];
 	temperature?: number;
 	maxTokens?: number;
+	/** See models.cacheMode. Absent behaves as 'auto': send nothing. */
+	cacheMode?: CacheMode;
 }
 
 export interface RemoteModel {
@@ -62,6 +82,8 @@ export interface RemoteModel {
 	supportsVision: boolean;
 	promptCostPerMTok: number | null;
 	completionCostPerMTok: number | null;
+	/** Starting point for models.cacheMode; only ever applied on first import. */
+	cacheMode: CacheMode;
 }
 
 export interface CompletionResult {

@@ -214,10 +214,15 @@ export function startCodingTurn(opts: {
 			// regardless is what let a long session grow without bound.
 			buildMessages: (): ProviderMessage[] =>
 				buildContext({
-					systemPrompt: systemPrompt + formatState(loadState(chat.id)) + priorRun,
+					systemPrompt,
 					chat: getChat(chat.id, opts.userId) ?? chat,
 					history: getMessages(chat.id),
-					supportsVision: choice.model.supportsVision
+					supportsVision: choice.model.supportsVision,
+					// The two volatile blocks, kept out of the system message so the
+					// prefix survives a leg. The state block changes every leg by design
+					// — that is what it is for — and in front of the prompt it
+					// invalidated everything behind it (see buildContext).
+					tail: formatState(loadState(chat.id)) + priorRun
 				}),
 			onDone: (text, _usage, usedChoice, turnSummary) => {
 				summary = turnSummary;

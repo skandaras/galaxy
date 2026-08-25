@@ -1,6 +1,9 @@
 import type {
+	CacheMode,
 	ChatRequest,
+	MessageContent,
 	ProviderAdapter,
+	ProviderMessage,
 	RemoteModel,
 	StreamEvent,
 	ToolCall,
@@ -28,7 +31,7 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
 
 	const body = (req: ChatRequest, stream: boolean) => ({
 		model: req.modelKey,
-		messages: req.messages.map((m) => ({
+		messages: withCacheBreakpoints(req.messages, req.cacheMode).map((m) => ({
 			role: m.role,
 			content: m.content,
 			...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
@@ -109,6 +112,87 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
 	};
 }
 
+/**
+ * Mark the cache breakpoints a provider needs told about explicitly.
+ *
+ * Most endpoints cache on their own off a stable prefix and need nothing from
+ * us — that is what `auto` means, and it is the default. Anthropic and Gemini
+ * do not: they cache only up to a `cache_control` marker, which OpenRouter
+ * passes through in the content part it sits on.
+ *
+ * Two breakpoints, which is the shape that pays: the system message, the
+ * largest thing that never changes within a run, and the newest settled
+ * message, so each round-trip extends the cached prefix rather than restarting
+ * it. The final message is deliberately left outside — it is the one that
+ * changed, and there is nothing to reuse behind it.
+ *
+ * Only plain, non-empty string content is marked. A tool result or an assistant
+ * message holding tool calls carries structure that not every gateway will
+ * accept rewritten into a content-part array, and a marker is never worth
+ * risking the call itself over.
+ *
+ * Exported for tests.
+ */
+export function withCacheBreakpoints(
+	messages: ProviderMessage[],
+	mode: CacheMode | undefined
+): ProviderMessage[] {
+	if (mode !== 'explicit' || !messages.length) return messages;
+
+	const markable = (i: number) => {
+		const m = messages[i];
+		return (
+			(m.role === 'system' || m.role === 'user' || m.role === 'assistant') &&
+			typeof m.content === 'string' &&
+			m.content.length > 0
+		);
+	};
+
+	const at = new Set<number>();
+	if (markable(0)) at.add(0);
+	for (let i = messages.length - 2; i > 0; i--) {
+		if (markable(i)) {
+			at.add(i);
+			break;
+		}
+	}
+	if (!at.size) return messages;
+
+	return messages.map((m, i) =>
+		at.has(i)
+			? {
+					...m,
+					content: [
+						{ type: 'text', text: m.content as string, cache_control: { type: 'ephemeral' } }
+					] as unknown as MessageContent
+				}
+			: m
+	);
+}
+
+/**
+ * Read one `usage` payload, including whatever it says about caching.
+ *
+ * Cache activity used to be dropped on the floor here, which made prompt
+ * caching unfalsifiable: there was no way to tell a provider serving a cached
+ * prefix from one that had never cached anything. Both cache fields stay
+ * optional on the way out, because "the provider said nothing" and "nothing
+ * was cached" are different answers and only one of them is zero.
+ */
+export function readUsage(raw: Record<string, unknown>): Usage {
+	const num = (v: unknown): number | undefined =>
+		typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+	const details = (raw.prompt_tokens_details ?? {}) as Record<string, unknown>;
+	const cached = num(details.cached_tokens);
+	const discount = num(raw.cache_discount);
+	return {
+		promptTokens: num(raw.prompt_tokens) ?? 0,
+		completionTokens: num(raw.completion_tokens) ?? 0,
+		...(cached !== undefined ? { cachedPromptTokens: cached } : {}),
+		...(discount !== undefined ? { cacheDiscountUsd: discount } : {})
+	};
+}
+
 /** Map one entry of GET /models to our registry shape (OpenRouter-style fields optional). */
 function toRemoteModel(m: Record<string, unknown>): RemoteModel {
 	const pricing = (m.pricing ?? {}) as Record<string, unknown>;
@@ -126,8 +210,25 @@ function toRemoteModel(m: Record<string, unknown>): RemoteModel {
 		supportsTools: supported.includes('tools'),
 		supportsVision: modalities.includes('image'),
 		promptCostPerMTok: perTok(pricing.prompt),
-		completionCostPerMTok: perTok(pricing.completion)
+		completionCostPerMTok: perTok(pricing.completion),
+		cacheMode: defaultCacheMode(String(m.id))
 	};
+}
+
+/**
+ * A starting guess at how a model wants caching asked for, used only when a
+ * model is first imported — an admin's later choice is never overwritten.
+ *
+ * Nothing in an OpenAI-compatible /models listing describes caching, so this
+ * reads the one signal there is: the vendor prefix OpenRouter puts on a model
+ * id. Anthropic and Gemini cache only up to an explicit breakpoint; everyone
+ * else either caches on their own or not at all, and 'auto' sends nothing
+ * either way.
+ *
+ * Exported for tests.
+ */
+export function defaultCacheMode(modelKey: string): CacheMode {
+	return /^(anthropic|google)\//i.test(modelKey) ? 'explicit' : 'auto';
 }
 
 /**
@@ -151,8 +252,8 @@ export async function* parseChatCompletionStream(
 		} catch {
 			continue;
 		}
-		const u = chunk.usage as Record<string, number> | undefined;
-		if (u) usage = { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0 };
+		const u = chunk.usage as Record<string, unknown> | undefined;
+		if (u) usage = readUsage(u);
 
 		const choice = (chunk.choices as Record<string, unknown>[] | undefined)?.[0];
 		if (!choice) continue;
