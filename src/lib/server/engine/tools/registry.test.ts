@@ -45,6 +45,7 @@ const EXPECTED = [
 	'run_history',
 	'set_chat_title',
 	// coding, available while planning
+	'glob',
 	'list_files',
 	'read_file',
 	'grep_files',

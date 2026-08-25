@@ -48,7 +48,13 @@ import { applyToolPolicy } from '../tools/registry';
 import { getExecutor } from './executor';
 import { captureState, clearState, formatState, isDirty, loadState } from './state';
 import { codingTools } from './tools';
-import { createWorkspace, destroyWorkspace, scrubSecrets, shellQuote } from './workspace';
+import {
+	createWorkspace,
+	destroyWorkspace,
+	repoInstructions,
+	scrubSecrets,
+	shellQuote
+} from './workspace';
 
 export type CodeSession = typeof codeSessions.$inferSelect;
 
@@ -429,6 +435,7 @@ function buildCodingSystemPrompt(base: string, session: CodeSession): string {
 		'',
 		`Repository: ${session.repoName} (branch ${session.workBranch}, based on ${session.baseBranch}).`,
 		modeNote,
-		bootstrapContext(session.userId)
+		bootstrapContext(session.userId),
+		repoInstructions(session.workspaceRel)
 	].join('\n');
 }

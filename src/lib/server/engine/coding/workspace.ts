@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { dirname, join, normalize, resolve, sep } from 'node:path';
 import { dataDir } from '$lib/server/db';
 import { decryptSecret } from '$lib/server/crypto';
@@ -66,6 +66,49 @@ export function scrubSecrets(text: string): string {
 	return text
 		.replace(/x-access-token:[^@\s]+@/g, 'x-access-token:***@')
 		.replace(/AUTHORIZATION: basic [A-Za-z0-9+/=]+/gi, 'AUTHORIZATION: basic ***');
+}
+
+/**
+ * Repo-level agent instructions, the ones a contributor is expected to read.
+ *
+ * PLAN.md has always said the platform's own system prompts "sit above
+ * repo-level AGENTS.md/CLAUDE.md-style files, which the coding agent still
+ * reads inside each repo" — and nothing read them, so the agent rediscovered
+ * each repository's conventions from scratch every session, or ignored them.
+ *
+ * AGENTS.md first because it is the vendor-neutral name and this platform is
+ * deliberately model-agnostic; CLAUDE.md is included too, since plenty of
+ * repositories carry only that one. Identical content (the two are often the
+ * same file linked twice) is not repeated.
+ */
+export const REPO_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
+
+/** Total characters of repo instructions folded into the system prompt. */
+const MAX_INSTRUCTION_CHARS = 8_000;
+
+export function repoInstructions(workspaceRel: string): string {
+	const seen = new Set<string>();
+	const blocks: string[] = [];
+	let budget = MAX_INSTRUCTION_CHARS;
+	for (const name of REPO_INSTRUCTION_FILES) {
+		if (budget <= 0) break;
+		let body: string;
+		try {
+			body = readFileSync(safeJoin(workspaceRel, name), 'utf8').trim();
+		} catch {
+			continue; // absent, unreadable, or outside the workspace — all the same here
+		}
+		if (!body || seen.has(body)) continue;
+		seen.add(body);
+		const slice = body.slice(0, budget);
+		budget -= slice.length;
+		blocks.push(
+			`[${name} — this repository's own instructions. Follow them; they outrank your general habits.]\n${slice}${
+				slice.length < body.length ? '\n…(truncated)' : ''
+			}`
+		);
+	}
+	return blocks.length ? `\n\n${blocks.join('\n\n')}` : '';
 }
 
 export interface CreatedWorkspace {

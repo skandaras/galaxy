@@ -10,6 +10,9 @@ const MAX_FILE_CHARS = 60_000;
 /** Default slice size, kept below the hard cap so paging is the normal path. */
 const maxFileChars = () => Math.min(MAX_FILE_CHARS, toolResultMaxChars());
 const MAX_LIST_ENTRIES = 500;
+/** Lines returned when the model doesn't say — enough for most whole files. */
+const DEFAULT_READ_LINES = 800;
+const MAX_READ_LINES = 3_000;
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.svelte-kit', '__pycache__']);
 
 function clampInt(raw: unknown, fallback: number, min: number, max: number): number {
@@ -25,16 +28,132 @@ export interface CodingToolContext {
 }
 
 /**
- * The coding toolset. In plan mode only the read-only tools are offered, so
- * a planning session physically cannot modify anything.
+ * Render a slice of a file with a line-number gutter, stopping at the character
+ * budget however many lines were asked for.
+ *
+ * The gutter is what makes `grep_files` and `read_file` compose: grep reports
+ * `path:412:`, and before this there was no way to ask for line 412 — reads
+ * were addressed by character offset, so the model either guessed or pulled the
+ * whole file in to count.
+ *
+ * Exported for tests.
  */
-export function codingTools(ctx: CodingToolContext): LoopTool[] {
-	const readOnly: LoopTool[] = [
+export function renderLines(
+	content: string,
+	startLine: number,
+	lineCount: number,
+	charBudget: number
+): string {
+	const lines = content.split('\n');
+	if (startLine > lines.length) {
+		return `(file has ${lines.length} line${lines.length === 1 ? '' : 's'}; nothing at line ${startLine})`;
+	}
+	const from = startLine - 1;
+	const wanted = lines.slice(from, from + lineCount);
+	const width = String(from + wanted.length).length;
+	const out: string[] = [];
+	let used = 0;
+	let shown = 0;
+	for (const [i, line] of wanted.entries()) {
+		const rendered = `${String(from + i + 1).padStart(width)}→${line}`;
+		// Always render at least one line: a single enormous line must produce
+		// something rather than an empty result the model cannot act on.
+		if (used + rendered.length > charBudget && shown > 0) break;
+		out.push(rendered);
+		used += rendered.length + 1;
+		shown++;
+	}
+	const nextLine = from + shown + 1;
+	const remaining = lines.length - (from + shown);
+	// Say how to get the rest rather than just truncating: without the hint the
+	// model re-reads from the top and pays for the same content twice.
+	if (remaining > 0) {
+		out.push(`…(${remaining} more line${remaining === 1 ? '' : 's'} — call again with start_line=${nextLine})`);
+	}
+	return out.join('\n');
+}
+
+/**
+ * Turn a glob into a git pathspec that means what the model thinks it means.
+ *
+ * A bare pathspec is matched with fnmatch and no FNM_PATHNAME, so `*` crosses
+ * directory separators and `**` carries no special meaning. A recursive
+ * pattern under a directory therefore missed the files sitting directly in it,
+ * because it required at least one directory in between, while a shallow
+ * pattern quietly matched every depth. Both are the wrong way round from every
+ * other glob the model has ever been given.
+ *
+ * `:(glob)` magic gives the standard semantics instead: `*` stops at a
+ * separator, and a `**` component matches zero or more directories.
+ *
+ * Exported for tests.
+ */
+export function globPathspec(pattern: string): string {
+	// Leave a pathspec the caller has already made magic alone.
+	return pattern.startsWith(':') ? pattern : `:(glob)${pattern}`;
+}
+
+/** One replacement against an in-memory string, so a failure writes nothing. */
+function applyEdit(content: string, old: string, replacement: string, replaceAll: boolean): string {
+	if (!old) throw new Error('old string is required');
+	const first = content.indexOf(old);
+	if (first === -1) throw new Error(`old string not found: ${JSON.stringify(old.slice(0, 80))}`);
+	if (replaceAll) return content.split(old).join(replacement);
+	if (content.indexOf(old, first + 1) !== -1) {
+		throw new Error(
+			`old string is not unique: ${JSON.stringify(old.slice(0, 80))} — add more context, or set replace_all`
+		);
+	}
+	return content.replace(old, replacement);
+}
+
+/**
+ * The tools that only look. Offered on their own in plan mode, so a planning
+ * session physically cannot modify anything — and shared with the explore
+ * sub-agent, which must be read-only for the same reason.
+ */
+export function readOnlyCodingTools(ctx: CodingToolContext): LoopTool[] {
+	return [
+		{
+			parallelSafe: true,
+			def: {
+				name: 'glob',
+				description:
+					'Find files by path pattern, e.g. "src/**/*.ts" or "*.json". Respects .gitignore. ' +
+					'Prefer this over list_files when you know roughly what you are looking for.',
+				parameters: {
+					type: 'object',
+					properties: {
+						pattern: { type: 'string', description: 'A glob, matched against repo-relative paths' }
+					},
+					required: ['pattern']
+				}
+			},
+			describe: (a) => String(a.pattern ?? ''),
+			execute: async (a) => {
+				const pattern = String(a.pattern ?? '').trim();
+				if (!pattern) throw new Error('pattern is required');
+				// --others --exclude-standard picks up new files the agent has just
+				// written without dragging in node_modules: .gitignore does the
+				// filtering that the hardcoded skip list does for list_files.
+				const res = await getExecutor().exec(
+					`git ls-files --cached --others --exclude-standard -- ${shellQuote(globPathspec(pattern))}`,
+					{ cwdRel: ctx.workspaceRel, timeoutMs: 30_000 }
+				);
+				const rows = res.stdout.split('\n').filter(Boolean);
+				if (!rows.length) return '(no matches)';
+				const shown = rows.slice(0, MAX_LIST_ENTRIES);
+				const extra = rows.length - shown.length;
+				return shown.join('\n') + (extra > 0 ? `\n…(${extra} more — narrow the pattern)` : '');
+			}
+		},
 		{
 			parallelSafe: true,
 			def: {
 				name: 'list_files',
-				description: 'List files in the repository (recursive, common junk dirs skipped).',
+				description:
+					'List files in the repository (recursive, common junk dirs skipped). Use glob instead ' +
+					'when you know the shape of what you want.',
 				parameters: {
 					type: 'object',
 					properties: { dir: { type: 'string', description: 'Subdirectory, default repo root' } }
@@ -53,13 +172,19 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 			def: {
 				name: 'read_file',
 				description:
-					'Read a file from the repository. Use offset/limit to page through a long file rather than pulling all of it into context.',
+					'Read a file from the repository. Returns lines with a "12→" line-number gutter, so a ' +
+					'hit from grep_files can be read directly with start_line. Page through a long file ' +
+					'with start_line rather than pulling all of it into context. The gutter is display ' +
+					'only — never include line numbers in an edit_file "old" string.',
 				parameters: {
 					type: 'object',
 					properties: {
 						path: { type: 'string' },
-						offset: { type: 'number', description: 'Character offset to start at (default 0)' },
-						limit: { type: 'number', description: 'Maximum characters to return' }
+						start_line: { type: 'number', description: 'First line to return, 1-based (default 1)' },
+						line_count: {
+							type: 'number',
+							description: `How many lines to return (default ${DEFAULT_READ_LINES})`
+						}
 					},
 					required: ['path']
 				}
@@ -67,33 +192,35 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 			describe: (a) => String(a.path ?? ''),
 			execute: async (a) => {
 				const content = readFileSync(safeJoin(ctx.workspaceRel, String(a.path)), 'utf8');
-				const offset = clampInt(a.offset, 0, 0, Math.max(0, content.length));
-				const limit = clampInt(a.limit, maxFileChars(), 1, MAX_FILE_CHARS);
-				const slice = content.slice(offset, offset + limit);
-				const end = offset + slice.length;
-				const remaining = content.length - end;
-				// Say how to get the rest rather than just truncating: without the
-				// offset hint the model re-reads from 0 and burns the budget twice.
-				return remaining > 0
-					? `${slice}\n…(${remaining} characters remain — call again with offset=${end})`
-					: slice;
+				const startLine = clampInt(a.start_line, 1, 1, Number.MAX_SAFE_INTEGER);
+				const lineCount = clampInt(a.line_count, DEFAULT_READ_LINES, 1, MAX_READ_LINES);
+				return renderLines(content, startLine, lineCount, maxFileChars());
 			}
 		},
 		{
 			parallelSafe: true,
 			def: {
 				name: 'grep_files',
-				description: 'Search file contents with a regex (git grep).',
+				description:
+					'Search file contents with a regex (git grep). Results are "path:line:text" — read a ' +
+					'hit with read_file and start_line rather than opening the whole file.',
 				parameters: {
 					type: 'object',
-					properties: { pattern: { type: 'string' } },
+					properties: {
+						pattern: { type: 'string' },
+						path: {
+							type: 'string',
+							description: 'Optional path or glob to search within, e.g. "src/**/*.ts"'
+						}
+					},
 					required: ['pattern']
 				}
 			},
 			describe: (a) => String(a.pattern ?? ''),
 			execute: async (a) => {
+				const scope = String(a.path ?? '').trim();
 				const res = await getExecutor().exec(
-					`git grep -n -E ${shellQuote(String(a.pattern))} || true`,
+					`git grep -n -E ${shellQuote(String(a.pattern))}${scope ? ` -- ${shellQuote(scope)}` : ''} || true`,
 					{ cwdRel: ctx.workspaceRel, timeoutMs: 30_000 }
 				);
 				return scrubSecrets(res.stdout).slice(0, maxFileChars()) || '(no matches)';
@@ -115,7 +242,14 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 			}
 		}
 	];
+}
 
+/**
+ * The coding toolset. In plan mode only the read-only tools are offered, so
+ * a planning session physically cannot modify anything.
+ */
+export function codingTools(ctx: CodingToolContext): LoopTool[] {
+	const readOnly = readOnlyCodingTools(ctx);
 	if (ctx.mode === 'plan') return readOnly;
 
 	const writeTools: LoopTool[] = [
@@ -141,36 +275,70 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 			def: {
 				name: 'edit_file',
 				description:
-					'Replace an exact string in a file. The old string must appear exactly once.',
+					'Replace exact strings in a file. Pass old/new for one change, or edits: [{old, new}] ' +
+					'to make several in one call — they are applied in order and all or nothing, so a ' +
+					'rename across a file costs one call rather than one per site. Each old string must ' +
+					'appear exactly once unless replace_all is set. Never include read_file line numbers.',
 				parameters: {
 					type: 'object',
 					properties: {
 						path: { type: 'string' },
-						old: { type: 'string' },
-						new: { type: 'string' }
+						old: { type: 'string', description: 'The exact text to replace' },
+						new: { type: 'string', description: 'What to put in its place' },
+						edits: {
+							type: 'array',
+							description: 'Several replacements, applied in order. Use instead of old/new.',
+							items: {
+								type: 'object',
+								properties: { old: { type: 'string' }, new: { type: 'string' } },
+								required: ['old', 'new']
+							}
+						},
+						replace_all: {
+							type: 'boolean',
+							description: 'Replace every occurrence rather than requiring a unique match'
+						}
 					},
-					required: ['path', 'old', 'new']
+					required: ['path']
 				}
 			},
 			describe: (a) => String(a.path ?? ''),
 			execute: async (a) => {
 				const abs = safeJoin(ctx.workspaceRel, String(a.path));
-				const content = readFileSync(abs, 'utf8');
-				const oldStr = String(a.old);
-				const first = content.indexOf(oldStr);
-				if (first === -1) throw new Error('old string not found');
-				if (content.indexOf(oldStr, first + 1) !== -1) {
-					throw new Error('old string is not unique — add more context');
+				const replaceAll = a.replace_all === true;
+				const batch = Array.isArray(a.edits) ? (a.edits as Record<string, unknown>[]) : [];
+				const edits = batch.length
+					? batch.map((e) => ({ old: String(e.old ?? ''), new: String(e.new ?? '') }))
+					: [{ old: String(a.old ?? ''), new: String(a.new ?? '') }];
+
+				// Applied to a string and written once: a batch that fails halfway
+				// must leave the file exactly as it was, not half-edited.
+				let content = readFileSync(abs, 'utf8');
+				for (const [i, edit] of edits.entries()) {
+					try {
+						content = applyEdit(content, edit.old, edit.new, replaceAll);
+					} catch (err) {
+						throw new Error(
+							edits.length > 1
+								? `edit ${i + 1} of ${edits.length} failed, nothing written: ${String(err instanceof Error ? err.message : err)}`
+								: String(err instanceof Error ? err.message : err)
+						);
+					}
 				}
-				writeFileSync(abs, content.replace(oldStr, String(a.new)));
-				return `Edited ${String(a.path)}`;
+				writeFileSync(abs, content);
+				return edits.length > 1
+					? `Edited ${String(a.path)} (${edits.length} changes)`
+					: `Edited ${String(a.path)}`;
 			}
 		},
 		{
 			def: {
 				name: 'bash',
 				description:
-					'Run a shell command in the repository root (tests, builds, scripts). 120s timeout.',
+					'Run a shell command in the repository root (tests, builds, scripts). 120s timeout. ' +
+					'Each call runs in a fresh shell, so cd, exported variables and background processes ' +
+					'do not carry over — chain steps with && in one command. The workspace itself does ' +
+					'persist, so installed dependencies and build output survive between calls.',
 				parameters: {
 					type: 'object',
 					properties: { command: { type: 'string' } },
