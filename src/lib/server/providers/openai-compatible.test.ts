@@ -19,10 +19,19 @@ function streamOf(...lines: string[]): ReadableStream<Uint8Array> {
 
 const chunk = (obj: unknown) => `data: ${JSON.stringify(obj)}\n\n`;
 
-async function collect(stream: ReadableStream<Uint8Array>): Promise<StreamEvent[]> {
+async function collectAll(stream: ReadableStream<Uint8Array>): Promise<StreamEvent[]> {
 	const events: StreamEvent[] = [];
 	for await (const ev of parseChatCompletionStream(stream)) events.push(ev);
 	return events;
+}
+
+/**
+ * The events that carry meaning. `progress` says only "the provider is alive"
+ * and is emitted from several places, so the tests about *content* filter it
+ * out and the tests about liveness look for it directly.
+ */
+async function collect(stream: ReadableStream<Uint8Array>): Promise<StreamEvent[]> {
+	return (await collectAll(stream)).filter((e) => e.type !== 'progress');
 }
 
 describe('parseChatCompletionStream', () => {
@@ -246,5 +255,79 @@ describe('withCacheBreakpoints', () => {
 		const one: ProviderMessage[] = [{ role: 'system', content: 'BASE' }];
 		expect(marked(withCacheBreakpoints(one, 'explicit')[0])).toBe(true);
 		expect(withCacheBreakpoints([], 'explicit')).toEqual([]);
+	});
+});
+
+/**
+ * Everything here is about the idle watchdog in loop.ts, which re-arms on any
+ * event a stream yields. A provider that is plainly working must never look
+ * silent to it — that is what killed a coding turn at ninety seconds while the
+ * model was mid-way through writing a file.
+ */
+describe('reporting that the provider is alive', () => {
+	const progressCount = (events: StreamEvent[]) =>
+		events.filter((e) => e.type === 'progress').length;
+
+	it('reports every tool-call fragment, not just the finished batch', async () => {
+		// The batch is only emitted once the stream ends. Without this the whole
+		// of a large write_file payload is invisible for as long as it takes to
+		// arrive, which for a coding model is the longest output there is.
+		const fragment = (args: string) =>
+			chunk({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: args } }] } }] });
+		const events = await collectAll(
+			streamOf(
+				chunk({
+					choices: [
+						{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'write_file' } }] } }
+					]
+				}),
+				fragment('{"path":'),
+				fragment('"a.ts",'),
+				fragment('"content":"x"}'),
+				chunk({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }),
+				'data: [DONE]\n\n'
+			)
+		);
+		// One per fragment-bearing chunk, and the call still arrives intact.
+		expect(progressCount(events)).toBe(4);
+		expect(events.filter((e) => e.type === 'tool_calls')).toEqual([
+			{
+				type: 'tool_calls',
+				calls: [
+					{ id: 'c1', name: 'write_file', arguments: '{"path":"a.ts","content":"x"}' }
+				]
+			}
+		]);
+	});
+
+	it('reports a keep-alive comment, which used to be thrown away', async () => {
+		// OpenRouter sends these through a long upstream wait for exactly this
+		// purpose, and the reader dropped every line that was not `data:`.
+		const events = await collectAll(
+			streamOf(': OPENROUTER PROCESSING\n\n', chunk({ choices: [{ delta: { content: 'hi' } }] }), 'data: [DONE]\n\n')
+		);
+		expect(progressCount(events)).toBe(1);
+		expect(events.filter((e) => e.type === 'text')).toEqual([{ type: 'text', delta: 'hi' }]);
+	});
+
+	it('reports a chunk it cannot parse rather than ignoring it', async () => {
+		const events = await collectAll(streamOf('data: {not json\n\n', 'data: [DONE]\n\n'));
+		expect(progressCount(events)).toBe(1);
+	});
+
+	it('reports a choice-less chunk', async () => {
+		const events = await collectAll(
+			streamOf(chunk({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }), 'data: [DONE]\n\n')
+		);
+		expect(progressCount(events)).toBe(1);
+	});
+
+	it('says nothing extra for an ordinary text delta', async () => {
+		// text already re-arms the watchdog; a second event per token would be
+		// noise on the hot path.
+		const events = await collectAll(
+			streamOf(chunk({ choices: [{ delta: { content: 'hi' } }] }), 'data: [DONE]\n\n')
+		);
+		expect(progressCount(events)).toBe(0);
 	});
 });

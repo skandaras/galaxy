@@ -13,12 +13,16 @@ export const GET: RequestHandler = ({ locals, params }) => {
 	// Opening the session clears whatever alert sent you here — same rule as a
 	// chat, and a coding session is a chat underneath.
 	resolveOpened(user.id, session.chatId);
+	const running = findRunningJobForChat(session.chatId);
 	return json({
 		// modelId lives on the chat row, not the code session, but the client
 		// wants it alongside the rest of the session state.
 		session: { ...session, modelId: getChat(session.chatId, user.id)?.modelId ?? null },
 		messages: getMessages(session.chatId),
-		runningJobId: findRunningJobForChat(session.chatId)?.id ?? null
+		runningJobId: running?.id ?? null,
+		// Server time, so a page reopened mid-run shows how long the agent has
+		// really been working rather than counting from the reload.
+		runningSince: running?.createdAt ?? null
 	});
 };
 

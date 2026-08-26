@@ -244,19 +244,35 @@ export async function* parseChatCompletionStream(
 	let finishReason: string | null = null;
 	let sawToolCallFinish = false;
 
-	for await (const data of sseDataLines(stream)) {
+	for await (const line of sseLines(stream)) {
+		// Anything that is not a data line is the gateway saying it is still
+		// there — OpenRouter sends `: OPENROUTER PROCESSING` comments through a
+		// long upstream wait. These used to be dropped before the parser ever saw
+		// them, which is exactly the silence the idle watchdog was killing runs
+		// for.
+		if (!line.startsWith('data:')) {
+			yield { type: 'progress' };
+			continue;
+		}
+		const data = line.slice(5).trim();
 		if (data === '[DONE]') break;
 		let chunk: Record<string, unknown>;
 		try {
 			chunk = JSON.parse(data);
 		} catch {
+			// Real bytes we could not read. Still evidence the connection is alive.
+			yield { type: 'progress' };
 			continue;
 		}
 		const u = chunk.usage as Record<string, unknown> | undefined;
 		if (u) usage = readUsage(u);
 
 		const choice = (chunk.choices as Record<string, unknown>[] | undefined)?.[0];
-		if (!choice) continue;
+		if (!choice) {
+			// A usage-only or otherwise choice-less chunk.
+			yield { type: 'progress' };
+			continue;
+		}
 		const delta = (choice.delta ?? {}) as Record<string, unknown>;
 
 		if (typeof delta.content === 'string' && delta.content) {
@@ -282,6 +298,11 @@ export async function* parseChatCompletionStream(
 				if (tc.function?.arguments) entry.args += tc.function.arguments;
 				pendingCalls.set(idx, entry);
 			}
+			// The batch is only emitted once the stream ends, so without this the
+			// whole of a tool call is invisible to the watchdog — and a coding
+			// model's longest output is a write_file payload, streamed one
+			// fragment at a time over a minute or more.
+			yield { type: 'progress' };
 		}
 		if (typeof choice.finish_reason === 'string') {
 			finishReason = choice.finish_reason;
@@ -299,7 +320,15 @@ export async function* parseChatCompletionStream(
 	yield { type: 'done', finishReason };
 }
 
-async function* sseDataLines(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+/**
+ * Every non-empty line of an SSE stream, `data:` or not.
+ *
+ * It used to yield only the payload of `data:` lines and drop the rest on the
+ * floor. Comment lines are how a gateway says "still working" — the one signal
+ * that distinguishes a slow upstream from a dead connection — so the caller
+ * gets everything and decides.
+ */
+async function* sseLines(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
 	let buffer = '';
@@ -312,7 +341,7 @@ async function* sseDataLines(stream: ReadableStream<Uint8Array>): AsyncGenerator
 			buffer = lines.pop() ?? '';
 			for (const line of lines) {
 				const trimmed = line.trim();
-				if (trimmed.startsWith('data:')) yield trimmed.slice(5).trim();
+				if (trimmed) yield trimmed;
 			}
 		}
 	} finally {

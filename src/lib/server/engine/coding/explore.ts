@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { getBudgetStatus } from '../budget';
 import { getTaskConfig, pickModel } from '../engine';
 import { emitEvent } from '../events';
@@ -36,6 +37,14 @@ import { readOnlyCodingTools, type CodingToolContext } from './tools';
 
 /** Longest answer handed back to the parent. Past this it is not a summary. */
 const MAX_ANSWER_CHARS = 2_000;
+/**
+ * Longest label or activity line on an `agent` chunk.
+ *
+ * Cut at the source rather than in the pane's CSS: the question is written by a
+ * model and a tool's `describe` can return an arbitrary grep pattern, and this
+ * is re-sent on every update.
+ */
+const MAX_LABEL_CHARS = 140;
 
 export interface ExploreContext extends CodingToolContext {
 	/** The run that asked, so the sub-agent's work shows in its timeline. */
@@ -74,6 +83,11 @@ export const exploreToolDef: ToolDef = {
 export function exploreTool(ctx: ExploreContext): LoopTool {
 	return {
 		def: exploreToolDef,
+		// Read-only, owning no shared state, and each dispatch gets its own job —
+		// so several can explore at once under the loop's concurrency cap. That is
+		// the cheapest speed-up a long leg has: four questions answered in the
+		// time one used to take, none of their reading entering this context.
+		parallelSafe: true,
 		describe: (a) => String(a.question ?? ''),
 		execute: async (a) => {
 			const question = String(a.question ?? '').trim();
@@ -97,13 +111,38 @@ async function explore(ctx: ExploreContext, question: string, hint: string): Pro
 
 	// A chat id of its own so the sub-agent never appears to be the run holding
 	// the parent's chat: findRunningJobForChat scans live jobs by chat id, and a
-	// child sharing one would be reported as the blocker.
+	// child sharing one would be reported as the blocker. Unique per dispatch,
+	// because several can now be in flight at once.
+	const agentId = randomUUID();
 	const job = createJob({
-		chatId: `${ctx.chatId}#explore`,
+		chatId: `${ctx.chatId}#explore-${agentId.slice(0, 8)}`,
 		userId: ctx.userId,
 		task: 'subagent',
 		persist: false
 	});
+	const startedAt = Date.now();
+	/**
+	 * Announce this sub-agent on the parent's stream, and keep it current.
+	 *
+	 * Its tool calls are already forwarded below, but as flattened rows with no
+	 * identity, no start and no end — which is enough for the transcript and not
+	 * enough to answer "what is running right now, and for how long". Same id
+	 * every time, so a reconnecting client converges instead of collecting one
+	 * row per update.
+	 */
+	const announce = (status: 'running' | 'ok' | 'error', detail?: string) =>
+		pushChunk(ctx.parentJob, {
+			type: 'agent',
+			id: agentId,
+			kind: 'explore',
+			// Capped here rather than in CSS: the question is model-authored and
+			// unbounded, and this rides the wire on every update.
+			label: question.slice(0, MAX_LABEL_CHARS),
+			status,
+			...(detail ? { detail: detail.slice(0, MAX_LABEL_CHARS) } : {}),
+			startedAt
+		});
+	announce('running');
 	// Subscribed before the loop starts, and for two reasons: failJob only rings
 	// the notification bell when nothing is watching, and a child's failure is
 	// the parent's tool error, not something to wake a phone for.
@@ -124,13 +163,17 @@ async function explore(ctx: ExploreContext, question: string, hint: string): Pro
 		if (chunk.type === 'tool') {
 			const { stepId: _childStep, ...rest } = chunk;
 			pushChunk(ctx.parentJob, { ...rest, name: `explore · ${chunk.name}` });
+			// And the same call as this sub-agent's current activity, so the pane
+			// has one line to show without parsing the flattened rows back out.
+			if (chunk.status === 'running') {
+				announce('running', chunk.detail ? `${chunk.name} ${chunk.detail}` : chunk.name);
+			}
 		}
 	});
 	// The parent stopping must stop this too, or a cancelled run keeps spending.
 	const onAbort = () => job.controller.abort();
 	ctx.parentJob.controller.signal.addEventListener('abort', onAbort, { once: true });
 
-	const started = Date.now();
 	let answer = '';
 	let steps = 0;
 	try {
@@ -161,6 +204,7 @@ async function explore(ctx: ExploreContext, question: string, hint: string): Pro
 	} finally {
 		off();
 		ctx.parentJob.controller.signal.removeEventListener('abort', onAbort);
+		announce(answer ? 'ok' : 'error', answer ? undefined : 'nothing to report');
 	}
 
 	emitEvent({
@@ -170,7 +214,7 @@ async function explore(ctx: ExploreContext, question: string, hint: string): Pro
 		type: 'job',
 		name: 'subagent.explore',
 		status: answer ? 'ok' : 'error',
-		durationMs: Date.now() - started,
+		durationMs: Date.now() - startedAt,
 		detail: { question, steps, answerChars: answer.length, model: choice.model.modelKey }
 	});
 

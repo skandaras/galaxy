@@ -58,6 +58,21 @@ export type StreamEvent =
 	 * — silently dropping it made an empty answer look like a successful run.
 	 */
 	| { type: 'reasoning'; delta: string }
+	/**
+	 * The provider sent something real that produces no other event.
+	 *
+	 * This exists for the idle watchdog in loop.ts, which re-arms on every event
+	 * yielded from a stream and so could only see text, reasoning and the final
+	 * tool-call batch. Everything else a provider sends was silence to it: the
+	 * argument fragments of a tool call, which arrive continuously and yield
+	 * nothing until the stream ends, and the keep-alive comments a gateway sends
+	 * precisely to say it is still working. A model writing a large file was
+	 * therefore killed for going quiet while it was plainly not.
+	 *
+	 * Carries nothing. Consumers ignore it; the watchdog only needs to know that
+	 * bytes arrived.
+	 */
+	| { type: 'progress' }
 	| { type: 'tool_calls'; calls: ToolCall[] }
 	| { type: 'usage'; usage: Usage }
 	| { type: 'done'; finishReason: string | null };
