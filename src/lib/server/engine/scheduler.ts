@@ -14,7 +14,9 @@ import {
 	type RetentionSettings,
 	type UxAuditSettings
 } from '$lib/server/settings';
+import { refreshLayout } from '$lib/server/cortex';
 import { getSynthesisStatus, runAlignmentSynthesis } from './alignment';
+import { emitEvent } from './events';
 import { getMemoryStatus, runMemory } from './memory';
 import { runUxAudit } from './ux-audit';
 
@@ -67,6 +69,37 @@ async function sweepMemory(): Promise<void> {
 		// and hammer the provider. One user's failure must not stop the rest.
 		await runMemory('schedule', user.id).catch(() => {
 			// runMemory reports its own failures via events
+		});
+	}
+}
+
+/**
+ * Keep the lattice map's coordinates current.
+ *
+ * Cheap on almost every tick: the signature check answers "has the graph
+ * changed" without laying anything out, and usually it has not. Doing this here
+ * rather than per request is what keeps the map free to open — force layout is
+ * the expensive part of any graph view, and on demand it would be paid by
+ * whoever opened the page.
+ */
+function sweepCortexLayout(): void {
+	try {
+		const res = refreshLayout();
+		if (!res.recomputed) return;
+		emitEvent({
+			type: 'job',
+			name: 'cortex.layout',
+			status: 'ok',
+			// Counts only. Node names never reach an event detail.
+			detail: { nodes: res.nodes, edges: res.edges }
+		});
+	} catch (err) {
+		// A layout that throws must not take the rest of the sweep with it.
+		emitEvent({
+			type: 'job',
+			name: 'cortex.layout',
+			status: 'error',
+			detail: { error: err instanceof Error ? err.message : String(err) }
 		});
 	}
 }

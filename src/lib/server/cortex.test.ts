@@ -16,7 +16,8 @@ import {
 	saveNode,
 	seedNodes,
 	cortexDigest,
-	deleteNode
+	deleteNode,
+	refreshLayout
 } from '$lib/server/cortex';
 import { setSetting } from '$lib/server/settings';
 import { cortexTools } from '$lib/server/engine/tools/cortex';
@@ -323,5 +324,49 @@ describe('the map projection', () => {
 		const node = mapProjection(ANA).nodes[0];
 		expect(node).toHaveProperty('x');
 		expect(node).not.toHaveProperty('activationCount');
+	});
+});
+
+describe('the layout sweep', () => {
+	it('lays the lattice out and stops', () => {
+		seedChain();
+		expect(refreshLayout().recomputed).toBe(true);
+
+		// The trap this guards: the sweep writes x/y/z, and the signature is built
+		// from updatedAt. Stamp updatedAt on a coordinate write and every tick
+		// looks like a change, so the layout recomputes forever.
+		expect(refreshLayout().recomputed).toBe(false);
+		expect(refreshLayout().recomputed).toBe(false);
+	});
+
+	it('picks the work back up when the graph changes', () => {
+		seedChain();
+		refreshLayout();
+		saveNode({ name: 'Kelp forests', ownerId: ANA });
+		expect(refreshLayout().recomputed).toBe(true);
+	});
+
+	it('gives every node a position', () => {
+		seedChain();
+		refreshLayout();
+		for (const node of db.select().from(cortexNodes).all()) {
+			expect(node.x).not.toBeNull();
+			expect(node.y).not.toBeNull();
+			expect(node.z).not.toBeNull();
+		}
+	});
+
+	it('does not move a node whose lattice did not change', () => {
+		seedChain();
+		refreshLayout();
+		const before = db.select().from(cortexNodes).all().map((n) => `${n.id}:${n.x},${n.y}`);
+		// A change elsewhere in the graph will move things — that is what a force
+		// layout does — but an unchanged graph must produce an unchanged map.
+		refreshLayout();
+		expect(db.select().from(cortexNodes).all().map((n) => `${n.id}:${n.x},${n.y}`)).toEqual(before);
+	});
+
+	it('copes with an empty lattice', () => {
+		expect(() => refreshLayout()).not.toThrow();
 	});
 });

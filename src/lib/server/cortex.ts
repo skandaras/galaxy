@@ -9,8 +9,9 @@ import {
 	cortexNodes,
 	type cortexCircuits
 } from '$lib/server/db/schema';
+import { layout, layoutSignature } from '$lib/server/cortex-layout';
 import { ftsQuery, slugify } from '$lib/server/library';
-import { DEFAULT_CORTEX, getSetting, type CortexSettings } from '$lib/server/settings';
+import { DEFAULT_CORTEX, getSetting, setSetting, type CortexSettings } from '$lib/server/settings';
 
 export type CortexNode = typeof cortexNodes.$inferSelect;
 export type CortexAssociation = typeof cortexAssociations.$inferSelect;
@@ -750,4 +751,43 @@ export function mapProjection(userId: string): { nodes: MapNode[]; edges: MapEdg
 		})),
 		edges: edges.map((e) => ({ source: e.sourceId, target: e.targetId, weight: e.weight }))
 	};
+}
+
+
+const LAYOUT_SIGNATURE_KEY = 'cortex.layoutSignature';
+
+/**
+ * Recompute where every node sits, if the graph has moved since last time.
+ *
+ * Global, not per viewer, because coordinates live on the node row and a node
+ * cannot sensibly be in two places. Someone who sees a subset of the lattice
+ * therefore gets a subset of a larger layout — the map fits and re-centres to
+ * whatever bounds their own nodes occupy, so relative structure survives and
+ * clusters stay clustered.
+ *
+ * The signature check is the whole reason this can sit on a five-minute tick: a
+ * layout is the expensive half of any graph view, and almost every tick will
+ * find nothing has changed.
+ */
+export function refreshLayout(): { recomputed: boolean; nodes: number; edges: number } {
+	const nodes = db.select().from(cortexNodes).all();
+	const edges = db.select().from(cortexAssociations).all();
+	const latest = nodes.reduce((m, n) => Math.max(m, n.updatedAt?.getTime() ?? 0), 0);
+	const signature = layoutSignature(nodes.length, edges.length, latest);
+	if (getSetting<string>(LAYOUT_SIGNATURE_KEY, '') === signature) {
+		return { recomputed: false, nodes: nodes.length, edges: edges.length };
+	}
+
+	const points = layout(
+		nodes.map((n) => ({ id: n.id })),
+		edges.map((e) => ({ source: e.sourceId, target: e.targetId, weight: e.weight }))
+	);
+	for (const [id, p] of points) {
+		// Deliberately not touching updatedAt. It feeds the signature above, so
+		// stamping it here would make every sweep look like a change and the
+		// layout would recompute forever.
+		db.update(cortexNodes).set({ x: p.x, y: p.y, z: p.z }).where(eq(cortexNodes.id, id)).run();
+	}
+	setSetting(LAYOUT_SIGNATURE_KEY, signature);
+	return { recomputed: true, nodes: nodes.length, edges: edges.length };
 }
