@@ -139,6 +139,14 @@ Internet ─► Proxy ──┤
 - ~~**SearXNG self-hosted search** as default provider~~ — **shipped**: runs in compose on an internal network, with primary/fallback providers and an admin "Test search" probe.
 - **Local model endpoints** (Ollama / llama.cpp) via the OpenAI-compatible adapter.
 - **Embeddings + RAG** over Library and past chats (semantic search) once FTS5 stops being enough.
+- **Cortex — the knowledge lattice** (`docs/CORTEX.md`): concepts as nodes, weighted
+  associations as edges, retrieval by traversal rather than lookup — the relational layer
+  memory, the Library and Boards each lack. Owner-scoped like every other store that
+  reaches an agent's context, seeded from FTS5 rather than a maintained keyword map, two
+  tools rather than seven, and a read-only star chart at `/cortex` that makes the lattice's
+  own health visible. Wants the eval fixture before the learning engine, not after. It
+  reaches the embeddings entry above from the other side: the lattice is the first thing
+  that would use them, and works on FTS5 until then.
 - **GitHub App + PR watching** — review agent, CI auto-fix via webhooks, replacing the PAT. Opening the pull request itself is shipped (`open_pull_request`, and a button on the session header).
 - **Artifacts pane** — sandboxed iframe rendering of interactive HTML/SVG the agents produce.
 - **Image generation providers** + a gallery surface in the Library; deep image analysis (OCR, structured extraction).
