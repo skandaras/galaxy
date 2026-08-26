@@ -1,9 +1,9 @@
 # Cortex — the knowledge lattice
 
-> Status: **Phase 1 shipped.** The scoped store, FTS seeding, spreading
-> activation, two tools and the privacy tests are in `src/lib/server/cortex.ts`,
-> `src/lib/server/engine/tools/cortex.ts` and their colocated tests. Phases 2–4
-> below are still design. Agent writes ship **off** — see "Writes need a gate".
+> Status: **Phases 1 and 2 shipped.** Store, FTS seeding, spreading activation,
+> two agent tools, the retrieval eval, a human write path, the layout sweep and
+> the map at `/cortex`. Phases 3–4 are still design. Agent writes ship **off** —
+> see "Writes need a gate".
 
 Memory, the Library and Boards each hold something Galaxy knows, and none of
 them hold how those things relate. Memory is a flat list of facts. The Library
@@ -240,8 +240,18 @@ says so.
 
 FTS5 is already in the project, already handles the quoting hazard, and matches
 on the node's own name and description rather than on a mapping someone
-remembered to add. Seeds come from `cortex_fts`, scored by FTS rank and
+remembered to add. Seeds come from `cortex_fts`, ranked by bm25 and nudged by
 `activationPriority`, filtered to what the reader may see.
+
+**Match any term, not all of them.** The first version ANDed the query's terms,
+which is what FTS5 does with a bare space, and the eval found the consequence on
+its first run: a question is almost never a term-for-term subset of the text it
+should match — "cliff edge retreating" misses a node that says "retreats" — so a
+quarter of the eval's questions produced no seed at all. With no seed there is
+nothing to spread from, so the traversal returned nothing and gave no hint why,
+which is the same silent failure the keyword map was rejected for. Library
+search keeps AND, because it is handed deliberate keywords; Cortex is handed a
+sentence someone said.
 
 This also removes a scheduling problem in the original: its stated fallback for
 a keyword miss was semantic similarity, but embeddings were not due until Phase
@@ -254,14 +264,34 @@ drop into this same step.
 ### Spreading activation
 
 Seeds start at 1.0. Each iteration propagates
-`source_activation × edge_weight × decay^hops` to visible neighbours,
-convergence nodes take a boost, context tags modulate strength, and nodes below
-a floor are pruned. Two to three iterations. Return the top nodes with their
-strongest visible associations.
+`source_activation × edge_weight × decay` to visible neighbours, context tags
+modulate strength, and nodes below a floor are pruned. Two iterations by
+default. Activation accumulates where two paths meet, which is how a concept
+the question never mentioned ends up in the answer.
 
-Every constant here — the decay base, the convergence boost, the floor, the
-iteration count — is **a guess until the eval exists**. See "Knowing whether it
-works". Do not tune them by feel; there will be nothing to tune against.
+**Contextual gating is on; the convergence boost is off.** Both were built and
+both were measured against the eval rather than adopted because the design
+named them.
+
+Gating takes the active context from the *seed* nodes' modalities — nothing new
+has to be passed in, and it says something true: these are the domains the
+question turned out to be about. An edge whose `contextTags` intersect that set
+propagates at full strength, one whose tags miss entirely is attenuated to 0.6,
+and an untagged edge is neutral. It measured as a small gain in recall at no
+cost in precision, so it ships on.
+
+The convergence boost measured as no gain at a small cost: bridge recall is
+identical with and without it, and turning it on loses about two points of
+precision by reordering answers that were already right. It ships off, opt-in.
+The honest caveat is that the fixture cannot show the case it was designed for
+— bridges already surface there, so there is no headroom — and a denser lattice
+might say otherwise. Flipping the default means showing it reaches something,
+not citing this document.
+
+The remaining constants — decay, floor, iteration count — are still the first
+plausible values. The eval is a regression guard on them, not a tuner: fitting
+numbers to a fiction would be fitting them to assumptions. Real tuning waits for
+a real lattice.
 
 ### Circuits are labels, not routing
 
@@ -374,6 +404,35 @@ Structural pathologies that no retrieval metric reports are obvious at a glance:
 - **Convergence nodes that bridge nothing** — the design's highest-value
   claimed element, immediately checkable.
 
+### Two passes, and `z` is computed now
+
+Position is never captured when a node or a relation is created. It cannot be:
+a coordinate fixed at creation would be wrong the moment anything else
+connected to either end. Position is a rendering of the whole graph, derived
+after the fact — so nothing about depth is *lost* by computing it late.
+
+What is lost by computing it late is stability. A native 2D layout and a native
+3D layout place nodes differently, so adding depth later would move every node,
+discarding the spatial memory that was the reason to precompute coordinates at
+all — at exactly the point the lattice is finally big enough for that memory to
+be worth something.
+
+So `src/lib/server/cortex-layout.ts` runs a true 2D Fruchterman-Reingold for
+`x`/`y`, then a constrained pass that relaxes **only** `z` with `x`/`y` frozen:
+repulsion measured in three dimensions, only its depth component applied. A pair
+the flat layout could not give room to pushes apart into depth; a pair with room
+barely moves.
+
+Turning on a 3D view will therefore *lift* the nodes out of the plane rather
+than reshuffle them, and `z` means something specific — how much a node's
+placement was compromised by flattening, which is where the flat map is lying to
+you. That the depth pass leaves `x`/`y` bit-identical is the property the whole
+argument rests on, so it is asserted in `cortex-layout.test.ts` rather than
+assumed; the `depth: false` option exists for that test.
+
+The trade: a 3D layout anchored to a 2D one, not a native 3D layout, which might
+pack marginally better. Not worth a reshuffle.
+
 ### Precompute the layout. This is the whole performance story.
 
 Force-directed layout is the expensive part of any graph visualisation —
@@ -406,10 +465,19 @@ anything currently shipped.
 
 ### Two tiers
 
-**Tier 1 — 2D canvas, no new dependency.** Precomputed coordinates, one
-`<canvas>`, pan and zoom by transform, click-to-select by distance against the
-visible set. Comfortably smooth at a few thousand nodes on a phone, zero bundle
+**Tier 1 — 2D canvas, no new dependency. Shipped.** Precomputed coordinates,
+one `<canvas>` in `src/lib/components/LatticeMap.svelte`, pan and zoom by
+transform, click-to-select by distance against the visible set. Zero bundle
 cost, and all five diagnostics above work in 2D.
+
+Nothing animates. Positions come from the sweep, so there is no simulation to
+run in the browser and no idle loop — the canvas redraws on pan, zoom, select
+and resize, and otherwise sits still. That makes `prefers-reduced-motion` a
+non-question rather than a special case.
+
+Depth is hinted rather than drawn: a node the flat layout had to squeeze sits
+slightly back. Same information the 3D tier will show properly, without
+pretending this one is 3D.
 
 Follow `GalaxyBackdrop.svelte` exactly on the mechanics: `requestAnimationFrame`
 rather than `setInterval` "so the browser suspends this on a hidden tab", a
@@ -423,9 +491,10 @@ rather than the default, and off by default on phones and under reduced motion.
 ### Two requirements that are not optional
 
 - **Accessibility.** A canvas is opaque to a screen reader, and this repo holds
-  itself to `docs/ACCESSIBILITY.md`. The route needs a parallel non-visual
-  representation: a plain searchable list of nodes and their connections, same
-  data, same page.
+  itself to `docs/ACCESSIBILITY.md`. The canvas is `aria-hidden`, and the
+  searchable list beside it is the real interface for anyone not looking at
+  pixels — and the same list a sighted person clicks. Not a hidden parallel
+  view, which is a thing that rots; this one cannot, because everyone uses it.
 - **Scoping.** The map is a view over the lattice and inherits the rules above
   in full. A visualisation is the easiest place in the world to accidentally
   render the whole table, so its endpoint belongs in the privacy test's case
@@ -442,11 +511,13 @@ tools registered in the catalogue and reporting counts to the Observatory, one
 bootstrap line, `cortex.test.ts` and `cortex-privacy.test.ts`, JSON export.
 Agent writes ship off.
 
-**P2 — Retrieval and sight.** The eval fixture first, then spreading activation
-tuned against it: contextual gating, convergence boost, re-entrant iterations.
-Then the tier-1 map, plus the layout sweep. Doing the map here is deliberate —
-it is most useful while the lattice is still small enough to shape by hand, and
-it makes P3 observable before P3 starts.
+**P2 — Retrieval and sight. Shipped.** The eval (`cortex-eval.test.ts`) with a
+fictional fixture lattice; the seeding fix it immediately found; contextual
+gating on and the convergence boost off, each decided by measurement; a human
+write path (API routes plus the panel on `/cortex`); the two-pass layout in the
+scheduler; and the tier-1 map. Doing the map here was deliberate — it is most
+useful while the lattice is still small enough to shape by hand, and it makes
+P3 observable before P3 starts.
 
 **P3 — Learning.** Only once P2's eval can say whether a change helped.
 Strengthening paired with decay or per-node normalisation — the original

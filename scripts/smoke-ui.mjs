@@ -236,7 +236,7 @@ const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
 
 // 1. Every page renders, and renders quietly. A page that throws during
 //    hydration still answers 200, so the bash smoke calls it healthy.
-for (const path of ['/chat', '/code', '/boards', '/library', '/settings', '/observatory', '/alignment']) {
+for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settings', '/observatory', '/alignment']) {
 	problems = [];
 	// Not networkidle: the app holds SSE streams open (notifications, the
 	// Observatory feed), so the network is never idle and every goto would sit
