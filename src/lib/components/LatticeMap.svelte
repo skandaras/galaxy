@@ -120,7 +120,10 @@
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		ctx.clearRect(0, 0, w, h);
 
-		const border = css('--border', '#333');
+		// Not --border. That colour is a deliberate whisper — docs/ACCESSIBILITY.md
+		// puts it near 1.2:1 against the page, which is right for separating cards
+		// and wrong for a line that carries meaning. An edge *is* the information
+		// here, so it gets a colour the themes are actually held to.
 		const dim = css('--fg-dim', '#888');
 		const accent = css('--accent', '#7aa2f7');
 		const fg = css('--fg', '#ddd');
@@ -136,8 +139,10 @@
 			const b = at(e.target);
 			if (!a || !b) continue;
 			const touches = selectedId === e.source || selectedId === e.target;
-			ctx.strokeStyle = touches ? accent : border;
-			ctx.globalAlpha = touches ? 0.9 : 0.25 + e.weight * 0.35;
+			ctx.strokeStyle = touches ? accent : dim;
+			// Weight is visible as opacity as well as width, so a strong
+			// association reads as strong at a glance rather than on inspection.
+			ctx.globalAlpha = touches ? 0.95 : 0.3 + e.weight * 0.45;
 			ctx.lineWidth = Math.max(0.5, e.weight * 2 * Math.min(scale, 1.5));
 			ctx.beginPath();
 			ctx.moveTo(a.x, a.y);

@@ -45,7 +45,34 @@ export interface Point {
 	z: number;
 }
 
-const ITERATIONS = 200;
+const ITERATIONS = 300;
+/**
+ * How much harder an edge pulls than the ambient repulsion pushes.
+ *
+ * Plain Fruchterman-Reingold spreads a small graph almost evenly, which is
+ * legible but says nothing — and a map whose only job is to show the shape of
+ * the mesh has to make a cluster look like one. Raising attraction tightens
+ * connected groups without changing what the layout means, because the
+ * equilibrium distance still falls out of the edge weight.
+ */
+const ATTRACTION = 2.2;
+
+/**
+ * A weak pull toward the middle.
+ *
+ * Nothing else holds a disconnected node in place: repulsion pushes it away
+ * from the cluster and no edge pulls it back, so it drifts until the cooling
+ * schedule runs out. One orphan just sits in a corner; several stretch the
+ * bounding box until the connected part of the lattice is squeezed into a
+ * fraction of the canvas.
+ *
+ * That matters more than tidiness. Spotting orphans is one of the things this
+ * map is *for* — a node nothing connects to is dead weight in every query — and
+ * an orphan is no use as a signal if it has drifted off the edge of the view or
+ * flattened everything else to get there. Weak enough not to disturb the
+ * clusters, strong enough to keep everything on screen.
+ */
+const GRAVITY = 0.012;
 /** Depth is a correction to a flat layout, not a third full dimension. */
 const Z_ITERATIONS = 60;
 const Z_SCALE = 0.35;
@@ -167,7 +194,7 @@ export function layout(
 			const ddx = xs[l.a] - xs[l.b];
 			const ddy = ys[l.a] - ys[l.b];
 			const dist = Math.hypot(ddx, ddy) || 0.01;
-			const force = ((dist * dist) / k) * l.w;
+			const force = ((dist * dist) / k) * l.w * ATTRACTION;
 			const fx = (ddx / dist) * force;
 			const fy = (ddy / dist) * force;
 			dx[l.a] -= fx;
@@ -177,6 +204,8 @@ export function layout(
 		}
 
 		for (let i = 0; i < n; i++) {
+			dx[i] -= xs[i] * GRAVITY;
+			dy[i] -= ys[i] * GRAVITY;
 			const disp = Math.hypot(dx[i], dy[i]) || 1;
 			// Cooling: large rearrangements early, small corrections late.
 			const step = Math.min(disp, temperature);
@@ -188,13 +217,23 @@ export function layout(
 
 	// --- pass 2: depth only, x and y frozen --------------------------------
 	//
-	// Nothing below writes xs or ys. Repulsion is measured in three dimensions
-	// but only its depth component is applied, so a pair crowded in the plane —
-	// which is to say a pair the flat layout could not separate — pushes apart
-	// into z, while a pair that already has room barely moves. Edges pull depth
-	// together, so a cluster stays at a common depth instead of shredding.
+	// Nothing below writes xs or ys.
+	//
+	// The rule is local: a pair squeezed together in the *plane* separates in
+	// depth, and everything else settles back toward zero. That is what makes z
+	// mean "how much this node's placement was compromised by flattening" rather
+	// than just "a third coordinate".
+	//
+	// An earlier version reused the 2D forces here — repulsion and edge
+	// attraction on the full 3D distance — and got the sign of the whole thing
+	// backwards: 3D distance is dominated by planar separation, so two nodes far
+	// apart on the map exerted an enormous depth-attraction on each other for no
+	// reason, and the nodes with the *most* room ended up with the most depth.
+	// Forces that are meant to be local have to be local in the axis that
+	// matters.
 	const dz = new Float64Array(n);
-	const cell = k * 2;
+	const near = k * 1.5;
+	const cell = near;
 	for (let iter = 0; opts.depth !== false && iter < Z_ITERATIONS; iter++) {
 		dz.fill(0);
 		const buckets = new Map<string, number[]>();
@@ -204,36 +243,33 @@ export function layout(
 		}
 		for (const [key, members] of buckets) {
 			const [cx, cy] = key.split(',').map(Number);
-			const near: number[] = [];
+			const neighbours: number[] = [];
 			for (let gx = cx - 1; gx <= cx + 1; gx++) {
 				for (let gy = cy - 1; gy <= cy + 1; gy++) {
 					const found = buckets.get(`${gx},${gy}`);
-					if (found) near.push(...found);
+					if (found) neighbours.push(...found);
 				}
 			}
 			for (const i of members) {
-				for (const j of near) {
+				for (const j of neighbours) {
 					if (i === j) continue;
-					const ddx = xs[i] - xs[j];
-					const ddy = ys[i] - ys[j];
-					const ddz = zs[i] - zs[j];
-					const dist = Math.hypot(ddx, ddy, ddz) || 0.01;
-					dz[i] += (ddz / dist) * ((k * k) / dist);
+					const planar = Math.hypot(xs[i] - xs[j], ys[i] - ys[j]);
+					if (planar >= near) continue;
+					// 1 when two nodes sit on top of each other, 0 at the point they
+					// have all the room they need. Squared so that genuine overlap
+					// dominates and mild proximity barely registers.
+					const crowding = (1 - planar / near) ** 2;
+					const gap = zs[i] - zs[j];
+					dz[i] += Math.sign(gap || 1) * crowding * k * 0.5;
 				}
 			}
 		}
-		for (const l of links) {
-			const ddz = zs[l.a] - zs[l.b];
-			const dist =
-				Math.hypot(xs[l.a] - xs[l.b], ys[l.a] - ys[l.b], ddz) || 0.01;
-			const force = ((dist * dist) / k) * l.w;
-			const fz = (ddz / dist) * force;
-			dz[l.a] -= fz;
-			dz[l.b] += fz;
-		}
 		const step = k * 0.05;
 		for (let i = 0; i < n; i++) {
-			zs[i] += Math.max(-step, Math.min(step, dz[i]));
+			// Depth is a correction, not a free dimension: without something
+			// pulling it back, a node with any crowding at all drifts outward
+			// forever and z stops being comparable between nodes.
+			zs[i] += Math.max(-step, Math.min(step, dz[i] - zs[i] * 0.25));
 		}
 	}
 

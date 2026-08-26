@@ -8,13 +8,34 @@ const edge = (source: string, target: string, weight = 0.8): LayoutEdge => ({
 	weight
 });
 
-/** A hub with many spokes crowds; a lone pair does not. */
+/** A hub with many spokes, plus a pair off on their own. */
 function crowdedAndRoomy() {
 	const spokes = Array.from({ length: 12 }, (_, i) => `spoke-${i}`);
 	return {
 		nodes: nodes('hub', ...spokes, 'lonely-a', 'lonely-b'),
 		edges: [...spokes.map((s) => edge('hub', s)), edge('lonely-a', 'lonely-b')]
 	};
+}
+
+/**
+ * A graph with a real density gradient: a fully-connected clique packs as tight
+ * as the layout allows, a weakly-linked chain strings out with room to spare.
+ *
+ * Hub-and-spokes will not do for this. Every spoke ends up the same distance
+ * from every other, so "crowded" and "roomy" differ by a few percent and any
+ * split between them is splitting noise — which is exactly how an earlier
+ * version of the depth test managed to fail while the mechanism was working.
+ */
+function denseAndSparse() {
+	const dense = Array.from({ length: 9 }, (_, i) => `dense-${i}`);
+	const loose = Array.from({ length: 6 }, (_, i) => `loose-${i}`);
+	const edges: LayoutEdge[] = [];
+	for (let i = 0; i < dense.length; i++) {
+		for (let j = i + 1; j < dense.length; j++) edges.push(edge(dense[i], dense[j], 1));
+	}
+	for (let i = 0; i < loose.length - 1; i++) edges.push(edge(loose[i], loose[i + 1], 0.25));
+	edges.push(edge('dense-0', 'loose-0', 0.25));
+	return { nodes: nodes(...dense, ...loose), edges };
 }
 
 describe('determinism', () => {
@@ -49,17 +70,31 @@ describe('the depth pass', () => {
 		}
 	});
 
-	it('pushes crowded nodes out of the plane and leaves roomy ones alone', () => {
+	it('gives depth to whatever the plane had to squeeze', () => {
 		// z means "how much this node's placement was compromised by flattening",
-		// so the twelve spokes fighting for room around one hub should have it and
-		// the pair off on their own should not.
-		const { nodes: n, edges: e } = crowdedAndRoomy();
+		// so this asserts that relationship directly — nodes with the least room
+		// in the plane against nodes with the most — rather than naming two nodes
+		// and assuming which will be which.
+		const { nodes: n, edges: e } = denseAndSparse();
 		const out = layout(n, e);
-		const spokeDepth =
-			[...out].filter(([id]) => id.startsWith('spoke-')).reduce((m, [, p]) => m + Math.abs(p.z), 0) /
-			12;
-		const lonelyDepth = (Math.abs(out.get('lonely-a')!.z) + Math.abs(out.get('lonely-b')!.z)) / 2;
-		expect(spokeDepth).toBeGreaterThan(lonelyDepth);
+		const points = [...out.entries()];
+
+		// How much room each node actually got: distance to its nearest neighbour
+		// in the plane, which is the thing z is supposed to be compensating for.
+		const room = points.map(([id, p]) => ({
+			id,
+			z: Math.abs(p.z),
+			gap: Math.min(
+				...points.filter(([other]) => other !== id).map(([, q]) => Math.hypot(p.x - q.x, p.y - q.y))
+			)
+		}));
+		const byRoom = [...room].sort((a, b) => a.gap - b.gap);
+		const half = Math.floor(byRoom.length / 2);
+		const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+
+		const crowded = mean(byRoom.slice(0, half).map((r) => r.z));
+		const roomy = mean(byRoom.slice(-half).map((r) => r.z));
+		expect(crowded).toBeGreaterThan(roomy);
 	});
 
 	it('is flat when asked to be', () => {
@@ -84,6 +119,21 @@ describe('the 2D layout', () => {
 		const out = [...layout(n, e).values()];
 		const cx = out.reduce((s, p) => s + p.x, 0) / out.length;
 		expect(Math.abs(cx)).toBeLessThan(0.5);
+	});
+});
+
+describe('nodes nothing connects to', () => {
+	it('keeps an orphan in view rather than letting it drift away', () => {
+		// Spotting an orphan is one of the things the map is for, and an orphan
+		// that has drifted off the edge — or flattened everything else to get
+		// there — is no use as a signal.
+		const { nodes: n, edges: e } = crowdedAndRoomy();
+		const out = layout([...n, { id: 'orphan-1' }, { id: 'orphan-2' }], e);
+		const spread = Math.max(...[...out.values()].map((p) => Math.hypot(p.x, p.y)));
+		const orphan = Math.hypot(out.get('orphan-1')!.x, out.get('orphan-1')!.y);
+		// Outside the crowd, since nothing holds it there — but not off in space.
+		expect(orphan).toBeLessThanOrEqual(spread);
+		expect(orphan / spread).toBeGreaterThan(0.3);
 	});
 });
 
