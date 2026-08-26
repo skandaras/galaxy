@@ -33,6 +33,25 @@ function fakeAdapter(opts: { count: number; gap: number; hangAfter?: boolean }):
 	};
 }
 
+/**
+ * Emits only `progress` — the shape a provider takes while streaming tool-call
+ * arguments or sending keep-alive comments, which is to say working hard and
+ * producing no text at all.
+ */
+function progressOnlyAdapter(opts: { count: number; gap: number }): ProviderAdapter {
+	return {
+		async *stream(_req: ChatRequest, signal?: AbortSignal): AsyncGenerator<StreamEvent> {
+			for (let i = 0; i < opts.count; i++) {
+				await sleep(opts.gap);
+				if (signal?.aborted) throw signal.reason;
+				yield { type: 'progress' };
+			}
+		},
+		complete: async () => ({ text: '', usage: null }),
+		listModels: async () => []
+	};
+}
+
 const collect = async (gen: AsyncGenerator<StreamEvent>) => {
 	const out: StreamEvent[] = [];
 	for await (const ev of gen) out.push(ev);
@@ -53,6 +72,22 @@ describe('streamWithIdleTimeout', () => {
 		// total deadline this is exactly the shape that died mid-answer.
 		const events = await collect(
 			streamWithIdleTimeout(fakeAdapter({ count: 10, gap: 20 }), req, new AbortController().signal)
+		);
+		expect(events).toHaveLength(10);
+	});
+
+	it('counts a working-but-silent stream as alive', async () => {
+		// This is the bug that killed a coding turn at ninety seconds: a model
+		// streaming a large tool-call payload yields no text, and the watchdog
+		// could not see the fragments arriving. 200ms of work against an 80ms
+		// idle window.
+		process.env.STREAM_IDLE_TIMEOUT_MS = '80';
+		const events = await collect(
+			streamWithIdleTimeout(
+				progressOnlyAdapter({ count: 10, gap: 20 }),
+				req,
+				new AbortController().signal
+			)
 		);
 		expect(events).toHaveLength(10);
 	});

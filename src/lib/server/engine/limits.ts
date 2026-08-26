@@ -14,8 +14,16 @@ function num(name: string, fallback: number): number {
  * total deadline killed those runs mid-answer while the connection was healthy
  * — the failure looked like "large repos always time out", because only large
  * repos took long enough to hit it.
+ *
+ * Three minutes rather than the ninety seconds it started at. The watchdog used
+ * to be blind to most of what a provider sends (see the `progress` event in
+ * providers/types.ts), so the old figure was measuring the wrong thing and
+ * cutting healthy runs; now that it measures real silence, the remaining risk is
+ * the opposite one — a slow route or a model that buffers its thinking is quiet
+ * for a while and has done nothing wrong. Being wrong here is expensive: a
+ * timeout throws away the whole leg and every tool result in it.
  */
-export const streamIdleTimeoutMs = () => num('STREAM_IDLE_TIMEOUT_MS', 90_000);
+export const streamIdleTimeoutMs = () => num('STREAM_IDLE_TIMEOUT_MS', 180_000);
 
 /**
  * Backstop for the pathological case the idle timeout cannot catch: a provider
