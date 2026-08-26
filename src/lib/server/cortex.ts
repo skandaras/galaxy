@@ -583,3 +583,171 @@ export function exportLattice(userId: string): { path: string; nodes: number; ed
 	);
 	return { path, nodes: nodes.length, edges: edges.length };
 }
+
+/** Disconnect two nodes. Owner-scoped through the same rule as connecting. */
+export function deleteAssociation(
+	sourceId: string,
+	targetId: string,
+	userId: string,
+	actor: 'user' | 'agent' | 'groom' = 'user'
+): boolean {
+	const source = getNode(sourceId, userId);
+	const target = getNode(targetId, userId);
+	if (!source || !target) return false;
+	if (!canEdit(source, userId) && !canEdit(target, userId)) return false;
+	const res = db
+		.delete(cortexAssociations)
+		.where(
+			and(eq(cortexAssociations.sourceId, sourceId), eq(cortexAssociations.targetId, targetId))
+		)
+		.run();
+	if (!res.changes) return false;
+	logChange({
+		nodeId: sourceId,
+		actor,
+		userId,
+		event: 'disconnected',
+		detail: `${source.name} ⇢ ${target.name}`
+	});
+	return true;
+}
+
+/** Change who can see a node. Only its owner (or a legacy node) can be changed. */
+export function setNodeVisibility(
+	id: string,
+	userId: string,
+	visibility: 'personal' | 'shared'
+): CortexNode | null {
+	const node = db.select().from(cortexNodes).where(eq(cortexNodes.id, id)).get();
+	if (!node || !canEdit(node, userId)) return null;
+	db.update(cortexNodes)
+		// Claim a legacy node on first change, so it stops being everyone's.
+		.set({ visibility, ownerId: node.ownerId ?? userId, updatedAt: new Date() })
+		.where(eq(cortexNodes.id, id))
+		.run();
+	logChange({
+		nodeId: id,
+		userId,
+		event: 'visibility',
+		detail: `${node.name}: ${node.visibility} → ${visibility}`,
+		before: node
+	});
+	return db.select().from(cortexNodes).where(eq(cortexNodes.id, id)).get() ?? null;
+}
+
+/**
+ * Fold one node into another, taking its connections with it.
+ *
+ * The answer to the duplicate problem, and the reason it exists before the
+ * grooming agent does: a lattice being shaped by hand accumulates "Tide pools"
+ * and "Rockpools" within a week, and without this the only remedy is deleting
+ * one and rebuilding its edges by hand — which nobody does, so the duplicates
+ * stay.
+ *
+ * Edges move rather than merge away: where both nodes connected to the same
+ * third node the stronger weight wins, because a merge should never make the
+ * lattice remember *less* about a relationship than it did before.
+ */
+export function mergeNodes(
+	keepId: string,
+	mergeId: string,
+	userId: string,
+	actor: 'user' | 'agent' | 'groom' = 'user'
+): CortexNode | null {
+	if (keepId === mergeId) return null;
+	const keep = getNode(keepId, userId);
+	const merge = getNode(mergeId, userId);
+	if (!keep || !merge) return null;
+	if (!canEdit(keep, userId) || !canEdit(merge, userId)) {
+		throw new Error('Both nodes must be yours to merge');
+	}
+
+	const existing = new Map(
+		listAssociations(keepId, userId).map((e) => [e.sourceId === keepId ? e.targetId : e.sourceId, e])
+	);
+
+	for (const edge of listAssociations(mergeId, userId)) {
+		const otherId = edge.sourceId === mergeId ? edge.targetId : edge.sourceId;
+		if (otherId === keepId) continue; // an edge between the two simply goes
+		const already = existing.get(otherId);
+		saveAssociation({
+			sourceId: keepId,
+			targetId: otherId,
+			weight: Math.max(edge.weight, already?.weight ?? 0),
+			contextTags: edge.contextTags ?? already?.contextTags ?? undefined,
+			description: already?.description || edge.description || undefined,
+			userId,
+			actor
+		});
+	}
+
+	// Delete the node last: its edges are gone by now, and the foreign keys are
+	// enforced, so anything left behind fails loudly rather than silently.
+	db.delete(cortexAssociations).where(eq(cortexAssociations.sourceId, mergeId)).run();
+	db.delete(cortexAssociations).where(eq(cortexAssociations.targetId, mergeId)).run();
+	db.delete(cortexNodes).where(eq(cortexNodes.id, mergeId)).run();
+	db.run(sql`DELETE FROM cortex_fts WHERE id = ${mergeId}`);
+
+	logChange({
+		nodeId: keepId,
+		actor,
+		userId,
+		event: 'merged',
+		detail: `${merge.name} → ${keep.name}`,
+		// The whole absorbed node, so a wrong merge is answerable.
+		before: merge
+	});
+	return getNode(keepId, userId);
+}
+
+export interface MapNode {
+	id: string;
+	name: string;
+	description: string;
+	x: number | null;
+	y: number | null;
+	z: number | null;
+	isConvergence: boolean;
+	visibility: 'personal' | 'shared';
+	circuits: string[] | null;
+	degree: number;
+}
+
+export interface MapEdge {
+	source: string;
+	target: string;
+	weight: number;
+}
+
+/**
+ * The projection the chart draws: what this user may see, and nothing else.
+ *
+ * Deliberately not the whole row. The map needs a position, a label and a
+ * shape, so that is what crosses the wire — and a viewer whose lattice is a
+ * subset of a larger one gets a subset here too, laid out inside whatever
+ * bounds their own nodes occupy.
+ */
+export function mapProjection(userId: string): { nodes: MapNode[]; edges: MapEdge[] } {
+	const nodes = listNodes(userId);
+	const edges = visibleEdges(userId);
+	const degree = new Map<string, number>();
+	for (const e of edges) {
+		degree.set(e.sourceId, (degree.get(e.sourceId) ?? 0) + 1);
+		degree.set(e.targetId, (degree.get(e.targetId) ?? 0) + 1);
+	}
+	return {
+		nodes: nodes.map((n) => ({
+			id: n.id,
+			name: n.name,
+			description: n.description,
+			x: n.x,
+			y: n.y,
+			z: n.z,
+			isConvergence: n.isConvergence,
+			visibility: n.visibility,
+			circuits: n.circuits,
+			degree: degree.get(n.id) ?? 0
+		})),
+		edges: edges.map((e) => ({ source: e.sourceId, target: e.targetId, weight: e.weight }))
+	};
+}

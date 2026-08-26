@@ -4,6 +4,8 @@ import { db, runMigrations } from '$lib/server/db';
 import { cortexAssociations, cortexChangeLog, cortexNodes } from '$lib/server/db/schema';
 import {
 	activate,
+	mapProjection,
+	mergeNodes,
 	exportLattice,
 	listNodes,
 	saveAssociation,
@@ -172,6 +174,17 @@ describe('what leaves the module', () => {
 		expect(serialised).not.toContain(BRIDGE);
 	});
 
+	it('keeps the other person out of the map', () => {
+		// A visualisation renders whatever it is handed, so the projection is the
+		// place this has to hold — by the time it is pixels there is no check left.
+		const map = mapProjection(ANA);
+		const serialised = JSON.stringify(map);
+		expect(serialised).toContain(BRIDGE);
+		expect(serialised).not.toContain(BEN_SECRET);
+		// And the edge into Ben's lattice is not there to be drawn either.
+		expect(map.edges).toHaveLength(1);
+	});
+
 	it('keeps the other person out of an export', () => {
 		const out = exportLattice(ANA);
 		const raw = readFileSync(out.path, 'utf8');
@@ -196,6 +209,30 @@ describe('writing across a boundary', () => {
 		expect(() => saveNode({ name: BRIDGE, description: 'rewritten', ownerId: BEN })).toThrow(
 			/someone else/
 		);
+	});
+
+	it('refuses to merge across an ownership boundary, without saying why', () => {
+		const benNodeId = db
+			.select()
+			.from(cortexNodes)
+			.all()
+			.find((n) => n.name === BEN_SECRET)!.id;
+
+		// Null, not a throw — and that is the stronger behaviour, not a weaker
+		// one. "That node is not yours" would confirm the node exists; a node Ana
+		// cannot see should be indistinguishable from a node that is not there.
+		// The refusal to disclose is the same rule as the refusal to traverse.
+		expect(mergeNodes('shared-bridge-concept', benNodeId, ANA)).toBeNull();
+
+		// And the point of the refusal: merging destroys a node, so Ben's has to
+		// still be standing afterwards.
+		const survivor = db
+			.select()
+			.from(cortexNodes)
+			.all()
+			.find((n) => n.id === benNodeId);
+		expect(survivor).toBeTruthy();
+		expect(survivor!.name).toBe(BEN_SECRET);
 	});
 
 	it('will not silently claim a node by writing over its name', async () => {

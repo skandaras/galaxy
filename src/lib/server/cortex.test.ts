@@ -4,6 +4,10 @@ import { db, runMigrations } from '$lib/server/db';
 import { cortexAssociations, cortexChangeLog, cortexNodes } from '$lib/server/db/schema';
 import {
 	activate,
+	deleteAssociation,
+	mapProjection,
+	mergeNodes,
+	setNodeVisibility,
 	exportLattice,
 	findNodeByName,
 	listAssociations,
@@ -235,5 +239,89 @@ describe('the write gate', () => {
 		const write = cortexTools(ANA).find((t) => t.def.name === 'cortex_write')!;
 		const out = await write.execute({ name: 'Tide pools' });
 		expect(out).toMatch(/not surface/);
+	});
+});
+
+describe('disconnecting', () => {
+	it('removes an edge and logs it', () => {
+		const { a, b } = seedChain();
+		expect(deleteAssociation(a.id, b.id, ANA)).toBe(true);
+		expect(listAssociations(a.id, ANA)).toHaveLength(0);
+		expect(listChanges(ANA).map((c) => c.event)).toContain('disconnected');
+	});
+
+	it('reports an edge that was not there', () => {
+		const { a, d } = seedChain();
+		expect(deleteAssociation(a.id, d.id, ANA)).toBe(false);
+	});
+});
+
+describe('visibility', () => {
+	it('shares a node and records what it was', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		expect(setNodeVisibility(a.id, ANA, 'shared')?.visibility).toBe('shared');
+		const entry = listChanges(ANA).find((c) => c.event === 'visibility')!;
+		expect((entry.before as { visibility: string }).visibility).toBe('personal');
+	});
+});
+
+describe('merging', () => {
+	it('takes the absorbed node’s connections with it', () => {
+		const { a, b, c } = seedChain();
+		// a—b—c. Merging a into c should leave c connected to b.
+		expect(mergeNodes(c.id, a.id, ANA)).toBeTruthy();
+		expect(db.select().from(cortexNodes).all().map((n) => n.id)).not.toContain(a.id);
+		const neighbours = listAssociations(c.id, ANA).map((e) =>
+			e.sourceId === c.id ? e.targetId : e.sourceId
+		);
+		expect(neighbours).toContain(b.id);
+	});
+
+	it('keeps the stronger weight when both connected to the same node', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const dupe = saveNode({ name: 'Rockpools', ownerId: ANA });
+		const shared = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		saveAssociation({ sourceId: a.id, targetId: shared.id, weight: 0.3, userId: ANA });
+		saveAssociation({ sourceId: dupe.id, targetId: shared.id, weight: 0.9, userId: ANA });
+		mergeNodes(a.id, dupe.id, ANA);
+		// A merge must never make the lattice remember less than it did.
+		expect(listAssociations(a.id, ANA)[0].weight).toBe(0.9);
+	});
+
+	it('drops the edge that ran between the two', () => {
+		const { a, b } = seedChain();
+		mergeNodes(a.id, b.id, ANA);
+		const neighbours = listAssociations(a.id, ANA).map((e) =>
+			e.sourceId === a.id ? e.targetId : e.sourceId
+		);
+		expect(neighbours).not.toContain(a.id);
+	});
+
+	it('keeps the whole absorbed node so a wrong merge is answerable', () => {
+		const { a, b } = seedChain();
+		mergeNodes(a.id, b.id, ANA);
+		const entry = listChanges(ANA).find((c) => c.event === 'merged')!;
+		expect((entry.before as { name: string }).name).toBe('Coastal ecology');
+	});
+
+	it('refuses to merge a node into itself', () => {
+		const { a } = seedChain();
+		expect(mergeNodes(a.id, a.id, ANA)).toBeNull();
+	});
+});
+
+describe('the map projection', () => {
+	it('carries a degree so the chart can size a node', () => {
+		const { b, d } = seedChain();
+		const map = mapProjection(ANA);
+		expect(map.nodes.find((n) => n.id === b.id)!.degree).toBe(2);
+		expect(map.nodes.find((n) => n.id === d.id)!.degree).toBe(0);
+	});
+
+	it('sends positions, not whole rows', () => {
+		seedChain();
+		const node = mapProjection(ANA).nodes[0];
+		expect(node).toHaveProperty('x');
+		expect(node).not.toHaveProperty('activationCount');
 	});
 });
