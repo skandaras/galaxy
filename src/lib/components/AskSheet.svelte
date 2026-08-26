@@ -64,7 +64,10 @@
 				{sending ? 'Sent' : 'Answer'}
 			</button>
 		</div>
-		<p class="hint">The run is waiting on this. It carries on as soon as you answer.</p>
+		<p class="hint">
+			The run is parked until you answer, for as long as that takes. It carries on the moment
+			you do — or stop the run to abandon it.
+		</p>
 	</div>
 </div>
 

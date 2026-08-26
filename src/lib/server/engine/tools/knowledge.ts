@@ -43,6 +43,7 @@ export function bootstrapContext(userId: string): string {
 export function knowledgeTools(userId: string): LoopTool[] {
 	return [
 		{
+			parallelSafe: true,
 			def: {
 				name: 'skill_load',
 				description: 'Load the full instructions of a skill from the skill index.',
@@ -60,6 +61,7 @@ export function knowledgeTools(userId: string): LoopTool[] {
 			}
 		},
 		{
+			parallelSafe: true,
 			def: {
 				name: 'library_search',
 				description:
@@ -80,6 +82,7 @@ export function knowledgeTools(userId: string): LoopTool[] {
 			}
 		},
 		{
+			parallelSafe: true,
 			def: {
 				name: 'library_read',
 				description: 'Read a Library document by title or id.',

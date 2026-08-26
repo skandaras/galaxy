@@ -15,7 +15,12 @@ import type {
 import { isRetryable, StreamTimeoutError } from '$lib/server/providers/types';
 import { emitEvent } from './events';
 import { completeJob, failJob, isCancellation, pushChunk, type LiveJob } from './jobs';
-import { streamIdleTimeoutMs, streamTotalTimeoutMs, toolOutputBudgetChars } from './limits';
+import {
+	streamIdleTimeoutMs,
+	streamTotalTimeoutMs,
+	toolConcurrency,
+	toolOutputBudgetChars
+} from './limits';
 
 const ELIDED = '[earlier tool output dropped to stay within the context budget]';
 
@@ -48,6 +53,17 @@ export interface LoopTool {
 	) => Promise<string>;
 	/** Short human-readable summary of a call for traces (e.g. the bash command). */
 	describe?: (args: Record<string, unknown>) => string;
+	/**
+	 * Safe to run at the same time as other calls in the same batch.
+	 *
+	 * Opt-in, and deliberately so: the default is that a tool runs alone, in the
+	 * order the model asked for it. A tool qualifies only if it neither changes
+	 * anything nor carries per-turn state that a concurrent call could race —
+	 * which is why `web_search` and `fetch_url`, both of which count a per-turn
+	 * allowance and pace themselves against a rate limit, are left sequential
+	 * despite being reads.
+	 */
+	parallelSafe?: boolean;
 }
 
 /**
@@ -473,7 +489,12 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		try {
 			const stream = streamWithIdleTimeout(
 				choice.adapter,
-				{ modelKey: choice.model.modelKey, messages, tools: toolDefs },
+				{
+						modelKey: choice.model.modelKey,
+						messages,
+						tools: toolDefs,
+						cacheMode: choice.model.cacheMode
+					},
 				// The user pressing stop drops the provider connection immediately;
 				// the idle watchdog inside handles a connection that goes quiet.
 				job.controller.signal
@@ -573,22 +594,41 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		pushChunk(job, { type: 'step', id: stepId, label, status: 'running', consumedText });
 
 		messages.push({ role: 'assistant', content: iterationText, tool_calls: toolCalls });
-		for (const call of toolCalls) {
-			// Checked per call, so a long chain doesn't have to drain first.
+		// The prompt tells the model to batch independent calls into one turn,
+		// so honour it: consecutive parallel-safe calls run together, and anything
+		// else is a barrier that runs alone in the order asked for. Under the
+		// docker executor every coding call is a container round-trip, which is
+		// what made a batch of ten file reads cost ten of them in series.
+		const batches = batchToolCalls(toolCalls, (name) => toolByName.get(name)?.parallelSafe);
+		for (const batch of batches) {
+			// Checked per batch, and a barrier is a batch of one — so a long chain
+			// still doesn't have to drain first.
 			if (job.controller.signal.aborted) break;
-			const tool = toolByName.get(call.name);
-			const args = safeParseArgs(call.arguments);
-			// One record, held in both views — the flat list every existing caller
-			// reads, and this step's group.
-			const record: ToolCallRecord = { name: call.name, summary: tool?.describe?.(args) };
-			toolCallRecords.push(record);
-			stepCalls.push(record);
-			const { output, ok, display } = await executeToolCall(opts, call, tool, stepId);
-			record.status = ok ? 'ok' : 'error';
-			// Onto the record, so the box survives a reload: the live chunk is gone
-			// the moment the job is, and the trace is all a finished reply keeps.
-			if (display?.results) record.results = display.results;
-			messages.push({ role: 'tool', content: output, tool_call_id: call.id });
+			// Records are created in call order before anything runs, so the trace
+			// reads the way the model wrote it however the batch finishes.
+			const prepared = batch.map((call) => {
+				const tool = toolByName.get(call.name);
+				const args = safeParseArgs(call.arguments);
+				// One record, held in both views — the flat list every existing caller
+				// reads, and this step's group.
+				const record: ToolCallRecord = { name: call.name, summary: tool?.describe?.(args) };
+				toolCallRecords.push(record);
+				stepCalls.push(record);
+				return { call, tool, record };
+			});
+			const results = await runBounded(prepared, toolConcurrency(), (item) =>
+				executeToolCall(opts, item.call, item.tool, stepId)
+			);
+			// Pushed in call order rather than completion order: a tool message has
+			// to line up with the assistant message's tool_calls.
+			for (const [i, { call, record }] of prepared.entries()) {
+				const { output, ok, display } = results[i];
+				record.status = ok ? 'ok' : 'error';
+				// Onto the record, so the box survives a reload: the live chunk is gone
+				// the moment the job is, and the trace is all a finished reply keeps.
+				if (display?.results) record.results = display.results;
+				messages.push({ role: 'tool', content: output, tool_call_id: call.id });
+			}
 		}
 
 		// A step is only as good as its calls: one failure leaves the group open
@@ -672,6 +712,56 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		{ persist }
 	);
 	if (opts.autoComplete !== false) completeJob(job, messageId || undefined, stopReason);
+}
+
+/**
+ * Split one round-trip's calls into batches that may run together.
+ *
+ * A run of consecutive parallel-safe calls becomes one batch; anything else
+ * gets a batch to itself, which is what keeps the ordering guarantees intact —
+ * a write followed by a read of the same file still happens in that order,
+ * because the write is a barrier.
+ *
+ * Exported for tests: these ordering rules are the whole safety of running
+ * anything concurrently.
+ */
+export function batchToolCalls(
+	calls: ToolCall[],
+	parallelSafe: (name: string) => boolean | undefined
+): ToolCall[][] {
+	const batches: ToolCall[][] = [];
+	let openRun = false;
+	for (const call of calls) {
+		const safe = parallelSafe(call.name) === true;
+		if (safe && openRun) batches[batches.length - 1].push(call);
+		else batches.push([call]);
+		openRun = safe;
+	}
+	return batches;
+}
+
+/**
+ * Run `fn` over `items` with at most `limit` in flight, returning results in
+ * input order. `fn` is expected never to reject — executeToolCall reports a
+ * failure as a value — so one bad call cannot strand the rest of a batch.
+ */
+async function runBounded<T, R>(
+	items: T[],
+	limit: number,
+	fn: (item: T) => Promise<R>
+): Promise<R[]> {
+	if (items.length <= 1) return items.length ? [await fn(items[0])] : [];
+	const out = new Array<R>(items.length);
+	let next = 0;
+	const worker = async () => {
+		for (;;) {
+			const i = next++;
+			if (i >= items.length) return;
+			out[i] = await fn(items[i]);
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+	return out;
 }
 
 /** `ok` is false for a failed call, so its step can be marked failed too. */
@@ -763,10 +853,22 @@ function safeParseArgs(raw: string): Record<string, unknown> {
 }
 
 function addUsage(a: Usage | null, b: Usage): Usage {
+	// The cache fields stay absent unless at least one side reported them, so a
+	// provider that says nothing about caching is never recorded as a zero-hit
+	// — which would read as "caching is on and doing nothing".
+	const cached = sumReported(a?.cachedPromptTokens, b.cachedPromptTokens);
+	const discount = sumReported(a?.cacheDiscountUsd, b.cacheDiscountUsd);
 	return {
 		promptTokens: (a?.promptTokens ?? 0) + b.promptTokens,
-		completionTokens: (a?.completionTokens ?? 0) + b.completionTokens
+		completionTokens: (a?.completionTokens ?? 0) + b.completionTokens,
+		...(cached !== undefined ? { cachedPromptTokens: cached } : {}),
+		...(discount !== undefined ? { cacheDiscountUsd: discount } : {})
 	};
+}
+
+function sumReported(a: number | undefined, b: number | undefined): number | undefined {
+	if (a === undefined && b === undefined) return undefined;
+	return (a ?? 0) + (b ?? 0);
 }
 
 function logUsage(
@@ -776,12 +878,19 @@ function logUsage(
 	status: 'ok' | 'error',
 	choice?: ModelChoice
 ): void {
-	const cost =
+	const listPrice =
 		usage && choice?.model.promptCostPerMTok != null && choice.model.completionCostPerMTok != null
 			? (usage.promptTokens * choice.model.promptCostPerMTok +
 					usage.completionTokens * choice.model.completionCostPerMTok) /
 				1_000_000
 			: null;
+	// A gateway that prices caching for us knows better than list price does.
+	// The discount is signed: negative on the turn that *writes* the cache,
+	// because a write costs more than plain input, and positive on later reads.
+	const cost =
+		listPrice === null
+			? null
+			: Math.max(0, listPrice - (usage?.cacheDiscountUsd ?? 0));
 	db.insert(usageLog)
 		.values({
 			id: randomUUID(),
@@ -796,6 +905,7 @@ function logUsage(
 			modelKey,
 			promptTokens: usage?.promptTokens ?? 0,
 			completionTokens: usage?.completionTokens ?? 0,
+			cachedPromptTokens: usage?.cachedPromptTokens ?? 0,
 			costUsd: cost,
 			status
 		})

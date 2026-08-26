@@ -7,15 +7,27 @@ export const INLINE_DOC_CHARS = 8_000;
 
 /**
  * Build the provider message array for a turn: system prompt (plus the
- * rolling compaction summary when present), then the un-compacted history.
- * Image attachments become data-URL parts when the model supports vision;
- * documents are inlined as text extracted at upload time.
+ * rolling compaction summary when present), then the un-compacted history,
+ * then any volatile context as a trailing note. Image attachments become
+ * data-URL parts when the model supports vision; documents are inlined as text
+ * extracted at upload time.
+ *
+ * `tail` exists for prompt caching. Every provider that caches does it on a
+ * prefix, so anything that changes between turns must sit at the *end* or
+ * nothing before it can be reused. The coding agent's session state block —
+ * files read, git status, diffstat — was concatenated into the system message,
+ * which is to say the very front, and it changes on every leg: three legs of
+ * one turn therefore missed the cache three times over, on automatic-caching
+ * providers as much as explicit ones. Moved here, the system prompt and the
+ * whole settled history stay byte-identical and cacheable.
  */
 export function buildContext(opts: {
 	systemPrompt: string;
 	chat: ChatMeta;
 	history: StoredMessage[];
 	supportsVision: boolean;
+	/** Volatile context, appended last so it cannot invalidate the prefix. */
+	tail?: string;
 }): ProviderMessage[] {
 	const { chat } = opts;
 	const system = [
@@ -29,6 +41,20 @@ export function buildContext(opts: {
 	for (const m of opts.history.slice(chat.compactedUpTo)) {
 		if (m.role === 'tool') continue; // tool exchanges are not replayed across turns
 		out.push({ role: m.role, content: messageContent(m, opts.supportsVision) });
+	}
+	const tail = opts.tail?.trim();
+	if (tail) {
+		const note: ProviderMessage = {
+			role: 'user',
+			content: `[Notes for this turn — context, not a new request. Answer the message that follows.]\n${tail}`
+		};
+		// Slipped in *before* the person's own message rather than after it. The
+		// last message is the one a model weighs most heavily, and that place
+		// belongs to what was actually asked — a session-state dump sitting there
+		// reads as the request. Everything before the note is still a stable
+		// prefix, which is all caching needs.
+		const insertAt = out.at(-1)?.role === 'user' ? out.length - 1 : out.length;
+		out.splice(insertAt, 0, note);
 	}
 	return out;
 }

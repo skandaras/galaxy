@@ -98,9 +98,26 @@
 	let uploadedRefs = $state<AttachmentRef[]>([]);
 	let fileInput: HTMLInputElement | null = $state(null);
 
+	interface DiffFile {
+		path: string;
+		additions: number | null;
+		deletions: number | null;
+		patch: string;
+	}
+	interface SessionDiff {
+		commits: string;
+		files: DiffFile[];
+		truncated: boolean;
+	}
+
 	const scroll = createAutoscroll();
 	let threadEl = $state<HTMLElement | null>(null);
 	let diffCopied = $state(false);
+	/** Paths whose patch is expanded. Everything starts collapsed. */
+	let openFiles = $state<Set<string>>(new Set());
+	/** Result of the last PR attempt, shown next to the button. */
+	let prUrl = $state<string | null>(null);
+	let prBusy = $state(false);
 
 	let selectedModelId = $state('');
 	let webSearch = $state(true);
@@ -123,7 +140,7 @@
 	 */
 	let lastStopReason = $state<string | null>(null);
 	let errorBanner = $state<string | null>(null);
-	let diffText = $state<string | null>(null);
+	let diff = $state<SessionDiff | null>(null);
 	let source: EventSource | null = null;
 	/**
 	 * Consecutive failed reattaches. Any chunk arriving resets it, so a run that
@@ -196,7 +213,9 @@
 		stashDraft();
 		closeStream();
 		errorBanner = null;
-		diffText = null;
+		diff = null;
+		openFiles = new Set();
+		prUrl = null;
 		const res = await fetch(`/api/code/sessions/${chatId}`);
 		if (!res.ok) return;
 		const data = await res.json();
@@ -519,11 +538,43 @@
 
 	async function loadDiff() {
 		if (!current) return;
-		if (diffText !== null) {
-			diffText = null;
+		if (diff !== null) {
+			diff = null;
 			return;
 		}
-		diffText = await (await fetch(`/api/code/sessions/${current.chatId}/diff`)).text();
+		const res = await fetch(`/api/code/sessions/${current.chatId}/diff`);
+		if (!res.ok) {
+			errorBanner = 'Could not read the diff for this session.';
+			return;
+		}
+		diff = await res.json();
+		// One changed file is the common case and there is nothing to choose
+		// between, so open it rather than making them click.
+		openFiles = diff && diff.files.length === 1 ? new Set([diff.files[0].path]) : new Set();
+	}
+
+	function toggleFile(path: string) {
+		const next = new Set(openFiles);
+		if (!next.delete(path)) next.add(path);
+		openFiles = next;
+	}
+
+	/** Open the pull request for this session's branch. */
+	async function openPr() {
+		if (!current || prBusy) return;
+		prBusy = true;
+		errorBanner = null;
+		const res = await fetch(`/api/code/sessions/${current.chatId}/pr`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({})
+		});
+		prBusy = false;
+		if (!res.ok) {
+			errorBanner = (await res.json().catch(() => ({})))?.message ?? 'Could not open a pull request';
+			return;
+		}
+		prUrl = (await res.json()).url;
 	}
 
 	async function removeSession(chatId: string, ev?: Event) {
@@ -550,8 +601,8 @@
 	}
 
 	async function copyDiff() {
-		if (diffText === null) return;
-		diffCopied = await copyText(diffText);
+		if (!diff) return;
+		diffCopied = await copyText(diff.files.map((f) => f.patch).join('\n'));
 		setTimeout(() => (diffCopied = false), 2000);
 	}
 
@@ -658,19 +709,58 @@
 				{#if current.mode === 'implement'}
 					<button class="chip" onclick={() => setMode('plan')}>back to plan</button>
 				{/if}
-				<button class="chip" onclick={loadDiff}>{diffText === null ? 'view diff' : 'hide diff'}</button>
+				<button class="chip" onclick={loadDiff}>{diff === null ? 'view diff' : 'hide diff'}</button>
+				{#if prUrl}
+					<a class="chip pr-link" href={prUrl} target="_blank" rel="noreferrer">pull request ↗</a>
+				{:else}
+					<button class="chip" disabled={prBusy} onclick={openPr}>
+						{prBusy ? 'opening…' : 'open pull request'}
+					</button>
+				{/if}
 			</header>
 
-			{#if diffText !== null}
+			{#if diff !== null}
 				<div class="diff-wrap">
-					<button
-						class="diff-copy"
-						class:ok={diffCopied}
-						onclick={copyDiff}
-						title="Copy diff to clipboard"
-						aria-label="Copy diff to clipboard">{diffCopied ? '✓' : '⧉'}</button
-					>
-					<pre class="diff">{@html renderDiff(diffText)}</pre>
+					<div class="diff-head">
+						<span class="dim">
+							{diff.files.length} file{diff.files.length === 1 ? '' : 's'} changed
+							{#if diff.truncated}· diff truncated{/if}
+						</span>
+						<button
+							class="diff-copy"
+							class:ok={diffCopied}
+							onclick={copyDiff}
+							title="Copy the whole diff to clipboard"
+							aria-label="Copy the whole diff to clipboard">{diffCopied ? '✓' : '⧉'}</button
+						>
+					</div>
+					{#if diff.commits}
+						<pre class="commits">{diff.commits}</pre>
+					{/if}
+					{#if !diff.files.length}
+						<p class="dim no-changes">Nothing has changed on this branch yet.</p>
+					{/if}
+					<!-- Collapsed by default: a session touching twenty files used to render
+					     as one scrolling block, which is where reviewing it stops happening. -->
+					{#each diff.files as file (file.path)}
+						<div class="file">
+							<button class="file-head" onclick={() => toggleFile(file.path)}>
+								<span class="caret">{openFiles.has(file.path) ? '▾' : '▸'}</span>
+								<span class="file-path">{file.path}</span>
+								<span class="stat">
+									{#if file.additions === null}
+										binary
+									{:else}
+										<span class="add">+{file.additions}</span>
+										<span class="del">−{file.deletions ?? 0}</span>
+									{/if}
+								</span>
+							</button>
+							{#if openFiles.has(file.path)}
+								<pre class="diff">{@html renderDiff(file.patch)}</pre>
+							{/if}
+						</div>
+					{/each}
 				</div>
 			{/if}
 
@@ -1007,13 +1097,11 @@
 		color: var(--bg);
 	}
 	.diff-wrap {
-		position: relative;
+		border-bottom: 1px solid var(--border);
+		max-height: 60vh;
+		overflow-y: auto;
 	}
 	.diff-copy {
-		position: absolute;
-		top: 0.4rem;
-		right: 0.6rem;
-		z-index: 1;
 		background: var(--bg);
 		border: 1px solid var(--border);
 		border-radius: 4px;
@@ -1030,6 +1118,70 @@
 	.diff-copy.ok {
 		color: var(--accent);
 		border-color: var(--accent);
+	}
+	.diff-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.6rem;
+		padding: 0.4rem 1rem;
+		background: var(--bg-pane);
+	}
+	.commits {
+		font-family: var(--font-mono);
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
+		background: var(--bg-pane);
+		margin: 0;
+		padding: 0 1rem 0.5rem;
+		white-space: pre-wrap;
+	}
+	.no-changes {
+		padding: 0 1rem 0.6rem;
+	}
+	.file {
+		border-top: 1px solid var(--border);
+	}
+	.file-head {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		width: 100%;
+		background: var(--bg-pane);
+		border: none;
+		color: var(--fg);
+		cursor: pointer;
+		font-family: var(--font-mono);
+		font-size: var(--text-base);
+		padding: 0.35rem 1rem;
+		text-align: left;
+	}
+	.file-head:hover {
+		color: var(--accent);
+	}
+	.caret {
+		color: var(--fg-dim);
+	}
+	.file-path {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.stat {
+		color: var(--fg-dim);
+		font-size: var(--text-sm);
+		white-space: nowrap;
+	}
+	.stat .add {
+		color: #6fd08c;
+	}
+	.stat .del {
+		color: var(--danger);
+	}
+	.pr-link {
+		text-decoration: none;
 	}
 	.diff {
 		/* A diff is columns of aligned text; a proportional font destroys it. */

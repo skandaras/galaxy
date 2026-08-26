@@ -175,6 +175,26 @@ export const models = sqliteTable('models', {
 	supportsVision: integer('supports_vision', { mode: 'boolean' }).notNull().default(false),
 	promptCostPerMTok: real('prompt_cost_per_mtok'),
 	completionCostPerMTok: real('completion_cost_per_mtok'),
+	/**
+	 * How this model wants prompt caching asked for.
+	 *
+	 * 'auto'     — send nothing. Providers that cache on their own (GLM, OpenAI,
+	 *              DeepSeek and friends) do it off a stable prefix with no
+	 *              request changes, and a provider that does not cache ignores
+	 *              us either way. This is the default because sending an unknown
+	 *              field to an endpoint that has never heard of it is the only
+	 *              way this feature can break a working setup.
+	 * 'explicit' — mark cache breakpoints with cache_control, which is what
+	 *              Anthropic and Gemini need and what OpenRouter passes through.
+	 * 'none'     — never mark anything, for an endpoint that rejects the field.
+	 *
+	 * An admin setting rather than something inferred: nothing in an
+	 * OpenAI-compatible /models listing describes caching, so any inference is a
+	 * guess, and a wrong guess costs money silently.
+	 */
+	cacheMode: text('cache_mode', { enum: ['auto', 'explicit', 'none'] })
+		.notNull()
+		.default('auto'),
 	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true)
 });
 
@@ -188,6 +208,7 @@ export const CORE_TASKS = [
 	'ux-audit',
 	'chat-title',
 	'run-summary',
+	'subagent',
 	'board',
 	'alignment',
 	'alignment-synthesis'
@@ -388,6 +409,12 @@ export const usageLog = sqliteTable(
 		modelKey: text('model_key').notNull(),
 		promptTokens: integer('prompt_tokens').notNull().default(0),
 		completionTokens: integer('completion_tokens').notNull().default(0),
+		/**
+		 * Prompt tokens the provider served from its own cache, where it says so.
+		 * Zero also covers "the provider never mentioned caching", which is the
+		 * honest reading for a row written before this column existed.
+		 */
+		cachedPromptTokens: integer('cached_prompt_tokens').notNull().default(0),
 		costUsd: real('cost_usd'),
 		status: text('status', { enum: ['ok', 'error'] }).notNull()
 	},

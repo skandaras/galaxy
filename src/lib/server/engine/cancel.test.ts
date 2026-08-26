@@ -134,8 +134,9 @@ describe('findRunningJobForChat', () => {
 
 	it('fails a job that has been running too long instead of reporting it', () => {
 		// A job only leaves `running` via completeJob/failJob, so one that neither
-		// finishes nor throws — an ask_user nobody answered — used to refuse every
-		// later message in that chat until the process restarted.
+		// finishes nor throws — a wedged provider call, say — would refuse every
+		// later message in that chat until the process restarted. A run parked on
+		// a question is the deliberate exception; see the `parked` tests below.
 		const job = jobFor('watchdog-c', 'deep-research');
 		const later = Date.now() + RUNNING_JOB_MAX_MS + 1;
 		expect(findRunningJobForChat('watchdog-c', later)).toBeNull();
@@ -171,6 +172,29 @@ describe('findRunningJobForChat', () => {
 		const later = Date.now() + RUNNING_JOB_MAX_MS - 1000;
 		expect(findRunningJobForChat('watchdog-d', later)?.id).toBe(job.id);
 		expect(job.status).toBe('running');
+	});
+
+	it('leaves a run parked on a question alone, however long it waits', () => {
+		// ask_user waits indefinitely now, and a parked run is silent precisely
+		// because it is behaving. Without this exemption removing the ten-minute
+		// ask timeout would only have moved the deadline to this watchdog.
+		const job = jobFor('watchdog-parked');
+		pushChunk(job, { type: 'question', id: 'q1', prompt: 'Which account?', options: [] });
+		job.parked = true;
+		const muchLater = Date.now() + 12 * 60 * 60 * 1000;
+		expect(findRunningJobForChat('watchdog-parked', muchLater)?.id).toBe(job.id);
+		expect(job.status).toBe('running');
+	});
+
+	it('applies the watchdog again once the question is answered', () => {
+		const job = jobFor('watchdog-unparked');
+		job.parked = true;
+		// Answering clears the flag and pushes the closing chunk.
+		job.parked = false;
+		pushChunk(job, { type: 'answer', id: 'q1', text: 'The joint one' });
+		job.lastChunkAt = Date.now() - RUNNING_JOB_MAX_MS - 1;
+		expect(findRunningJobForChat('watchdog-unparked')).toBeNull();
+		expect(job.status).toBe('error');
 	});
 
 	it('reports the age in whole minutes for the message the user sees', () => {

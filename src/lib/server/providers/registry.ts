@@ -103,6 +103,10 @@ export async function syncProviderModels(provider: ProviderRow): Promise<number>
 					supportsVision: rm.supportsVision,
 					promptCostPerMTok: rm.promptCostPerMTok,
 					completionCostPerMTok: rm.completionCostPerMTok,
+					// Both of these are starting points an admin then owns, which is
+					// why neither appears in the update branch above: a re-sync must
+					// not undo a decision someone made in the UI.
+					cacheMode: rm.cacheMode,
 					// Aggregators list hundreds of models; imports start disabled
 					// and are switched on per-model in admin.
 					enabled: false

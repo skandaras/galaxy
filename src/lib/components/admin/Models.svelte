@@ -9,6 +9,7 @@
 		supportsVision: boolean;
 		promptCostPerMTok: number | null;
 		completionCostPerMTok: number | null;
+		cacheMode: 'auto' | 'explicit' | 'none';
 		enabled: boolean;
 	}
 
@@ -59,6 +60,15 @@
 		await load();
 	}
 
+	async function setCacheMode(m: Model, cacheMode: string) {
+		await fetch(`/api/admin/models/${m.id}`, {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ cacheMode })
+		});
+		await load();
+	}
+
 	const fmtCost = (v: number | null) => (v == null ? '—' : `$${v.toFixed(2)}/M`);
 </script>
 
@@ -76,7 +86,10 @@
 
 	<table>
 		<thead>
-			<tr><th>On</th><th>Model</th><th>Caps</th><th>Context</th><th>In</th><th>Out</th></tr>
+			<tr>
+				<th>On</th><th>Model</th><th>Caps</th><th>Context</th><th>In</th><th>Out</th>
+				<th title="How this model wants prompt caching asked for">Cache</th>
+			</tr>
 		</thead>
 		<tbody>
 			{#each visible as m (m.id)}
@@ -93,9 +106,21 @@
 					<td class="num">{m.contextWindow ? `${Math.round(m.contextWindow / 1024)}k` : '—'}</td>
 					<td class="num">{fmtCost(m.promptCostPerMTok)}</td>
 					<td class="num">{fmtCost(m.completionCostPerMTok)}</td>
+					<td>
+						<select
+							class="cache"
+							value={m.cacheMode}
+							onchange={(e) => setCacheMode(m, e.currentTarget.value)}
+							title="auto: send nothing, for providers that cache on their own. explicit: mark cache_control breakpoints, which Anthropic and Gemini need. none: never mark anything."
+						>
+							<option value="auto">auto</option>
+							<option value="explicit">explicit</option>
+							<option value="none">none</option>
+						</select>
+					</td>
 				</tr>
 			{:else}
-				<tr><td colspan="6" class="empty">No models — sync a provider first.</td></tr>
+				<tr><td colspan="7" class="empty">No models — sync a provider first.</td></tr>
 			{/each}
 		</tbody>
 	</table>
@@ -176,6 +201,15 @@
 	}
 	tr.disabled td {
 		opacity: 0.5;
+	}
+	.cache {
+		background: var(--bg-pane);
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		color: var(--fg);
+		font-family: inherit;
+		font-size: var(--text-sm);
+		padding: 0.15rem 0.25rem;
 	}
 	.key {
 		font-size: var(--text-sm);

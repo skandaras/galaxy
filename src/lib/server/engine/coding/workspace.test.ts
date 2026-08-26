@@ -2,7 +2,14 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { mkdirSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataDir } from '$lib/server/db';
-import { authenticatedUrl, gitAuthArgs, safeJoin, scrubSecrets, shellQuote } from './workspace';
+import {
+	authenticatedUrl,
+	gitAuthArgs,
+	repoInstructions,
+	safeJoin,
+	scrubSecrets,
+	shellQuote
+} from './workspace';
 
 const WS = 'workspaces/test-ws';
 
@@ -76,5 +83,49 @@ describe('shellQuote', () => {
 	it('quotes safely', () => {
 		expect(shellQuote("it's")).toBe(`'it'\\''s'`);
 		expect(shellQuote('plain')).toBe(`'plain'`);
+	});
+});
+
+describe('repoInstructions', () => {
+	const INSTR = 'workspaces/instr-ws';
+	const write = (name: string, body: string) =>
+		writeFileSync(join(dataDir, INSTR, name), body);
+
+	beforeAll(() => {
+		rmSync(join(dataDir, INSTR), { recursive: true, force: true });
+		mkdirSync(join(dataDir, INSTR), { recursive: true });
+	});
+
+	it('is empty when the repo says nothing, which most do', () => {
+		expect(repoInstructions(INSTR)).toBe('');
+	});
+
+	it('folds in AGENTS.md and says it outranks general habits', () => {
+		write('AGENTS.md', 'Always run npm run check before committing.');
+		const out = repoInstructions(INSTR);
+		expect(out).toContain('Always run npm run check');
+		expect(out).toContain('outrank');
+	});
+
+	it('reads CLAUDE.md too, since plenty of repos carry only that', () => {
+		rmSync(join(dataDir, INSTR, 'AGENTS.md'));
+		write('CLAUDE.md', 'Prefer tabs.');
+		expect(repoInstructions(INSTR)).toContain('Prefer tabs');
+	});
+
+	it('does not repeat the same content under both names', () => {
+		write('AGENTS.md', 'Prefer tabs.');
+		write('CLAUDE.md', 'Prefer tabs.');
+		// The two are commonly one file linked twice; paying for it twice on
+		// every leg is the whole reason this dedupes.
+		expect(repoInstructions(INSTR).match(/Prefer tabs/g)).toHaveLength(1);
+	});
+
+	it('truncates rather than letting a huge file take over the prompt', () => {
+		write('AGENTS.md', 'x'.repeat(20_000));
+		rmSync(join(dataDir, INSTR, 'CLAUDE.md'));
+		const out = repoInstructions(INSTR);
+		expect(out).toContain('…(truncated)');
+		expect(out.length).toBeLessThan(9_000);
 	});
 });

@@ -46,9 +46,23 @@ import { bootstrapContext, knowledgeTools } from '../tools/knowledge';
 import { mcpLoopTools } from '../tools/mcp';
 import { applyToolPolicy } from '../tools/registry';
 import { getExecutor } from './executor';
-import { captureState, clearState, formatState, isDirty, loadState } from './state';
+import { exploreTool } from './explore';
+import {
+	captureState,
+	clearState,
+	formatState,
+	isDirty,
+	loadState,
+	setApprovedPlan
+} from './state';
 import { codingTools } from './tools';
-import { createWorkspace, destroyWorkspace, scrubSecrets, shellQuote } from './workspace';
+import {
+	createWorkspace,
+	destroyWorkspace,
+	repoInstructions,
+	scrubSecrets,
+	shellQuote
+} from './workspace';
 
 export type CodeSession = typeof codeSessions.$inferSelect;
 
@@ -88,6 +102,16 @@ export async function createSession(opts: {
 }
 
 export function setSessionMode(session: CodeSession, mode: 'plan' | 'implement'): void {
+	// Leaving plan mode is the moment the plan becomes a commitment, so capture
+	// it here rather than in the browser: it then holds however the mode was
+	// switched, and survives the compaction that would otherwise summarise the
+	// plan away halfway through building it.
+	if (mode === 'implement' && session.mode === 'plan') {
+		const lastReply = getMessages(session.chatId)
+			.filter((m) => m.role === 'assistant' && m.content.trim())
+			.at(-1);
+		if (lastReply) setApprovedPlan(session.chatId, lastReply.content);
+	}
 	db.update(codeSessions).set({ mode }).where(eq(codeSessions.chatId, session.chatId)).run();
 }
 
@@ -98,13 +122,99 @@ export function destroySession(session: CodeSession): void {
 	deleteChat(session.chatId, session.userId);
 }
 
-/** Cumulative branch diff plus any uncommitted changes. */
-export async function sessionDiff(session: CodeSession): Promise<string> {
+/** Total patch characters returned; past this the tail is dropped. */
+const MAX_DIFF_CHARS = 400_000;
+
+export interface SessionDiffFile {
+	path: string;
+	/** Null for a binary file, which git counts as `-`. */
+	additions: number | null;
+	deletions: number | null;
+	patch: string;
+}
+
+export interface SessionDiff {
+	/** `git log --oneline base..HEAD`. */
+	commits: string;
+	files: SessionDiffFile[];
+	/** True when the patch was cut short, so the view can say so. */
+	truncated: boolean;
+}
+
+/**
+ * Everything this session has done to the repository, split per file.
+ *
+ * It used to be one string — log, branch diff and working diff concatenated,
+ * capped at 400k and rendered as a single `<pre>`. Reviewing the diff is the
+ * centre of the workflow, and a single scrolling block is where review stops
+ * happening. The split happens here rather than in the browser so the shape is
+ * testable without a DOM.
+ *
+ * The patch is the working tree against the base branch, which covers
+ * committed and uncommitted work in one pass — the reviewer wants the state of
+ * the branch, not an archaeology of how it got there. The commit list carries
+ * that separately.
+ */
+export async function sessionDiff(session: CodeSession): Promise<SessionDiff> {
+	const base = shellQuote(session.baseBranch);
 	const res = await getExecutor().exec(
-		`git log --oneline ${session.baseBranch}..HEAD; echo '---'; git diff ${session.baseBranch}...HEAD; git diff`,
+		`git log --oneline ${base}..HEAD; echo '${NUMSTAT_MARK}'; git diff --numstat ${base}; echo '${PATCH_MARK}'; git diff ${base}`,
 		{ cwdRel: session.workspaceRel, timeoutMs: 30_000 }
 	);
-	return scrubSecrets(res.stdout + res.stderr).slice(0, 400_000);
+	const out = scrubSecrets(res.stdout);
+	const [commits = '', rest = ''] = splitOnce(out, NUMSTAT_MARK);
+	const [numstat = '', patch = ''] = splitOnce(rest, PATCH_MARK);
+
+	const counts = new Map<string, { additions: number | null; deletions: number | null }>();
+	for (const line of numstat.split('\n')) {
+		const m = /^(\d+|-)\t(\d+|-)\t(.+)$/.exec(line.trim());
+		if (!m) continue;
+		const n = (v: string) => (v === '-' ? null : Number(v));
+		// A rename arrives as `old => new`; the new path is what to show.
+		counts.set(renamedTo(m[3]), { additions: n(m[1]), deletions: n(m[2]) });
+	}
+
+	const truncated = patch.length > MAX_DIFF_CHARS;
+	const files = splitPatch(truncated ? patch.slice(0, MAX_DIFF_CHARS) : patch).map((f) => ({
+		...f,
+		additions: counts.get(f.path)?.additions ?? null,
+		deletions: counts.get(f.path)?.deletions ?? null
+	}));
+	return { commits: commits.trim(), files, truncated };
+}
+
+// Markers rather than a bare '---', which a diff can legitimately contain.
+const NUMSTAT_MARK = '@@galaxy-numstat@@';
+const PATCH_MARK = '@@galaxy-patch@@';
+
+function splitOnce(text: string, mark: string): [string, string] {
+	const at = text.indexOf(mark);
+	return at === -1 ? [text, ''] : [text.slice(0, at), text.slice(at + mark.length)];
+}
+
+/** `dir/{old => new}.ts` and `old.ts => new.ts` both name the file it is now. */
+function renamedTo(raw: string): string {
+	const braced = /^(.*)\{.* => (.*)\}(.*)$/.exec(raw);
+	if (braced) return `${braced[1]}${braced[2]}${braced[3]}`.replace(/\/\//g, '/');
+	const plain = raw.split(' => ');
+	return plain.length === 2 ? plain[1] : raw;
+}
+
+/** Cut a unified diff into one entry per file, keeping each file's header. */
+export function splitPatch(patch: string): { path: string; patch: string }[] {
+	const out: { path: string; patch: string }[] = [];
+	let current: { path: string; patch: string } | null = null;
+	for (const line of patch.split('\n')) {
+		const header = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
+		if (header) {
+			if (current) out.push(current);
+			current = { path: header[2], patch: line };
+		} else if (current) {
+			current.patch += `\n${line}`;
+		}
+	}
+	if (current) out.push(current);
+	return out;
 }
 
 export function startCodingTurn(opts: {
@@ -163,9 +273,24 @@ export function startCodingTurn(opts: {
 		applyToolPolicy(
 			[
 				...codingTools({
+					chatId: chat.id,
 					workspaceRel: session.workspaceRel,
 					mode: session.mode,
-					repoUrl: session.repoUrl
+					repoUrl: session.repoUrl,
+					baseBranch: session.baseBranch,
+					workBranch: session.workBranch
+				}),
+				// Reading the repository at arm's length: the sub-agent's own file
+				// reads never enter this context, only its answer.
+				exploreTool({
+					workspaceRel: session.workspaceRel,
+					mode: session.mode,
+					repoUrl: session.repoUrl,
+					baseBranch: session.baseBranch,
+					workBranch: session.workBranch,
+					parentJob: job,
+					userId: opts.userId,
+					chatId: chat.id
 				}),
 				...knowledgeTools(opts.userId),
 				...attachmentTools(chat.id),
@@ -208,10 +333,15 @@ export function startCodingTurn(opts: {
 			// regardless is what let a long session grow without bound.
 			buildMessages: (): ProviderMessage[] =>
 				buildContext({
-					systemPrompt: systemPrompt + formatState(loadState(chat.id)) + priorRun,
+					systemPrompt,
 					chat: getChat(chat.id, opts.userId) ?? chat,
 					history: getMessages(chat.id),
-					supportsVision: choice.model.supportsVision
+					supportsVision: choice.model.supportsVision,
+					// The two volatile blocks, kept out of the system message so the
+					// prefix survives a leg. The state block changes every leg by design
+					// — that is what it is for — and in front of the prompt it
+					// invalidated everything behind it (see buildContext).
+					tail: formatState(loadState(chat.id)) + priorRun
 				}),
 			onDone: (text, _usage, usedChoice, turnSummary) => {
 				summary = turnSummary;
@@ -429,6 +559,7 @@ function buildCodingSystemPrompt(base: string, session: CodeSession): string {
 		'',
 		`Repository: ${session.repoName} (branch ${session.workBranch}, based on ${session.baseBranch}).`,
 		modeNote,
-		bootstrapContext(session.userId)
+		bootstrapContext(session.userId),
+		repoInstructions(session.workspaceRel)
 	].join('\n');
 }

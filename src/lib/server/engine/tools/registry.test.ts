@@ -45,6 +45,7 @@ const EXPECTED = [
 	'run_history',
 	'set_chat_title',
 	// coding, available while planning
+	'glob',
 	'list_files',
 	'read_file',
 	'grep_files',
@@ -54,7 +55,11 @@ const EXPECTED = [
 	'edit_file',
 	'bash',
 	'git_commit',
-	'git_push'
+	'git_push',
+	'update_plan',
+	'open_pull_request',
+	// coding, a sub-agent rather than a tool of its own
+	'dispatch_explore'
 ];
 
 beforeAll(() => {

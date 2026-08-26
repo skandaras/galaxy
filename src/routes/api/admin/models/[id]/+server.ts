@@ -15,6 +15,8 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
 	if (typeof body.displayName === 'string' && body.displayName.trim())
 		patch.displayName = body.displayName.trim();
+	if (body.cacheMode === 'auto' || body.cacheMode === 'explicit' || body.cacheMode === 'none')
+		patch.cacheMode = body.cacheMode;
 	if (Object.keys(patch).length) {
 		db.update(models).set(patch).where(eq(models.id, row.id)).run();
 	}

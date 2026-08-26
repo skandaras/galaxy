@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '$lib/server/db';
-import { ASK_TIMEOUT_MS, answerQuestion, askUserTool, openQuestionCount } from './ask-user';
+import { answerQuestion, askUserTool, openQuestionCount } from './ask-user';
 import { createJob, subscribeJob, type JobChunk, type LiveJob } from './jobs';
 
 beforeAll(() => {
@@ -99,19 +99,38 @@ describe('who may answer', () => {
 });
 
 describe('when nobody answers', () => {
-	it('gives up after the timeout instead of hanging the job forever', async () => {
+	/** Resolves to 'pending' unless the question settled first. */
+	const settledYet = (p: Promise<string>) =>
+		Promise.race([p, Promise.resolve('pending')]);
+
+	it('waits indefinitely rather than answering on your behalf', async () => {
 		vi.useFakeTimers();
-		const { chunks, tool } = harness();
+		const { job, tool } = harness();
 		const pending = tool.execute({ question: 'Which account?' });
 
-		vi.advanceTimersByTime(ASK_TIMEOUT_MS + 1);
-		const result = await pending;
+		// Well past the ten minutes this used to give up after, and past the
+		// 45-minute job watchdog too.
+		vi.advanceTimersByTime(6 * 60 * 60 * 1000);
+		await vi.runOnlyPendingTimersAsync();
 
-		expect(result).toContain('No answer');
-		expect(openQuestionCount()).toBe(0);
-		expect(chunks.find((c) => c.type === 'answer')).toMatchObject({
-			text: '(no answer — timed out)'
-		});
+		expect(await settledYet(pending)).toBe('pending');
+		expect(openQuestionCount()).toBe(1);
+		expect(job.parked).toBe(true);
+	});
+
+	it('carries on with the answer whenever it finally arrives', async () => {
+		vi.useFakeTimers();
+		const { job, chunks, tool } = harness();
+		const pending = tool.execute({ question: 'Which account?' });
+
+		vi.advanceTimersByTime(3 * 60 * 60 * 1000);
+		await vi.runOnlyPendingTimersAsync();
+
+		const asked = questionIn(chunks);
+		expect(answerQuestion(asked.id, 'u1', 'The joint one')).toBe(true);
+		await expect(pending).resolves.toBe('The joint one');
+		// Working again, so the watchdog applies again.
+		expect(job.parked).toBe(false);
 	});
 
 	it('settles when the run is stopped, so the loop can wind down', async () => {
@@ -156,15 +175,18 @@ describe('isolation between runs', () => {
 	});
 });
 
-/** Guards the contract the loop depends on: execute never rejects on timeout. */
+/**
+ * Guards the contract the loop depends on: execute resolves with a usable
+ * string on every path, and never rejects. A stop is the only path left now
+ * that the timeout is gone.
+ */
 describe('what the model is told', () => {
 	it('returns a usable instruction rather than throwing', async () => {
-		vi.useFakeTimers();
-		const { tool } = harness();
+		const { job, tool } = harness();
 		const pending = tool.execute({ question: 'Which account?' });
-		vi.advanceTimersByTime(ASK_TIMEOUT_MS + 1);
 
-		const text = await pending;
-		expect(text).toMatch(/without this/);
+		job.controller.abort();
+
+		await expect(pending).resolves.toMatch(/stopped/);
 	});
 });

@@ -1,0 +1,1 @@
+ALTER TABLE `usage_log` ADD `cached_prompt_tokens` integer DEFAULT 0 NOT NULL;

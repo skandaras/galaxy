@@ -37,12 +37,32 @@ export const toolOutputBudgetChars = () => num('TOOL_OUTPUT_BUDGET_CHARS', 240_0
 export const toolResultMaxChars = () => num('TOOL_RESULT_MAX_CHARS', 30_000);
 
 /**
+ * Tool calls from one model round-trip that may run at once.
+ *
+ * Only tools that declare `parallelSafe` are ever batched (see loop.ts); the
+ * cap is here because the coding tools run one throwaway container per call
+ * under the docker executor, and an unbounded batch would ask the daemon for
+ * as many containers as the model felt like naming.
+ */
+export const toolConcurrency = () => num('TOOL_CONCURRENCY', 4);
+
+/**
  * Model round-trips one coding turn may take — *not* tool calls, since a round
  * can carry several. A model that calls one tool at a time spends these fast:
  * a dozen file reads, a few edits and a test run left the old cap of 24 with
  * nothing in hand at the point it should have been committing.
  */
 export const codingMaxSteps = () => num('CODING_MAX_STEPS', 50);
+
+/**
+ * Model round-trips the explore sub-agent may take before it must answer.
+ *
+ * Deliberately small. A sub-agent earns its keep by returning an answer instead
+ * of a transcript; one that wanders for fifty steps has spent more than the
+ * reading it saved, and the honest failure is "I could not establish that in
+ * the budget I had".
+ */
+export const exploreMaxSteps = () => num('EXPLORE_MAX_STEPS', 12);
 
 /**
  * Model round-trips one chat turn may take. Six was hardcoded, which is two

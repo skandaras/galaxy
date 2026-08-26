@@ -124,13 +124,13 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		// an error, rather than being flattened into "no results".
 		tools.push(webSearchTool(searchCfg));
 	}
-	// Read before the turn starts, so it describes the *previous* attempt and
-	// stays fixed for the whole of this one.
 	const fullSystemPrompt =
-		systemPrompt +
-		bootstrapContext(opts.userId) +
-		previousRunNote(chat.id) +
-		(needsName ? nameThisChatNote() : '');
+		systemPrompt + bootstrapContext(opts.userId) + (needsName ? nameThisChatNote() : '');
+	// Read before the turn starts, so it describes the *previous* attempt and
+	// stays fixed for the whole of this one. Carried as a tail note rather than
+	// in the system message: it changes every turn, and in front of the prompt
+	// it invalidated the cacheable prefix behind it (see buildContext).
+	const priorRun = previousRunNote(chat.id);
 	const activeTools = applyToolPolicy([...tools, ...mcpLoopTools('chat')], 'chat');
 
 	void runAgentLoop({
@@ -148,7 +148,8 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 				systemPrompt: fullSystemPrompt,
 				chat: getChat(chat.id, opts.userId)!,
 				history: getMessages(chat.id),
-				supportsVision: choice.model.supportsVision
+				supportsVision: choice.model.supportsVision,
+				tail: priorRun
 			}),
 		onDone: (text, _usage, usedChoice, summary) => {
 			const saved = appendMessage(chat.id, {
