@@ -60,6 +60,22 @@ export type JobChunk =
 			/** The search itself failed, as distinct from finding nothing. */
 			failed?: boolean;
 	  }
+	// A sub-agent this run has out, and what it is doing.
+	//
+	// Re-sent with the same `id` as its status and detail change, so replay
+	// converges rather than duplicating — the same rule `step` chunks follow
+	// above. `startedAt` is server time on purpose: on replay after a reload
+	// every chunk arrives at once, so a client clock would report every
+	// sub-agent as having just begun.
+	| {
+			type: 'agent';
+			id: string;
+			kind: 'explore';
+			label: string;
+			status: 'running' | 'ok' | 'error';
+			detail?: string;
+			startedAt: number;
+	  }
 	// The agent is waiting on a person. `answer` closes the question it names —
 	// which matters on replay, since a reconnecting client would otherwise
 	// re-open a question that has already been dealt with.

@@ -260,3 +260,84 @@ describe('how it is offered', () => {
 		expect(exploreToolDef.description).toMatch(/outside your context/);
 	});
 });
+
+/** The chunks the Code page's agent pane is built from. */
+describe('announcing itself to the parent run', () => {
+	const agentChunks = (chunks: JobChunk[]) =>
+		chunks.filter((c) => c.type === 'agent') as Extract<JobChunk, { type: 'agent' }>[];
+
+	it('opens with a running row carrying a server start time', async () => {
+		script = { calls: 0, neverStops: false, answer: 'Found it.' };
+		const { chunks, tool } = harness();
+		const before = Date.now();
+		await tool.execute({ question: 'Where is a wired up?' });
+		const first = agentChunks(chunks)[0];
+		expect(first).toMatchObject({ kind: 'explore', status: 'running' });
+		expect(first.label).toBe('Where is a wired up?');
+		// Server time, because on replay after a reload every chunk arrives at
+		// once and a client clock would call every sub-agent brand new.
+		expect(first.startedAt).toBeGreaterThanOrEqual(before);
+	});
+
+	it('keeps one id throughout, so a replay converges', async () => {
+		script = { calls: 0, neverStops: false, answer: 'Found it.' };
+		const { chunks, tool } = harness();
+		await tool.execute({ question: 'Where?' });
+		const ids = new Set(agentChunks(chunks).map((c) => c.id));
+		expect(ids.size).toBe(1);
+		// And it really did update in place rather than announcing once.
+		expect(agentChunks(chunks).length).toBeGreaterThan(1);
+	});
+
+	it('reports what it is doing as it works', async () => {
+		script = { calls: 0, neverStops: false, answer: 'Found it.' };
+		const { chunks, tool } = harness();
+		await tool.execute({ question: 'Where?' });
+		expect(agentChunks(chunks).some((c) => c.detail?.includes('read_file'))).toBe(true);
+	});
+
+	it('closes ok when it answered', async () => {
+		script = { calls: 0, neverStops: false, answer: 'Found it.' };
+		const { chunks, tool } = harness();
+		await tool.execute({ question: 'Where?' });
+		expect(agentChunks(chunks).at(-1)?.status).toBe('ok');
+	});
+
+	it('closes error when it could not', async () => {
+		script = { calls: 0, neverStops: false, answer: '', fail: true };
+		const { chunks, tool } = harness();
+		await tool.execute({ question: 'Where?' }).catch(() => {});
+		expect(agentChunks(chunks).at(-1)?.status).toBe('error');
+	});
+
+	it('caps a label that is really a paragraph', async () => {
+		// Model-authored and unbounded, and this rides the wire on every update.
+		script = { calls: 0, neverStops: false, answer: 'Found it.' };
+		const { chunks, tool } = harness();
+		await tool.execute({ question: 'x'.repeat(500) });
+		expect(agentChunks(chunks)[0].label.length).toBe(140);
+	});
+});
+
+describe('several at once', () => {
+	it('is parallel-safe, so a turn can dispatch a few', () => {
+		// Read-only, no shared state, its own job each time — and it is what makes
+		// "one main agent and three sub-agents" a thing to look at.
+		const { tool } = harness();
+		expect(tool.parallelSafe).toBe(true);
+	});
+
+	it('gives each dispatch its own id and its own child chat', async () => {
+		script = { calls: 0, neverStops: false, answer: 'Found it.' };
+		const { parentJob, chunks } = harness();
+		const ctx = context(parentJob);
+		const [a, b] = [exploreTool(ctx), exploreTool(ctx)];
+		await Promise.all([a.execute({ question: 'One?' }), b.execute({ question: 'Two?' })]);
+		const ids = new Set(
+			(chunks.filter((c) => c.type === 'agent') as Extract<JobChunk, { type: 'agent' }>[]).map(
+				(c) => c.id
+			)
+		);
+		expect(ids.size).toBe(2);
+	});
+});

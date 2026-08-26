@@ -119,6 +119,21 @@
 	let prUrl = $state<string | null>(null);
 	let prBusy = $state(false);
 
+	interface AgentRow {
+		id: string;
+		kind: string;
+		label: string;
+		status: 'running' | 'ok' | 'error';
+		detail?: string;
+		startedAt: number;
+	}
+	/** Sub-agents this run has out, keyed by id so an update converges. */
+	let subAgents = $state<AgentRow[]>([]);
+	/** Server time the running turn began; null when nothing is running. */
+	let runStartedAt = $state<number | null>(null);
+	/** Ticks the elapsed clocks once a second while anything is running. */
+	let now = $state(Date.now());
+
 	let selectedModelId = $state('');
 	let webSearch = $state(true);
 	/** Task default, used when a session has no remembered model. */
@@ -216,6 +231,10 @@
 		diff = null;
 		openFiles = new Set();
 		prUrl = null;
+		// The pane is session-scoped: nothing from the session being left may
+		// survive into the one being opened.
+		subAgents = [];
+		runStartedAt = null;
 		const res = await fetch(`/api/code/sessions/${chatId}`);
 		if (!res.ok) return;
 		const data = await res.json();
@@ -229,7 +248,7 @@
 		loadDraft(draftKey('code', chatId));
 		// Open on the newest message rather than the top of the history.
 		void scroll.toBottom('auto');
-		if (data.runningJobId) attach(data.runningJobId);
+		if (data.runningJobId) attach(data.runningJobId, 0, data.runningSince);
 	}
 
 	async function createSession() {
@@ -331,8 +350,12 @@
 		await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST' }).catch(() => {});
 	}
 
-	/** `carriedRecoveries` keeps the reconnect budget across a reattach. */
-	function attach(jobId: string, carriedRecoveries = 0) {
+	/**
+	 * `carriedRecoveries` keeps the reconnect budget across a reattach.
+	 * `startedAt` is the server's idea of when the run began — a reattach after
+	 * a reload must not report the agent as having just started.
+	 */
+	function attach(jobId: string, carriedRecoveries = 0, startedAt?: number | null) {
 		closeStream();
 		// Clears the reconnecting notice; a real failure sets its own.
 		errorBanner = null;
@@ -343,6 +366,11 @@
 		streamText = '';
 		streamModel = '';
 		timeline = [];
+		// Refilled from the replayed chunks; a stale row from a previous attach
+		// would otherwise sit there claiming to be running.
+		subAgents = [];
+		runStartedAt = startedAt ?? Date.now();
+		now = Date.now();
 		lastStopReason = null;
 		question = null;
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
@@ -364,6 +392,22 @@
 				// clearing it here threw that work away.
 				if (chunk.type === 'step' && chunk.consumedText) streamText = '';
 				timeline = applyChunk(timeline, chunk);
+			} else if (chunk.type === 'agent') {
+				// Same id on every update, so replay after a reconnect converges
+				// rather than stacking one row per change.
+				const row: AgentRow = {
+					id: chunk.id,
+					kind: chunk.kind,
+					label: chunk.label,
+					status: chunk.status,
+					detail: chunk.detail,
+					startedAt: chunk.startedAt
+				};
+				const at = subAgents.findIndex((a) => a.id === row.id);
+				subAgents =
+					at === -1
+						? [...subAgents, row]
+						: subAgents.map((a, i) => (i === at ? { ...a, ...row } : a));
 			} else if (chunk.type === 'question') {
 				question = { id: chunk.id, prompt: chunk.prompt, options: chunk.options ?? [] };
 			} else if (chunk.type === 'answer') {
@@ -413,7 +457,7 @@
 			recoveries++;
 			errorBanner = `Reconnecting to this run…`;
 			await new Promise((resolve) => setTimeout(resolve, wait));
-			attach(data.runningJobId, recoveries);
+			attach(data.runningJobId, recoveries, data.runningSince);
 			return;
 		}
 		if (data.runningJobId) {
@@ -496,6 +540,8 @@
 		question = null;
 		streamText = '';
 		timeline = [];
+		subAgents = [];
+		runStartedAt = null;
 		closeStream();
 	}
 
@@ -620,6 +666,54 @@
 		void send();
 	}
 
+	// One interval for the whole pane, and only while something is running.
+	$effect(() => {
+		if (!streaming) return;
+		const timer = setInterval(() => (now = Date.now()), 1000);
+		return () => clearInterval(timer);
+	});
+
+	/**
+	 * "1m 12s", rolling to "1h 04m" — always two segments, so the column keeps
+	 * its width and a row does not shuffle sideways once a second.
+	 */
+	function elapsed(from: number): string {
+		const total = Math.max(0, Math.round((now - from) / 1000));
+		if (total < 3600) {
+			return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
+		}
+		const hours = Math.floor(total / 3600);
+		return `${hours}h ${String(Math.floor((total % 3600) / 60)).padStart(2, '0')}m`;
+	}
+
+	/** Only the sub-agents still working; a finished one is history, not status. */
+	const liveAgents = $derived(subAgents.filter((a) => a.status === 'running'));
+	/** Defensive: toolConcurrency caps dispatches at 4, but not from in here. */
+	const MAX_AGENT_ROWS = 4;
+	const shownAgents = $derived(liveAgents.slice(0, MAX_AGENT_ROWS));
+	const hiddenAgents = $derived(liveAgents.length - shownAgents.length);
+	const agentCount = $derived(streaming ? 1 + liveAgents.length : 0);
+
+	/**
+	 * One line saying what the main agent is doing, from what the run is already
+	 * reporting: the model's own narration became this step's label back in the
+	 * loop (see stepLabel), so there is nothing extra to generate here.
+	 */
+	const mainActivity = $derived.by(() => {
+		if (question) return 'Waiting on your answer';
+		const step = timeline.findLast((i) => i.kind === 'step');
+		if (step?.kind === 'step') {
+			if (step.label) return step.label;
+			const tool = step.tools.at(-1);
+			if (tool) return tool.detail ? `${tool.name} ${tool.detail}` : tool.name;
+		}
+		const stage = timeline.findLast((i) => i.kind === 'stage');
+		if (stage?.kind === 'stage') {
+			return stage.detail ? `${stage.name} · ${stage.detail}` : stage.name;
+		}
+		return streamText ? 'Writing the reply' : 'Starting up';
+	});
+
 	const lastAssistantExists = $derived(messages.some((m) => m.role === 'assistant'));
 	/** Mirrors the guard at the top of send(), so the button can't look live and do nothing. */
 	const canSend = $derived(
@@ -703,20 +797,54 @@
 			</div>
 		{:else if current}
 			<header class="session-head">
-				<span class="repo">{current.repoName}</span>
-				<span class="branch">{current.workBranch}</span>
-				<span class="mode-badge {current.mode}">{current.mode}</span>
-				{#if current.mode === 'implement'}
-					<button class="chip" onclick={() => setMode('plan')}>back to plan</button>
-				{/if}
-				<button class="chip" onclick={loadDiff}>{diff === null ? 'view diff' : 'hide diff'}</button>
-				{#if prUrl}
-					<a class="chip pr-link" href={prUrl} target="_blank" rel="noreferrer">pull request ↗</a>
-				{:else}
-					<button class="chip" disabled={prBusy} onclick={openPr}>
-						{prBusy ? 'opening…' : 'open pull request'}
-					</button>
-				{/if}
+				<div class="head-main">
+					<span class="repo">{current.repoName}</span>
+					<span class="branch">{current.workBranch}</span>
+					<span class="mode-badge {current.mode}">{current.mode}</span>
+					{#if current.mode === 'implement'}
+						<button class="chip" onclick={() => setMode('plan')}>back to plan</button>
+					{/if}
+					<button class="chip" onclick={loadDiff}>{diff === null ? 'view diff' : 'hide diff'}</button>
+					{#if prUrl}
+						<a class="chip pr-link" href={prUrl} target="_blank" rel="noreferrer">pull request ↗</a>
+					{:else}
+						<button class="chip" disabled={prBusy} onclick={openPr}>
+							{prBusy ? 'opening…' : 'open pull request'}
+						</button>
+					{/if}
+				</div>
+
+				<!-- What this session has working right now. Session-scoped on purpose:
+				     another session's run is not this session's business. -->
+				<aside class="agents" aria-label="Agents working on this session">
+					{#if !streaming}
+						<p class="agents-idle">No agent running</p>
+					{:else}
+						<!-- The count only. The coding row below carries the run's age,
+						     and showing the same number twice reads as two facts. -->
+						<p class="agents-count">{agentCount} agent{agentCount === 1 ? '' : 's'}</p>
+						<div class="agent-row">
+							<span class="dot" class:parked={!!question}></span>
+							<span class="agent-name">coding</span>
+							{#if runStartedAt !== null}<span class="age">{elapsed(runStartedAt)}</span>{/if}
+						</div>
+						<p class="agent-doing" title={mainActivity}>{mainActivity}</p>
+						{#each shownAgents as agent (agent.id)}
+							<div class="agent-row sub">
+								<span class="branch-mark">└</span>
+								<span class="dot"></span>
+								<span class="agent-name" title={agent.label}>{agent.kind}</span>
+								<span class="age">{elapsed(agent.startedAt)}</span>
+							</div>
+							<p class="agent-doing sub" title={agent.detail || agent.label}>
+								{agent.detail || agent.label}
+							</p>
+						{/each}
+						{#if hiddenAgents > 0}
+							<p class="agent-doing sub">+{hiddenAgents} more</p>
+						{/if}
+					{/if}
+				</aside>
 			</header>
 
 			{#if diff !== null}
@@ -1068,11 +1196,90 @@
 
 	.session-head {
 		display: flex;
-		align-items: center;
-		gap: 0.6rem;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 0.9rem;
 		padding: 0.55rem 1rem;
 		border-bottom: 1px solid var(--border);
+	}
+	.head-main {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
 		flex-wrap: wrap;
+		min-width: 0;
+	}
+
+	/* The agent readout. Every row is one line with an ellipsis and the full
+	   text on `title`: a model's narration is capped at 100 characters server
+	   side, which is still three lines in a column this narrow, and a wrapping
+	   row would grow the header under the thread. */
+	.agents {
+		flex: 0 0 auto;
+		width: clamp(13rem, 26%, 20rem);
+		min-width: 0;
+		border-left: 1px solid var(--border);
+		padding-left: 0.7rem;
+		font-size: var(--text-sm);
+		line-height: 1.35;
+	}
+	.agents p {
+		margin: 0;
+	}
+	.agents-idle {
+		color: var(--fg-dim);
+	}
+	.agents-count {
+		color: var(--fg-dim);
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
+		font-size: var(--text-xs);
+		margin-bottom: 0.2rem;
+	}
+	.agent-row {
+		display: flex;
+		align-items: baseline;
+		gap: 0.35rem;
+	}
+	.agent-row.sub {
+		padding-left: 0.5rem;
+	}
+	.branch-mark {
+		color: var(--fg-dim);
+	}
+	.dot {
+		flex: 0 0 auto;
+		width: 0.45rem;
+		height: 0.45rem;
+		border-radius: 50%;
+		background: var(--accent);
+		animation: pulse 1.4s ease-in-out infinite;
+	}
+	.dot.parked {
+		background: var(--danger);
+	}
+	.agent-name {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.age {
+		flex: 0 0 auto;
+		color: var(--fg-dim);
+		/* Fixed-width digits, so a row does not shuffle sideways every second. */
+		font-variant-numeric: tabular-nums;
+	}
+	.agent-doing {
+		color: var(--fg-dim);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		padding-left: 0.8rem;
+	}
+	.agent-doing.sub {
+		padding-left: 1.75rem;
 	}
 	.repo {
 		font-size: var(--text-md);
@@ -1256,6 +1463,12 @@
 			opacity: 0.35;
 		}
 	}
+	@media (prefers-reduced-motion: reduce) {
+		.thinking,
+		.dot {
+			animation: none;
+		}
+	}
 	/* What the agent did, kept with the reply and folded away. Scrolled-back
 	   history used to show the prose and no evidence at all. */
 	.past-run {
@@ -1427,6 +1640,20 @@
 	}
 
 	@media (max-width: 720px) {
+		/* One column: the pane drops full width under the chips rather than
+		   squeezing them into half a phone. */
+		.session-head {
+			flex-direction: column;
+			align-items: stretch;
+			gap: 0.5rem;
+		}
+		.agents {
+			width: auto;
+			border-left: none;
+			border-top: 1px solid var(--border);
+			padding-left: 0;
+			padding-top: 0.45rem;
+		}
 		.list-toggle {
 			display: block;
 			position: fixed;
