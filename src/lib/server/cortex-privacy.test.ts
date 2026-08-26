@@ -102,8 +102,14 @@ describe('traversal across an ownership boundary', () => {
 	});
 
 	it('will not use a hidden node as a conduit to a visible one', () => {
-		// The test that actually proves the edge bound, rather than the result
+		// The test that proves reachability is bounded, rather than the result
 		// filter standing in for it.
+		//
+		// It asserts the *guarantee*, not one mechanism: two independent guards
+		// now hold it — the edge query in `visibleEdges` and the visible-node
+		// lookup in the traversal — so removing either one alone leaves this
+		// green. That is defence in depth working as intended, and it is worth
+		// knowing when reading a passing run: only removing both trips this.
 		//
 		// Ana → bridge → [Ben's private node] → a second shared node. Every node
 		// at the far end is one Ana may see, so dropping invisible rows from the

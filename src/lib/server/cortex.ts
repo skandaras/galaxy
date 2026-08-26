@@ -491,6 +491,12 @@ export function activate(opts: {
 		for (const id of frontier) {
 			const source = activation.get(id) ?? 0;
 			for (const edge of out.get(id) ?? []) {
+				// The second of two guards on the same rule, and deliberately so.
+				// `byId` holds only what this reader may see, so a node outside that
+				// is skipped here even if an edge somehow reached it — `visibleEdges`
+				// already bounds the edge set, and a privacy boundary is worth
+				// holding in both the query and the walk. Either one alone is
+				// sufficient; both means a mistake in one is not a disclosure.
 				const target = byId.get(edge.to);
 				if (!target) continue;
 				const boost =
