@@ -26,6 +26,7 @@ import { previousRunNote, runHistoryTool } from './run-history';
 import { askUserTool } from './ask-user';
 import { attachmentTools } from './tools/attachments';
 import { boardTools } from './tools/boards';
+import { cortexTools } from './tools/cortex';
 import { fetchUrlTool } from './tools/fetch-url';
 import { bootstrapContext, knowledgeTools } from './tools/knowledge';
 import { mcpLoopTools } from './tools/mcp';
@@ -101,6 +102,9 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		runHistoryTool(chat.id),
 		// Scoped to this user's boards and anything shared with them.
 		...boardTools(opts.userId),
+		// Likewise scoped: their own concepts plus anything shared. Activation
+		// never crosses into a lattice they cannot see.
+		...cortexTools(opts.userId),
 		// The turn parks on the promise this returns until the browser answers.
 		askUserTool(job)
 	];

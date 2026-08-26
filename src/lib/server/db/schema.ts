@@ -998,3 +998,156 @@ export const alignmentSyntheses = sqliteTable(
 	},
 	(t) => [index('alignment_syntheses_user_created_idx').on(t.userId, t.createdAt)]
 );
+
+// --- cortex -----------------------------------------------------------------
+//
+// The knowledge lattice: concepts as nodes, weighted associations as edges,
+// retrieval by traversal rather than lookup. See docs/CORTEX.md for the design
+// and the reasoning behind it.
+//
+// Like the Library and memory, this is a store whose contents reach an agent's
+// system prompt, so every row carries an owner and every read filters by one.
+// The rule that makes the mesh safe as well as the rows: an association is
+// visible only when *both* its endpoints are, and activation never traverses
+// into a node the reader cannot see — otherwise a shared node becomes a bridge
+// between two people's private ones.
+
+export const cortexNodes = sqliteTable(
+	'cortex_nodes',
+	{
+		id: text('id').primaryKey(),
+		/**
+		 * Owner. Nullable for the same expand-migrate-contract reason as
+		 * memory_items: the column can be added without breaking a rollback, and
+		 * every read filters by owner, so a null row is simply invisible.
+		 */
+		ownerId: text('owner_id'),
+		/**
+		 * 'shared' reaches every user's traversals; 'personal' only the owner's.
+		 * New nodes start personal — the opposite of the Library's default,
+		 * because a concept in someone's lattice is a more personal thing than a
+		 * document they wrote to be read.
+		 */
+		visibility: text('visibility', { enum: ['personal', 'shared'] })
+			.notNull()
+			.default('personal'),
+		name: text('name').notNull(),
+		description: text('description').notNull().default(''),
+		/** JSON array. Cosmetic grouping and filtering, never access control. */
+		modalities: text('modalities', { mode: 'json' }).$type<string[]>(),
+		/**
+		 * JSON array of circuit ids. A label for grouping and for the map's
+		 * cluster titles — deliberately *not* a routing key. Seeds come from FTS
+		 * so that circuits can stay curated (or later, derived) without
+		 * retrieval depending on which they are.
+		 */
+		circuits: text('circuits', { mode: 'json' }).$type<string[]>(),
+		/** 0.0–1.0. How readily this node earns a place in a result. */
+		activationPriority: real('activation_priority').notNull().default(0.5),
+		/**
+		 * Bridges otherwise-separate areas. Earns a boost during traversal from
+		 * P2 — the whole claim of the design is that these are where the useful
+		 * cross-domain context lives, and the map is how you check that it is true.
+		 */
+		isConvergence: integer('is_convergence', { mode: 'boolean' }).notNull().default(false),
+		/**
+		 * Precomputed map coordinates, written by the layout sweep and never at
+		 * request time. Force layout is the expensive half of any graph view, and
+		 * a stable position is also what lets the chart become spatial memory
+		 * rather than a fresh scatter of dots on every visit.
+		 */
+		x: real('x'),
+		y: real('y'),
+		z: real('z'),
+		lastVerifiedAt: integer('last_verified_at', { mode: 'timestamp_ms' }),
+		lastActivatedAt: integer('last_activated_at', { mode: 'timestamp_ms' }),
+		activationCount: integer('activation_count').notNull().default(0),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	// Every read is "what may this user see", exactly as the Library does it.
+	(t) => [index('cortex_nodes_owner_idx').on(t.ownerId, t.visibility)]
+);
+
+export const cortexAssociations = sqliteTable(
+	'cortex_associations',
+	{
+		sourceId: text('source_id')
+			.notNull()
+			.references(() => cortexNodes.id),
+		targetId: text('target_id')
+			.notNull()
+			.references(() => cortexNodes.id),
+		/** 0.0–1.0. How strongly the two co-activate. */
+		weight: real('weight').notNull().default(0.5),
+		/** JSON array. Which conversational domains make this edge relevant. */
+		contextTags: text('context_tags', { mode: 'json' }).$type<string[]>(),
+		/**
+		 * Why they connect, in a sentence. A closed set of edge types was
+		 * considered and rejected: the relationships worth recording here don't
+		 * fall into a small vocabulary, and a wrong label is worse than prose.
+		 */
+		description: text('description').notNull().default(''),
+		/**
+		 * Whether activation flows both ways equally. One concept can strongly
+		 * imply another while the reverse is weak — the second is touched by many
+		 * things, the first is specific.
+		 */
+		directionality: text('directionality', { enum: ['symmetric', 'asymmetric'] })
+			.notNull()
+			.default('symmetric'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		lastTraversedAt: integer('last_traversed_at', { mode: 'timestamp_ms' }),
+		traversalCount: integer('traversal_count').notNull().default(0)
+	},
+	(t) => [
+		primaryKey({ columns: [t.sourceId, t.targetId] }),
+		// The primary key serves outbound traversal only. Symmetric spreading
+		// activation walks inbound too, and without this it table-scans every hop.
+		index('cortex_assoc_target_idx').on(t.targetId)
+	]
+);
+
+export const cortexCircuits = sqliteTable(
+	'cortex_circuits',
+	{
+		id: text('id').primaryKey(),
+		ownerId: text('owner_id'),
+		name: text('name').notNull(),
+		description: text('description').notNull().default(''),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [index('cortex_circuits_owner_idx').on(t.ownerId)]
+);
+
+/**
+ * Every mutation of the lattice, whoever made it.
+ *
+ * Here from the first phase rather than added alongside the grooming agent,
+ * because writes exist from the first phase and the first one should already be
+ * auditable. When grooming lands it classifies its changes as uncontroversial,
+ * low or high risk; the first two are applied and land here, and `before` is
+ * what makes a flagged low-risk change reversible rather than merely noted.
+ */
+export const cortexChangeLog = sqliteTable(
+	'cortex_change_log',
+	{
+		id: text('id').primaryKey(),
+		nodeId: text('node_id'),
+		actor: text('actor', { enum: ['user', 'agent', 'groom'] })
+			.notNull()
+			.default('user'),
+		/** Who did it — the acting user, or the user an agent was acting for. */
+		userId: text('user_id'),
+		/** Short verb: created, updated, connected, disconnected, merged, deleted. */
+		event: text('event').notNull(),
+		detail: text('detail').notNull().default(''),
+		/** Prior state for a reversible change. Null when there is nothing to undo. */
+		before: text('before', { mode: 'json' }),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [
+		index('cortex_change_log_node_created_idx').on(t.nodeId, t.createdAt),
+		index('cortex_change_log_user_created_idx').on(t.userId, t.createdAt)
+	]
+);

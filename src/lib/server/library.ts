@@ -195,8 +195,13 @@ export function searchDocs(
 		.map((r) => ({ ...metas.get(r.id)!, match: r.match }));
 }
 
-/** Quote terms so user input can't break FTS5 query syntax. */
-function ftsQuery(q: string): string {
+/**
+ * Quote terms so user input can't break FTS5 query syntax.
+ *
+ * Exported because Cortex seeds its traversals from an FTS table too, and this
+ * hazard is worth solving once rather than in every module that opens one.
+ */
+export function ftsQuery(q: string): string {
 	return q
 		.split(/\s+/)
 		.filter(Boolean)

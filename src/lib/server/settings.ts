@@ -494,3 +494,39 @@ export interface BoardSettings {
 }
 
 export const DEFAULT_BOARDS: BoardSettings = { maxBoardsPerUser: 20, agentWrites: true };
+
+export interface CortexSettings {
+	/**
+	 * Whether agents may write to the lattice, or only read it.
+	 *
+	 * Off, unlike boards. An agent free to mint nodes produces near-duplicates —
+	 * "music discovery", "discovering music", "music curation" — with
+	 * confident-looking weights, and the grooming agent that merges them does not
+	 * exist yet. Until it does, the lattice is worth shaping by hand, which is
+	 * also when shaping it matters most. Flip this on when grooming lands.
+	 */
+	agentWrites: boolean;
+	/**
+	 * Whether this instance may look for the same concept in two people's
+	 * lattices and offer to note the overlap.
+	 *
+	 * Off by default and opted into per user, because even the *proposal*
+	 * discloses to one person that another holds a node by a similar name. See
+	 * docs/CORTEX.md — kinship is a note, never an edge, and activation never
+	 * traverses it.
+	 */
+	kinship: boolean;
+	/**
+	 * Nodes one person may own. Not a scaling limit — SQLite is nowhere near
+	 * troubled at this size — but a lattice past a few thousand concepts has
+	 * stopped being a memory and started being a landfill, and the cap is where
+	 * that conversation happens.
+	 */
+	maxNodesPerUser: number;
+}
+
+export const DEFAULT_CORTEX: CortexSettings = {
+	agentWrites: false,
+	kinship: false,
+	maxNodesPerUser: 2000
+};

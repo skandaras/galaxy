@@ -24,6 +24,9 @@ const EXPECTED = [
 	'library_search',
 	'library_read',
 	'library_write',
+	// cortex
+	'cortex_query',
+	'cortex_write',
 	// attachments
 	'list_attachments',
 	'read_attachment',

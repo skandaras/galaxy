@@ -8,6 +8,7 @@ import {
 	searchDocs
 } from '$lib/server/library';
 import { toolResultMaxChars } from '../limits';
+import { cortexDigest } from '$lib/server/cortex';
 import { memoryDigest } from '../memory';
 import { boardsDigest } from './boards';
 
@@ -28,7 +29,11 @@ export function bootstrapContext(userId: string): string {
 		'[Task boards — yours plus any shared with you. Read them with board_read, one card in full with card_read]',
 		boardsDigest(userId),
 		// Only this user's memories — never another user's observations.
-		memoryDigest(userId)
+		memoryDigest(userId),
+		// One line: that a lattice exists and how big it is. Its contents load
+		// through cortex_query, for the same reason the Library index carries
+		// titles rather than snippets.
+		cortexDigest(userId)
 	].join('\n');
 }
 
