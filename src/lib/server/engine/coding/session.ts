@@ -41,6 +41,7 @@ import { webSearchConfigured, webSearchTool } from '../tools/web-search';
 import { askUserTool } from '../ask-user';
 import { attachmentTools } from '../tools/attachments';
 import { boardTools } from '../tools/boards';
+import { cortexTools } from '../tools/cortex';
 import { fetchUrlTool } from '../tools/fetch-url';
 import { bootstrapContext, knowledgeTools } from '../tools/knowledge';
 import { mcpLoopTools } from '../tools/mcp';
@@ -301,6 +302,9 @@ export function startCodingTurn(opts: {
 				// A coding task often is a card; reading the board is how the agent
 				// finds out what it was actually asked for.
 				...boardTools(opts.userId),
+				// Why a thing is built the way it is outlives any one session, and
+				// that is the sort of thing the lattice holds.
+				...cortexTools(opts.userId),
 				askUserTool(job),
 				...(opts.webSearch && webSearchConfigured(searchCfg)
 					? [webSearchTool(searchCfg, { scope: 'leg' })]

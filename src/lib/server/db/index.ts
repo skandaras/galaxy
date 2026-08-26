@@ -42,4 +42,11 @@ export function runMigrations() {
 	sqlite.exec(
 		`CREATE VIRTUAL TABLE IF NOT EXISTS library_fts USING fts5(id UNINDEXED, title, body)`
 	);
+	// Cortex seeds its traversals from here rather than from a hand-maintained
+	// keyword map: a map has to be written by someone, and when its coverage
+	// falls behind the lattice the failure is silent — queries stop reaching the
+	// right region and nothing says so.
+	sqlite.exec(
+		`CREATE VIRTUAL TABLE IF NOT EXISTS cortex_fts USING fts5(id UNINDEXED, name, description)`
+	);
 }

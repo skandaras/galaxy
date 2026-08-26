@@ -1,8 +1,9 @@
 # Cortex — the knowledge lattice
 
-> Status: **design, not built.** This document is the corrected architecture
-> after review. Nothing in `src/` implements it yet. Where it names a file, that
-> file is where the code should go, not where it is.
+> Status: **Phase 1 shipped.** The scoped store, FTS seeding, spreading
+> activation, two tools and the privacy tests are in `src/lib/server/cortex.ts`,
+> `src/lib/server/engine/tools/cortex.ts` and their colocated tests. Phases 2–4
+> below are still design. Agent writes ship **off** — see "Writes need a gate".
 
 Memory, the Library and Boards each hold something Galaxy knows, and none of
 them hold how those things relate. Memory is a flat list of facts. The Library
@@ -144,10 +145,15 @@ export const cortexCircuits = sqliteTable('cortex_circuits', {
 });
 ```
 
-`cortex_activation_log` and `cortex_index_cache` from the original design are
-**deferred**. The log has no consumer until learning exists (see "Learning"),
-and the index cache has no purpose once seeding goes through FTS5 rather than a
-maintained keyword map.
+`cortex_change_log` ships alongside them — see "Grooming" below. Writes exist
+from the first phase, so the first one should already be auditable.
+
+Three tables from the original design do **not** ship yet.
+`cortex_activation_log` has no consumer until learning exists, and
+`cortex_index_cache` has no purpose at all once seeding goes through FTS5
+rather than a maintained keyword map. `cortex_proposals` and `cortex_kinship`
+arrive with the grooming agent: adding a table later is a cheap additive
+migration, and shipping dead ones now is worse than not shipping them.
 
 ### Full-text index
 
@@ -160,8 +166,9 @@ there:
 CREATE VIRTUAL TABLE IF NOT EXISTS cortex_fts USING fts5(id UNINDEXED, name, description)
 ```
 
-Reuse `ftsQuery()` from `src/lib/server/library.ts` — it quotes terms so user
-input cannot break FTS5 syntax, which is a real hazard and already solved.
+`ftsQuery()` is exported from `src/lib/server/library.ts` and reused rather than
+re-derived — it quotes terms so user input cannot break FTS5 syntax, a real
+hazard worth solving once rather than in every module that opens an index.
 
 ---
 
@@ -428,10 +435,12 @@ rather than the default, and off by default on phones and under reduced motion.
 
 ## Phases
 
-**P1 — Foundation.** Drizzle tables with owner and visibility, generated
-migration, `cortex_fts`, the store in `src/lib/server/cortex.ts`, two tools
-registered in the catalogue and emitting events, one bootstrap line,
-`cortex-privacy.test.ts`, YAML export.
+**P1 — Foundation. Shipped.** Drizzle tables with owner and visibility
+(`cortex_nodes`, `cortex_associations`, `cortex_circuits`, `cortex_change_log`),
+generated migration, `cortex_fts`, the store in `src/lib/server/cortex.ts`, two
+tools registered in the catalogue and reporting counts to the Observatory, one
+bootstrap line, `cortex.test.ts` and `cortex-privacy.test.ts`, JSON export.
+Agent writes ship off.
 
 **P2 — Retrieval and sight.** The eval fixture first, then spreading activation
 tuned against it: contextual gating, convergence boost, re-entrant iterations.
@@ -453,16 +462,83 @@ round-trip. Tier-2 3D map. Expanded node set.
 
 ---
 
-## Open questions
+## Kinship — overlap across an ownership boundary
 
-1. **Edges across an ownership boundary.** The rule above (visible only when
-   both endpoints are) is the safe default, but it means a shared node cannot
-   carry a connection between two people's private ones. Is that right, or
-   should shared nodes be able to hold edges that each owner sees only their
-   own half of?
-2. **Deduplication.** Name resolution on write catches the obvious cases. What
-   catches "Music discovery" versus "Discovering new music" — a similarity
-   check, a periodic review queue, or accepting the drift and merging by hand?
-3. **The memory boundary.** The split above is clean in principle. In practice,
-   should the memory job be able to *propose* nodes from what it observes, or
-   does that couple two stores that are better kept independent?
+The default holds: an association is visible only when both endpoints are, and
+activation never traverses into a node the reader cannot see. `cortex.test.ts`
+and `cortex-privacy.test.ts` enforce it, including the case that actually
+matters — a hidden node used as a *conduit* between two visible ones, where
+filtering the result set is not enough and only the edge bound saves you.
+
+On top of that, the grooming agent may record **kinship**: a note on two nodes
+with different owners that the same concept lives in both lattices, *without*
+connecting them. It draws in the positive overlaps rather than exposing the
+gaps.
+
+What makes it safe is that **kinship carries no weight and activation never
+traverses it.** It is an annotation, not an edge. Nothing can flow from one
+person's lattice into another's, which is the property the tests above defend
+and the one kinship must not quietly undo.
+
+The consent model, since two people are involved:
+
+- Per-user `cortex.kinship` setting, **default off**. Only nodes whose owner
+  opted in are ever eligible.
+- Candidate pairs are found by a **deterministic SQL/FTS pass**. No agent reads
+  anything to produce the shortlist.
+- Within that shortlist the agent **does see both descriptions**. Judging a
+  match on names alone would mean confident, wrong merges, and a little
+  disclosure inside an already-narrow, opted-in set buys a lot of accuracy.
+- A kinship link is **always high risk**: it needs both node owners to approve
+  before either of them sees it.
+
+One rule falls out of this and applies to the whole module: **node names and
+descriptions never reach an Observatory event detail.** The Observatory is
+shared with admins. `engine/alignment.ts` already holds itself to exactly this
+("no quoted evidence ever reaches an event detail"), and
+`cortex-privacy.test.ts` asserts the `report(...)` payload carries counts only.
+
+## Grooming — risk bands, a backlog and a full log
+
+The groomer classifies every change it wants to make before making it:
+
+| Band | Behaviour | Examples |
+|---|---|---|
+| **Uncontroversial** | Actioned, logged | A typo in a name, dropping an edge whose endpoint is gone, touching `lastVerifiedAt` |
+| **Low risk** | Actioned, logged **and** flagged for review, reversible from the log | Merging near-identical names within one owner, small weight adjustments, adding a circuit label |
+| **High risk** | Never actioned — waits for the node owner | Anything crossing an ownership boundary (kinship, always), deletions, merging nodes with genuinely different descriptions, visibility changes |
+
+Two supporting structures, both with a precedent in this repo:
+
+- **Backlog** — `cortex_proposals`, modelled on `ux_ideas`: `status`
+  open/actioned/discarded plus a `fingerprint`, so a decision is replayed to
+  later runs and nothing is proposed twice.
+- **Change log** — `cortex_change_log`, modelled on `card_log`. **This one
+  ships in P1**, because writes exist in P1 and the first one should already be
+  auditable. Every mutation lands here, uncontroversial ones included, so the
+  automatic changes can be sense-checked as easily as the flagged ones.
+  `before` holds the prior state, which is what makes a flagged low-risk change
+  reversible rather than merely noted.
+
+Hard rule regardless of band: **the groomer never writes across an ownership
+boundary.** A cross-owner finding is always a proposal.
+
+It may **read** the acting owner's `memory_items` as input when proposing
+nodes, and never writes to memory. That keeps the coupling one-directional and
+in a single place — the same shape as the UX audit reading telemetry.
+
+## Still open
+
+1. **Dedup beyond name resolution.** `cortex_write` resolves an exact name
+   before creating, which catches "Tide pools" vs "tide POOLS". What catches
+   "Music discovery" vs "Discovering new music"? Probably an FTS similarity
+   pass in the groomer, banded low risk — but the threshold is a guess until
+   the eval exists.
+2. **Whether kinship should ever become an edge.** If two people repeatedly
+   work in the same concept, a note may stop being enough. Any answer has to
+   survive the conduit test above, which is a high bar and probably the right
+   one.
+3. **When `agentWrites` flips on.** Currently gated on the groomer existing.
+   Whether that is the right trigger, or whether it wants a period of
+   supervised writing first, is worth revisiting once P2's map makes the
+   duplicate rate visible.
