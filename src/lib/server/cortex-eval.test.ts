@@ -49,9 +49,16 @@ interface Score {
 	precisionAtK: number;
 }
 
-function score(): Score[] {
+interface EvalOpts {
+	gating?: boolean;
+	convergenceBoost?: boolean;
+}
+
+function score(opts: EvalOpts = {}): Score[] {
 	return EVAL_QUERIES.map((q) => {
-		const returned = activate({ userId: USER, query: q.query }).nodes.map((n) => n.node.id);
+		const returned = activate({ userId: USER, query: q.query, ...opts }).nodes.map(
+			(n) => n.node.id
+		);
 		if (!q.expect.length) {
 			return { query: q, returned, recall: returned.length ? 0 : 1, precisionAtK: returned.length ? 0 : 1 };
 		}
@@ -148,13 +155,64 @@ describe('retrieval quality', () => {
 });
 
 /**
+ * Contextual gating and the convergence boost are the two mechanisms the design
+ * argued for and never tested. Adding a mechanism because the design mentions it
+ * is how a system fills up with knobs that do nothing, or worse.
+ *
+ * So each one is A/B'd against the same fixture: on must be no worse than off.
+ * That is a deliberately weak bar. These constants are not tuned — the fixture
+ * is fiction, and fitting numbers to it would be fitting them to assumptions
+ * rather than to a real lattice. The bar is "this does not hurt", and real
+ * tuning waits for real data.
+ */
+describe('the two mechanisms, held to account', () => {
+	const overall = (o: EvalOpts) => summarise(score(o));
+
+	it('gating earns its place', () => {
+		const on = overall({ gating: true });
+		const off = overall({ gating: false });
+		console.log(
+			`\n  gating   on: recall ${on.recall.toFixed(3)} p@k ${on.precisionAtK.toFixed(3)}` +
+				`  |  off: recall ${off.recall.toFixed(3)} p@k ${off.precisionAtK.toFixed(3)}`
+		);
+		// Ships on because both of these hold, not because the design mentioned it.
+		expect(on.recall).toBeGreaterThanOrEqual(off.recall);
+		expect(on.precisionAtK).toBeGreaterThanOrEqual(off.precisionAtK);
+	});
+
+	it('the convergence boost does not, so it ships off', () => {
+		const on = overall({ convergenceBoost: true });
+		const off = overall({ convergenceBoost: false });
+		console.log(
+			`  boost    on: recall ${on.recall.toFixed(3)} p@k ${on.precisionAtK.toFixed(3)}` +
+				`  |  off: recall ${off.recall.toFixed(3)} p@k ${off.precisionAtK.toFixed(3)}\n`
+		);
+		// Written to defend the shipped default rather than the design's
+		// preference. Bridges already surface on this fixture without any help, so
+		// the boost only reorders — and reorders slightly worse. Flipping the
+		// default means making this assertion fail honestly, by finding a lattice
+		// where the boost actually reaches something.
+		expect(off.precisionAtK).toBeGreaterThanOrEqual(on.precisionAtK);
+		expect(off.recall).toBeGreaterThanOrEqual(on.recall);
+	});
+
+	it('still changes an answer, so it is a real switch and not dead code', () => {
+		const withBoost = score({ convergenceBoost: true });
+		const without = score({ convergenceBoost: false });
+		expect(
+			withBoost.some((s, i) => s.returned.join() !== without[i].returned.join())
+		).toBe(true);
+	});
+});
+
+/**
  * Set from a measured run, then lowered. These are a floor to fall through,
  * not a target to hit: a change that moves a number a little should not turn
  * the suite red, and one that halves recall should.
  */
 const FLOOR = {
 	search: 0.9,
-	traversal: 0.6,
-	convergence: 0.4,
-	precisionAtK: 0.55
+	traversal: 0.85,
+	convergence: 0.85,
+	precisionAtK: 0.7
 };

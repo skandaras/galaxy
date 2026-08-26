@@ -196,18 +196,46 @@ export function searchDocs(
 }
 
 /**
+ * Words too common to narrow anything, dropped from an `any` match. bm25 would
+ * weight them near zero anyway; the reason to drop them outright is that a
+ * query made *entirely* of them would otherwise match the whole table.
+ */
+const FTS_STOPWORDS = new Set([
+	'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'can', 'do', 'for', 'from',
+	'had', 'has', 'have', 'he', 'her', 'his', 'how', 'i', 'in', 'is', 'it', 'its', 'me',
+	'my', 'no', 'not', 'of', 'on', 'or', 'our', 'she', 'so', 'that', 'the', 'their',
+	'them', 'then', 'there', 'these', 'they', 'this', 'to', 'was', 'we', 'were', 'what',
+	'when', 'which', 'who', 'why', 'will', 'with', 'you', 'your'
+]);
+
+/**
  * Quote terms so user input can't break FTS5 query syntax.
  *
  * Exported because Cortex seeds its traversals from an FTS table too, and this
  * hazard is worth solving once rather than in every module that opens one.
+ *
+ * `match` decides what a multi-word query means, and the two callers genuinely
+ * want different things. Library search is given deliberate keywords, so *all*
+ * — FTS5's implicit AND — is right: asking for two words and being shown
+ * documents containing one of them is not a search.
+ *
+ * Cortex is given a sentence someone said. A natural-language query is almost
+ * never a term-for-term subset of the text it should match — "cliff edge
+ * retreating" against a node that says "retreats" already fails — so AND finds
+ * nothing at all, silently, which is the same failure the keyword map it
+ * replaced would have had. *any* matches on whatever overlaps and lets bm25
+ * rank by how much did.
  */
-export function ftsQuery(q: string): string {
-	return q
-		.split(/\s+/)
-		.filter(Boolean)
+export function ftsQuery(q: string, match: 'all' | 'any' = 'all'): string {
+	const terms = q.split(/\s+/).filter(Boolean);
+	const kept =
+		match === 'any'
+			? terms.filter((t) => t.length >= 3 && !FTS_STOPWORDS.has(t.toLowerCase()))
+			: terms;
+	return kept
 		.slice(0, 8)
 		.map((t) => `"${t.replace(/"/g, '')}"`)
-		.join(' ');
+		.join(match === 'any' ? ' OR ' : ' ');
 }
 
 function uniqueSlug(base: string): string {

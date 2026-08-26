@@ -339,18 +339,31 @@ export function listAssociations(nodeId: string, userId: string): CortexAssociat
  * and when embeddings arrive they drop into exactly this step.
  */
 export function seedNodes(query: string, userId: string, limit = 6): CortexNode[] {
-	const q = query.trim();
-	if (!q) return [];
+	// `any`, not `all`. A question is not a keyword list: the first version of
+	// this ANDed the terms, so anything phrased differently from the node it
+	// should have matched returned no seed whatsoever — and with no seed there is
+	// nothing to spread from, so the whole traversal silently produced nothing.
+	// The eval found this on its first run; every failing query failed here.
+	const match = ftsQuery(query.trim(), 'any');
+	if (!match) return [];
 	const hits = db.all<{ id: string }>(
-		sql`SELECT id FROM cortex_fts WHERE cortex_fts MATCH ${ftsQuery(q)} ORDER BY rank LIMIT ${limit * 4}`
+		sql`SELECT id FROM cortex_fts WHERE cortex_fts MATCH ${match} ORDER BY rank LIMIT ${limit * 4}`
 	);
 	// Scoped by construction: only visible nodes are in the map, so an FTS hit on
 	// someone else's personal node is dropped here.
 	const visible = new Map(listNodes(userId).map((n) => [n.id, n]));
+	// Relevance leads, priority nudges. Sorting by priority alone threw away the
+	// ranking FTS had just done, so a node that barely matched outranked the one
+	// the question was about; sorting by rank alone makes priority dead weight.
+	// Multiplying by (0.5 + priority) lets a node the lattice considers important
+	// climb a place or two without ever leapfrogging a much better match.
+	const rank = new Map(hits.map((h, i) => [h.id, i]));
+	const relevance = (n: CortexNode) =>
+		(1 / (1 + rank.get(n.id)!)) * (0.5 + n.activationPriority);
 	return hits
 		.map((h) => visible.get(h.id))
 		.filter((n): n is CortexNode => !!n)
-		.sort((a, b) => b.activationPriority - a.activationPriority)
+		.sort((a, b) => relevance(b) - relevance(a))
 		.slice(0, limit);
 }
 
@@ -381,6 +394,35 @@ const ITERATIONS = 2;
 const MAX_RESULTS = 12;
 
 /**
+ * What a convergence node gets for being one — and why this is **off by
+ * default**.
+ *
+ * Boosting the bridges is the design's central claim, so it was built and
+ * measured. On the eval fixture it buys nothing: convergence recall is 1.00
+ * with it and 1.00 without, and turning it on costs about two points of
+ * precision by reordering answers that were already right. A mechanism that
+ * only reorders, and reorders slightly worse, does not earn its default.
+ *
+ * The honest caveat is that the fixture cannot show the case it was designed
+ * for. Bridges already surface there, so there is no headroom to demonstrate;
+ * a larger, denser lattice where a bridge is genuinely hard to reach might tell
+ * a different story. So the mechanism stays, opt-in, with the finding recorded
+ * — and cortex-eval.test.ts holds the comparison, so flipping the default
+ * requires showing it helps rather than assuming it does.
+ */
+const CONVERGENCE_BOOST = 1.25;
+
+/**
+ * What an edge keeps when its context tags miss the query's entirely.
+ *
+ * Attenuation, not a cut. An edge tagged `craft` is still a real connection
+ * when someone asks a field question — it is just less likely to be what they
+ * meant, and a lattice that severed it would lose the cross-domain reach that
+ * is the point of having one.
+ */
+const GATE_MISS = 0.6;
+
+/**
  * Spreading activation over the visible sub-lattice.
  *
  * Seeds start at 1.0 and push activation to their neighbours, attenuated by the
@@ -399,6 +441,10 @@ export function activate(opts: {
 	fromNodeId?: string;
 	depth?: number;
 	limit?: number;
+	/** Defaults on: measured as a small gain at no cost. */
+	gating?: boolean;
+	/** Defaults **off**: measured as no gain at a small cost. See CONVERGENCE_BOOST. */
+	convergenceBoost?: boolean;
 }): ActivationResult {
 	const seeds = opts.fromNodeId
 		? [getNode(opts.fromNodeId, opts.userId)].filter((n): n is CortexNode => !!n)
@@ -412,14 +458,23 @@ export function activate(opts: {
 	// the way it points: one concept can strongly imply another while the reverse
 	// is weak, and flattening that would make every specific node as loud as the
 	// general one it feeds.
-	const out = new Map<string, { to: string; weight: number }[]>();
-	const push = (from: string, to: string, weight: number) => {
-		out.set(from, [...(out.get(from) ?? []), { to, weight }]);
+	const out = new Map<string, { to: string; weight: number; tags: string[] | null }[]>();
+	const push = (from: string, to: string, weight: number, tags: string[] | null) => {
+		out.set(from, [...(out.get(from) ?? []), { to, weight, tags }]);
 	};
 	for (const e of edges) {
-		push(e.sourceId, e.targetId, e.weight);
-		if (e.directionality === 'symmetric') push(e.targetId, e.sourceId, e.weight);
+		push(e.sourceId, e.targetId, e.weight, e.contextTags);
+		if (e.directionality === 'symmetric') push(e.targetId, e.sourceId, e.weight, e.contextTags);
 	}
+
+	// The query's context, taken from where it landed rather than asked for: the
+	// modalities of the seed nodes. Nothing new has to be passed in, and it says
+	// something true — these are the domains the question turned out to be about.
+	const context = new Set(seeds.flatMap((s) => s.modalities ?? []));
+	const gate = (tags: string[] | null): number => {
+		if (opts.gating === false || !tags?.length || !context.size) return 1;
+		return tags.some((t) => context.has(t)) ? 1 : GATE_MISS;
+	};
 
 	const activation = new Map<string, number>();
 	const hops = new Map<string, number>();
@@ -435,7 +490,11 @@ export function activate(opts: {
 		for (const id of frontier) {
 			const source = activation.get(id) ?? 0;
 			for (const edge of out.get(id) ?? []) {
-				const delivered = source * edge.weight * DECAY;
+				const target = byId.get(edge.to);
+				if (!target) continue;
+				const boost =
+					opts.convergenceBoost === true && target.isConvergence ? CONVERGENCE_BOOST : 1;
+				const delivered = source * edge.weight * DECAY * gate(edge.tags) * boost;
 				if (delivered < THRESHOLD) continue;
 				const prior = activation.get(edge.to) ?? 0;
 				// Accumulate rather than overwrite: arriving from two directions is
