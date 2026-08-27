@@ -245,7 +245,8 @@ export function saveAssociation(opts: {
 	}
 
 	const now = new Date();
-	const existing = db
+	const direction = opts.directionality ?? 'symmetric';
+	const exact = db
 		.select()
 		.from(cortexAssociations)
 		.where(
@@ -255,14 +256,39 @@ export function saveAssociation(opts: {
 			)
 		)
 		.get();
+	// A symmetric link is one relationship, not two. The primary key is
+	// (source, target), so without this A→B and B→A both store and the traversal
+	// walks the same connection twice — activation arrives doubled and clamps at
+	// full strength, making the far node look twice as relevant as it is.
+	//
+	// Asymmetric edges are exempt: "A strongly implies B, B weakly implies A" is
+	// two genuinely different claims and both rows are meant.
+	const reciprocal =
+		!exact && direction === 'symmetric'
+			? db
+					.select()
+					.from(cortexAssociations)
+					.where(
+						and(
+							eq(cortexAssociations.sourceId, opts.targetId),
+							eq(cortexAssociations.targetId, opts.sourceId),
+							eq(cortexAssociations.directionality, 'symmetric')
+						)
+					)
+					.get()
+			: undefined;
+	const existing = exact ?? reciprocal;
 
+	// Keep the stored orientation when updating a reciprocal: rewriting it would
+	// churn the row for no gain, and for a symmetric edge the direction carries
+	// no meaning anyway.
 	const row: CortexAssociation = {
-		sourceId: opts.sourceId,
-		targetId: opts.targetId,
+		sourceId: existing?.sourceId ?? opts.sourceId,
+		targetId: existing?.targetId ?? opts.targetId,
 		weight: clamp(opts.weight ?? existing?.weight ?? 0.5),
 		contextTags: opts.contextTags ?? existing?.contextTags ?? null,
 		description: opts.description ?? existing?.description ?? '',
-		directionality: opts.directionality ?? existing?.directionality ?? 'symmetric',
+		directionality: direction,
 		createdAt: existing?.createdAt ?? now,
 		lastTraversedAt: existing?.lastTraversedAt ?? null,
 		traversalCount: existing?.traversalCount ?? 0
@@ -273,8 +299,8 @@ export function saveAssociation(opts: {
 			.set(row)
 			.where(
 				and(
-					eq(cortexAssociations.sourceId, opts.sourceId),
-					eq(cortexAssociations.targetId, opts.targetId)
+					eq(cortexAssociations.sourceId, row.sourceId),
+					eq(cortexAssociations.targetId, row.targetId)
 				)
 			)
 			.run();
@@ -466,6 +492,17 @@ export function activate(opts: {
 	for (const e of edges) {
 		push(e.sourceId, e.targetId, e.weight, e.contextTags);
 		if (e.directionality === 'symmetric') push(e.targetId, e.sourceId, e.weight, e.contextTags);
+	}
+	// Belt to the braces of the write-side fix above: any row pair that predates
+	// it would otherwise still deliver twice. Strongest weight wins, so
+	// collapsing a duplicate never weakens a real connection.
+	for (const [from, list] of out) {
+		const best = new Map<string, { to: string; weight: number; tags: string[] | null }>();
+		for (const edge of list) {
+			const seen = best.get(edge.to);
+			if (!seen || edge.weight > seen.weight) best.set(edge.to, edge);
+		}
+		if (best.size !== list.length) out.set(from, [...best.values()]);
 	}
 
 	// The query's context, taken from where it landed rather than asked for: the

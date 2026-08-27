@@ -97,6 +97,43 @@ describe('associations', () => {
 		expect(edge.weight).toBe(1);
 	});
 
+	it('stores a symmetric link once, whichever way round it is written', () => {
+		const { a, b } = seedChain();
+		saveAssociation({ sourceId: b.id, targetId: a.id, weight: 0.95, userId: ANA });
+		const between = db
+			.select()
+			.from(cortexAssociations)
+			.all()
+			.filter((e) => [e.sourceId, e.targetId].includes(a.id) && [e.sourceId, e.targetId].includes(b.id));
+		expect(between).toHaveLength(1);
+		expect(between[0].weight).toBe(0.95);
+	});
+
+	it('does not deliver a doubled activation for one relationship', () => {
+		// The bug this prevents: two rows for one symmetric link walked twice, so
+		// activation arrived doubled and clamped at 1.0 — the far node looking
+		// twice as relevant as it is.
+		const a = saveNode({ name: 'Tide pools', description: 'rockpool', ownerId: ANA });
+		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		saveAssociation({ sourceId: a.id, targetId: b.id, weight: 0.9, userId: ANA });
+		saveAssociation({ sourceId: b.id, targetId: a.id, weight: 0.9, userId: ANA });
+		const got = activate({ userId: ANA, query: 'rockpool' }).nodes.find((n) => n.node.id === b.id);
+		expect(got!.activation).toBeCloseTo(0.9 * 0.7, 5);
+	});
+
+	it('keeps both directions of an asymmetric pair, which mean different things', () => {
+		const { a, b } = seedChain();
+		deleteAssociation(a.id, b.id, ANA);
+		saveAssociation({ sourceId: a.id, targetId: b.id, weight: 0.9, directionality: 'asymmetric', userId: ANA });
+		saveAssociation({ sourceId: b.id, targetId: a.id, weight: 0.2, directionality: 'asymmetric', userId: ANA });
+		const between = db
+			.select()
+			.from(cortexAssociations)
+			.all()
+			.filter((e) => [e.sourceId, e.targetId].includes(a.id) && [e.sourceId, e.targetId].includes(b.id));
+		expect(between).toHaveLength(2);
+	});
+
 	it('reads edges from both ends of a node', () => {
 		const { b } = seedChain();
 		expect(listAssociations(b.id, ANA)).toHaveLength(2);
