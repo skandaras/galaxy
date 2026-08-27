@@ -12,10 +12,14 @@ export const GET: RequestHandler = ({ locals }) => {
 	return json(groomStatus(user.id));
 };
 
-export const POST: RequestHandler = async ({ locals }) => {
+export const POST: RequestHandler = async ({ locals, request }) => {
 	const user = requireUser(locals);
-	// Runs over the caller's own lattice, never anyone else's.
-	return json(await runCortexGroom('manual', user.id));
+	const body = await request.json().catch(() => ({}));
+	// Two jobs: `harvest` picks up what has been said since last time, `review`
+	// reads the whole lattice looking for consolidation. Runs over the caller's
+	// own lattice, never anyone else's.
+	const mode = body?.mode === 'harvest' ? 'harvest' : 'review';
+	return json(await runCortexGroom('manual', user.id, mode));
 };
 
 export const PUT: RequestHandler = async ({ locals, request }) => {

@@ -114,10 +114,10 @@
 		await loadProposals();
 	}
 
-	async function groom() {
+	async function groom(mode: 'harvest' | 'review') {
 		grooming = true;
 		try {
-			const res = await send('/api/cortex/groom', 'POST', {});
+			const res = await send('/api/cortex/groom', 'POST', { mode });
 			if (res && !res.ran && res.reason) error = res.reason;
 			await load();
 		} finally {
@@ -377,15 +377,21 @@
 		{:else if tab === 'review'}
 			<div class="editor">
 				<div class="row">
-					<button class="btn" disabled={grooming} onclick={groom}>
-						{grooming ? 'Looking…' : 'Look for improvements'}
+					<button class="btn" disabled={grooming} onclick={() => groom('harvest')}>
+						{grooming ? 'Working…' : 'Catch up on recent activity'}
+					</button>
+					<button class="btn" disabled={grooming} onclick={() => groom('review')}>
+						{grooming ? 'Working…' : 'Review the whole lattice'}
 					</button>
 				</div>
 				{#if error}<p class="error" role="alert">{error}</p>{/if}
 				{#if !proposals.length}
 					<p class="empty">
-						Nothing suggested. The groomer proposes changes that would alter what a query
-						returns — merges, connections, areas — and applies only tidying on its own.
+						Nothing waiting. <strong>Catch up</strong> reads what you have been talking about
+						and suggests concepts worth keeping; <strong>review</strong> reads the whole
+						lattice looking for merges and structural problems. Both also run a free check
+						for concepts that connect to nothing, names that look like duplicates, and
+						anything unfiled.
 					</p>
 				{/if}
 				<ul class="nodes">

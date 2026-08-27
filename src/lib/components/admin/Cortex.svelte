@@ -6,7 +6,7 @@
 	 * groomed is yours to decide, and how often the job runs at all is the
 	 * platform's. Same split the memory job uses.
 	 */
-	let groom = $state({ enabled: false, intervalHours: 168, maxProposalsPerRun: 10 });
+	let groom = $state({ enabled: false, intervalHours: 24, maxProposalsPerRun: 10 });
 	let cortex = $state({ agentWrites: false, kinship: false, maxNodesPerUser: 2000 });
 	let lastRun = $state(0);
 	let busy = $state(false);
@@ -35,15 +35,22 @@
 		await load();
 	}
 
-	async function runNow() {
+	async function runNow(mode: 'harvest' | 'review') {
 		busy = true;
 		notice = null;
-		const result = await (await fetch('/api/cortex/groom', { method: 'POST' })).json();
+		const result = await (
+			await fetch('/api/cortex/groom', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ mode })
+			})
+		).json();
 		busy = false;
+		const found = `tidied ${result.tidied ?? 0}, ${result.detected ?? 0} found by check`;
 		notice = result.ran
-			? `Tidied ${result.tidied ?? 0}, proposed ${result.proposed ?? 0}` +
+			? `${found}, ${result.proposed ?? 0} suggested` +
 				(result.duplicates ? `, ${result.duplicates} already raised` : '')
-			: `Tidied ${result.tidied ?? 0}. Did not look further: ${result.reason}`;
+			: `${found}. Did not look further: ${result.reason}`;
 		await load();
 	}
 
@@ -54,11 +61,17 @@
 <section>
 	<h3>The groomer</h3>
 	<p class="hint">
-		A weekly pass over each person's lattice. It <strong>applies only tidying</strong> — whitespace
-		in a name, and little else — and <strong>proposes everything that would change what a query
-		returns</strong>: merges, weights, new connections, areas. Suggestions are reviewed by the
-		person whose lattice it is, in their own Cortex tab, and anything it does apply is logged with
-		a snapshot so it can be undone.
+		Two jobs, split by who asked for them. The <strong>scheduled pass adds</strong>: it reads what
+		has been said since last time and suggests concepts worth keeping. A <strong>manual review
+		consolidates</strong>: it reads the whole lattice looking for merges and structural problems,
+		which is the expensive prompt and so only ever runs because someone asked.
+	</p>
+	<p class="hint">
+		Both start with the free half — tidying, plus a check for concepts that connect to nothing,
+		names that look like duplicates, and anything unfiled. Those are graph problems rather than
+		language ones, so they cost no tokens and run whether or not a model is configured. Everything
+		that would change what a query returns is <strong>proposed</strong>, never applied, and waits
+		in the owner's own Cortex tab.
 	</p>
 
 	<div class="grid">
@@ -81,8 +94,11 @@
 	</p>
 	<div class="row">
 		<button class="btn primary" onclick={() => save('cortexGroom', groom)}>Save schedule</button>
-		<button class="btn" disabled={busy} onclick={runNow}>
-			{busy ? 'Looking…' : 'Run now on my lattice'}
+		<button class="btn" disabled={busy} onclick={() => runNow('harvest')}>
+			{busy ? 'Working…' : 'Catch up on recent activity'}
+		</button>
+		<button class="btn" disabled={busy} onclick={() => runNow('review')}>
+			{busy ? 'Working…' : 'Review the whole lattice'}
 		</button>
 	</div>
 

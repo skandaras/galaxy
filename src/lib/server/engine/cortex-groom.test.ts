@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
+import { setSetting } from '$lib/server/settings';
 import {
 	cortexAssociations,
 	cortexChangeLog,
@@ -29,6 +30,8 @@ import {
 	groomStatus,
 	applyProposal,
 	fingerprint,
+	detect,
+	nameSimilarity,
 	tidy
 } from './cortex-groom';
 
@@ -356,5 +359,130 @@ describe('fingerprints', () => {
 		expect(fingerprint('rename', 'tide-pools', 'a')).not.toBe(
 			fingerprint('rename', 'a', 'tide-pools')
 		);
+	});
+});
+
+describe('the free half', () => {
+	it('flags a concept nothing connects to', () => {
+		saveNode({ name: 'Bicycle repair', ownerId: ANA });
+		const found = detect(ANA);
+		// Traversal reaches a concept only through a connection, so an orphan
+		// cannot surface however good it is.
+		expect(found.some((d) => d.kind === 'connect' && d.title.includes('connects to nothing'))).toBe(
+			true
+		);
+	});
+
+	it('flags two names that look like one concept', () => {
+		saveNode({ name: 'Tide pools', ownerId: ANA });
+		saveNode({ name: 'The tide pools', ownerId: ANA });
+		expect(detect(ANA).some((d) => d.kind === 'merge')).toBe(true);
+	});
+
+	it('tells a near-duplicate from a different concept', () => {
+		expect(nameSimilarity('Tide pools', 'Letterpress printing')).toBe(0);
+		// Singular and plural are the same word to a person, and this is the pair
+		// the check exists for.
+		expect(nameSimilarity('Tide pools', 'Tide pool surveying')).toBeGreaterThan(0.6);
+		expect(nameSimilarity('Tide pools', 'The tide pools')).toBe(1);
+	});
+
+	it('flags a concept with no area, since the context index is grouped by area', () => {
+		saveNode({ name: 'Tide pools', ownerId: ANA });
+		expect(detect(ANA).some((d) => d.kind === 'circuit')).toBe(true);
+	});
+
+	it('looks at nobody else’s concepts', () => {
+		saveNode({ name: 'Ben orphan', ownerId: BEN, visibility: 'shared' });
+		expect(detect(ANA).some((d) => d.title.includes('Ben orphan'))).toBe(false);
+	});
+
+	it('runs with no model configured, and files what it found', async () => {
+		saveNode({ name: 'Bicycle repair', ownerId: ANA });
+		saveNode({ name: 'Storm logs', ownerId: ANA });
+		saveNode({ name: 'Seabird counts', ownerId: ANA });
+		const res = await runCortexGroom('manual', ANA);
+		// The half that needs a model stands down; the half that does not still
+		// did its work.
+		expect(res.ran).toBe(false);
+		expect(res.detected).toBeGreaterThan(0);
+		expect(listProposals(ANA).length).toBeGreaterThan(0);
+	});
+
+	it('does not raise the same finding twice', async () => {
+		saveNode({ name: 'Bicycle repair', ownerId: ANA });
+		saveNode({ name: 'Storm logs', ownerId: ANA });
+		saveNode({ name: 'Seabird counts', ownerId: ANA });
+		await runCortexGroom('manual', ANA);
+		const first = listProposals(ANA).length;
+		const second = await runCortexGroom('manual', ANA);
+		expect(second.detected).toBe(0);
+		expect(listProposals(ANA)).toHaveLength(first);
+	});
+});
+
+describe('the two modes', () => {
+	beforeEach(() => {
+		saveNode({ name: 'Tide pools', description: 'rockpool surveying', ownerId: ANA });
+		saveNode({ name: 'Storm logs', ownerId: ANA });
+		saveNode({ name: 'Seabird counts', ownerId: ANA });
+	});
+
+	it('a review reads the whole lattice, with its connections', () => {
+		const prompt = buildGroomPrompt(ANA, 10, 'review');
+		expect(prompt).toContain('A FULL REVIEW');
+		expect(prompt).toContain('connects to:');
+		expect(prompt).toContain('Seabird counts');
+	});
+
+	it('a harvest reads what was said, and only a slice of the lattice', () => {
+		const prompt = buildGroomPrompt(ANA, 10, 'harvest', 'we talked about rockpool surveying');
+		expect(prompt).toContain('SINCE THE LAST PASS');
+		expect(prompt).toContain('rockpool surveying');
+		// Names for the rest is all that is needed to avoid proposing a duplicate.
+		expect(prompt).toContain('names only');
+	});
+
+	it('asks for concepts on a harvest and consolidation on a review', () => {
+		expect(buildGroomPrompt(ANA, 10, 'harvest', 'x')).toContain('worth adding');
+		expect(buildGroomPrompt(ANA, 10, 'review')).toContain('near-duplicate concepts');
+	});
+
+	it('a manual run is a review, a scheduled one is a harvest', async () => {
+		expect((await runCortexGroom('manual', ANA)).mode).toBe('review');
+		expect((await runCortexGroom('schedule', ANA)).mode).toBe('harvest');
+	});
+
+	/**
+	 * The mark is only written by a pass that actually reached a model, so with
+	 * none configured it never gets set — correct, since nothing has been read,
+	 * but it means the skip has to be set up rather than arrived at.
+	 */
+	function markAsSeen() {
+		const nodes = listNodes(ANA);
+		setSetting(
+			'cortex.groom.latticeMark',
+			`${nodes.length}:${visibleEdges(ANA).length}:${nodes.reduce(
+				(m, n) => Math.max(m, n.updatedAt?.getTime() ?? 0),
+				0
+			)}`,
+			ANA
+		);
+	}
+
+	it('a quiet scheduled pass makes no model call at all', async () => {
+		// The lever that makes a daily — or hourly — cadence affordable: nothing
+		// said and nothing changed means there is nothing for a model to read.
+		markAsSeen();
+		const res = await runCortexGroom('schedule', ANA);
+		expect(res.ran).toBe(false);
+		expect(res.reason).toBe('nothing new since the last pass');
+	});
+
+	it('picks the work back up when the lattice changes', async () => {
+		markAsSeen();
+		saveNode({ name: 'Kelp forests', ownerId: ANA });
+		const next = await runCortexGroom('schedule', ANA);
+		expect(next.reason).not.toBe('nothing new since the last pass');
 	});
 });

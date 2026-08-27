@@ -669,6 +669,31 @@ shared with admins. `engine/alignment.ts` already holds itself to exactly this
 ("no quoted evidence ever reaches an event detail"), and
 `cortex-privacy.test.ts` asserts the `report(...)` payload carries counts only.
 
+## How a conversation becomes a concept
+
+The chain, end to end, now that it runs:
+
+```
+chat / coding session
+  → the scheduled harvest reads what is new since its watermark
+  → proposes concepts, with the connections that make them reachable
+  → you accept in the Cortex tab
+  → applyProposal writes them through the ordinary path, under one runId
+  → they surface in cortex_query, and in the context digest's area index
+```
+
+For a long time this stopped dead at "you accept": `decideProposal` flipped a
+status flag and changed no lattice, there was no `create` kind to propose a
+concept in the first place, and the prompt asked for a payload with no schema
+to put in it. Three gaps, each hiding the next, and the button looked like it
+worked throughout.
+
+**Memory is a separate input, not the route.** The memory job records *facts*
+("prefers dark themes"); the lattice holds *concepts* ("visual design"). The
+groomer reads recorded observations as one more thing to notice, but a concept
+whose fact the memory job had no reason to write down would never arrive if
+that were the only path — which is why the harvest reads conversation directly.
+
 ## Grooming — one line, not a scale
 
 The three-band model this document originally carried is gone. "Low risk"
@@ -684,6 +709,52 @@ One test replaces it, and it can be settled by looking rather than argued:
 | **Would this change what a query returns?** | Propose it. Merges, weights, new connections, deletions, areas, bridge flags. |
 | **No?** | Apply it, and log it. Whitespace in a name — which is close to the whole list, and that is the point. |
 
+### Two jobs, split by who asked
+
+The groomer was doing two things at one cadence, and they do not want the same
+one. **Adding is incremental** — a concept from this morning should land soon,
+and each pass only needs what is new. **Consolidating is holistic** — merges and
+structure need the whole lattice in view, and are most useful when someone is
+already looking at the map.
+
+| | Scheduled — *harvest* | Manual — *review* |
+|---|---|---|
+| tidy + detectors | yes | yes |
+| model reads new activity → proposes concepts | yes | yes |
+| model reads the **whole lattice** → merges, structure | — | yes |
+
+Manual is a superset, so the expensive whole-lattice prompt only ever fires
+because a person asked for it. That is a stronger cost control than any
+heuristic, and it is what lets the cadence be daily rather than weekly.
+
+### What never needed a model
+
+Orphans, near-duplicate names and unfiled concepts are graph properties, not
+language ones. `detect()` finds them in code for no tokens, on both modes, so
+nobody has to remember to go looking — and the model is left the one job it is
+uniquely good at: reading what somebody said and proposing a concept from it.
+
+Duplicate detection is Jaccard overlap on name tokens with a crude plural strip
+— not real stemming, and worth saying so. Without the strip, "Tide pools" and
+"Tide pool surveying" share one token in four and score 0.25, which is exactly
+the pair a person would call the same concept twice.
+
+Both halves file through the same queue and the same fingerprint dedupe, and
+**fingerprints are orientation-free where the two ends are interchangeable**: a
+merge of A into B and of B into A are the same conversation to have, and
+without sorting the ids the detector and the model would duplicate each other
+precisely where they overlap most.
+
+### The skip
+
+A scheduled pass with no new activity and no lattice change **makes no model
+call**. Tidy and the detectors still run, because they are free. That is the
+single biggest lever on cost, and what makes a short cadence sane: a quiet day
+costs nothing.
+
+The watermark only advances on a pass that actually reached a model, so a failed
+run does not silently skip a day of conversation.
+
 Tidying is deterministic and model-free, so it runs whether or not a provider is
 configured and is testable without one. The thinking half reads the owner's
 lattice and, read-only, their `memory_items` — the groomer may notice that a
@@ -694,6 +765,12 @@ direction, one place, the same shape as the UX audit reading telemetry.
 replayed to later runs, because re-raising something already turned down is how
 a review queue teaches people to stop reading it. Reviewed in the Cortex tab
 rather than Admin — it is somebody's own lattice, not a platform setting.
+
+**Accepting carries out the change**, through the ordinary write path under one
+`runId`, so an accepted suggestion is logged like a hand edit and undone the
+same way. A proposal whose concepts have gone since it was raised fails and
+stays open: a half-applied change nobody was told about is worse than one that
+plainly did not happen. Dismissing is still only a decision.
 
 **Undo covers creation as well as change.** Restoring a `before` snapshot only
 answers for things that were modified; anything newly *made* — every concept in
