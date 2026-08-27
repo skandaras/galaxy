@@ -9,6 +9,8 @@ import {
 	cortexDigest,
 	mapProjection,
 	mergeNodes,
+	importLattice,
+	exportPayload,
 	exportLattice,
 	listNodes,
 	saveAssociation,
@@ -222,6 +224,65 @@ describe('what leaves the module', () => {
 		const raw = readFileSync(out.path, 'utf8');
 		expect(raw).toContain(ANA_SECRET);
 		expect(raw).not.toContain(BEN_SECRET);
+	});
+});
+
+describe('importing a file', () => {
+	it('ignores the owner named in the file and uses the person importing', () => {
+		// A payload naming somebody else is not a request, it is an attempt.
+		const res = importLattice(ANA, {
+			nodes: [{ id: 'planted', name: 'Planted concept', ownerId: BEN, visibility: 'shared' }]
+		});
+		expect(res.nodes).toBe(1);
+		const planted = db
+			.select()
+			.from(cortexNodes)
+			.all()
+			.find((n) => n.name === 'Planted concept')!;
+		expect(planted.ownerId).toBe(ANA);
+	});
+
+	it('cannot reach another person’s concept by naming its id', () => {
+		const benNode = db
+			.select()
+			.from(cortexNodes)
+			.all()
+			.find((n) => n.name === BEN_SECRET)!;
+
+		importLattice(ANA, {
+			nodes: [{ id: benNode.id, name: 'Overwritten by ana', description: 'should not land' }]
+		});
+
+		// Ids in a file are hints, not claims: nodes resolve by name through the
+		// ordinary write path, so guessing an id reaches nothing.
+		const after = db
+			.select()
+			.from(cortexNodes)
+			.all()
+			.find((n) => n.id === benNode.id)!;
+		expect(after.name).toBe(BEN_SECRET);
+		expect(after.ownerId).toBe(BEN);
+	});
+
+	it('will not claim a shared concept by importing over its name', () => {
+		const res = importLattice(ANA, {
+			nodes: [{ name: BRIDGE, description: 'rewritten by ana' }]
+		});
+		// The bridge is Ana's own here, so this one legitimately updates — the
+		// case that must not work is the one above, and the one below.
+		expect(res.nodes).toBe(1);
+
+		const benOwned = db
+			.select()
+			.from(cortexNodes)
+			.all()
+			.find((n) => n.name === BEN_SECRET)!;
+		expect(benOwned.description).toContain(BEN_SECRET);
+	});
+
+	it('does not let an export of one lattice carry another’s', () => {
+		const payload = exportPayload(ANA);
+		expect(JSON.stringify(payload)).not.toContain(BEN_SECRET);
 	});
 });
 

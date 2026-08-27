@@ -148,6 +148,8 @@ export function saveNode(opts: {
 	/** New nodes start personal; sharing is a deliberate act. */
 	visibility?: 'personal' | 'shared';
 	actor?: 'user' | 'agent' | 'groom';
+	/** Groups a batch — an import, a groom pass — so it can be undone together. */
+	runId?: string;
 }): CortexNode {
 	const now = new Date();
 	const existing = opts.id
@@ -199,7 +201,8 @@ export function saveNode(opts: {
 		userId: opts.ownerId,
 		event: existing ? 'updated' : 'created',
 		detail: row.name,
-		before: existing ?? undefined
+		before: existing ?? undefined,
+		runId: opts.runId
 	});
 	return row;
 }
@@ -237,6 +240,7 @@ export function saveAssociation(opts: {
 	directionality?: 'symmetric' | 'asymmetric';
 	userId: string;
 	actor?: 'user' | 'agent' | 'groom';
+	runId?: string;
 }): CortexAssociation {
 	if (opts.sourceId === opts.targetId) throw new Error('A node cannot be connected to itself');
 	const source = getNode(opts.sourceId, opts.userId);
@@ -316,7 +320,8 @@ export function saveAssociation(opts: {
 		userId: opts.userId,
 		event: 'connected',
 		detail: `${source.name} → ${target.name}`,
-		before: existing ?? undefined
+		before: existing ?? undefined,
+		runId: opts.runId
 	});
 	return row;
 }
@@ -738,14 +743,10 @@ export function cortexDigest(userId: string): string {
  */
 export function exportLattice(userId: string): { path: string; nodes: number; edges: number } {
 	mkdirSync(cortexDir(), { recursive: true });
-	const nodes = listNodes(userId);
-	const edges = visibleEdges(userId);
+	const payload = exportPayload(userId);
 	const path = join(cortexDir(), `${slugify(userId)}.json`);
-	writeFileSync(
-		path,
-		JSON.stringify({ exportedAt: new Date().toISOString(), nodes, associations: edges }, null, 2)
-	);
-	return { path, nodes: nodes.length, edges: edges.length };
+	writeFileSync(path, JSON.stringify(payload, null, 2));
+	return { path, nodes: payload.nodes.length, edges: payload.associations.length };
 }
 
 /** Disconnect two nodes. Owner-scoped through the same rule as connecting. */
@@ -1051,23 +1052,40 @@ export function revertChange(id: string, userId: string): boolean {
 		.from(cortexChangeLog)
 		.where(and(eq(cortexChangeLog.id, id), eq(cortexChangeLog.userId, userId)))
 		.get();
-	if (!entry?.before) return false;
+	if (!entry || entry.event === 'reverted') return false;
 
-	const before = entry.before as Record<string, unknown>;
-	if (entry.event === 'tidied' && 'sourceId' in before) {
-		const edge = before as unknown as CortexAssociation;
-		if (!getNode(edge.sourceId, userId) || !getNode(edge.targetId, userId)) return false;
-		db.insert(cortexAssociations).values(edge).onConflictDoNothing().run();
-	} else if ('name' in before) {
-		const node = before as unknown as CortexNode;
-		if (!canEdit(node, userId)) return false;
-		db.update(cortexNodes)
-			.set({ name: node.name, description: node.description, updatedAt: new Date() })
-			.where(eq(cortexNodes.id, node.id))
-			.run();
-		syncFts(node.id, node.name, node.description);
+	// Undoing something that was *made* means removing it. The first version
+	// only knew how to restore a `before` snapshot, so anything newly created —
+	// every node in an import, every connection the groomer adds — was quietly
+	// un-undoable, and a whole-run revert reported success having done nothing.
+	if (!entry.before) {
+		if (entry.event === 'created' && entry.nodeId) {
+			if (!deleteNode(entry.nodeId, userId)) return false;
+		} else if (entry.event === 'connected' && entry.nodeId) {
+			const [from, to] = (entry.detail ?? '').split(' → ');
+			const target = listNodes(userId).find((n) => n.name === to);
+			if (!target || !deleteAssociation(entry.nodeId, target.id, userId)) return false;
+			void from;
+		} else {
+			return false;
+		}
 	} else {
-		return false;
+		const before = entry.before as Record<string, unknown>;
+		if ('sourceId' in before) {
+			const edge = before as unknown as CortexAssociation;
+			if (!getNode(edge.sourceId, userId) || !getNode(edge.targetId, userId)) return false;
+			db.insert(cortexAssociations).values(edge).onConflictDoNothing().run();
+		} else if ('name' in before) {
+			const node = before as unknown as CortexNode;
+			if (!canEdit(node, userId)) return false;
+			db.update(cortexNodes)
+				.set({ name: node.name, description: node.description, updatedAt: new Date() })
+				.where(eq(cortexNodes.id, node.id))
+				.run();
+			syncFts(node.id, node.name, node.description);
+		} else {
+			return false;
+		}
 	}
 
 	logChange({
@@ -1088,10 +1106,146 @@ export function revertRun(runId: string, userId: string): number {
 		.where(and(eq(cortexChangeLog.runId, runId), eq(cortexChangeLog.userId, userId)))
 		.orderBy(sql`${cortexChangeLog.createdAt} DESC`)
 		.all();
+	// Connections first, then the nodes: undoing a creation deletes the node and
+	// its edges with it, which would leave the edge entries with nothing to do
+	// and report a smaller number than actually happened.
+	const order = (e: (typeof entries)[number]) => (e.event === 'created' ? 1 : 0);
 	let done = 0;
-	for (const entry of entries) {
+	for (const entry of [...entries].sort((a, b) => order(a) - order(b))) {
 		if (entry.event === 'reverted') continue;
 		if (revertChange(entry.id, userId)) done++;
 	}
 	return done;
+}
+
+
+// --- round trip -------------------------------------------------------------
+
+export interface LatticePayload {
+	exportedAt: string;
+	nodes: CortexNode[];
+	associations: CortexAssociation[];
+	circuits: CortexCircuit[];
+}
+
+/** Everything this user can see, as a plain object. */
+export function exportPayload(userId: string): LatticePayload {
+	return {
+		exportedAt: new Date().toISOString(),
+		nodes: listNodes(userId),
+		associations: visibleEdges(userId),
+		// Carried too, or a round trip drops every area and the context digest
+		// comes back with nothing to group by.
+		circuits: listCircuits(userId)
+	};
+}
+
+export interface ImportResult {
+	runId: string;
+	circuits: number;
+	nodes: number;
+	edges: number;
+	skipped: number;
+}
+
+/**
+ * Read back what `exportPayload` writes — or something written by hand, which
+ * is the more useful case: a lattice is far easier to draft in a file than to
+ * type into a side panel fifty times.
+ *
+ * A file is a new way into the store, so it is a new way to get the ownership
+ * model wrong. Two rules keep it honest:
+ *
+ * **The owner is the person importing, never the file.** A payload naming
+ * somebody else is not a request, it is an attempt, and it is ignored rather
+ * than refused — there is nothing to negotiate.
+ *
+ * **Ids in the file are hints, not claims.** Nodes resolve by *name* through
+ * the ordinary write path, so importing over an existing lattice updates it
+ * instead of duplicating, and a file cannot reach a row by guessing its id.
+ * Connections are remapped through what actually resolved, and dropped if
+ * either end did not.
+ *
+ * Everything goes through `saveNode` and `saveAssociation`, so an import obeys
+ * the concept cap, lands in the change log, and can be undone as one run.
+ */
+export function importLattice(userId: string, payload: unknown): ImportResult {
+	const runId = randomUUID();
+	const body = (payload ?? {}) as Partial<LatticePayload>;
+	const out: ImportResult = { runId, circuits: 0, nodes: 0, edges: 0, skipped: 0 };
+
+	// Areas first: a node's circuit ids have to be remapped to the ones that
+	// exist here before the node is written.
+	const areaIds = new Map<string, string>();
+	for (const raw of Array.isArray(body.circuits) ? body.circuits : []) {
+		const name = String(raw?.name ?? '').trim();
+		if (!name) continue;
+		try {
+			const saved = saveCircuit({ name, description: String(raw?.description ?? ''), ownerId: userId });
+			if (raw?.id) areaIds.set(String(raw.id), saved.id);
+			areaIds.set(name, saved.id);
+			out.circuits++;
+		} catch {
+			out.skipped++;
+		}
+	}
+
+	const nodeIds = new Map<string, string>();
+	for (const raw of Array.isArray(body.nodes) ? body.nodes : []) {
+		const name = String(raw?.name ?? '').trim();
+		if (!name) {
+			out.skipped++;
+			continue;
+		}
+		try {
+			const saved = saveNode({
+				name,
+				description: String(raw?.description ?? ''),
+				modalities: Array.isArray(raw?.modalities) ? raw.modalities.map(String) : undefined,
+				circuits: Array.isArray(raw?.circuits)
+					? raw.circuits.map((c) => areaIds.get(String(c)) ?? String(c))
+					: undefined,
+				activationPriority:
+					typeof raw?.activationPriority === 'number' ? raw.activationPriority : undefined,
+				isConvergence: raw?.isConvergence === true,
+				// Never from the file.
+				ownerId: userId,
+				visibility: raw?.visibility === 'shared' ? 'shared' : 'personal',
+				runId
+			});
+			if (raw?.id) nodeIds.set(String(raw.id), saved.id);
+			nodeIds.set(name.toLowerCase(), saved.id);
+			out.nodes++;
+		} catch {
+			// The concept cap, or a name already owned by someone else. Counted
+			// rather than thrown: half a lattice imported and a stack trace is a
+			// worse outcome than a number telling you what did not fit.
+			out.skipped++;
+		}
+	}
+
+	for (const raw of Array.isArray(body.associations) ? body.associations : []) {
+		const source = nodeIds.get(String(raw?.sourceId ?? ''));
+		const target = nodeIds.get(String(raw?.targetId ?? ''));
+		if (!source || !target || source === target) {
+			out.skipped++;
+			continue;
+		}
+		try {
+			saveAssociation({
+				sourceId: source,
+				targetId: target,
+				weight: typeof raw?.weight === 'number' ? raw.weight : undefined,
+				contextTags: Array.isArray(raw?.contextTags) ? raw.contextTags.map(String) : undefined,
+				description: String(raw?.description ?? '') || undefined,
+				directionality: raw?.directionality === 'asymmetric' ? 'asymmetric' : 'symmetric',
+				userId,
+				runId
+			});
+			out.edges++;
+		} catch {
+			out.skipped++;
+		}
+	}
+	return out;
 }

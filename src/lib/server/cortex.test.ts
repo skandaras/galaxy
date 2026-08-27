@@ -21,7 +21,11 @@ import {
 	circuitIndex,
 	listCircuits,
 	saveCircuit,
-	deleteCircuit
+	deleteCircuit,
+	exportPayload,
+	importLattice,
+	revertRun,
+	listAssociations as _listAssociations
 } from '$lib/server/cortex';
 import { setSetting } from '$lib/server/settings';
 import { cortexTools } from '$lib/server/engine/tools/cortex';
@@ -532,5 +536,85 @@ describe('areas', () => {
 		saveNode({ name: 'Tide pools', ownerId: ANA, circuits: [area.id] });
 		saveNode({ name: 'Storm logs', ownerId: ANA, circuits: [area.id] });
 		expect(cortexDigest(ANA)).toContain('Coastal fieldwork (2)');
+	});
+});
+
+describe('the round trip', () => {
+	it('comes back the same after export, wipe and import', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		const { a, b } = seedChain();
+		saveNode({ id: a.id, name: a.name, ownerId: ANA, circuits: [area.id] });
+		const before = exportPayload(ANA);
+
+		db.delete(cortexAssociations).run();
+		db.delete(cortexNodes).run();
+		db.run(`DELETE FROM cortex_fts`);
+
+		const res = importLattice(ANA, before);
+		expect(res.nodes).toBe(before.nodes.length);
+		expect(res.edges).toBe(before.associations.length);
+
+		const after = exportPayload(ANA);
+		expect(after.nodes.map((n) => n.name).sort()).toEqual(
+			before.nodes.map((n) => n.name).sort()
+		);
+		expect(after.associations).toHaveLength(before.associations.length);
+		expect(b.id).toBeTruthy();
+	});
+
+	it('carries the areas, so the context index still has something to group by', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		saveNode({ name: 'Tide pools', ownerId: ANA, circuits: [area.id] });
+		const payload = exportPayload(ANA);
+
+		db.delete(cortexNodes).run();
+		importLattice(ANA, payload);
+		expect(cortexDigest(ANA)).toContain('Coastal fieldwork');
+	});
+
+	it('updates rather than duplicating when imported over itself', () => {
+		seedChain();
+		const payload = exportPayload(ANA);
+		// Names, not ids: a file cannot reach a row by guessing an id, and
+		// importing over a lattice should not double it.
+		importLattice(ANA, payload);
+		expect(db.select().from(cortexNodes).all()).toHaveLength(payload.nodes.length);
+	});
+
+	it('drops a connection whose far end did not import', () => {
+		const { a, b } = seedChain();
+		const payload = exportPayload(ANA);
+		payload.nodes = payload.nodes.filter((n) => n.id !== b.id);
+		db.delete(cortexAssociations).run();
+		db.delete(cortexNodes).run();
+		db.run(`DELETE FROM cortex_fts`);
+
+		const res = importLattice(ANA, payload);
+		expect(res.skipped).toBeGreaterThan(0);
+		expect(_listAssociations(a.id, ANA)).toHaveLength(0);
+	});
+
+	it('survives a file that is not a lattice at all', () => {
+		expect(() => importLattice(ANA, { nodes: 'not an array' })).not.toThrow();
+		expect(importLattice(ANA, {}).nodes).toBe(0);
+		expect(importLattice(ANA, null).nodes).toBe(0);
+	});
+
+	it('lands as one run, so a bad import can be undone in one go', () => {
+		const payload = { nodes: [{ name: 'Kelp forests' }, { name: 'Sea urchins' }] };
+		const res = importLattice(ANA, payload);
+		expect(res.nodes).toBe(2);
+		expect(revertRun(res.runId, ANA)).toBeGreaterThan(0);
+	});
+
+	it('respects the concept cap rather than throwing halfway', () => {
+		setSetting('cortex', { maxNodesPerUser: 2 });
+		const res = importLattice(ANA, {
+			nodes: [{ name: 'One' }, { name: 'Two' }, { name: 'Three' }, { name: 'Four' }]
+		});
+		expect(res.nodes).toBe(2);
+		// A number telling you what did not fit beats half a lattice and a stack
+		// trace.
+		expect(res.skipped).toBe(2);
 	});
 });
