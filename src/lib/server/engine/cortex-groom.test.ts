@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
+import { setSetting } from '$lib/server/settings';
 import {
 	cortexAssociations,
 	cortexChangeLog,
@@ -10,7 +11,9 @@ import {
 } from '$lib/server/db/schema';
 import {
 	listNodes,
+	listAssociations,
 	listChanges,
+	deleteNode,
 	revertChange,
 	revertRun,
 	saveAssociation,
@@ -25,6 +28,10 @@ import {
 	runCortexGroom,
 	setUserGroomEnabled,
 	groomStatus,
+	applyProposal,
+	fingerprint,
+	detect,
+	nameSimilarity,
 	tidy
 } from './cortex-groom';
 
@@ -252,5 +259,230 @@ describe('per-user opt-out', () => {
 		// yours, the same split the memory job uses.
 		expect(groomStatus(ANA).enabled).toBe(false);
 		expect(groomStatus(BEN).enabled).toBe(true);
+	});
+});
+
+describe('accepting a suggestion', () => {
+	/** File one proposal and hand back its id. */
+	function file(p: Record<string, unknown>): string {
+		expect(recordProposals(ANA, [p], 10).added).toBe(1);
+		return listProposals(ANA)[0].id;
+	}
+
+	it('creates the concept and its connections', () => {
+		// The assertion this whole phase exists for. Accepting used to flip a
+		// status flag and change no lattice — a button that looked like it worked.
+		const anchor = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		const id = file({
+			kind: 'create',
+			title: 'Add "Tide pools"',
+			payload: {
+				name: 'Tide pools',
+				description: 'Rockpool surveying at low water',
+				connect: [{ node: anchor.id, weight: 0.8, why: 'a place it is practised' }]
+			}
+		});
+
+		expect(applyProposal(id, ANA)).toBe(true);
+		const made = listNodes(ANA).find((n) => n.name === 'Tide pools')!;
+		expect(made).toBeTruthy();
+		expect(made.description).toContain('Rockpool');
+		// Connections are part of the suggestion: an unconnected concept can
+		// never surface, so creating one without them would be a null change.
+		expect(listAssociations(made.id, ANA)).toHaveLength(1);
+		expect(listProposals(ANA)).toHaveLength(0);
+	});
+
+	it('folds one concept into another on a merge', () => {
+		const keep = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const dupe = saveNode({ name: 'Rockpools', ownerId: ANA });
+		const id = file({ kind: 'merge', title: 'Merge', node: keep.id, target: dupe.id });
+
+		expect(applyProposal(id, ANA)).toBe(true);
+		expect(listNodes(ANA).map((n) => n.name)).toEqual(['Tide pools']);
+	});
+
+	it('lands in the history as one run, and reverts as one', () => {
+		const anchor = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		const id = file({
+			kind: 'create',
+			title: 'Add "Tide pools"',
+			payload: { name: 'Tide pools', connect: [{ node: anchor.id }] }
+		});
+		applyProposal(id, ANA);
+
+		const entry = listChanges(ANA).find((c) => c.actor === 'groom' && c.event === 'created')!;
+		expect(entry.runId).toBeTruthy();
+		expect(revertRun(entry.runId!, ANA)).toBeGreaterThan(0);
+		expect(listNodes(ANA).map((n) => n.name)).toEqual(['Coastal ecology']);
+	});
+
+	it('fails cleanly and stays open when the concept has since gone', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		const id = file({ kind: 'connect', title: 'Connect', node: a.id, target: b.id });
+		deleteNode(b.id, ANA);
+
+		// A half-applied change nobody was told about is worse than one that
+		// plainly did not happen.
+		expect(applyProposal(id, ANA)).toBe(false);
+		expect(listProposals(ANA)).toHaveLength(1);
+	});
+
+	it('is still just a decision when dismissed', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		const id = file({ kind: 'connect', title: 'Connect', node: a.id, target: b.id });
+
+		expect(decideProposal(id, ANA, 'discarded')).toBe(true);
+		expect(listAssociations(a.id, ANA)).toHaveLength(0);
+	});
+
+	it('will not apply someone else’s suggestion', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const id = file({ kind: 'delete', title: 'Delete', node: a.id });
+		expect(applyProposal(id, BEN)).toBe(false);
+		expect(listNodes(ANA)).toHaveLength(1);
+	});
+});
+
+describe('fingerprints', () => {
+	it('reads a merge the same way round or not', () => {
+		// A detector finding one and a model proposing the other are the same
+		// conversation to have, and would otherwise both sit in the queue.
+		expect(fingerprint('merge', 'tide-pools', 'rockpools')).toBe(
+			fingerprint('merge', 'rockpools', 'tide-pools')
+		);
+	});
+
+	it('keeps direction where direction means something', () => {
+		expect(fingerprint('rename', 'tide-pools', 'a')).not.toBe(
+			fingerprint('rename', 'a', 'tide-pools')
+		);
+	});
+});
+
+describe('the free half', () => {
+	it('flags a concept nothing connects to', () => {
+		saveNode({ name: 'Bicycle repair', ownerId: ANA });
+		const found = detect(ANA);
+		// Traversal reaches a concept only through a connection, so an orphan
+		// cannot surface however good it is.
+		expect(found.some((d) => d.kind === 'connect' && d.title.includes('connects to nothing'))).toBe(
+			true
+		);
+	});
+
+	it('flags two names that look like one concept', () => {
+		saveNode({ name: 'Tide pools', ownerId: ANA });
+		saveNode({ name: 'The tide pools', ownerId: ANA });
+		expect(detect(ANA).some((d) => d.kind === 'merge')).toBe(true);
+	});
+
+	it('tells a near-duplicate from a different concept', () => {
+		expect(nameSimilarity('Tide pools', 'Letterpress printing')).toBe(0);
+		// Singular and plural are the same word to a person, and this is the pair
+		// the check exists for.
+		expect(nameSimilarity('Tide pools', 'Tide pool surveying')).toBeGreaterThan(0.6);
+		expect(nameSimilarity('Tide pools', 'The tide pools')).toBe(1);
+	});
+
+	it('flags a concept with no area, since the context index is grouped by area', () => {
+		saveNode({ name: 'Tide pools', ownerId: ANA });
+		expect(detect(ANA).some((d) => d.kind === 'circuit')).toBe(true);
+	});
+
+	it('looks at nobody else’s concepts', () => {
+		saveNode({ name: 'Ben orphan', ownerId: BEN, visibility: 'shared' });
+		expect(detect(ANA).some((d) => d.title.includes('Ben orphan'))).toBe(false);
+	});
+
+	it('runs with no model configured, and files what it found', async () => {
+		saveNode({ name: 'Bicycle repair', ownerId: ANA });
+		saveNode({ name: 'Storm logs', ownerId: ANA });
+		saveNode({ name: 'Seabird counts', ownerId: ANA });
+		const res = await runCortexGroom('manual', ANA);
+		// The half that needs a model stands down; the half that does not still
+		// did its work.
+		expect(res.ran).toBe(false);
+		expect(res.detected).toBeGreaterThan(0);
+		expect(listProposals(ANA).length).toBeGreaterThan(0);
+	});
+
+	it('does not raise the same finding twice', async () => {
+		saveNode({ name: 'Bicycle repair', ownerId: ANA });
+		saveNode({ name: 'Storm logs', ownerId: ANA });
+		saveNode({ name: 'Seabird counts', ownerId: ANA });
+		await runCortexGroom('manual', ANA);
+		const first = listProposals(ANA).length;
+		const second = await runCortexGroom('manual', ANA);
+		expect(second.detected).toBe(0);
+		expect(listProposals(ANA)).toHaveLength(first);
+	});
+});
+
+describe('the two modes', () => {
+	beforeEach(() => {
+		saveNode({ name: 'Tide pools', description: 'rockpool surveying', ownerId: ANA });
+		saveNode({ name: 'Storm logs', ownerId: ANA });
+		saveNode({ name: 'Seabird counts', ownerId: ANA });
+	});
+
+	it('a review reads the whole lattice, with its connections', () => {
+		const prompt = buildGroomPrompt(ANA, 10, 'review');
+		expect(prompt).toContain('A FULL REVIEW');
+		expect(prompt).toContain('connects to:');
+		expect(prompt).toContain('Seabird counts');
+	});
+
+	it('a harvest reads what was said, and only a slice of the lattice', () => {
+		const prompt = buildGroomPrompt(ANA, 10, 'harvest', 'we talked about rockpool surveying');
+		expect(prompt).toContain('SINCE THE LAST PASS');
+		expect(prompt).toContain('rockpool surveying');
+		// Names for the rest is all that is needed to avoid proposing a duplicate.
+		expect(prompt).toContain('names only');
+	});
+
+	it('asks for concepts on a harvest and consolidation on a review', () => {
+		expect(buildGroomPrompt(ANA, 10, 'harvest', 'x')).toContain('worth adding');
+		expect(buildGroomPrompt(ANA, 10, 'review')).toContain('near-duplicate concepts');
+	});
+
+	it('a manual run is a review, a scheduled one is a harvest', async () => {
+		expect((await runCortexGroom('manual', ANA)).mode).toBe('review');
+		expect((await runCortexGroom('schedule', ANA)).mode).toBe('harvest');
+	});
+
+	/**
+	 * The mark is only written by a pass that actually reached a model, so with
+	 * none configured it never gets set — correct, since nothing has been read,
+	 * but it means the skip has to be set up rather than arrived at.
+	 */
+	function markAsSeen() {
+		const nodes = listNodes(ANA);
+		setSetting(
+			'cortex.groom.latticeMark',
+			`${nodes.length}:${visibleEdges(ANA).length}:${nodes.reduce(
+				(m, n) => Math.max(m, n.updatedAt?.getTime() ?? 0),
+				0
+			)}`,
+			ANA
+		);
+	}
+
+	it('a quiet scheduled pass makes no model call at all', async () => {
+		// The lever that makes a daily — or hourly — cadence affordable: nothing
+		// said and nothing changed means there is nothing for a model to read.
+		markAsSeen();
+		const res = await runCortexGroom('schedule', ANA);
+		expect(res.ran).toBe(false);
+		expect(res.reason).toBe('nothing new since the last pass');
+	});
+
+	it('picks the work back up when the lattice changes', async () => {
+		markAsSeen();
+		saveNode({ name: 'Kelp forests', ownerId: ANA });
+		const next = await runCortexGroom('schedule', ANA);
+		expect(next.reason).not.toBe('nothing new since the last pass');
 	});
 });

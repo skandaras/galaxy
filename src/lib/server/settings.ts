@@ -544,7 +544,10 @@ export interface CortexGroomSettings {
 
 export const DEFAULT_CORTEX_GROOM: CortexGroomSettings = {
 	enabled: false,
-	intervalHours: 168,
+	// Daily rather than weekly. The scheduled pass only reads what is new, and
+	// skips the model entirely when nothing is, so a quiet day costs nothing —
+	// which is what makes a short cadence affordable at all.
+	intervalHours: 24,
 	maxProposalsPerRun: 10
 };
 

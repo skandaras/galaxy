@@ -184,7 +184,14 @@ interface ActivityDigest {
  * already lists every document in the bootstrap — auditing it again only
  * produced the same observation duplicated into every user's memory.
  */
-function gatherActivity(userId: string, sinceMs: number): ActivityDigest {
+/**
+ * Chats, messages and coding sessions since a watermark.
+ *
+ * Exported because the Cortex groomer needs the same window and the same
+ * shape — a second implementation would drift, and this one already handles
+ * the truncation and ordering that make the digest affordable.
+ */
+export function gatherActivity(userId: string, sinceMs: number): ActivityDigest {
 	const since = new Date(sinceMs);
 	const parts: string[] = [];
 
