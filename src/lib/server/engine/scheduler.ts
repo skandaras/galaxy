@@ -85,7 +85,9 @@ async function sweepCortexGroom(): Promise<void> {
 	if (!cfg.enabled) return;
 	const now = Date.now();
 	for (const user of db.select().from(users).all()) {
-		if (now < groomStatus(user.id).lastRun + cfg.intervalHours * 3_600_000) continue;
+		const status = groomStatus(user.id);
+		if (!status.enabled) continue;
+		if (now < status.lastRun + cfg.intervalHours * 3_600_000) continue;
 		// Sequential, like the memory sweep: parallel runs would race the budget
 		// cap, and one person's failure must not stop the rest.
 		await runCortexGroom('schedule', user.id).catch(() => {

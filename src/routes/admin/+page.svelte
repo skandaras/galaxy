@@ -8,6 +8,7 @@
 	import Users from '$lib/components/admin/Users.svelte';
 	import Boards from '$lib/components/admin/Boards.svelte';
 	import Ux from '$lib/components/admin/Ux.svelte';
+	import Cortex from '$lib/components/admin/Cortex.svelte';
 	import Settings from '$lib/components/admin/Settings.svelte';
 	import Usage from '$lib/components/admin/Usage.svelte';
 
@@ -20,6 +21,7 @@
 		'Skills',
 		'Memory',
 		'Boards',
+		'Cortex',
 		'UX',
 		'Settings',
 		'Usage'
@@ -50,6 +52,8 @@
 			<Skills />
 		{:else if active === 'Memory'}
 			<Memory />
+		{:else if active === 'Cortex'}
+			<Cortex />
 		{:else if active === 'Boards'}
 			<Boards />
 		{:else if active === 'UX'}

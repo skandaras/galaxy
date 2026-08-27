@@ -43,6 +43,7 @@ import { logUsage } from './usage';
  */
 
 const LAST_RUN_KEY = 'cortex.groom.lastRun';
+const USER_ENABLED_KEY = 'cortex.groom.userEnabled';
 
 export interface GroomResult {
 	ran: boolean;
@@ -60,7 +61,16 @@ export function groomSettings(): CortexGroomSettings {
 }
 
 export function groomStatus(userId: string) {
-	return { lastRun: getSetting<number>(LAST_RUN_KEY, 0, userId) };
+	return {
+		lastRun: getSetting<number>(LAST_RUN_KEY, 0, userId),
+		// Whether *your* lattice gets groomed is yours; how often the job runs at
+		// all is the platform's. The same split the memory job uses.
+		enabled: getSetting<boolean>(USER_ENABLED_KEY, true, userId)
+	};
+}
+
+export function setUserGroomEnabled(userId: string, enabled: boolean): void {
+	setSetting(USER_ENABLED_KEY, enabled, userId);
 }
 
 /** Stable enough that the same suggestion is recognised on a later run. */

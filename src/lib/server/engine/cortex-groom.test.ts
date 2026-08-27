@@ -23,6 +23,8 @@ import {
 	listProposals,
 	recordProposals,
 	runCortexGroom,
+	setUserGroomEnabled,
+	groomStatus,
 	tidy
 } from './cortex-groom';
 
@@ -236,5 +238,19 @@ describe('retention', () => {
 			.run();
 		expect(prune(Date.now(), true).cortexChanges).toBeGreaterThan(0);
 		expect(listChanges(ANA)).toHaveLength(0);
+	});
+});
+
+describe('per-user opt-out', () => {
+	it('defaults to letting the groomer look', () => {
+		expect(groomStatus(ANA).enabled).toBe(true);
+	});
+
+	it('remembers a decision, and only that person’s', () => {
+		setUserGroomEnabled(ANA, false);
+		// The cadence is the platform's; whether it touches *your* concepts is
+		// yours, the same split the memory job uses.
+		expect(groomStatus(ANA).enabled).toBe(false);
+		expect(groomStatus(BEN).enabled).toBe(true);
 	});
 });
