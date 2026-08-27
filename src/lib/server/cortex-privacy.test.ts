@@ -1,9 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { eq } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
 import { cortexAssociations, cortexChangeLog, cortexNodes } from '$lib/server/db/schema';
 import {
 	activate,
+	circuitIndex,
+	cortexDigest,
 	mapProjection,
 	mergeNodes,
 	exportLattice,
@@ -189,6 +192,29 @@ describe('what leaves the module', () => {
 		expect(serialised).not.toContain(BEN_SECRET);
 		// And the edge into Ben's lattice is not there to be drawn either.
 		expect(map.edges).toHaveLength(1);
+	});
+
+	it('will not render someone else’s label for their shared node', () => {
+		// The API takes free strings for circuits, so the id is usually the label
+		// itself. Ben shares a node — its *name* is legitimately Ana's to see,
+		// that is what sharing means — but the area he filed it under is his.
+		const shared = saveNode({
+			name: 'A concept ben shares',
+			description: 'Visible to everyone by design',
+			ownerId: BEN,
+			visibility: 'shared'
+		});
+		db.update(cortexNodes)
+			.set({ circuits: [`${BEN_SECRET}-area`] })
+			.where(eq(cortexNodes.id, shared.id))
+			.run();
+
+		const index = circuitIndex(ANA);
+		expect(JSON.stringify(index.circuits)).not.toContain(BEN_SECRET);
+		expect(cortexDigest(ANA)).not.toContain(BEN_SECRET);
+
+		// Ben's own view still shows him his own label.
+		expect(JSON.stringify(circuitIndex(BEN).circuits)).toContain(BEN_SECRET);
 	});
 
 	it('keeps the other person out of an export', () => {

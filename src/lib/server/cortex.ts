@@ -574,17 +574,27 @@ export interface CircuitSummary {
  * someone typed is still a label.
  */
 export function circuitIndex(userId: string): { circuits: CircuitSummary[]; unfiled: number } {
+	// Only this reader's own circuit rows. The first version read the whole
+	// table, which meant a node someone else shared could render *their* label
+	// in *this* person's prompt — and since the API accepts free strings, the id
+	// is often the label, so there was no safe half to show either.
 	const named = new Map(
 		db
 			.select()
 			.from(cortexCircuits)
+			.where(or(eq(cortexCircuits.ownerId, userId), isNull(cortexCircuits.ownerId))!)
 			.all()
 			.map((c) => [c.id, c.name])
 	);
 	const counts = new Map<string, number>();
 	let unfiled = 0;
 	for (const node of listNodes(userId)) {
-		const on = node.circuits ?? [];
+		// A label written on your own node is yours to see. A label on a node
+		// somebody shared with you is theirs, and only surfaces if it resolves to
+		// a circuit you also keep — otherwise the node counts as unfiled here,
+		// which is what it is from where you are standing.
+		const mine = node.ownerId === userId || node.ownerId === null;
+		const on = (node.circuits ?? []).filter((id) => mine || named.has(id));
 		if (!on.length) {
 			unfiled++;
 			continue;
