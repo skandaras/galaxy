@@ -4,9 +4,16 @@ import { db } from '$lib/server/db';
 import { cortexAssociations, cortexNodes, cortexProposals } from '$lib/server/db/schema';
 import {
 	circuitIndex,
+	deleteAssociation,
+	deleteNode,
+	findNodeByName,
+	getNode,
 	listAssociations,
 	listNodes,
 	logChange,
+	mergeNodes,
+	saveAssociation,
+	saveNode,
 	syncFts,
 	visibleEdges,
 	type CortexNode
@@ -73,9 +80,21 @@ export function setUserGroomEnabled(userId: string, enabled: boolean): void {
 	setSetting(USER_ENABLED_KEY, enabled, userId);
 }
 
-/** Stable enough that the same suggestion is recognised on a later run. */
+/**
+ * Stable enough that the same suggestion is recognised on a later run.
+ *
+ * Sorted for the kinds where the two ends are interchangeable. A merge of A into
+ * B and a merge of B into A are the same conversation to have, and a detector
+ * finding one while a model proposes the other would otherwise put both in the
+ * queue — duplicating precisely where the two halves of the groomer overlap
+ * most.
+ */
+const SYMMETRIC_KINDS = new Set(['merge', 'connect', 'disconnect', 'weight']);
+
 export function fingerprint(kind: string, ...parts: string[]): string {
-	return [kind, ...parts.map((p) => p.trim().toLowerCase())].filter(Boolean).join('|').slice(0, 300);
+	const cleaned = parts.map((p) => p.trim().toLowerCase()).filter(Boolean);
+	const ordered = SYMMETRIC_KINDS.has(kind) ? [...cleaned].sort() : cleaned;
+	return [kind, ...ordered].join('|').slice(0, 300);
 }
 
 // --- the mechanical pass ----------------------------------------------------
@@ -147,11 +166,150 @@ export function listProposals(userId: string, status: 'open' | 'all' = 'open') {
 		.all();
 }
 
+/**
+ * Carry out a suggestion.
+ *
+ * Accepting used to mean flipping a status flag and nothing else, so the button
+ * wrote a row and changed no lattice — worse than having no button, because it
+ * looked like it had worked. This is the half that was missing.
+ *
+ * Every change goes through the ordinary write path under one `runId`, so an
+ * accepted suggestion is logged like any hand edit and undone the same way. A
+ * proposal whose concepts have been deleted since it was raised fails and stays
+ * open rather than half-applying.
+ */
+export function applyProposal(id: string, userId: string): boolean {
+	const p = db
+		.select()
+		.from(cortexProposals)
+		.where(
+			and(
+				eq(cortexProposals.id, id),
+				eq(cortexProposals.userId, userId),
+				eq(cortexProposals.status, 'open')
+			)
+		)
+		.get();
+	if (!p) return false;
+
+	const runId = randomUUID();
+	const payload = (p.payload ?? {}) as Record<string, unknown>;
+	const num = (v: unknown) => (typeof v === 'number' ? v : undefined);
+	const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+
+	try {
+		switch (p.kind) {
+			case 'create': {
+				const name = str(payload.name) ?? p.title;
+				const node = saveNode({
+					name,
+					description: str(payload.description),
+					ownerId: userId,
+					actor: 'groom',
+					runId
+				});
+				// A concept with no connections can never surface in a query, so the
+				// links are part of the suggestion rather than a follow-up.
+				for (const raw of Array.isArray(payload.connect) ? payload.connect : []) {
+					const link = (raw ?? {}) as Record<string, unknown>;
+					const targetRef = str(link.node);
+					if (!targetRef) continue;
+					const target = getNode(targetRef, userId) ?? findNodeByName(targetRef, userId);
+					if (!target || target.id === node.id) continue;
+					saveAssociation({
+						sourceId: node.id,
+						targetId: target.id,
+						weight: num(link.weight),
+						description: str(link.why),
+						userId,
+						actor: 'groom',
+						runId
+					});
+				}
+				break;
+			}
+			case 'merge': {
+				if (!p.nodeId || !p.targetId) return false;
+				if (!mergeNodes(p.nodeId, p.targetId, userId, 'groom')) return false;
+				break;
+			}
+			case 'connect': {
+				if (!p.nodeId || !p.targetId) return false;
+				saveAssociation({
+					sourceId: p.nodeId,
+					targetId: p.targetId,
+					weight: num(payload.weight),
+					description: str(payload.why),
+					userId,
+					actor: 'groom',
+					runId
+				});
+				break;
+			}
+			case 'disconnect': {
+				if (!p.nodeId || !p.targetId) return false;
+				if (!deleteAssociation(p.nodeId, p.targetId, userId, 'groom')) return false;
+				break;
+			}
+			case 'weight': {
+				if (!p.nodeId || !p.targetId || num(payload.weight) === undefined) return false;
+				saveAssociation({
+					sourceId: p.nodeId,
+					targetId: p.targetId,
+					weight: num(payload.weight),
+					userId,
+					actor: 'groom',
+					runId
+				});
+				break;
+			}
+			case 'circuit':
+			case 'convergence':
+			case 'rename': {
+				if (!p.nodeId) return false;
+				const node = getNode(p.nodeId, userId);
+				if (!node) return false;
+				saveNode({
+					id: node.id,
+					name: p.kind === 'rename' ? (str(payload.name) ?? node.name) : node.name,
+					ownerId: userId,
+					circuits: Array.isArray(payload.areas) ? payload.areas.map(String) : undefined,
+					isConvergence:
+						p.kind === 'convergence' ? payload.isConvergence !== false : undefined,
+					actor: 'groom',
+					runId
+				});
+				break;
+			}
+			case 'delete': {
+				if (!p.nodeId) return false;
+				if (!deleteNode(p.nodeId, userId, 'groom')) return false;
+				break;
+			}
+			default:
+				return false;
+		}
+	} catch {
+		// A concept gone since the suggestion was raised, or the cap reached.
+		// Leave it open: a half-applied change nobody was told about is worse
+		// than one that plainly did not happen.
+		return false;
+	}
+
+	db.update(cortexProposals)
+		.set({ status: 'actioned', decidedAt: new Date() })
+		.where(eq(cortexProposals.id, id))
+		.run();
+	return true;
+}
+
 export function decideProposal(
 	id: string,
 	userId: string,
 	status: 'actioned' | 'discarded'
 ): boolean {
+	// Accepting means doing the thing. Only a dismissal is a bare status change.
+	if (status === 'actioned') return applyProposal(id, userId);
 	const res = db
 		.update(cortexProposals)
 		.set({ status, decidedAt: new Date() })
@@ -200,8 +358,11 @@ export function recordProposals(
 		const targetId = typeof p.target === 'string' ? p.target : null;
 		// A proposal naming a node this person cannot see is either a model
 		// hallucination or a boundary crossing. Neither is worth filing.
-		if (nodeId && !visible.has(nodeId)) continue;
-		if (targetId && !visible.has(targetId)) continue;
+		// `create` is the exception by definition: its concept does not exist yet.
+		if (kind !== 'create') {
+			if (nodeId && !visible.has(nodeId)) continue;
+			if (targetId && !visible.has(targetId)) continue;
+		}
 
 		const fp = fingerprint(kind, nodeId ?? title, targetId ?? '');
 		if (known.has(fp)) {
@@ -230,6 +391,7 @@ export function recordProposals(
 }
 
 const KINDS = [
+	'create',
 	'merge',
 	'connect',
 	'disconnect',
@@ -280,8 +442,19 @@ export function buildGroomPrompt(userId: string, max: number): string {
 		`--- YOUR TASK ---`,
 		`Suggest at most ${max} changes that would make this lattice better at answering questions about its owner.`,
 		'Look for: near-duplicate concepts that should be merged; concepts that connect to nothing and so can never surface; clusters with no connection leaving them; obvious missing connections between concepts that clearly relate; concepts that bridge several areas and are not marked as bridges; unfiled concepts that belong to an existing area.',
-		'Reply with ONLY a JSON array. Each item: {"kind":"merge|connect|disconnect|weight|circuit|convergence|rename|delete","title":"one line","rationale":"why","node":"node-id","target":"node-id or area-id, if the change involves two things","payload":{}}',
-		'Use the exact ids given above. Propose nothing you cannot justify from what you were shown.'
+		'Reply with ONLY a JSON array. Every item has "kind", "title" (one line) and "rationale" (why). What else it needs depends on the kind:',
+		[
+			'create   — payload {"name":"…","description":"…","connect":[{"node":"node-id","weight":0.7,"why":"…"}]}. Connections are part of the suggestion, not a follow-up: a concept nothing links to can never surface in a query.',
+			'merge    — "node": the one to keep, "target": the one folded into it.',
+			'connect  — "node" and "target", payload {"weight":0.0-1.0,"why":"…"}.',
+			'disconnect — "node" and "target".',
+			'weight   — "node" and "target", payload {"weight":0.0-1.0}.',
+			'circuit  — "node", payload {"areas":["area-id", …]} (the full set it should be in).',
+			'convergence — "node", payload {"isConvergence":true|false}.',
+			'rename   — "node", payload {"name":"…"}.',
+			'delete   — "node".'
+		].join('\n'),
+		'Use the exact ids given above; a node id you invent will be dropped. Propose nothing you cannot justify from what you were shown.'
 	].join('\n\n');
 }
 

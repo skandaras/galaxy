@@ -1165,6 +1165,9 @@ export const cortexChangeLog = sqliteTable(
 );
 
 export const CORTEX_PROPOSAL_KINDS = [
+	// The one the groomer could not make until now, and the only one that grows
+	// a lattice rather than tidying one.
+	'create',
 	'merge',
 	'connect',
 	'disconnect',

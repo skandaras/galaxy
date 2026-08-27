@@ -10,7 +10,9 @@ import {
 } from '$lib/server/db/schema';
 import {
 	listNodes,
+	listAssociations,
 	listChanges,
+	deleteNode,
 	revertChange,
 	revertRun,
 	saveAssociation,
@@ -25,6 +27,8 @@ import {
 	runCortexGroom,
 	setUserGroomEnabled,
 	groomStatus,
+	applyProposal,
+	fingerprint,
 	tidy
 } from './cortex-groom';
 
@@ -252,5 +256,105 @@ describe('per-user opt-out', () => {
 		// yours, the same split the memory job uses.
 		expect(groomStatus(ANA).enabled).toBe(false);
 		expect(groomStatus(BEN).enabled).toBe(true);
+	});
+});
+
+describe('accepting a suggestion', () => {
+	/** File one proposal and hand back its id. */
+	function file(p: Record<string, unknown>): string {
+		expect(recordProposals(ANA, [p], 10).added).toBe(1);
+		return listProposals(ANA)[0].id;
+	}
+
+	it('creates the concept and its connections', () => {
+		// The assertion this whole phase exists for. Accepting used to flip a
+		// status flag and change no lattice — a button that looked like it worked.
+		const anchor = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		const id = file({
+			kind: 'create',
+			title: 'Add "Tide pools"',
+			payload: {
+				name: 'Tide pools',
+				description: 'Rockpool surveying at low water',
+				connect: [{ node: anchor.id, weight: 0.8, why: 'a place it is practised' }]
+			}
+		});
+
+		expect(applyProposal(id, ANA)).toBe(true);
+		const made = listNodes(ANA).find((n) => n.name === 'Tide pools')!;
+		expect(made).toBeTruthy();
+		expect(made.description).toContain('Rockpool');
+		// Connections are part of the suggestion: an unconnected concept can
+		// never surface, so creating one without them would be a null change.
+		expect(listAssociations(made.id, ANA)).toHaveLength(1);
+		expect(listProposals(ANA)).toHaveLength(0);
+	});
+
+	it('folds one concept into another on a merge', () => {
+		const keep = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const dupe = saveNode({ name: 'Rockpools', ownerId: ANA });
+		const id = file({ kind: 'merge', title: 'Merge', node: keep.id, target: dupe.id });
+
+		expect(applyProposal(id, ANA)).toBe(true);
+		expect(listNodes(ANA).map((n) => n.name)).toEqual(['Tide pools']);
+	});
+
+	it('lands in the history as one run, and reverts as one', () => {
+		const anchor = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		const id = file({
+			kind: 'create',
+			title: 'Add "Tide pools"',
+			payload: { name: 'Tide pools', connect: [{ node: anchor.id }] }
+		});
+		applyProposal(id, ANA);
+
+		const entry = listChanges(ANA).find((c) => c.actor === 'groom' && c.event === 'created')!;
+		expect(entry.runId).toBeTruthy();
+		expect(revertRun(entry.runId!, ANA)).toBeGreaterThan(0);
+		expect(listNodes(ANA).map((n) => n.name)).toEqual(['Coastal ecology']);
+	});
+
+	it('fails cleanly and stays open when the concept has since gone', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		const id = file({ kind: 'connect', title: 'Connect', node: a.id, target: b.id });
+		deleteNode(b.id, ANA);
+
+		// A half-applied change nobody was told about is worse than one that
+		// plainly did not happen.
+		expect(applyProposal(id, ANA)).toBe(false);
+		expect(listProposals(ANA)).toHaveLength(1);
+	});
+
+	it('is still just a decision when dismissed', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		const id = file({ kind: 'connect', title: 'Connect', node: a.id, target: b.id });
+
+		expect(decideProposal(id, ANA, 'discarded')).toBe(true);
+		expect(listAssociations(a.id, ANA)).toHaveLength(0);
+	});
+
+	it('will not apply someone else’s suggestion', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const id = file({ kind: 'delete', title: 'Delete', node: a.id });
+		expect(applyProposal(id, BEN)).toBe(false);
+		expect(listNodes(ANA)).toHaveLength(1);
+	});
+});
+
+describe('fingerprints', () => {
+	it('reads a merge the same way round or not', () => {
+		// A detector finding one and a model proposing the other are the same
+		// conversation to have, and would otherwise both sit in the queue.
+		expect(fingerprint('merge', 'tide-pools', 'rockpools')).toBe(
+			fingerprint('merge', 'rockpools', 'tide-pools')
+		);
+	});
+
+	it('keeps direction where direction means something', () => {
+		expect(fingerprint('rename', 'tide-pools', 'a')).not.toBe(
+			fingerprint('rename', 'a', 'tide-pools')
+		);
 	});
 });
