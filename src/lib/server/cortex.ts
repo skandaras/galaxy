@@ -914,3 +914,82 @@ export function refreshLayout(): { recomputed: boolean; nodes: number; edges: nu
 	setSetting(LAYOUT_SIGNATURE_KEY, signature);
 	return { recomputed: true, nodes: nodes.length, edges: edges.length };
 }
+
+
+// --- circuits ---------------------------------------------------------------
+
+/**
+ * Areas of the lattice: a label for grouping, and what the context digest is
+ * indexed by. Deliberately not a routing key — seeding goes through FTS, so a
+ * circuit can be renamed, split or abandoned without touching retrieval.
+ */
+export function listCircuits(userId: string): CortexCircuit[] {
+	return db
+		.select()
+		.from(cortexCircuits)
+		.where(or(eq(cortexCircuits.ownerId, userId), isNull(cortexCircuits.ownerId))!)
+		.orderBy(cortexCircuits.name)
+		.all();
+}
+
+export function saveCircuit(opts: {
+	id?: string;
+	name: string;
+	description?: string;
+	ownerId: string;
+}): CortexCircuit {
+	const name = opts.name.trim();
+	if (!name) throw new Error('name is required');
+	const existing = opts.id
+		? db.select().from(cortexCircuits).where(eq(cortexCircuits.id, opts.id)).get()
+		: listCircuits(opts.ownerId).find((c) => c.name.toLowerCase() === name.toLowerCase());
+	if (existing && existing.ownerId !== null && existing.ownerId !== opts.ownerId) {
+		throw new Error('That area belongs to someone else');
+	}
+
+	const row: CortexCircuit = {
+		id: existing?.id ?? uniqueCircuitId(slugify(name)),
+		ownerId: existing ? existing.ownerId : opts.ownerId,
+		name,
+		description: opts.description ?? existing?.description ?? '',
+		createdAt: existing?.createdAt ?? new Date()
+	};
+	if (existing) {
+		db.update(cortexCircuits).set(row).where(eq(cortexCircuits.id, row.id)).run();
+	} else {
+		db.insert(cortexCircuits).values(row).run();
+	}
+	return row;
+}
+
+function uniqueCircuitId(base: string): string {
+	let candidate = base;
+	for (
+		let i = 2;
+		db.select().from(cortexCircuits).where(eq(cortexCircuits.id, candidate)).get();
+		i++
+	) {
+		candidate = `${base}-${i}`;
+	}
+	return candidate;
+}
+
+/**
+ * Remove an area. Nodes filed under it are left alone and simply become
+ * unfiled — deleting a label should never delete what was labelled.
+ */
+export function deleteCircuit(id: string, userId: string): boolean {
+	const circuit = db.select().from(cortexCircuits).where(eq(cortexCircuits.id, id)).get();
+	if (!circuit || (circuit.ownerId !== null && circuit.ownerId !== userId)) return false;
+	db.delete(cortexCircuits).where(eq(cortexCircuits.id, id)).run();
+	for (const node of listNodes(userId)) {
+		if (!node.circuits?.includes(id)) continue;
+		if (!canEdit(node, userId)) continue;
+		db.update(cortexNodes)
+			.set({ circuits: node.circuits.filter((c) => c !== id) })
+			.where(eq(cortexNodes.id, node.id))
+			.run();
+	}
+	logChange({ userId, event: 'circuit-deleted', detail: circuit.name });
+	return true;
+}

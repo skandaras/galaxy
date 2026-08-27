@@ -25,6 +25,7 @@
 		z: number | null;
 		isConvergence: boolean;
 		degree: number;
+		circuits?: string[] | null;
 	}
 	interface MapEdge {
 		source: string;
@@ -36,12 +37,15 @@
 		nodes = [],
 		edges = [],
 		selectedId = null,
-		onselect
+		onselect,
+		areaNames
 	}: {
 		nodes?: MapNode[];
 		edges?: MapEdge[];
 		selectedId?: string | null;
 		onselect?: (id: string | null) => void;
+		/** Area id → display name, so the chart can label a cluster. */
+		areaNames?: Map<string, string>;
 	} = $props();
 
 	let canvas = $state<HTMLCanvasElement>();
@@ -97,6 +101,28 @@
 	function css(name: string, fallback: string): string {
 		if (!wrap) return fallback;
 		return getComputedStyle(wrap).getPropertyValue(name).trim() || fallback;
+	}
+
+	/**
+	 * A hue per area, spread evenly around the wheel and keyed by the area's
+	 * position in the sorted set so a colour does not change when an unrelated
+	 * one is added. Areas are what the agents' context index is grouped by, so
+	 * seeing them here is seeing what the agent sees.
+	 *
+	 * Deliberately not the theme accent: this is categorical data and one accent
+	 * cannot carry it. Lightness and saturation are fixed to stay legible on both
+	 * a near-black and a cream page.
+	 */
+	const areaHues = $derived.by(() => {
+		const seen = [...new Set(nodes.flatMap((n) => n.circuits ?? []))].sort();
+		return new Map(seen.map((id, i) => [id, Math.round((i * 360) / Math.max(seen.length, 1))]));
+	});
+
+	function areaColour(node: MapNode): string | null {
+		const first = node.circuits?.[0];
+		if (!first) return null;
+		const hue = areaHues.get(first);
+		return hue === undefined ? null : `hsl(${hue} 52% 62%)`;
 	}
 
 	function radius(node: MapNode): number {
@@ -164,7 +190,7 @@
 			const depth = points.get(node.id)?.z ?? 0;
 			ctx.globalAlpha = selected ? 1 : Math.max(0.45, 1 - Math.abs(depth) / 400);
 
-			ctx.fillStyle = selected ? accent : node.isConvergence ? accent : dim;
+			ctx.fillStyle = selected ? accent : node.isConvergence ? accent : (areaColour(node) ?? dim);
 			ctx.beginPath();
 			ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
 			ctx.fill();
@@ -193,6 +219,28 @@
 				ctx.font = `${selected ? 600 : 400} 11px var(--font-ui, system-ui)`;
 				ctx.textAlign = 'center';
 				ctx.fillText(node.name, p.x, p.y - r - 6);
+			}
+			ctx.globalAlpha = 1;
+		}
+
+		// Zoomed far enough out that node labels are gone, the areas are what is
+		// left to navigate by — drawn at the centre of mass of each one's nodes.
+		if (scale <= 0.55 && areaHues.size) {
+			const centres = new Map<string, { x: number; y: number; n: number }>();
+			for (const node of nodes) {
+				const id = node.circuits?.[0];
+				const p = at(node.id);
+				if (!id || !p) continue;
+				const acc = centres.get(id) ?? { x: 0, y: 0, n: 0 };
+				centres.set(id, { x: acc.x + p.x, y: acc.y + p.y, n: acc.n + 1 });
+			}
+			ctx.textAlign = 'center';
+			ctx.font = '600 13px var(--font-ui, system-ui)';
+			for (const [id, c] of centres) {
+				if (c.n < 2) continue;
+				ctx.fillStyle = `hsl(${areaHues.get(id)} 52% 62%)`;
+				ctx.globalAlpha = 0.85;
+				ctx.fillText(areaNames?.get(id) ?? id, c.x / c.n, c.y / c.n);
 			}
 			ctx.globalAlpha = 1;
 		}

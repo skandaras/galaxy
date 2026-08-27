@@ -18,7 +18,10 @@ import {
 	cortexDigest,
 	deleteNode,
 	refreshLayout,
-	circuitIndex
+	circuitIndex,
+	listCircuits,
+	saveCircuit,
+	deleteCircuit
 } from '$lib/server/cortex';
 import { setSetting } from '$lib/server/settings';
 import { cortexTools } from '$lib/server/engine/tools/cortex';
@@ -461,5 +464,36 @@ describe('the layout sweep', () => {
 
 	it('copes with an empty lattice', () => {
 		expect(() => refreshLayout()).not.toThrow();
+	});
+});
+
+describe('areas', () => {
+	it('slugs an id from the name and reuses it on a second save', () => {
+		const a = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		expect(a.id).toBe('coastal-fieldwork');
+		expect(saveCircuit({ name: 'coastal FIELDWORK', ownerId: ANA }).id).toBe(a.id);
+		expect(listCircuits(ANA)).toHaveLength(1);
+	});
+
+	it('unfiles the nodes rather than deleting them', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		const node = saveNode({ name: 'Tide pools', ownerId: ANA, circuits: [area.id] });
+		expect(deleteCircuit(area.id, ANA)).toBe(true);
+		// Deleting a label must never delete what was labelled.
+		const after = db.select().from(cortexNodes).all().find((n) => n.id === node.id)!;
+		expect(after).toBeTruthy();
+		expect(after.circuits).toEqual([]);
+	});
+
+	it('refuses to delete someone else’s area', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		expect(deleteCircuit(area.id, 'user-ben')).toBe(false);
+	});
+
+	it('shows up in the digest as an area with a count', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		saveNode({ name: 'Tide pools', ownerId: ANA, circuits: [area.id] });
+		saveNode({ name: 'Storm logs', ownerId: ANA, circuits: [area.id] });
+		expect(cortexDigest(ANA)).toContain('Coastal fieldwork (2)');
 	});
 });

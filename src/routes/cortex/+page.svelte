@@ -42,8 +42,12 @@
 	let visibility = $state<'personal' | 'shared'>('personal');
 	let connectTo = $state('');
 	let connectWeight = $state(0.5);
+	/** Comma-separated while editing; the API takes an array. */
+	let areas = $state('');
+	let circuits = $state<{ id: string; name: string; count: number }[]>([]);
 
 	const selected = $derived(nodes.find((n) => n.id === selectedId) ?? null);
+	const areaNames = $derived(new Map(circuits.map((c) => [c.id, c.name])));
 
 	/**
 	 * The list is not a fallback for the map — it is the same interface, and the
@@ -60,11 +64,38 @@
 	);
 
 	async function load() {
-		const res = await fetch('/api/cortex/map');
-		if (!res.ok) return;
-		const data = await res.json();
-		nodes = data.nodes;
-		edges = data.edges;
+		const [mapRes, circuitRes] = await Promise.all([
+			fetch('/api/cortex/map'),
+			fetch('/api/cortex/circuits')
+		]);
+		if (mapRes.ok) {
+			const data = await mapRes.json();
+			nodes = data.nodes;
+			edges = data.edges;
+		}
+		if (circuitRes.ok) circuits = await circuitRes.json();
+	}
+
+	/**
+	 * Areas are typed as names, stored as ids. A name with no area behind it
+	 * creates one — filing something should not be a two-step errand.
+	 */
+	async function resolveAreas(): Promise<string[]> {
+		const wanted = areas
+			.split(',')
+			.map((a) => a.trim())
+			.filter(Boolean);
+		const out: string[] = [];
+		for (const name of wanted) {
+			const known = circuits.find((c) => c.name.toLowerCase() === name.toLowerCase());
+			if (known) {
+				out.push(known.id);
+				continue;
+			}
+			const made = await send('/api/cortex/circuits', 'POST', { name });
+			if (made) out.push(made.id);
+		}
+		return out;
 	}
 
 	async function select(id: string | null) {
@@ -83,6 +114,9 @@
 		description = data.node.description;
 		isConvergence = data.node.isConvergence;
 		visibility = data.node.visibility;
+		areas = (data.node.circuits ?? [])
+			.map((id: string) => circuits.find((c) => c.id === id)?.name ?? id)
+			.join(', ');
 	}
 
 	function resetForm() {
@@ -91,6 +125,7 @@
 		isConvergence = false;
 		visibility = 'personal';
 		connectTo = '';
+		areas = '';
 	}
 
 	function startNew() {
@@ -121,7 +156,7 @@
 
 	async function save() {
 		if (!name.trim()) return;
-		const body = { name, description, isConvergence, visibility };
+		const body = { name, description, isConvergence, visibility, circuits: await resolveAreas() };
 		const saved = selectedId
 			? await send(`/api/cortex/nodes/${encodeURIComponent(selectedId)}`, 'PATCH', body)
 			: await send('/api/cortex/nodes', 'POST', body);
@@ -163,7 +198,7 @@
 
 <div class="cortex">
 	<section class="chart">
-		<LatticeMap {nodes} {edges} {selectedId} onselect={select} />
+		<LatticeMap {nodes} {edges} {selectedId} onselect={select} areaNames={areaNames} />
 	</section>
 
 	<section class="panel">
@@ -217,6 +252,12 @@
 			{#if error}<p class="error" role="alert">{error}</p>{/if}
 			<input placeholder="Name" bind:value={name} />
 			<textarea placeholder="What it is, and why it matters" bind:value={description}></textarea>
+			<!-- Areas are what the agents' context index is grouped by, so a node
+			     with none is harder for them to find. -->
+			<input placeholder="Areas, comma separated" bind:value={areas} list="cortex-areas" />
+			<datalist id="cortex-areas">
+				{#each circuits as c (c.id)}<option value={c.name}></option>{/each}
+			</datalist>
 			<div class="row">
 				<label><input type="checkbox" bind:checked={isConvergence} /> Bridges domains</label>
 				<label>
