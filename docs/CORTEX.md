@@ -613,8 +613,23 @@ context (`events`, `usageLog`, `messages.trace` all record enough), not on
 co-retrieval, which just teaches the lattice to confirm itself. Connection
 suggestions, cluster proposals and staleness flagging go through a review queue.
 
-**P4 — Growth.** Embeddings for seeding, replacing FTS in the same step. YAML
-round-trip. Tier-2 3D map. Expanded node set.
+**P4 — Usable and fillable. Shipped.** Every setting reachable (Admin → Cortex
+for the schedule and the lattice caps, Settings → Cortex for a person's own
+opt-out, and the change-history window beside the other retention controls), and
+the file round trip: export what you have, draft a lattice in a file, import it.
+
+**The groomer's cadence** lives in Admin → Cortex: weekly by default
+(`intervalHours: 168`), per user, off until switched on, ten suggestions a run.
+`tidy` runs on every pass whether or not a model is configured for the
+`cortex-groom` task, because that half needs none.
+
+**Still deferred, with reasons rather than silence.** *Embeddings* — FTS scores
+0.98 recall on the fixture, and replacing it needs new provider surface plus an
+answer for when no embedding model is configured, to chase a gain nothing has
+demonstrated. *Tier-2 3D* — the z coordinates are computed and stable so this is
+mostly a lazily-imported renderer, but the stated bar was that tier 1 earn it,
+and tier 1 has had no real lattice to prove anything on. *Kinship* — still needs
+a second populated lattice; design intact above.
 
 ---
 
@@ -680,6 +695,12 @@ replayed to later runs, because re-raising something already turned down is how
 a review queue teaches people to stop reading it. Reviewed in the Cortex tab
 rather than Admin — it is somebody's own lattice, not a platform setting.
 
+**Undo covers creation as well as change.** Restoring a `before` snapshot only
+answers for things that were modified; anything newly *made* — every concept in
+an import, every connection the groomer adds — is undone by removing it. The
+first version knew only the first half, so a whole-run revert could report
+success having done nothing.
+
 **Undo is what makes applying anything defensible.** A change you cannot undo is
 a decision taken on your behalf; one you can is a suggestion you did not have to
 accept. `revertChange` restores from the log's `before` snapshot, `revertRun`
@@ -699,6 +720,28 @@ carried a sweep for edges whose far end no longer exists. It was unreachable
 code dressed as diligence — a scoped read cannot see such an edge in the first
 place, and cleaning it would take an unscoped query over rows belonging to
 nobody. A wasted row is much the cheaper problem.
+
+## The file round trip
+
+`exportPayload` and `importLattice` in `src/lib/server/cortex.ts`, reachable
+from the File tab on `/cortex`. Concepts, connections and areas — areas
+included, or a round trip silently drops every one and the context digest comes
+back with nothing to group by.
+
+A file is a new way into the store, so it is a new way to get the ownership
+model wrong. Two rules keep it honest, and both are tested in
+`cortex-privacy.test.ts`:
+
+- **The owner is the person importing, never the file.** A payload naming
+  somebody else is ignored rather than refused — there is nothing to negotiate.
+- **Ids in a file are hints, not claims.** Concepts resolve by *name* through
+  the ordinary write path, so importing over an existing lattice updates it
+  instead of duplicating, and guessing an id reaches nothing.
+
+Everything goes through `saveNode`/`saveAssociation`, so an import obeys the
+concept cap, lands in the change log, and is undone as one run. A file that is
+not a lattice, or one that exceeds the cap, returns a count of what did not fit
+rather than a stack trace over a half-imported lattice.
 
 ## Still open
 

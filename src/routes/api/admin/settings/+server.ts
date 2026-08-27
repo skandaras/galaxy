@@ -8,6 +8,8 @@ import {
 	DEFAULT_CODING,
 	DEFAULT_COMPACTION,
 	DEFAULT_FETCH,
+	DEFAULT_CORTEX,
+	DEFAULT_CORTEX_GROOM,
 	DEFAULT_MEMORY,
 	DEFAULT_RESEARCH,
 	DEFAULT_RETENTION,
@@ -31,7 +33,9 @@ const KNOWN_KEYS = [
 	'uxaudit',
 	'retention',
 	'fetch',
-	'boards'
+	'boards',
+	'cortex',
+	'cortexGroom'
 ] as const;
 const DEFAULTS: Record<string, unknown> = {
 	websearch: DEFAULT_WEB_SEARCH,
@@ -44,7 +48,9 @@ const DEFAULTS: Record<string, unknown> = {
 	uxaudit: DEFAULT_UX_AUDIT,
 	retention: DEFAULT_RETENTION,
 	fetch: DEFAULT_FETCH,
-	boards: DEFAULT_BOARDS
+	boards: DEFAULT_BOARDS,
+	cortex: DEFAULT_CORTEX,
+	cortexGroom: DEFAULT_CORTEX_GROOM
 };
 
 /**

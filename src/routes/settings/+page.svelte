@@ -2,6 +2,7 @@
 	import Theme from '$lib/components/settings/Theme.svelte';
 	import Memory from '$lib/components/settings/Memory.svelte';
 	import Boards from '$lib/components/settings/Boards.svelte';
+	import Cortex from '$lib/components/settings/Cortex.svelte';
 	import Notifications from '$lib/components/settings/Notifications.svelte';
 	import Alignment from '$lib/components/settings/Alignment.svelte';
 
@@ -21,6 +22,7 @@
 			<Theme />
 		{:else if active === 'Boards'}
 			<Boards />
+	<Cortex />
 		{:else if active === 'Notifications'}
 			<Notifications />
 		{:else if active === 'Memory'}

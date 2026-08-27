@@ -26,7 +26,7 @@
 		extraLanguages: ''
 	});
 	let coding = $state({ autoCheckpoint: true, autoContinue: true, maxLegs: 3 });
-	let retention = $state({ eventDays: 60, usageDays: 400, uxIdeaDays: 14 });
+	let retention = $state({ eventDays: 60, usageDays: 400, uxIdeaDays: 14, cortexChangeDays: 90 });
 	let fetchCfg = $state({ timeoutMs: 15000, maxChars: 20000, maxFetchesPerTurn: 5 });
 	let saved = $state<string | null>(null);
 	let deployBusy = $state<string | null>(null);
@@ -491,12 +491,19 @@
 				keep UX ideas on dev (days)
 				<input type="number" min="0" max="3650" bind:value={retention.uxIdeaDays} />
 			</label>
+			<label>
+				keep Cortex change history (days)
+				<input type="number" min="0" max="3650" bind:value={retention.cortexChangeDays} />
+			</label>
 		</div>
 		<p class="hint">
 			Older rows are trimmed by the background scheduler; 0 keeps everything. Events are the
 			fastest-growing table — one row per model call, tool call and job. Keep usage history at
 			least as long as the longest window you look at in Usage (up to 365 days), since the budget
-			cap and those charts read the same rows. The UX window applies to
+			cap and those charts read the same rows. Cortex keeps a snapshot of what each change
+			replaced so it can be undone, which makes it the fastest-growing thing the lattice owns —
+			and unlike the UX backlog it prunes everywhere, because nothing in it suppresses a future
+			suggestion. The UX window applies to
 			<strong>non-production instances only</strong> — on prod the backlog's decision history is
 			kept permanently, because it is what stops the audit re-proposing what you already dismissed.
 		</p>

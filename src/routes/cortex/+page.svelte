@@ -63,8 +63,10 @@
 	let circuits = $state<{ id: string; name: string; count: number }[]>([]);
 	let proposals = $state<Proposal[]>([]);
 	let changes = $state<Change[]>([]);
-	let tab = $state<'edit' | 'review' | 'history'>('edit');
+	let tab = $state<'edit' | 'review' | 'history' | 'data'>('edit');
 	let grooming = $state(false);
+	let importing = $state(false);
+	let fileInput = $state<HTMLInputElement>();
 
 	const selected = $derived(nodes.find((n) => n.id === selectedId) ?? null);
 	const areaNames = $derived(new Map(circuits.map((c) => [c.id, c.name])));
@@ -120,6 +122,33 @@
 			await load();
 		} finally {
 			grooming = false;
+		}
+	}
+
+	function exportLattice() {
+		// Straight to a download rather than through the server's own export
+		// directory: what you want is the file, not a copy of it on the droplet.
+		window.location.href = '/api/cortex/export';
+	}
+
+	async function importLattice(event: Event) {
+		const file = (event.target as HTMLInputElement).files?.[0];
+		if (!file) return;
+		importing = true;
+		error = '';
+		try {
+			const payload = JSON.parse(await file.text());
+			const res = await send('/api/cortex/import', 'POST', payload);
+			if (res) {
+				error = `Imported ${res.nodes} concept(s), ${res.edges} connection(s)` +
+					(res.skipped ? ` — ${res.skipped} skipped` : '');
+			}
+			await load();
+		} catch {
+			error = 'That file is not a lattice export.';
+		} finally {
+			importing = false;
+			if (fileInput) fileInput.value = '';
 		}
 	}
 
@@ -311,7 +340,7 @@
 		</ul>
 
 		<div class="tabs" role="tablist">
-			{#each [['edit', 'Concept'], ['review', `Suggestions${proposals.length ? ` (${proposals.length})` : ''}`], ['history', 'History']] as [id, label] (id)}
+			{#each [['edit', 'Concept'], ['review', `Suggestions${proposals.length ? ` (${proposals.length})` : ''}`], ['history', 'History'], ['data', 'File']] as [id, label] (id)}
 				<button
 					role="tab"
 					class="tab"
@@ -322,7 +351,30 @@
 			{/each}
 		</div>
 
-		{#if tab === 'review'}
+		{#if tab === 'data'}
+			<div class="editor">
+				<p class="empty">
+					A lattice is far easier to draft in a file than to type in fifty times. Import reads
+					what export writes — concepts, connections and areas — and matches by name, so
+					importing over what is here updates rather than duplicates. It lands in the history
+					as one entry and can be undone from there.
+				</p>
+				{#if error}<p class="error" role="alert">{error}</p>{/if}
+				<div class="row">
+					<button class="btn" onclick={exportLattice}>Export</button>
+					<button class="btn" disabled={importing} onclick={() => fileInput?.click()}>
+						{importing ? 'Importing…' : 'Import…'}
+					</button>
+					<input
+						class="sr-only"
+						type="file"
+						accept="application/json,.json"
+						bind:this={fileInput}
+						onchange={importLattice}
+					/>
+				</div>
+			</div>
+		{:else if tab === 'review'}
 			<div class="editor">
 				<div class="row">
 					<button class="btn" disabled={grooming} onclick={groom}>
