@@ -90,6 +90,8 @@ export function logChange(entry: {
 	event: string;
 	detail?: string;
 	before?: unknown;
+	/** Groups one groom run's changes; null for a change a person made. */
+	runId?: string | null;
 }): void {
 	db.insert(cortexChangeLog)
 		.values({
@@ -100,6 +102,7 @@ export function logChange(entry: {
 			event: entry.event,
 			detail: entry.detail ?? '',
 			before: entry.before ?? null,
+			runId: entry.runId ?? null,
 			createdAt: new Date()
 		})
 		.run();
@@ -117,7 +120,7 @@ export function listChanges(userId: string, limit = 100) {
 
 // --- nodes ------------------------------------------------------------------
 
-function syncFts(id: string, name: string, description: string): void {
+export function syncFts(id: string, name: string, description: string): void {
 	db.run(sql`DELETE FROM cortex_fts WHERE id = ${id}`);
 	db.run(
 		sql`INSERT INTO cortex_fts (id, name, description) VALUES (${id}, ${name}, ${description})`
@@ -1029,4 +1032,66 @@ export function deleteCircuit(id: string, userId: string): boolean {
 	}
 	logChange({ userId, event: 'circuit-deleted', detail: circuit.name });
 	return true;
+}
+
+
+/**
+ * Put back what a change replaced.
+ *
+ * This is what makes applying anything automatically defensible: an automatic
+ * change you cannot undo is a decision taken on your behalf, and one you can is
+ * a suggestion you did not have to accept.
+ *
+ * The revert is itself logged, so history stays a record of what happened
+ * rather than quietly rewriting itself.
+ */
+export function revertChange(id: string, userId: string): boolean {
+	const entry = db
+		.select()
+		.from(cortexChangeLog)
+		.where(and(eq(cortexChangeLog.id, id), eq(cortexChangeLog.userId, userId)))
+		.get();
+	if (!entry?.before) return false;
+
+	const before = entry.before as Record<string, unknown>;
+	if (entry.event === 'tidied' && 'sourceId' in before) {
+		const edge = before as unknown as CortexAssociation;
+		if (!getNode(edge.sourceId, userId) || !getNode(edge.targetId, userId)) return false;
+		db.insert(cortexAssociations).values(edge).onConflictDoNothing().run();
+	} else if ('name' in before) {
+		const node = before as unknown as CortexNode;
+		if (!canEdit(node, userId)) return false;
+		db.update(cortexNodes)
+			.set({ name: node.name, description: node.description, updatedAt: new Date() })
+			.where(eq(cortexNodes.id, node.id))
+			.run();
+		syncFts(node.id, node.name, node.description);
+	} else {
+		return false;
+	}
+
+	logChange({
+		nodeId: entry.nodeId,
+		userId,
+		event: 'reverted',
+		detail: entry.detail,
+		runId: entry.runId
+	});
+	return true;
+}
+
+/** Undo a whole groom run, newest change first so each lands on the state it expects. */
+export function revertRun(runId: string, userId: string): number {
+	const entries = db
+		.select()
+		.from(cortexChangeLog)
+		.where(and(eq(cortexChangeLog.runId, runId), eq(cortexChangeLog.userId, userId)))
+		.orderBy(sql`${cortexChangeLog.createdAt} DESC`)
+		.all();
+	let done = 0;
+	for (const entry of entries) {
+		if (entry.event === 'reverted') continue;
+		if (revertChange(entry.id, userId)) done++;
+	}
+	return done;
 }

@@ -211,7 +211,8 @@ export const CORE_TASKS = [
 	'subagent',
 	'board',
 	'alignment',
-	'alignment-synthesis'
+	'alignment-synthesis',
+	'cortex-groom'
 ] as const;
 export type CoreTask = (typeof CORE_TASKS)[number];
 
@@ -1144,10 +1145,73 @@ export const cortexChangeLog = sqliteTable(
 		detail: text('detail').notNull().default(''),
 		/** Prior state for a reversible change. Null when there is nothing to undo. */
 		before: text('before', { mode: 'json' }),
+		/**
+		 * Groups the changes one groom run made.
+		 *
+		 * A run touching two hundred nodes is two hundred rows, and a log nobody
+		 * can read is a log nobody checks — which defeats the point of applying
+		 * anything automatically. Collapsed to one line per run in the UI, and a
+		 * whole run can be reverted together. Null for a change a person made by
+		 * hand, which is its own occasion.
+		 */
+		runId: text('run_id'),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 	},
 	(t) => [
 		index('cortex_change_log_node_created_idx').on(t.nodeId, t.createdAt),
-		index('cortex_change_log_user_created_idx').on(t.userId, t.createdAt)
+		index('cortex_change_log_user_created_idx').on(t.userId, t.createdAt),
+		index('cortex_change_log_run_idx').on(t.runId)
+	]
+);
+
+export const CORTEX_PROPOSAL_KINDS = [
+	'merge',
+	'connect',
+	'disconnect',
+	'weight',
+	'circuit',
+	'convergence',
+	'rename',
+	'delete'
+] as const;
+export type CortexProposalKind = (typeof CORTEX_PROPOSAL_KINDS)[number];
+
+/**
+ * Changes the groomer wants to make and will not make on its own.
+ *
+ * The line is sharp and permanent: if a change would alter what a query
+ * returns, it is proposed rather than applied. Mechanical tidying — whitespace
+ * in a name, an edge whose endpoint is gone — goes straight through and lands
+ * in the change log instead.
+ *
+ * Modelled on ux_ideas, including the fingerprint: a decision is replayed to
+ * later runs so that something already turned down is not raised again every
+ * week until it is accepted out of fatigue.
+ */
+export const cortexProposals = sqliteTable(
+	'cortex_proposals',
+	{
+		id: text('id').primaryKey(),
+		/** Whose lattice this concerns. The groomer never proposes across owners. */
+		userId: text('user_id').notNull(),
+		kind: text('kind', { enum: CORTEX_PROPOSAL_KINDS }).notNull(),
+		/** Short line naming the change, for the review list. */
+		title: text('title').notNull(),
+		/** Why the groomer thinks so, in its own words. */
+		rationale: text('rationale').notNull().default(''),
+		nodeId: text('node_id'),
+		targetId: text('target_id'),
+		/** Everything needed to apply it, so accepting is one click and not a form. */
+		payload: text('payload', { mode: 'json' }),
+		fingerprint: text('fingerprint').notNull(),
+		status: text('status', { enum: ['open', 'actioned', 'discarded'] })
+			.notNull()
+			.default('open'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		decidedAt: integer('decided_at', { mode: 'timestamp_ms' })
+	},
+	(t) => [
+		index('cortex_proposals_user_status_idx').on(t.userId, t.status, t.createdAt),
+		index('cortex_proposals_fingerprint_idx').on(t.fingerprint)
 	]
 );

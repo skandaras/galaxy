@@ -99,7 +99,7 @@ describe('prune', () => {
 		usage(daysAgo(5000));
 		idea(daysAgo(5000));
 
-		expect(prune(NOW, true)).toEqual({ events: 0, usage: 0, uxIdeas: 0 });
+		expect(prune(NOW, true)).toEqual({ events: 0, usage: 0, uxIdeas: 0, cortexChanges: 0 });
 		expect(counts()).toEqual({ events: 1, usage: 1, ideas: 1 });
 	});
 
@@ -129,7 +129,7 @@ describe('prune', () => {
 		prune(NOW, true);
 		event(daysAgo(400));
 		// Same tick window, so this one is skipped and the stale row survives.
-		expect(prune(NOW + 60_000)).toEqual({ events: 0, usage: 0, uxIdeas: 0 });
+		expect(prune(NOW + 60_000)).toEqual({ events: 0, usage: 0, uxIdeas: 0, cortexChanges: 0 });
 		expect(counts().events).toBe(1);
 		// Past the interval it runs again.
 		expect(prune(NOW + 7 * 3_600_000).events).toBe(1);

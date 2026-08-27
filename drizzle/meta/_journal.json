@@ -162,6 +162,13 @@
       "when": 1787743108234,
       "tag": "0022_chubby_luckman",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1787821108812,
+      "tag": "0023_tiresome_strong_guy",
+      "breakpoints": true
     }
   ]
 }

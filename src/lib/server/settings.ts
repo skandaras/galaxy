@@ -461,12 +461,22 @@ export interface RetentionSettings {
 	 * nobody ever actually read. 0 disables pruning there too.
 	 */
 	uxIdeaDays: number;
+	/**
+	 * Days of Cortex change history to keep.
+	 *
+	 * The log exists so automatic changes can be checked and undone, and both of
+	 * those are things you do soon after they happen. A `before` snapshot is a
+	 * whole node, so at a thousand concepts and a weekly groomer this is the
+	 * fastest-growing thing Cortex owns. 0 disables pruning.
+	 */
+	cortexChangeDays: number;
 }
 
 export const DEFAULT_RETENTION: RetentionSettings = {
 	eventDays: 60,
 	usageDays: 400,
-	uxIdeaDays: 14
+	uxIdeaDays: 14,
+	cortexChangeDays: 90
 };
 
 export interface CompactionSettings {
@@ -524,6 +534,19 @@ export interface CortexSettings {
 	 */
 	maxNodesPerUser: number;
 }
+
+export interface CortexGroomSettings {
+	enabled: boolean;
+	intervalHours: number;
+	/** Proposals one run may raise, so a first pass cannot bury the review list. */
+	maxProposalsPerRun: number;
+}
+
+export const DEFAULT_CORTEX_GROOM: CortexGroomSettings = {
+	enabled: false,
+	intervalHours: 168,
+	maxProposalsPerRun: 10
+};
 
 export const DEFAULT_CORTEX: CortexSettings = {
 	agentWrites: false,
