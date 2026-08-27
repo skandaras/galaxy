@@ -28,12 +28,13 @@ export function bootstrapContext(userId: string): string {
 		'',
 		'[Task boards — yours plus any shared with you. Read them with board_read, one card in full with card_read]',
 		boardsDigest(userId),
+		// Ahead of the memory digest on purpose. Placed after it, Cortex read as
+		// more of the same — another record of things that already happened — and
+		// an agent that takes it for an archive never thinks to consult it before
+		// answering. The map comes first, then the log.
+		cortexDigest(userId),
 		// Only this user's memories — never another user's observations.
-		memoryDigest(userId),
-		// One line: that a lattice exists and how big it is. Its contents load
-		// through cortex_query, for the same reason the Library index carries
-		// titles rather than snippets.
-		cortexDigest(userId)
+		memoryDigest(userId)
 	].join('\n');
 }
 

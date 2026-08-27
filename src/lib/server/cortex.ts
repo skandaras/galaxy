@@ -6,8 +6,8 @@ import { db, dataDir } from '$lib/server/db';
 import {
 	cortexAssociations,
 	cortexChangeLog,
-	cortexNodes,
-	type cortexCircuits
+	cortexCircuits,
+	cortexNodes
 } from '$lib/server/db/schema';
 import { layout, layoutSignature } from '$lib/server/cortex-layout';
 import { ftsQuery, slugify } from '$lib/server/library';
@@ -549,26 +549,133 @@ function recordActivation(ids: string[]): void {
 // --- context and export -----------------------------------------------------
 
 /**
- * The lattice's line in the context bootstrap: that it exists and how big it
- * is, nothing more.
+ * Node names are listed only while a lattice is small enough for the list to be
+ * cheap. Past this it is indexed by circuit instead — see cortexDigest.
+ */
+const DIGEST_NAME_LIMIT = 40;
+/**
+ * Bridges are few by design, but a runaway lattice should not prove otherwise —
+ * and named concepts are the most expensive thing in this block, so the cap is
+ * what keeps the whole digest bounded rather than merely finite.
+ */
+const DIGEST_BRIDGE_CAP = 8;
+
+export interface CircuitSummary {
+	id: string;
+	name: string;
+	count: number;
+}
+
+/**
+ * What areas this person's lattice covers, and how much sits in each.
  *
- * The original design pushed an activated subgraph — five to fifteen kilobytes
- * — into every conversation's opening context. This platform has already paid
- * for that mistake twice: once in the coding agent's session block (see
- * engine/context.ts, where it cost a cache hit on every leg of every turn) and
- * once in the Library digest, which used to carry a snippet of every document.
- * A catalogue line costs nothing per turn and the tool fetches what a question
- * actually needs.
+ * A node's `circuits` array holds ids, but the API accepts free strings, so an
+ * entry with no matching row is shown as itself rather than dropped — a label
+ * someone typed is still a label.
+ */
+export function circuitIndex(userId: string): { circuits: CircuitSummary[]; unfiled: number } {
+	const named = new Map(
+		db
+			.select()
+			.from(cortexCircuits)
+			.all()
+			.map((c) => [c.id, c.name])
+	);
+	const counts = new Map<string, number>();
+	let unfiled = 0;
+	for (const node of listNodes(userId)) {
+		const on = node.circuits ?? [];
+		if (!on.length) {
+			unfiled++;
+			continue;
+		}
+		for (const id of on) counts.set(id, (counts.get(id) ?? 0) + 1);
+	}
+	return {
+		circuits: [...counts.entries()]
+			.map(([id, count]) => ({ id, name: named.get(id) ?? id, count }))
+			.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+		unfiled
+	};
+}
+
+/**
+ * The lattice's line in the context bootstrap.
+ *
+ * This block earns its place twice over, and the first version failed at both.
+ *
+ * **It has to say what the lattice is.** An agent that read the old wording
+ * treated Cortex as an archive of past events — something to consult if a
+ * question happened to be about history — and answered from its own priors
+ * instead. It is not a log. It is the current map of the person being spoken
+ * to, and the framing has to say so in the present tense.
+ *
+ * **It has to say what is in there.** Every other store puts instance data in
+ * the prompt: the Library lists document titles, boards are named, memories are
+ * quoted. Cortex used to carry a bare count, so an agent could not tell whether
+ * querying would return anything relevant — a gamble with unknown payoff, which
+ * is a gamble most turns decline.
+ *
+ * The obvious fix, listing every node, does not survive arithmetic: a thousand
+ * nodes is around 22,000 characters, some 5,500 tokens on *every* turn, which
+ * is worse than the wholesale context injection this design was corrected away
+ * from in the first place. So the index is by circuit and its cost is O(areas),
+ * not O(concepts) — the same shape the Library's folder grouping takes, and the
+ * scalability the original design claimed for a tiered index without ever
+ * building one.
+ *
+ * Names are still listed while a lattice is small, because a handful of
+ * concepts needs the specifics to look worth querying and costs nothing.
  */
 export function cortexDigest(userId: string): string {
-	const count = nodeCount(userId);
-	if (!count) return '';
-	return [
+	const nodes = listNodes(userId);
+	if (!nodes.length) return '';
+
+	const bridges = nodes.filter((n) => n.isConvergence);
+	const { circuits, unfiled } = circuitIndex(userId);
+	const lines = [
 		'',
-		`[Cortex — a knowledge lattice of ${count} linked concept${count === 1 ? '' : 's'}. ` +
-			'Not a document store: it holds how things connect. Query it with cortex_query when ' +
-			'a question leans on background you would otherwise have to guess at.]'
-	].join('\n');
+		'[Cortex — the working map of this person: ' +
+			`${nodes.length} concept${nodes.length === 1 ? '' : 's'}` +
+			(circuits.length ? ` across ${circuits.length} area${circuits.length === 1 ? '' : 's'}` : '') +
+			', and how they connect. Not a record of past events — this is what is currently true ' +
+			'of them, their work and their world.'
+	];
+
+	if (circuits.length) {
+		lines.push(
+			'  Areas: ' + circuits.map((c) => `${c.name} (${c.count})`).join(' · ') +
+				(unfiled ? ` · unfiled (${unfiled})` : '')
+		);
+	}
+
+	if (nodes.length <= DIGEST_NAME_LIMIT) {
+		lines.push('  Concepts: ' + nodes.map((n) => n.name).join(' · '));
+	} else if (!circuits.length) {
+		// Nothing to group by and too many to list. Say so rather than silently
+		// offering a number, which is the failure this whole block exists to fix.
+		lines.push(
+			'  No areas assigned yet, so this index cannot show what is in there — ' +
+				'assign circuits to concepts and it will.'
+		);
+	}
+
+	if (bridges.length) {
+		const shown = bridges.slice(0, DIGEST_BRIDGE_CAP).map((b) => b.name);
+		lines.push(
+			'  Bridges between areas: ' +
+				shown.join(' · ') +
+				(bridges.length > shown.length ? ` and ${bridges.length - shown.length} more` : '')
+		);
+	}
+
+	lines.push(
+		'Call cortex_query with what the conversation is about whenever the answer depends on ' +
+			'who this person is — which is most things that are not purely factual. It returns the ' +
+			'concepts that bear on it and how they relate, including ones you would not have known ' +
+			'to ask for.]'
+	);
+	return lines.join('\n');
 }
 
 /**

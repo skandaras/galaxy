@@ -17,7 +17,8 @@ import {
 	seedNodes,
 	cortexDigest,
 	deleteNode,
-	refreshLayout
+	refreshLayout,
+	circuitIndex
 } from '$lib/server/cortex';
 import { setSetting } from '$lib/server/settings';
 import { cortexTools } from '$lib/server/engine/tools/cortex';
@@ -187,18 +188,110 @@ describe('the change log', () => {
 });
 
 describe('the context bootstrap line', () => {
+	/** Insert straight to the table: this is about digest cost, not about writes. */
+	function bulk(count: number, circuits: number) {
+		const now = new Date();
+		for (let i = 0; i < count; i++) {
+			db.insert(cortexNodes)
+				.values({
+					id: `bulk-${i}`,
+					ownerId: ANA,
+					visibility: 'personal',
+					name: `Concept number ${i} with a fairly typical name`,
+					description: 'A description of roughly the length a real one would be.',
+					circuits: [`circuit-${i % circuits}`],
+					isConvergence: i % 40 === 0,
+					activationPriority: 0.5,
+					activationCount: 0,
+					createdAt: now,
+					updatedAt: now
+				})
+				.run();
+		}
+	}
+
 	it('says nothing at all when the lattice is empty', () => {
 		expect(cortexDigest(ANA)).toBe('');
 	});
 
-	it('carries a count, never the concepts themselves', () => {
+	it('names the concepts while the lattice is small', () => {
 		seedChain();
 		const digest = cortexDigest(ANA);
-		expect(digest).toContain('4');
-		// The Library learned this the expensive way: an index in the prompt, and
-		// bodies only when something asks for them.
+		// A handful of concepts needs the specifics to look worth querying, and
+		// costs nothing. The old version showed a bare count, and an agent could
+		// not tell whether querying would return anything relevant.
+		expect(digest).toContain('Tide pools');
+		expect(digest).toContain('Coastal ecology');
+		// Names, never bodies — the Library learned that one the expensive way.
 		expect(digest).not.toContain('Rockpool surveying');
-		expect(digest).not.toContain('Tide pools');
+	});
+
+	it('calls itself a map of now, not a record of before', () => {
+		// The reported bug: an agent read the lattice as an archive of past
+		// events, so consulting it before answering never looked necessary.
+		seedChain();
+		const digest = cortexDigest(ANA).toLowerCase();
+		expect(digest).toContain('map');
+		expect(digest).toContain('currently true');
+		expect(digest).toContain('not a record of past events');
+	});
+
+	it('stops listing names once there are too many to be cheap', () => {
+		bulk(200, 8);
+		const digest = cortexDigest(ANA);
+		expect(digest).not.toContain('Concept number 7 ');
+		expect(digest).toContain('circuit-0 (25)');
+	});
+
+	it('costs the same at a thousand concepts as at two hundred', () => {
+		// The regression this whole block exists to prevent. Listing every node
+		// would be ~22,000 characters at a thousand — some 5,500 tokens on every
+		// single turn, worse than the wholesale injection the design was corrected
+		// away from. Indexing by area makes the cost O(areas), not O(concepts).
+		bulk(200, 20);
+		const small = cortexDigest(ANA).length;
+		db.delete(cortexNodes).run();
+		bulk(1000, 20);
+		const large = cortexDigest(ANA).length;
+
+		// ~1.5KB, call it 375 tokens, for a thousand concepts — the same order as
+		// the Library's forty-document index, and flat from here on.
+		expect(large).toBeLessThan(1500);
+		// Five times the lattice must not be five times the prompt.
+		expect(large).toBeLessThan(small * 1.5);
+	});
+
+	it('always names the bridges, because they are the way in', () => {
+		bulk(1000, 20);
+		const digest = cortexDigest(ANA);
+		expect(digest).toContain('Bridges between areas');
+		// Capped even so: a lattice that has gone wrong should not be able to
+		// flood the prompt through this line.
+		expect(digest).toContain('more');
+	});
+
+	it('admits when it cannot show what is in there', () => {
+		bulk(200, 1);
+		db.update(cortexNodes).set({ circuits: null }).run();
+		// Too many to list, nothing to group by. Saying so is the point — a bare
+		// count is what caused the agent to ignore it in the first place.
+		expect(cortexDigest(ANA)).toContain('No areas assigned yet');
+	});
+});
+
+describe('the circuit index', () => {
+	it('counts concepts per area and notices the unfiled', () => {
+		saveNode({ name: 'One', ownerId: ANA, circuits: ['field'] });
+		saveNode({ name: 'Two', ownerId: ANA, circuits: ['field'] });
+		saveNode({ name: 'Three', ownerId: ANA });
+		const index = circuitIndex(ANA);
+		expect(index.circuits).toEqual([{ id: 'field', name: 'field', count: 2 }]);
+		expect(index.unfiled).toBe(1);
+	});
+
+	it('counts a node in every area it belongs to', () => {
+		saveNode({ name: 'One', ownerId: ANA, circuits: ['field', 'craft'] });
+		expect(circuitIndex(ANA).circuits.map((c) => c.count)).toEqual([1, 1]);
 	});
 });
 

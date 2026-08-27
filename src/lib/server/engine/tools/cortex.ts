@@ -36,11 +36,14 @@ export function cortexTools(userId: string, writes = cortexWritesAllowed()): Loo
 			def: {
 				name: 'cortex_query',
 				description:
-					'Search the knowledge lattice and follow its connections. Returns the concepts a ' +
-					'question activates plus how they relate — including ones the question never ' +
-					'named, reached through the mesh. Use it when a request leans on background ' +
-					'about the person, their work or their world. Pass from_node instead of query ' +
-					'to explore outward from one concept you already have.',
+					'Read the working map of who you are talking to. The lattice holds their ' +
+					'concepts and how those connect — what is currently true of them, their work ' +
+					'and their world, not a log of past events. Give it what the conversation is ' +
+					'about and it returns the concepts that bear on it plus how they relate, ' +
+					'including ones the question never named and you would not have known to ask ' +
+					'for. Worth calling before answering anything where the right answer depends ' +
+					'on who this person is, which is most things that are not purely factual. ' +
+					'Pass from_node instead of query to explore outward from a concept you have.',
 				parameters: {
 					type: 'object',
 					properties: {
