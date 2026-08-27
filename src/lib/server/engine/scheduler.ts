@@ -1,7 +1,7 @@
 import { lt } from 'drizzle-orm';
 import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db';
-import { events, usageLog, users, uxIdeas } from '$lib/server/db/schema';
+import { cortexChangeLog, events, usageLog, users, uxIdeas } from '$lib/server/db/schema';
 import {
 	ALIGNMENT_ENABLED_KEY,
 	DEFAULT_ALIGNMENT,
@@ -15,6 +15,7 @@ import {
 	type UxAuditSettings
 } from '$lib/server/settings';
 import { refreshLayout } from '$lib/server/cortex';
+import { groomSettings, groomStatus, runCortexGroom } from './cortex-groom';
 import { getSynthesisStatus, runAlignmentSynthesis } from './alignment';
 import { emitEvent } from './events';
 import { getMemoryStatus, runMemory } from './memory';
@@ -69,6 +70,26 @@ async function sweepMemory(): Promise<void> {
 		// and hammer the provider. One user's failure must not stop the rest.
 		await runMemory('schedule', user.id).catch(() => {
 			// runMemory reports its own failures via events
+		});
+	}
+}
+
+/**
+ * The lattice's gardener, per user and only for those who turned it on.
+ *
+ * Off by default: it files suggestions about the shape of somebody's own
+ * concepts, which is not a thing to start doing unasked.
+ */
+async function sweepCortexGroom(): Promise<void> {
+	const cfg = groomSettings();
+	if (!cfg.enabled) return;
+	const now = Date.now();
+	for (const user of db.select().from(users).all()) {
+		if (now < groomStatus(user.id).lastRun + cfg.intervalHours * 3_600_000) continue;
+		// Sequential, like the memory sweep: parallel runs would race the budget
+		// cap, and one person's failure must not stop the rest.
+		await runCortexGroom('schedule', user.id).catch(() => {
+			// runCortexGroom reports its own failures via events.
 		});
 	}
 }
@@ -161,8 +182,8 @@ export function isProd(): boolean {
 export function prune(
 	now = Date.now(),
 	force = false
-): { events: number; usage: number; uxIdeas: number } {
-	const nothing = { events: 0, usage: 0, uxIdeas: 0 };
+): { events: number; usage: number; uxIdeas: number; cortexChanges: number } {
+	const nothing = { events: 0, usage: 0, uxIdeas: 0, cortexChanges: 0 };
 	if (!force && now < lastPrune + PRUNE_INTERVAL_MS) return nothing;
 	lastPrune = now;
 	const cfg = getSetting<RetentionSettings>('retention', DEFAULT_RETENTION);
@@ -194,8 +215,26 @@ export function prune(
 			.run().changes;
 	}
 
+	// Unlike the UX backlog, this prunes on prod too. Nothing here suppresses a
+	// future suggestion — the change log is a record of what was done, read to
+	// check the groomer's work and to undo it, and both of those happen within
+	// days. A `before` snapshot is a whole node, so this is the fastest-growing
+	// thing Cortex owns and the one place it needs a ceiling.
+	let prunedCortex = 0;
+	if (cfg.cortexChangeDays > 0) {
+		prunedCortex = db
+			.delete(cortexChangeLog)
+			.where(lt(cortexChangeLog.createdAt, new Date(now - cfg.cortexChangeDays * 86_400_000)))
+			.run().changes;
+	}
+
 	// No VACUUM: the file does not shrink, but SQLite reuses the freed pages for
 	// subsequent inserts, so the database plateaus instead of growing forever —
 	// and a full VACUUM takes an exclusive lock this process cannot afford.
-	return { events: prunedEvents, usage: prunedUsage, uxIdeas: prunedIdeas };
+	return {
+		events: prunedEvents,
+		usage: prunedUsage,
+		uxIdeas: prunedIdeas,
+		cortexChanges: prunedCortex
+	};
 }

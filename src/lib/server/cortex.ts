@@ -6,8 +6,8 @@ import { db, dataDir } from '$lib/server/db';
 import {
 	cortexAssociations,
 	cortexChangeLog,
-	cortexNodes,
-	type cortexCircuits
+	cortexCircuits,
+	cortexNodes
 } from '$lib/server/db/schema';
 import { layout, layoutSignature } from '$lib/server/cortex-layout';
 import { ftsQuery, slugify } from '$lib/server/library';
@@ -90,6 +90,8 @@ export function logChange(entry: {
 	event: string;
 	detail?: string;
 	before?: unknown;
+	/** Groups one groom run's changes; null for a change a person made. */
+	runId?: string | null;
 }): void {
 	db.insert(cortexChangeLog)
 		.values({
@@ -100,6 +102,7 @@ export function logChange(entry: {
 			event: entry.event,
 			detail: entry.detail ?? '',
 			before: entry.before ?? null,
+			runId: entry.runId ?? null,
 			createdAt: new Date()
 		})
 		.run();
@@ -117,7 +120,7 @@ export function listChanges(userId: string, limit = 100) {
 
 // --- nodes ------------------------------------------------------------------
 
-function syncFts(id: string, name: string, description: string): void {
+export function syncFts(id: string, name: string, description: string): void {
 	db.run(sql`DELETE FROM cortex_fts WHERE id = ${id}`);
 	db.run(
 		sql`INSERT INTO cortex_fts (id, name, description) VALUES (${id}, ${name}, ${description})`
@@ -245,7 +248,8 @@ export function saveAssociation(opts: {
 	}
 
 	const now = new Date();
-	const existing = db
+	const direction = opts.directionality ?? 'symmetric';
+	const exact = db
 		.select()
 		.from(cortexAssociations)
 		.where(
@@ -255,14 +259,39 @@ export function saveAssociation(opts: {
 			)
 		)
 		.get();
+	// A symmetric link is one relationship, not two. The primary key is
+	// (source, target), so without this A→B and B→A both store and the traversal
+	// walks the same connection twice — activation arrives doubled and clamps at
+	// full strength, making the far node look twice as relevant as it is.
+	//
+	// Asymmetric edges are exempt: "A strongly implies B, B weakly implies A" is
+	// two genuinely different claims and both rows are meant.
+	const reciprocal =
+		!exact && direction === 'symmetric'
+			? db
+					.select()
+					.from(cortexAssociations)
+					.where(
+						and(
+							eq(cortexAssociations.sourceId, opts.targetId),
+							eq(cortexAssociations.targetId, opts.sourceId),
+							eq(cortexAssociations.directionality, 'symmetric')
+						)
+					)
+					.get()
+			: undefined;
+	const existing = exact ?? reciprocal;
 
+	// Keep the stored orientation when updating a reciprocal: rewriting it would
+	// churn the row for no gain, and for a symmetric edge the direction carries
+	// no meaning anyway.
 	const row: CortexAssociation = {
-		sourceId: opts.sourceId,
-		targetId: opts.targetId,
+		sourceId: existing?.sourceId ?? opts.sourceId,
+		targetId: existing?.targetId ?? opts.targetId,
 		weight: clamp(opts.weight ?? existing?.weight ?? 0.5),
 		contextTags: opts.contextTags ?? existing?.contextTags ?? null,
 		description: opts.description ?? existing?.description ?? '',
-		directionality: opts.directionality ?? existing?.directionality ?? 'symmetric',
+		directionality: direction,
 		createdAt: existing?.createdAt ?? now,
 		lastTraversedAt: existing?.lastTraversedAt ?? null,
 		traversalCount: existing?.traversalCount ?? 0
@@ -273,8 +302,8 @@ export function saveAssociation(opts: {
 			.set(row)
 			.where(
 				and(
-					eq(cortexAssociations.sourceId, opts.sourceId),
-					eq(cortexAssociations.targetId, opts.targetId)
+					eq(cortexAssociations.sourceId, row.sourceId),
+					eq(cortexAssociations.targetId, row.targetId)
 				)
 			)
 			.run();
@@ -467,6 +496,17 @@ export function activate(opts: {
 		push(e.sourceId, e.targetId, e.weight, e.contextTags);
 		if (e.directionality === 'symmetric') push(e.targetId, e.sourceId, e.weight, e.contextTags);
 	}
+	// Belt to the braces of the write-side fix above: any row pair that predates
+	// it would otherwise still deliver twice. Strongest weight wins, so
+	// collapsing a duplicate never weakens a real connection.
+	for (const [from, list] of out) {
+		const best = new Map<string, { to: string; weight: number; tags: string[] | null }>();
+		for (const edge of list) {
+			const seen = best.get(edge.to);
+			if (!seen || edge.weight > seen.weight) best.set(edge.to, edge);
+		}
+		if (best.size !== list.length) out.set(from, [...best.values()]);
+	}
 
 	// The query's context, taken from where it landed rather than asked for: the
 	// modalities of the seed nodes. Nothing new has to be passed in, and it says
@@ -549,26 +589,143 @@ function recordActivation(ids: string[]): void {
 // --- context and export -----------------------------------------------------
 
 /**
- * The lattice's line in the context bootstrap: that it exists and how big it
- * is, nothing more.
+ * Node names are listed only while a lattice is small enough for the list to be
+ * cheap. Past this it is indexed by circuit instead — see cortexDigest.
+ */
+const DIGEST_NAME_LIMIT = 40;
+/**
+ * Bridges are few by design, but a runaway lattice should not prove otherwise —
+ * and named concepts are the most expensive thing in this block, so the cap is
+ * what keeps the whole digest bounded rather than merely finite.
+ */
+const DIGEST_BRIDGE_CAP = 8;
+
+export interface CircuitSummary {
+	id: string;
+	name: string;
+	count: number;
+}
+
+/**
+ * What areas this person's lattice covers, and how much sits in each.
  *
- * The original design pushed an activated subgraph — five to fifteen kilobytes
- * — into every conversation's opening context. This platform has already paid
- * for that mistake twice: once in the coding agent's session block (see
- * engine/context.ts, where it cost a cache hit on every leg of every turn) and
- * once in the Library digest, which used to carry a snippet of every document.
- * A catalogue line costs nothing per turn and the tool fetches what a question
- * actually needs.
+ * A node's `circuits` array holds ids, but the API accepts free strings, so an
+ * entry with no matching row is shown as itself rather than dropped — a label
+ * someone typed is still a label.
+ */
+export function circuitIndex(userId: string): { circuits: CircuitSummary[]; unfiled: number } {
+	// Only this reader's own circuit rows. The first version read the whole
+	// table, which meant a node someone else shared could render *their* label
+	// in *this* person's prompt — and since the API accepts free strings, the id
+	// is often the label, so there was no safe half to show either.
+	const named = new Map(
+		db
+			.select()
+			.from(cortexCircuits)
+			.where(or(eq(cortexCircuits.ownerId, userId), isNull(cortexCircuits.ownerId))!)
+			.all()
+			.map((c) => [c.id, c.name])
+	);
+	const counts = new Map<string, number>();
+	let unfiled = 0;
+	for (const node of listNodes(userId)) {
+		// A label written on your own node is yours to see. A label on a node
+		// somebody shared with you is theirs, and only surfaces if it resolves to
+		// a circuit you also keep — otherwise the node counts as unfiled here,
+		// which is what it is from where you are standing.
+		const mine = node.ownerId === userId || node.ownerId === null;
+		const on = (node.circuits ?? []).filter((id) => mine || named.has(id));
+		if (!on.length) {
+			unfiled++;
+			continue;
+		}
+		for (const id of on) counts.set(id, (counts.get(id) ?? 0) + 1);
+	}
+	return {
+		circuits: [...counts.entries()]
+			.map(([id, count]) => ({ id, name: named.get(id) ?? id, count }))
+			.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+		unfiled
+	};
+}
+
+/**
+ * The lattice's line in the context bootstrap.
+ *
+ * This block earns its place twice over, and the first version failed at both.
+ *
+ * **It has to say what the lattice is.** An agent that read the old wording
+ * treated Cortex as an archive of past events — something to consult if a
+ * question happened to be about history — and answered from its own priors
+ * instead. It is not a log. It is the current map of the person being spoken
+ * to, and the framing has to say so in the present tense.
+ *
+ * **It has to say what is in there.** Every other store puts instance data in
+ * the prompt: the Library lists document titles, boards are named, memories are
+ * quoted. Cortex used to carry a bare count, so an agent could not tell whether
+ * querying would return anything relevant — a gamble with unknown payoff, which
+ * is a gamble most turns decline.
+ *
+ * The obvious fix, listing every node, does not survive arithmetic: a thousand
+ * nodes is around 22,000 characters, some 5,500 tokens on *every* turn, which
+ * is worse than the wholesale context injection this design was corrected away
+ * from in the first place. So the index is by circuit and its cost is O(areas),
+ * not O(concepts) — the same shape the Library's folder grouping takes, and the
+ * scalability the original design claimed for a tiered index without ever
+ * building one.
+ *
+ * Names are still listed while a lattice is small, because a handful of
+ * concepts needs the specifics to look worth querying and costs nothing.
  */
 export function cortexDigest(userId: string): string {
-	const count = nodeCount(userId);
-	if (!count) return '';
-	return [
+	const nodes = listNodes(userId);
+	if (!nodes.length) return '';
+
+	const bridges = nodes.filter((n) => n.isConvergence);
+	const { circuits, unfiled } = circuitIndex(userId);
+	const lines = [
 		'',
-		`[Cortex — a knowledge lattice of ${count} linked concept${count === 1 ? '' : 's'}. ` +
-			'Not a document store: it holds how things connect. Query it with cortex_query when ' +
-			'a question leans on background you would otherwise have to guess at.]'
-	].join('\n');
+		'[Cortex — the working map of this person: ' +
+			`${nodes.length} concept${nodes.length === 1 ? '' : 's'}` +
+			(circuits.length ? ` across ${circuits.length} area${circuits.length === 1 ? '' : 's'}` : '') +
+			', and how they connect. Not a record of past events — this is what is currently true ' +
+			'of them, their work and their world.'
+	];
+
+	if (circuits.length) {
+		lines.push(
+			'  Areas: ' + circuits.map((c) => `${c.name} (${c.count})`).join(' · ') +
+				(unfiled ? ` · unfiled (${unfiled})` : '')
+		);
+	}
+
+	if (nodes.length <= DIGEST_NAME_LIMIT) {
+		lines.push('  Concepts: ' + nodes.map((n) => n.name).join(' · '));
+	} else if (!circuits.length) {
+		// Nothing to group by and too many to list. Say so rather than silently
+		// offering a number, which is the failure this whole block exists to fix.
+		lines.push(
+			'  No areas assigned yet, so this index cannot show what is in there — ' +
+				'assign circuits to concepts and it will.'
+		);
+	}
+
+	if (bridges.length) {
+		const shown = bridges.slice(0, DIGEST_BRIDGE_CAP).map((b) => b.name);
+		lines.push(
+			'  Bridges between areas: ' +
+				shown.join(' · ') +
+				(bridges.length > shown.length ? ` and ${bridges.length - shown.length} more` : '')
+		);
+	}
+
+	lines.push(
+		'Call cortex_query with what the conversation is about whenever the answer depends on ' +
+			'who this person is — which is most things that are not purely factual. It returns the ' +
+			'concepts that bear on it and how they relate, including ones you would not have known ' +
+			'to ask for.]'
+	);
+	return lines.join('\n');
 }
 
 /**
@@ -796,4 +953,145 @@ export function refreshLayout(): { recomputed: boolean; nodes: number; edges: nu
 	}
 	setSetting(LAYOUT_SIGNATURE_KEY, signature);
 	return { recomputed: true, nodes: nodes.length, edges: edges.length };
+}
+
+
+// --- circuits ---------------------------------------------------------------
+
+/**
+ * Areas of the lattice: a label for grouping, and what the context digest is
+ * indexed by. Deliberately not a routing key — seeding goes through FTS, so a
+ * circuit can be renamed, split or abandoned without touching retrieval.
+ */
+export function listCircuits(userId: string): CortexCircuit[] {
+	return db
+		.select()
+		.from(cortexCircuits)
+		.where(or(eq(cortexCircuits.ownerId, userId), isNull(cortexCircuits.ownerId))!)
+		.orderBy(cortexCircuits.name)
+		.all();
+}
+
+export function saveCircuit(opts: {
+	id?: string;
+	name: string;
+	description?: string;
+	ownerId: string;
+}): CortexCircuit {
+	const name = opts.name.trim();
+	if (!name) throw new Error('name is required');
+	const existing = opts.id
+		? db.select().from(cortexCircuits).where(eq(cortexCircuits.id, opts.id)).get()
+		: listCircuits(opts.ownerId).find((c) => c.name.toLowerCase() === name.toLowerCase());
+	if (existing && existing.ownerId !== null && existing.ownerId !== opts.ownerId) {
+		throw new Error('That area belongs to someone else');
+	}
+
+	const row: CortexCircuit = {
+		id: existing?.id ?? uniqueCircuitId(slugify(name)),
+		ownerId: existing ? existing.ownerId : opts.ownerId,
+		name,
+		description: opts.description ?? existing?.description ?? '',
+		createdAt: existing?.createdAt ?? new Date()
+	};
+	if (existing) {
+		db.update(cortexCircuits).set(row).where(eq(cortexCircuits.id, row.id)).run();
+	} else {
+		db.insert(cortexCircuits).values(row).run();
+	}
+	return row;
+}
+
+function uniqueCircuitId(base: string): string {
+	let candidate = base;
+	for (
+		let i = 2;
+		db.select().from(cortexCircuits).where(eq(cortexCircuits.id, candidate)).get();
+		i++
+	) {
+		candidate = `${base}-${i}`;
+	}
+	return candidate;
+}
+
+/**
+ * Remove an area. Nodes filed under it are left alone and simply become
+ * unfiled — deleting a label should never delete what was labelled.
+ */
+export function deleteCircuit(id: string, userId: string): boolean {
+	const circuit = db.select().from(cortexCircuits).where(eq(cortexCircuits.id, id)).get();
+	if (!circuit || (circuit.ownerId !== null && circuit.ownerId !== userId)) return false;
+	db.delete(cortexCircuits).where(eq(cortexCircuits.id, id)).run();
+	for (const node of listNodes(userId)) {
+		if (!node.circuits?.includes(id)) continue;
+		if (!canEdit(node, userId)) continue;
+		db.update(cortexNodes)
+			.set({ circuits: node.circuits.filter((c) => c !== id) })
+			.where(eq(cortexNodes.id, node.id))
+			.run();
+	}
+	logChange({ userId, event: 'circuit-deleted', detail: circuit.name });
+	return true;
+}
+
+
+/**
+ * Put back what a change replaced.
+ *
+ * This is what makes applying anything automatically defensible: an automatic
+ * change you cannot undo is a decision taken on your behalf, and one you can is
+ * a suggestion you did not have to accept.
+ *
+ * The revert is itself logged, so history stays a record of what happened
+ * rather than quietly rewriting itself.
+ */
+export function revertChange(id: string, userId: string): boolean {
+	const entry = db
+		.select()
+		.from(cortexChangeLog)
+		.where(and(eq(cortexChangeLog.id, id), eq(cortexChangeLog.userId, userId)))
+		.get();
+	if (!entry?.before) return false;
+
+	const before = entry.before as Record<string, unknown>;
+	if (entry.event === 'tidied' && 'sourceId' in before) {
+		const edge = before as unknown as CortexAssociation;
+		if (!getNode(edge.sourceId, userId) || !getNode(edge.targetId, userId)) return false;
+		db.insert(cortexAssociations).values(edge).onConflictDoNothing().run();
+	} else if ('name' in before) {
+		const node = before as unknown as CortexNode;
+		if (!canEdit(node, userId)) return false;
+		db.update(cortexNodes)
+			.set({ name: node.name, description: node.description, updatedAt: new Date() })
+			.where(eq(cortexNodes.id, node.id))
+			.run();
+		syncFts(node.id, node.name, node.description);
+	} else {
+		return false;
+	}
+
+	logChange({
+		nodeId: entry.nodeId,
+		userId,
+		event: 'reverted',
+		detail: entry.detail,
+		runId: entry.runId
+	});
+	return true;
+}
+
+/** Undo a whole groom run, newest change first so each lands on the state it expects. */
+export function revertRun(runId: string, userId: string): number {
+	const entries = db
+		.select()
+		.from(cortexChangeLog)
+		.where(and(eq(cortexChangeLog.runId, runId), eq(cortexChangeLog.userId, userId)))
+		.orderBy(sql`${cortexChangeLog.createdAt} DESC`)
+		.all();
+	let done = 0;
+	for (const entry of entries) {
+		if (entry.event === 'reverted') continue;
+		if (revertChange(entry.id, userId)) done++;
+	}
+	return done;
 }

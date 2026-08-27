@@ -48,6 +48,86 @@ When the two disagree, the memory item wins — it is the one a human curates.
 
 ---
 
+## How big is a node?
+
+The first question anyone seeding a lattice hits: is "Australian culture" a
+node, or are "multicultural festivals" and "digger mentality" the nodes?
+
+Usually neither reading is quite right. The specifics are nodes, and the
+category is a **circuit** — which already exists for exactly this, and is
+deliberately not a routing key, so using it as a label costs nothing at
+retrieval time.
+
+This has a mechanical answer rather than a matter of taste, because the
+traversal does something specific with a node.
+
+### An over-large node is a firehose
+
+`activate` delivers `source × weight × DECAY` along *every* edge, with **no
+normalisation by degree**, and `MAX_RESULTS` is 12. So a node with forty edges
+pushes full-strength activation to all forty, and a single query landing on it
+returns twelve arbitrary things ranked by edge weight. A category node does not
+add context — it displaces whatever the question was actually about.
+
+### A node has to be worth reading back
+
+A result carries the node's name, its description and its strongest
+associations. "Australian culture" coming back tells the agent nothing it did
+not already know. "Digger mentality" with two specific sentences is something
+it can use in a reply. If the description could be written by someone who has
+never met you, the node is too general to earn its place.
+
+### Three tests
+
+1. **Containment or connection.** An association carries a `description` — why
+   these two connect. If the only sentence you can write is "X is an example of
+   Y", that is containment, and containment is a circuit. If it is "X and Y
+   share Z" or "X shaped how I do Y", both ends are nodes.
+2. **Distinctness.** Two concepts earn separate nodes when they would connect
+   to *different* things. Two names with the same neighbourhood are one node
+   that has not been merged yet.
+3. **Degree budget.** Three to seven connections is healthy. Below two, nothing
+   reaches it. Above ten, see the firehose above.
+
+### Err specific, because the tooling is asymmetric
+
+`mergeNodes` is a single call and keeps the stronger weight on every edge it
+moves. There is no split: separating one node into two means creating them and
+redistributing edges by hand. Fine-to-coarse is the reversible direction, so
+start finer than feels comfortable and merge when two nodes turn out to be one.
+
+### Abstract is fine. General is not.
+
+The most valuable nodes in the design are abstract — convergence nodes are
+through-lines, not things. The distinction is not concreteness:
+
+- A **bridge** names one particular thing and connects a handful of items
+  across domains for a stated reason.
+- A **category** contains everything beneath it, indiscriminately.
+
+So the shape that works is specifics at the bottom, a few named through-lines
+above them, and categories as circuit labels rather than nodes. A node like
+"suspicion of self-seriousness" — reaching from a sense of humour to how you
+run an event to how you talk about your own work — is worth many times a node
+called "Australian culture", because it reaches *out* of its cluster.
+
+### The island check
+
+If no node in a cluster connects to anything outside that cluster, the cluster
+is an island, and an island contributes nothing traversal can offer that plain
+search would not already find. **A node's value is in its edges out of its own
+neighbourhood.** That is the entire bet the lattice makes, and it is the first
+thing to look for on the map.
+
+### A caveat
+
+All of the above is reasoned from the retrieval mechanics, not measured against
+a real lattice — the eval fixture is fiction. Once there are thirty or forty
+real nodes the map will settle it directly: a firehose looks like a hub with
+everything hanging off it, and an island looks like an island.
+
+---
+
 ## Storage
 
 Cortex tables live in Galaxy's existing SQLite database, declared in
@@ -519,7 +599,12 @@ scheduler; and the tier-1 map. Doing the map here was deliberate — it is most
 useful while the lattice is still small enough to shape by hand, and it makes
 P3 observable before P3 starts.
 
-**P3 — Learning.** Only once P2's eval can say whether a change helped.
+**P3 — Grooming and being consulted. Shipped.** The circuit-indexed context
+digest (see "Retrieval"), areas made real with an editor and cluster labels on
+the map, the grooming agent with its apply/propose line, the review queue, undo,
+and change-log retention.
+
+**P3.5 — Learning.** Only once P2's eval can say whether a change helped.
 Strengthening paired with decay or per-node normalisation — the original
 "+0.01 per co-activation with no decay and no cap" drifts monotonically toward
 a fully connected mesh, where activation spreads everywhere, which is the same
@@ -569,34 +654,51 @@ shared with admins. `engine/alignment.ts` already holds itself to exactly this
 ("no quoted evidence ever reaches an event detail"), and
 `cortex-privacy.test.ts` asserts the `report(...)` payload carries counts only.
 
-## Grooming — risk bands, a backlog and a full log
+## Grooming — one line, not a scale
 
-The groomer classifies every change it wants to make before making it:
+The three-band model this document originally carried is gone. "Low risk"
+invited argument about where a given change sat, and the first thing filed under
+it — merging near-identical nodes — turned out to be the most consequential
+thing the groomer can do: a merge destroys a node, and restoring one from a log
+snapshot means rebuilding its edges by hand.
 
-| Band | Behaviour | Examples |
-|---|---|---|
-| **Uncontroversial** | Actioned, logged | A typo in a name, dropping an edge whose endpoint is gone, touching `lastVerifiedAt` |
-| **Low risk** | Actioned, logged **and** flagged for review, reversible from the log | Merging near-identical names within one owner, small weight adjustments, adding a circuit label |
-| **High risk** | Never actioned — waits for the node owner | Anything crossing an ownership boundary (kinship, always), deletions, merging nodes with genuinely different descriptions, visibility changes |
+One test replaces it, and it can be settled by looking rather than argued:
 
-Two supporting structures, both with a precedent in this repo:
+| Question | Answer |
+|---|---|
+| **Would this change what a query returns?** | Propose it. Merges, weights, new connections, deletions, areas, bridge flags. |
+| **No?** | Apply it, and log it. Whitespace in a name — which is close to the whole list, and that is the point. |
 
-- **Backlog** — `cortex_proposals`, modelled on `ux_ideas`: `status`
-  open/actioned/discarded plus a `fingerprint`, so a decision is replayed to
-  later runs and nothing is proposed twice.
-- **Change log** — `cortex_change_log`, modelled on `card_log`. **This one
-  ships in P1**, because writes exist in P1 and the first one should already be
-  auditable. Every mutation lands here, uncontroversial ones included, so the
-  automatic changes can be sense-checked as easily as the flagged ones.
-  `before` holds the prior state, which is what makes a flagged low-risk change
-  reversible rather than merely noted.
+Tidying is deterministic and model-free, so it runs whether or not a provider is
+configured and is testable without one. The thinking half reads the owner's
+lattice and, read-only, their `memory_items` — the groomer may notice that a
+recorded observation implies a concept, and never writes back to memory. One
+direction, one place, the same shape as the UX audit reading telemetry.
 
-Hard rule regardless of band: **the groomer never writes across an ownership
-boundary.** A cross-owner finding is always a proposal.
+`cortex_proposals` is modelled on `ux_ideas`, fingerprint included: a decision is
+replayed to later runs, because re-raising something already turned down is how
+a review queue teaches people to stop reading it. Reviewed in the Cortex tab
+rather than Admin — it is somebody's own lattice, not a platform setting.
 
-It may **read** the acting owner's `memory_items` as input when proposing
-nodes, and never writes to memory. That keeps the coupling one-directional and
-in a single place — the same shape as the UX audit reading telemetry.
+**Undo is what makes applying anything defensible.** A change you cannot undo is
+a decision taken on your behalf; one you can is a suggestion you did not have to
+accept. `revertChange` restores from the log's `before` snapshot, `revertRun`
+undoes a whole pass, and the revert is itself logged rather than quietly
+rewriting history.
+
+**The log has a ceiling.** A `before` snapshot is a whole node, so at a thousand
+concepts with a weekly groomer this is the fastest-growing thing Cortex owns.
+`runId` collapses a run into one line in the UI, and `cortexChangeDays`
+(default 90) is trimmed by the same `prune()` sweep that trims events and usage.
+It prunes on prod as well as dev, unlike the UX backlog: nothing here suppresses
+a future suggestion, it is a record read within days of being written.
+
+**Hard rule regardless: the groomer never writes across an ownership boundary,
+and never touches a row the owner-scoped API cannot reach.** The first version
+carried a sweep for edges whose far end no longer exists. It was unreachable
+code dressed as diligence — a scoped read cannot see such an edge in the first
+place, and cleaning it would take an unscoped query over rows belonging to
+nobody. A wasted row is much the cheaper problem.
 
 ## Still open
 

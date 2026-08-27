@@ -19,6 +19,22 @@
 		target: string;
 		weight: number;
 	}
+	interface Proposal {
+		id: string;
+		kind: string;
+		title: string;
+		rationale: string;
+		createdAt: number;
+	}
+	interface Change {
+		id: string;
+		event: string;
+		detail: string;
+		actor: 'user' | 'agent' | 'groom';
+		runId: string | null;
+		before: unknown;
+		createdAt: number;
+	}
 	interface Link {
 		otherId: string;
 		otherName: string;
@@ -42,8 +58,16 @@
 	let visibility = $state<'personal' | 'shared'>('personal');
 	let connectTo = $state('');
 	let connectWeight = $state(0.5);
+	/** Comma-separated while editing; the API takes an array. */
+	let areas = $state('');
+	let circuits = $state<{ id: string; name: string; count: number }[]>([]);
+	let proposals = $state<Proposal[]>([]);
+	let changes = $state<Change[]>([]);
+	let tab = $state<'edit' | 'review' | 'history'>('edit');
+	let grooming = $state(false);
 
 	const selected = $derived(nodes.find((n) => n.id === selectedId) ?? null);
+	const areaNames = $derived(new Map(circuits.map((c) => [c.id, c.name])));
 
 	/**
 	 * The list is not a fallback for the map — it is the same interface, and the
@@ -60,11 +84,81 @@
 	);
 
 	async function load() {
-		const res = await fetch('/api/cortex/map');
-		if (!res.ok) return;
-		const data = await res.json();
-		nodes = data.nodes;
-		edges = data.edges;
+		const [mapRes, circuitRes] = await Promise.all([
+			fetch('/api/cortex/map'),
+			fetch('/api/cortex/circuits')
+		]);
+		if (mapRes.ok) {
+			const data = await mapRes.json();
+			nodes = data.nodes;
+			edges = data.edges;
+		}
+		if (circuitRes.ok) circuits = await circuitRes.json();
+		await Promise.all([loadProposals(), loadChanges()]);
+	}
+
+	async function loadProposals() {
+		const res = await fetch('/api/cortex/proposals');
+		if (res.ok) proposals = await res.json();
+	}
+
+	async function loadChanges() {
+		const res = await fetch('/api/cortex/changes?limit=60');
+		if (res.ok) changes = await res.json();
+	}
+
+	async function decide(id: string, status: 'actioned' | 'discarded') {
+		await send(`/api/cortex/proposals/${id}`, 'POST', { status });
+		await loadProposals();
+	}
+
+	async function groom() {
+		grooming = true;
+		try {
+			const res = await send('/api/cortex/groom', 'POST', {});
+			if (res && !res.ran && res.reason) error = res.reason;
+			await load();
+		} finally {
+			grooming = false;
+		}
+	}
+
+	async function undo(change: Change) {
+		await send('/api/cortex/changes/revert', 'POST', { id: change.id });
+		await load();
+	}
+
+	/** One line per groom run, so a run touching fifty concepts is one row. */
+	const grouped = $derived.by(() => {
+		const out: { runId: string | null; actor: string; at: number; items: Change[] }[] = [];
+		for (const c of changes) {
+			const last = out.at(-1);
+			if (last && c.runId && last.runId === c.runId) last.items.push(c);
+			else out.push({ runId: c.runId, actor: c.actor, at: c.createdAt, items: [c] });
+		}
+		return out;
+	});
+
+	/**
+	 * Areas are typed as names, stored as ids. A name with no area behind it
+	 * creates one — filing something should not be a two-step errand.
+	 */
+	async function resolveAreas(): Promise<string[]> {
+		const wanted = areas
+			.split(',')
+			.map((a) => a.trim())
+			.filter(Boolean);
+		const out: string[] = [];
+		for (const name of wanted) {
+			const known = circuits.find((c) => c.name.toLowerCase() === name.toLowerCase());
+			if (known) {
+				out.push(known.id);
+				continue;
+			}
+			const made = await send('/api/cortex/circuits', 'POST', { name });
+			if (made) out.push(made.id);
+		}
+		return out;
 	}
 
 	async function select(id: string | null) {
@@ -83,6 +177,9 @@
 		description = data.node.description;
 		isConvergence = data.node.isConvergence;
 		visibility = data.node.visibility;
+		areas = (data.node.circuits ?? [])
+			.map((id: string) => circuits.find((c) => c.id === id)?.name ?? id)
+			.join(', ');
 	}
 
 	function resetForm() {
@@ -91,6 +188,7 @@
 		isConvergence = false;
 		visibility = 'personal';
 		connectTo = '';
+		areas = '';
 	}
 
 	function startNew() {
@@ -121,7 +219,7 @@
 
 	async function save() {
 		if (!name.trim()) return;
-		const body = { name, description, isConvergence, visibility };
+		const body = { name, description, isConvergence, visibility, circuits: await resolveAreas() };
 		const saved = selectedId
 			? await send(`/api/cortex/nodes/${encodeURIComponent(selectedId)}`, 'PATCH', body)
 			: await send('/api/cortex/nodes', 'POST', body);
@@ -163,7 +261,7 @@
 
 <div class="cortex">
 	<section class="chart">
-		<LatticeMap {nodes} {edges} {selectedId} onselect={select} />
+		<LatticeMap {nodes} {edges} {selectedId} onselect={select} areaNames={areaNames} />
 	</section>
 
 	<section class="panel">
@@ -212,11 +310,80 @@
 			{/each}
 		</ul>
 
+		<div class="tabs" role="tablist">
+			{#each [['edit', 'Concept'], ['review', `Suggestions${proposals.length ? ` (${proposals.length})` : ''}`], ['history', 'History']] as [id, label] (id)}
+				<button
+					role="tab"
+					class="tab"
+					class:on={tab === id}
+					aria-selected={tab === id}
+					onclick={() => (tab = id as typeof tab)}>{label}</button
+				>
+			{/each}
+		</div>
+
+		{#if tab === 'review'}
+			<div class="editor">
+				<div class="row">
+					<button class="btn" disabled={grooming} onclick={groom}>
+						{grooming ? 'Looking…' : 'Look for improvements'}
+					</button>
+				</div>
+				{#if error}<p class="error" role="alert">{error}</p>{/if}
+				{#if !proposals.length}
+					<p class="empty">
+						Nothing suggested. The groomer proposes changes that would alter what a query
+						returns — merges, connections, areas — and applies only tidying on its own.
+					</p>
+				{/if}
+				<ul class="nodes">
+					{#each proposals as p (p.id)}
+						<li class="proposal">
+							<span class="badge">{p.kind}</span>
+							<strong>{p.title}</strong>
+							{#if p.rationale}<span class="hint">{p.rationale}</span>{/if}
+							<div class="row">
+								<button class="btn" onclick={() => decide(p.id, 'actioned')}>Accept</button>
+								<button class="btn" onclick={() => decide(p.id, 'discarded')}>Dismiss</button>
+							</div>
+						</li>
+					{/each}
+				</ul>
+			</div>
+		{:else if tab === 'history'}
+			<div class="editor">
+				{#if !grouped.length}
+					<p class="empty">Nothing has changed yet.</p>
+				{/if}
+				<ul class="nodes">
+					{#each grouped as g (g.items[0].id)}
+						<li class="proposal">
+							<span class="badge">{g.actor}</span>
+							<span class="hint">{new Date(g.at).toLocaleString()}</span>
+							{#each g.items as c (c.id)}
+								<div class="row">
+									<span class="grow">{c.event}: {c.detail}</span>
+									{#if c.before}
+										<button class="btn" onclick={() => undo(c)}>Undo</button>
+									{/if}
+								</div>
+							{/each}
+						</li>
+					{/each}
+				</ul>
+			</div>
+		{:else}
 		<div class="editor">
 			<h2>{selectedId ? 'Edit concept' : 'New concept'}</h2>
 			{#if error}<p class="error" role="alert">{error}</p>{/if}
 			<input placeholder="Name" bind:value={name} />
 			<textarea placeholder="What it is, and why it matters" bind:value={description}></textarea>
+			<!-- Areas are what the agents' context index is grouped by, so a node
+			     with none is harder for them to find. -->
+			<input placeholder="Areas, comma separated" bind:value={areas} list="cortex-areas" />
+			<datalist id="cortex-areas">
+				{#each circuits as c (c.id)}<option value={c.name}></option>{/each}
+			</datalist>
 			<div class="row">
 				<label><input type="checkbox" bind:checked={isConvergence} /> Bridges domains</label>
 				<label>
@@ -274,6 +441,7 @@
 				</div>
 			{/if}
 		</div>
+		{/if}
 	</section>
 </div>
 
@@ -446,6 +614,36 @@
 	.error {
 		font-size: var(--text-sm);
 		color: var(--danger);
+	}
+	.tabs {
+		display: flex;
+		gap: 0.2rem;
+		margin: 0.6rem 0 0.2rem;
+		border-bottom: 1px solid var(--border);
+	}
+	.tab {
+		background: none;
+		border: none;
+		border-bottom: 2px solid transparent;
+		color: var(--fg-dim);
+		padding: 0.3rem 0.5rem;
+		cursor: pointer;
+		font-size: var(--text-sm);
+	}
+	.tab.on {
+		color: var(--heading);
+		border-bottom-color: var(--accent);
+	}
+	.proposal {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		padding: 0.5rem 0;
+		border-bottom: 1px solid var(--border);
+	}
+	.hint {
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
 	}
 	.sr-only {
 		position: absolute;

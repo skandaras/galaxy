@@ -17,7 +17,11 @@ import {
 	seedNodes,
 	cortexDigest,
 	deleteNode,
-	refreshLayout
+	refreshLayout,
+	circuitIndex,
+	listCircuits,
+	saveCircuit,
+	deleteCircuit
 } from '$lib/server/cortex';
 import { setSetting } from '$lib/server/settings';
 import { cortexTools } from '$lib/server/engine/tools/cortex';
@@ -91,6 +95,43 @@ describe('associations', () => {
 		const { a, d } = seedChain();
 		const edge = saveAssociation({ sourceId: a.id, targetId: d.id, weight: 5, userId: ANA });
 		expect(edge.weight).toBe(1);
+	});
+
+	it('stores a symmetric link once, whichever way round it is written', () => {
+		const { a, b } = seedChain();
+		saveAssociation({ sourceId: b.id, targetId: a.id, weight: 0.95, userId: ANA });
+		const between = db
+			.select()
+			.from(cortexAssociations)
+			.all()
+			.filter((e) => [e.sourceId, e.targetId].includes(a.id) && [e.sourceId, e.targetId].includes(b.id));
+		expect(between).toHaveLength(1);
+		expect(between[0].weight).toBe(0.95);
+	});
+
+	it('does not deliver a doubled activation for one relationship', () => {
+		// The bug this prevents: two rows for one symmetric link walked twice, so
+		// activation arrived doubled and clamped at 1.0 — the far node looking
+		// twice as relevant as it is.
+		const a = saveNode({ name: 'Tide pools', description: 'rockpool', ownerId: ANA });
+		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		saveAssociation({ sourceId: a.id, targetId: b.id, weight: 0.9, userId: ANA });
+		saveAssociation({ sourceId: b.id, targetId: a.id, weight: 0.9, userId: ANA });
+		const got = activate({ userId: ANA, query: 'rockpool' }).nodes.find((n) => n.node.id === b.id);
+		expect(got!.activation).toBeCloseTo(0.9 * 0.7, 5);
+	});
+
+	it('keeps both directions of an asymmetric pair, which mean different things', () => {
+		const { a, b } = seedChain();
+		deleteAssociation(a.id, b.id, ANA);
+		saveAssociation({ sourceId: a.id, targetId: b.id, weight: 0.9, directionality: 'asymmetric', userId: ANA });
+		saveAssociation({ sourceId: b.id, targetId: a.id, weight: 0.2, directionality: 'asymmetric', userId: ANA });
+		const between = db
+			.select()
+			.from(cortexAssociations)
+			.all()
+			.filter((e) => [e.sourceId, e.targetId].includes(a.id) && [e.sourceId, e.targetId].includes(b.id));
+		expect(between).toHaveLength(2);
 	});
 
 	it('reads edges from both ends of a node', () => {
@@ -187,18 +228,110 @@ describe('the change log', () => {
 });
 
 describe('the context bootstrap line', () => {
+	/** Insert straight to the table: this is about digest cost, not about writes. */
+	function bulk(count: number, circuits: number) {
+		const now = new Date();
+		for (let i = 0; i < count; i++) {
+			db.insert(cortexNodes)
+				.values({
+					id: `bulk-${i}`,
+					ownerId: ANA,
+					visibility: 'personal',
+					name: `Concept number ${i} with a fairly typical name`,
+					description: 'A description of roughly the length a real one would be.',
+					circuits: [`circuit-${i % circuits}`],
+					isConvergence: i % 40 === 0,
+					activationPriority: 0.5,
+					activationCount: 0,
+					createdAt: now,
+					updatedAt: now
+				})
+				.run();
+		}
+	}
+
 	it('says nothing at all when the lattice is empty', () => {
 		expect(cortexDigest(ANA)).toBe('');
 	});
 
-	it('carries a count, never the concepts themselves', () => {
+	it('names the concepts while the lattice is small', () => {
 		seedChain();
 		const digest = cortexDigest(ANA);
-		expect(digest).toContain('4');
-		// The Library learned this the expensive way: an index in the prompt, and
-		// bodies only when something asks for them.
+		// A handful of concepts needs the specifics to look worth querying, and
+		// costs nothing. The old version showed a bare count, and an agent could
+		// not tell whether querying would return anything relevant.
+		expect(digest).toContain('Tide pools');
+		expect(digest).toContain('Coastal ecology');
+		// Names, never bodies — the Library learned that one the expensive way.
 		expect(digest).not.toContain('Rockpool surveying');
-		expect(digest).not.toContain('Tide pools');
+	});
+
+	it('calls itself a map of now, not a record of before', () => {
+		// The reported bug: an agent read the lattice as an archive of past
+		// events, so consulting it before answering never looked necessary.
+		seedChain();
+		const digest = cortexDigest(ANA).toLowerCase();
+		expect(digest).toContain('map');
+		expect(digest).toContain('currently true');
+		expect(digest).toContain('not a record of past events');
+	});
+
+	it('stops listing names once there are too many to be cheap', () => {
+		bulk(200, 8);
+		const digest = cortexDigest(ANA);
+		expect(digest).not.toContain('Concept number 7 ');
+		expect(digest).toContain('circuit-0 (25)');
+	});
+
+	it('costs the same at a thousand concepts as at two hundred', () => {
+		// The regression this whole block exists to prevent. Listing every node
+		// would be ~22,000 characters at a thousand — some 5,500 tokens on every
+		// single turn, worse than the wholesale injection the design was corrected
+		// away from. Indexing by area makes the cost O(areas), not O(concepts).
+		bulk(200, 20);
+		const small = cortexDigest(ANA).length;
+		db.delete(cortexNodes).run();
+		bulk(1000, 20);
+		const large = cortexDigest(ANA).length;
+
+		// ~1.5KB, call it 375 tokens, for a thousand concepts — the same order as
+		// the Library's forty-document index, and flat from here on.
+		expect(large).toBeLessThan(1500);
+		// Five times the lattice must not be five times the prompt.
+		expect(large).toBeLessThan(small * 1.5);
+	});
+
+	it('always names the bridges, because they are the way in', () => {
+		bulk(1000, 20);
+		const digest = cortexDigest(ANA);
+		expect(digest).toContain('Bridges between areas');
+		// Capped even so: a lattice that has gone wrong should not be able to
+		// flood the prompt through this line.
+		expect(digest).toContain('more');
+	});
+
+	it('admits when it cannot show what is in there', () => {
+		bulk(200, 1);
+		db.update(cortexNodes).set({ circuits: null }).run();
+		// Too many to list, nothing to group by. Saying so is the point — a bare
+		// count is what caused the agent to ignore it in the first place.
+		expect(cortexDigest(ANA)).toContain('No areas assigned yet');
+	});
+});
+
+describe('the circuit index', () => {
+	it('counts concepts per area and notices the unfiled', () => {
+		saveNode({ name: 'One', ownerId: ANA, circuits: ['field'] });
+		saveNode({ name: 'Two', ownerId: ANA, circuits: ['field'] });
+		saveNode({ name: 'Three', ownerId: ANA });
+		const index = circuitIndex(ANA);
+		expect(index.circuits).toEqual([{ id: 'field', name: 'field', count: 2 }]);
+		expect(index.unfiled).toBe(1);
+	});
+
+	it('counts a node in every area it belongs to', () => {
+		saveNode({ name: 'One', ownerId: ANA, circuits: ['field', 'craft'] });
+		expect(circuitIndex(ANA).circuits.map((c) => c.count)).toEqual([1, 1]);
 	});
 });
 
@@ -368,5 +501,36 @@ describe('the layout sweep', () => {
 
 	it('copes with an empty lattice', () => {
 		expect(() => refreshLayout()).not.toThrow();
+	});
+});
+
+describe('areas', () => {
+	it('slugs an id from the name and reuses it on a second save', () => {
+		const a = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		expect(a.id).toBe('coastal-fieldwork');
+		expect(saveCircuit({ name: 'coastal FIELDWORK', ownerId: ANA }).id).toBe(a.id);
+		expect(listCircuits(ANA)).toHaveLength(1);
+	});
+
+	it('unfiles the nodes rather than deleting them', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		const node = saveNode({ name: 'Tide pools', ownerId: ANA, circuits: [area.id] });
+		expect(deleteCircuit(area.id, ANA)).toBe(true);
+		// Deleting a label must never delete what was labelled.
+		const after = db.select().from(cortexNodes).all().find((n) => n.id === node.id)!;
+		expect(after).toBeTruthy();
+		expect(after.circuits).toEqual([]);
+	});
+
+	it('refuses to delete someone else’s area', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		expect(deleteCircuit(area.id, 'user-ben')).toBe(false);
+	});
+
+	it('shows up in the digest as an area with a count', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		saveNode({ name: 'Tide pools', ownerId: ANA, circuits: [area.id] });
+		saveNode({ name: 'Storm logs', ownerId: ANA, circuits: [area.id] });
+		expect(cortexDigest(ANA)).toContain('Coastal fieldwork (2)');
 	});
 });
