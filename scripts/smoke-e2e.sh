@@ -392,6 +392,34 @@ UCSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$UCJOB/stream)
 check "coding can read a url" "$UCSTREAM" '"name":"fetch_url","status":"ok"'
 check "coding reads it without web search on" "$UCSTREAM" 'Contains FACT-42: true'
 
+# ---------------------------------------------------------------------------
+# Generated assets. The chat agent calls generate_image, which calls the model
+# the `visual` task points at, and the picture reaches the thread only if the
+# whole chain holds: the request carries the image modality, the reply's data
+# URL is decoded, the bytes are stored as an attachment, and the link the tool
+# hands back actually serves them.
+# ---------------------------------------------------------------------------
+PAINT_ID=$(api $B/api/admin/models | node -pe "JSON.parse(require('fs').readFileSync(0)).find(m=>m.modelKey.includes('painter')).id")
+check "image capability is imported from the listing" "$(api $B/api/admin/models)" '"supportsImageOutput":true'
+api -X PATCH $B/api/admin/models/$PAINT_ID -d '{"enabled":true}' > /dev/null
+api -X PUT $B/api/admin/task-configs -d "{\"task\":\"visual\",\"primaryModelId\":\"$PAINT_ID\"}" > /dev/null
+
+ICHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+IJOB=$(api -X POST $B/api/chats/$ICHAT/messages -d '{"content":"Please draw a spiral galaxy"}' | jqn .jobId)
+ISTREAM=$(curl -sN --max-time 60 $B/api/jobs/$IJOB/stream)
+check "the agent can draw" "$ISTREAM" '"name":"generate_image","status":"ok"'
+REPLY=$(api $B/api/chats/$ICHAT | jqn '.messages.at(-1).content')
+check "the reply carries the link, so the picture shows" "$REPLY" "/api/chats/$ICHAT/attachments/"
+# The link in the reply is the one a reader would click, so follow that rather
+# than looking the attachment up another way.
+IMG_URL=$(node -pe "process.argv[1].match(/\\/api\\/chats\\/[^)]+/)[0]" "$REPLY")
+IHDR=$(curl -sI $B$IMG_URL)
+check "the image serves as an image" "$IHDR" 'content-type: image/png'
+check "the image renders inline rather than downloading" "$IHDR" 'content-disposition: inline'
+check "the image is served with sniffing off" "$IHDR" 'x-content-type-options: nosniff'
+# od rather than xxd: xxd ships with vim, which a CI runner need not have.
+check "the bytes are a real PNG" "$(curl -s $B$IMG_URL | od -An -tx1 -N4 | tr -d ' ')" '89504e47'
+
 # The nav cost bar reads this; it must be available to a non-admin user, since
 # the cap blocks everyone's turns.
 BUD=$(api $B/api/usage/budget)

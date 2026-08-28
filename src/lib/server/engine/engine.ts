@@ -15,6 +15,7 @@ import {
 	type FetchSettings,
 	type WebSearchSettings
 } from '$lib/server/settings';
+import { typstReady } from '$lib/server/pdf';
 import { assertBudget } from './budget';
 import { buildContext } from './context';
 import { maybeCompact } from './compaction';
@@ -27,7 +28,9 @@ import { askUserTool } from './ask-user';
 import { attachmentTools } from './tools/attachments';
 import { boardTools } from './tools/boards';
 import { cortexTools } from './tools/cortex';
+import { documentTools } from './tools/documents';
 import { fetchUrlTool } from './tools/fetch-url';
+import { imageTools } from './tools/images';
 import { bootstrapContext, knowledgeTools } from './tools/knowledge';
 import { mcpLoopTools } from './tools/mcp';
 import { applyToolPolicy } from './tools/registry';
@@ -105,9 +108,15 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		// Likewise scoped: their own concepts plus anything shared. Activation
 		// never crosses into a lattice they cannot see.
 		...cortexTools(opts.userId),
+		// Drawing and typesetting. Scoped to this chat: what they make is saved
+		// as an attachment on it, which is how the result reaches the thread.
+		...imageTools(chat.id, opts.userId),
 		// The turn parks on the promise this returns until the browser answers.
 		askUserTool(job)
 	];
+	// Only where the compiler exists. An instance without the binary should be
+	// unable to write PDFs rather than offering a tool that always throws.
+	if (typstReady()) tools.push(...documentTools(chat.id));
 
 	/**
 	 * Naming happens inside this turn when the chat is still unnamed: the agent

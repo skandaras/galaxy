@@ -1,0 +1,1 @@
+ALTER TABLE `models` ADD `supports_image_output` integer DEFAULT false NOT NULL;

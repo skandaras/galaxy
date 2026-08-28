@@ -26,6 +26,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+
+      # Typst backs the create_pdf tool and ships in the image. Without it here
+      # the PDF suites skip themselves and the promotion gate would never once
+      # compile a document. Version pinned to the Dockerfile's.
+      - name: Install Typst, so the PDF tests actually run
+        run: |
+          curl -fsSL -o /tmp/typst.tar.xz \
+            https://github.com/typst/typst/releases/download/v0.13.1/typst-x86_64-unknown-linux-musl.tar.xz
+          tar -xJf /tmp/typst.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/typst-x86_64-unknown-linux-musl/typst /usr/local/bin/typst
+          typst --version
+
       - run: npm run check
       - run: npm test
       - run: npm run build

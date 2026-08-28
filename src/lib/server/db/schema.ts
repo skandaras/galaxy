@@ -173,6 +173,15 @@ export const models = sqliteTable('models', {
 	contextWindow: integer('context_window'),
 	supportsTools: integer('supports_tools', { mode: 'boolean' }).notNull().default(false),
 	supportsVision: integer('supports_vision', { mode: 'boolean' }).notNull().default(false),
+	/**
+	 * The model returns images, not just reads them — what generate_image needs
+	 * and what the `visual` task must be pointed at. Read from a provider's own
+	 * listing (OpenRouter's `output_modalities`), so unlike cacheMode it is a
+	 * fact to be corrected on every sync rather than a preference an admin owns.
+	 */
+	supportsImageOutput: integer('supports_image_output', { mode: 'boolean' })
+		.notNull()
+		.default(false),
 	promptCostPerMTok: real('prompt_cost_per_mtok'),
 	completionCostPerMTok: real('completion_cost_per_mtok'),
 	/**

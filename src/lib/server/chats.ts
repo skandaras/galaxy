@@ -437,6 +437,32 @@ export function attachmentDataUrl(chatId: string, attId: string): string | null 
 	return `data:${row.mime};base64,${readFileSync(row.path).toString('base64')}`;
 }
 
+export interface AttachmentBytes {
+	name: string;
+	mime: string;
+	kind: 'image' | 'document';
+	data: Buffer;
+}
+
+/**
+ * An attachment's bytes, for the route that serves them to the browser.
+ *
+ * Reads from the hidden chat's in-memory store as well as from disk, because a
+ * hidden conversation can still generate an image and still has to be able to
+ * show it — it simply leaves no trace once the process ends.
+ */
+export function attachmentBytes(chatId: string, attId: string): AttachmentBytes | null {
+	const hidden = hiddenChats.get(chatId);
+	if (hidden) {
+		const att = hidden.attachments.get(attId);
+		if (!att) return null;
+		return { name: att.name, mime: att.mime, kind: att.kind, data: dataUrlToBuffer(att.dataUrl) };
+	}
+	const row = db.select().from(attachments).where(eq(attachments.id, attId)).get();
+	if (!row || row.chatId !== chatId || !existsSync(row.path)) return null;
+	return { name: row.name, mime: row.mime, kind: row.kind, data: readFileSync(row.path) };
+}
+
 /** The text extracted from a document attachment at upload time. */
 export function attachmentText(chatId: string, attId: string): string | null {
 	const hidden = hiddenChats.get(chatId);

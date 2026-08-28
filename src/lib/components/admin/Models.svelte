@@ -7,6 +7,7 @@
 		contextWindow: number | null;
 		supportsTools: boolean;
 		supportsVision: boolean;
+		supportsImageOutput: boolean;
 		promptCostPerMTok: number | null;
 		completionCostPerMTok: number | null;
 		cacheMode: 'auto' | 'explicit' | 'none';
@@ -102,6 +103,7 @@
 					<td>
 						{#if m.supportsTools}<span class="badge" title="tool calling">T</span>{/if}
 						{#if m.supportsVision}<span class="badge" title="vision">V</span>{/if}
+					{#if m.supportsImageOutput}<span class="badge" title="image generation">I</span>{/if}
 					</td>
 					<td class="num">{m.contextWindow ? `${Math.round(m.contextWindow / 1024)}k` : '—'}</td>
 					<td class="num">{fmtCost(m.promptCostPerMTok)}</td>

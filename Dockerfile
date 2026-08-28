@@ -1,6 +1,17 @@
 FROM node:22-alpine AS build
 # better-sqlite3 is a native module; toolchain needed when no prebuilt binary matches
 RUN apk add --no-cache python3 make g++
+# Typst, for the create_pdf tool. One static musl binary that embeds its own
+# fonts and needs no network at run time — a usable TeX distribution would add
+# gigabytes to an alpine image for the same job. Pinned, like every other tool
+# here, so a build is reproducible.
+ARG TYPST_VERSION=v0.13.1
+RUN wget -qO /tmp/typst.tar.xz \
+      "https://github.com/typst/typst/releases/download/${TYPST_VERSION}/typst-x86_64-unknown-linux-musl.tar.xz" \
+    && tar -xJf /tmp/typst.tar.xz -C /tmp \
+    && mv /tmp/typst-x86_64-unknown-linux-musl/typst /usr/local/bin/typst \
+    && chmod +x /usr/local/bin/typst \
+    && rm -rf /tmp/typst.tar.xz /tmp/typst-x86_64-unknown-linux-musl
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -16,6 +27,7 @@ ENV NODE_ENV=production \
     DATA_DIR=/data \
     PORT=3000 \
     BODY_SIZE_LIMIT=32M
+COPY --from=build /usr/local/bin/typst /usr/local/bin/typst
 COPY --from=build /app/build ./build
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/drizzle ./drizzle

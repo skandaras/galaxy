@@ -3,6 +3,7 @@
 	import DOMPurify from 'dompurify';
 	import MermaidBlock from './MermaidBlock.svelte';
 	import CodeBlock from './CodeBlock.svelte';
+	import SvgBlock from './SvgBlock.svelte';
 	import { segmentMarkdown } from '$lib/markdown-segments';
 
 	let { text }: { text: string } = $props();
@@ -21,6 +22,8 @@
 	{#each segments as seg, i (i)}
 		{#if seg.kind === 'mermaid'}
 			<MermaidBlock code={seg.content} />
+		{:else if seg.kind === 'svg'}
+			<SvgBlock code={seg.content} />
 		{:else if seg.kind === 'code'}
 			<CodeBlock code={seg.content} lang={seg.lang} />
 		{:else}

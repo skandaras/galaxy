@@ -3,7 +3,7 @@
 //
 //   node scripts/mock-provider.mjs [port]
 //
-// GET  /v1/models            → one tool-capable mock model
+// GET  /v1/models            → one tool-capable mock model, plus a painter
 // POST /v1/chat/completions  → streams text; emits a web_search tool call
 //                              when tools are offered and no tool result yet
 // GET  /searxng/search       → canned results (format=json)
@@ -44,7 +44,24 @@ const REASONING_MODEL = {
 	architecture: { input_modalities: ['text'] }
 };
 
+// A model that draws. OpenRouter reports the capability as an output modality
+// and returns the picture on message.images, which is the shape generate_image
+// reads — so a mock that only streamed text would prove nothing about it.
+const PAINTER_MODEL = {
+	id: 'mock/painter-1',
+	name: 'Painter 1 (mock image)',
+	context_length: 8192,
+	pricing: { prompt: '0.000001', completion: '0.000002' },
+	supported_parameters: [],
+	architecture: { input_modalities: ['text', 'image'], output_modalities: ['text', 'image'] }
+};
+
+/** A 1×1 PNG: the smallest thing that is genuinely an image file. */
+const PIXEL_PNG =
+	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
 const isReasoning = (modelKey) => String(modelKey ?? '').includes('ponder');
+const isPainter = (modelKey) => String(modelKey ?? '').includes('painter');
 
 function sseChunk(res, obj) {
 	res.write(`data: ${JSON.stringify(obj)}\n\n`);
@@ -253,7 +270,7 @@ const server = createServer(async (req, res) => {
 
 	if (req.method === 'GET' && url.pathname === '/v1/models') {
 		res.writeHead(200, { 'content-type': 'application/json' });
-		res.end(JSON.stringify({ data: [MODEL, REASONING_MODEL] }));
+		res.end(JSON.stringify({ data: [MODEL, REASONING_MODEL, PAINTER_MODEL] }));
 		return;
 	}
 
@@ -423,11 +440,14 @@ const server = createServer(async (req, res) => {
 		const parsed = JSON.parse(body);
 		const last = parsed.messages.at(-1);
 		const system = String(parsed.messages[0]?.content ?? '');
-		const wantsTool =
-			Array.isArray(parsed.tools) &&
-			parsed.tools.length &&
-			last?.role === 'user' &&
-			String(last.content).toLowerCase().includes('search');
+		const offered = (name) =>
+			Array.isArray(parsed.tools) && parsed.tools.some((t) => t.function?.name === name);
+		const asksFor = (word) =>
+			last?.role === 'user' && String(last.content).toLowerCase().includes(word);
+		const wantsTool = offered('web_search') && asksFor('search');
+		// Same shape as the search trigger above, for the drawing path: the agent
+		// calls generate_image, which calls the painter model behind it.
+		const wantsImage = offered('generate_image') && asksFor('draw');
 
 		// A provider that is simply down. Checked before either path picks its
 		// response headers — a 503 after the SSE headers are already out is an
@@ -447,6 +467,34 @@ const server = createServer(async (req, res) => {
 		// compaction summaries, etc.
 		if (!parsed.stream) {
 			const userText = String(last?.content ?? '');
+			// Image generation. Answered only when the caller actually asked for
+			// the modality, so the mock also proves the request carried it.
+			if (isPainter(parsed.model) && (parsed.modalities ?? []).includes('image')) {
+				res.writeHead(200, { 'content-type': 'application/json' });
+				res.end(
+					JSON.stringify({
+						id: 'mock',
+						choices: [
+							{
+								index: 0,
+								message: {
+									role: 'assistant',
+									content: 'Here is the picture you asked for.',
+									images: [
+										{
+											type: 'image_url',
+											image_url: { url: `data:image/png;base64,${PIXEL_PNG}` }
+										}
+									]
+								},
+								finish_reason: 'stop'
+							}
+						],
+						usage: { prompt_tokens: 30, completion_tokens: 10 }
+					})
+				);
+				return;
+			}
 			const content = (await scriptedReply(userText, parsed.max_tokens ?? 0))?.content ?? 'Mock completion.';
 			res.writeHead(200, { 'content-type': 'application/json' });
 			if (isReasoning(parsed.model)) {
@@ -854,7 +902,19 @@ const server = createServer(async (req, res) => {
 		const namedAlready = parsed.messages.some(
 			(m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.function?.name === 'set_chat_title')
 		);
-		if (system.includes('[This conversation has no name yet]') && !namedAlready && !wantsTool) {
+		// A drawing turn is mid-flight on its second pass: the picture's link is
+		// sitting in the tool result and has to reach the reply. Naming the chat
+		// here would take that pass and lose it.
+		const drewAlready = parsed.messages.some(
+			(m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.function?.name === 'generate_image')
+		);
+		if (
+			system.includes('[This conversation has no name yet]') &&
+			!namedAlready &&
+			!wantsTool &&
+			!wantsImage &&
+			!drewAlready
+		) {
 			delta(res, {
 				tool_calls: [
 					{
@@ -881,6 +941,30 @@ const server = createServer(async (req, res) => {
 			delta(res, { tool_calls: [{ index: 0, function: { arguments: '{"query": "gal' } }] });
 			delta(res, { tool_calls: [{ index: 0, function: { arguments: 'axy news"}' } }] });
 			delta(res, {}, 'tool_calls');
+		} else if (wantsImage) {
+			delta(res, {
+				tool_calls: [
+					{
+						index: 0,
+						id: 'call_img',
+						function: {
+							name: 'generate_image',
+							arguments: JSON.stringify({ prompt: 'a spiral galaxy', name: 'galaxy' })
+						}
+					}
+				]
+			});
+			delta(res, {}, 'tool_calls');
+		} else if (last?.role === 'tool' && String(last.content ?? '').includes('](/api/chats/')) {
+			// What a real model does with generate_image's result: it is told to
+			// put the link in its reply verbatim, and the picture only reaches the
+			// thread if it does.
+			const link = String(last.content).match(/!?\[[^\]]*\]\(\/api\/chats\/[^)]+\)/)[0];
+			for (const w of ['Here ', 'you ', 'are: ', link]) {
+				delta(res, { content: w });
+				await new Promise((r) => setTimeout(r, 10));
+			}
+			delta(res, {}, 'stop');
 		} else if (last?.role === 'tool') {
 			const words = ['Based ', 'on ', 'the ', 'search ', 'results: ', 'mock ', 'answer ', 'with ', 'sources.'];
 			for (const w of words) {
