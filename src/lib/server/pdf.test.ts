@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { dataDir } from '$lib/server/db';
 import { compileTypst, resetTypstProbe, typstAvailable, TypstError } from './pdf';
 
 /**
@@ -44,12 +47,37 @@ describe.skipIf(!installed)('compileTypst', () => {
 		);
 	});
 
-	it('refuses to reach the network for a package', async () => {
-		// The tool description and the skill both promise this; if the package
-		// cache were ever left at its default this test is what notices.
-		await expect(compileTypst('#import "@preview/cetz:0.3.1": canvas\n= Hi')).rejects.toThrow(
-			TypstError
+	it('cannot read a file outside the directory it compiles in', async () => {
+		// --root is the confinement that matters, and the one thing here worth
+		// asserting: the source is model-authored, so a document that could read
+		// the filesystem would be reading it on the model's behalf.
+		//
+		// Package downloads deliberately get no test. Typst has no offline mode,
+		// so whether an @preview import resolves depends on whether the machine
+		// running the suite has egress — which is why the assertion that used to
+		// stand here passed on a sandboxed laptop and failed on CI.
+		await expect(compileTypst('= Peek\n\n#read("/../../../etc/hostname")')).rejects.toThrow(
+			/outside of project root/
 		);
+	});
+
+	it('looks for packages under DATA_DIR, not in the throwaway compile directory', async () => {
+		// The behaviour a persistent cache buys: what one document downloads, the
+		// next one already has, and a redeploy does not throw it away. Exercised
+		// with a local package because the registry needs egress, and a test that
+		// depends on the network is what put this file in CI's red column.
+		const pkg = join(dataDir, 'typst', 'local', 'smoke-pkg', '0.1.0');
+		mkdirSync(pkg, { recursive: true });
+		writeFileSync(
+			join(pkg, 'typst.toml'),
+			'[package]\nname = "smoke-pkg"\nversion = "0.1.0"\nentrypoint = "lib.typ"\n'
+		);
+		writeFileSync(join(pkg, 'lib.typ'), '#let hello() = [Hello from a package]\n');
+
+		const pdf = await compileTypst(
+			'#import "@local/smoke-pkg:0.1.0": hello\n\n= Doc\n\n#hello()'
+		);
+		expect(pdf.subarray(0, 5).toString('latin1')).toBe('%PDF-');
 	});
 
 	it('rejects an empty document before shelling out', async () => {
