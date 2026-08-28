@@ -13,6 +13,10 @@ import {
 	listNodes,
 	listAssociations,
 	listChanges,
+	listCircuits,
+	saveCircuit,
+	circuitIndex,
+	cortexDigest,
 	deleteNode,
 	revertChange,
 	revertRun,
@@ -387,9 +391,12 @@ describe('the free half', () => {
 		expect(nameSimilarity('Tide pools', 'The tide pools')).toBe(1);
 	});
 
-	it('flags a concept with no area, since the context index is grouped by area', () => {
+	it('does not flag an unfiled concept, because that is now where they start', () => {
 		saveNode({ name: 'Tide pools', ownerId: ANA });
-		expect(detect(ANA).some((d) => d.kind === 'circuit')).toBe(true);
+		// Nothing else can file a concept, so arriving unfiled is normal rather
+		// than a fault, and one complaint per concept would drown the queue.
+		// Filing is a job of the groom pass, which can name a specific area.
+		expect(detect(ANA).some((d) => d.kind === 'circuit')).toBe(false);
 	});
 
 	it('looks at nobody else’s concepts', () => {
@@ -484,5 +491,92 @@ describe('the two modes', () => {
 		saveNode({ name: 'Kelp forests', ownerId: ANA });
 		const next = await runCortexGroom('schedule', ANA);
 		expect(next.reason).not.toBe('nothing new since the last pass');
+	});
+});
+
+describe('filing', () => {
+	function file(p: Record<string, unknown>): string {
+		expect(recordProposals(ANA, [p], 10).added).toBe(1);
+		return listProposals(ANA)[0].id;
+	}
+
+	it('files a created concept under an existing area, matched by id', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		const id = file({
+			kind: 'create',
+			title: 'Add "Tide pools"',
+			payload: { name: 'Tide pools', areas: [area.id] }
+		});
+		expect(applyProposal(id, ANA)).toBe(true);
+		// Asserted through the digest, because being in the index is the thing
+		// filing is *for*.
+		expect(cortexDigest(ANA)).toContain('Coastal fieldwork (1)');
+	});
+
+	it('takes the display name too, since a model will sometimes answer with it', () => {
+		saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		const id = file({
+			kind: 'create',
+			title: 'Add "Tide pools"',
+			payload: { name: 'Tide pools', areas: ['coastal FIELDWORK'] }
+		});
+		applyProposal(id, ANA);
+		expect(listCircuits(ANA)).toHaveLength(1);
+		expect(cortexDigest(ANA)).toContain('Coastal fieldwork (1)');
+	});
+
+	it('may name an area that does not exist yet, because a person read it first', () => {
+		const id = file({
+			kind: 'create',
+			title: 'Add "Tide pools"',
+			payload: { name: 'Tide pools', areas: ['Coastal fieldwork'] }
+		});
+		applyProposal(id, ANA);
+		expect(listCircuits(ANA).map((c) => c.name)).toEqual(['Coastal fieldwork']);
+	});
+
+	it('files an existing concept through a circuit proposal', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		const node = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const id = file({
+			kind: 'circuit',
+			title: 'File under Coastal fieldwork',
+			node: node.id,
+			payload: { areas: [area.id] }
+		});
+		expect(applyProposal(id, ANA)).toBe(true);
+		expect(cortexDigest(ANA)).toContain('Coastal fieldwork (1)');
+	});
+
+	it('lists what is waiting to be filed rather than counting it', () => {
+		saveNode({ name: 'Tide pools', description: 'rockpool surveying', ownerId: ANA });
+		saveNode({ name: 'Storm logs', ownerId: ANA });
+		saveNode({ name: 'Seabird counts', ownerId: ANA });
+		const prompt = buildGroomPrompt(ANA, 10, 'review');
+		// A count tells a model there is work without telling it what the work is.
+		expect(prompt).toContain('NOT YET FILED');
+		expect(prompt).toContain('Tide pools');
+		expect(prompt).toContain('rockpool surveying');
+	});
+});
+
+describe('the write tool cannot file', () => {
+	it('offers no way to name an area', async () => {
+		const { cortexTools } = await import('$lib/server/engine/tools/cortex');
+		setSetting('cortex', { agentWrites: true });
+		const write = cortexTools(ANA).find((t) => t.def.name === 'cortex_write')!;
+		const params = JSON.stringify(write.def.parameters);
+		// Filing is a taxonomy decision, and this agent sees area names in a
+		// digest line and nothing else. It also writes unreviewed.
+		expect(params).not.toContain('area');
+		expect(params).not.toContain('circuit');
+	});
+
+	it('leaves what it writes unfiled, and says so in the index', async () => {
+		const { cortexTools } = await import('$lib/server/engine/tools/cortex');
+		setSetting('cortex', { agentWrites: true });
+		const write = cortexTools(ANA).find((t) => t.def.name === 'cortex_write')!;
+		await write.execute({ name: 'Tide pools', description: 'rockpool surveying' });
+		expect(circuitIndex(ANA).unfiled).toBe(1);
 	});
 });

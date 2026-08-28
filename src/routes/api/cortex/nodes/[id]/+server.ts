@@ -43,10 +43,19 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 			if (!merged) error(404, 'No such node to merge');
 			return json(merged);
 		}
+		// Visibility goes through its own function because it carries the
+		// claim-a-legacy-node rule, but it is one field among several and must not
+		// end the request.
+		//
+		// It used to. This branch returned early, and the editor always sends
+		// `visibility` because it is bound to a checkbox — so every edit to an
+		// existing concept changed only that, silently dropping the name,
+		// description, areas and bridge flag. Each field had been tested on its
+		// own; none had been sent together, which is the only way to see it.
 		if (body.visibility === 'shared' || body.visibility === 'personal') {
-			const updated = setNodeVisibility(node.id, user.id, body.visibility);
-			if (!updated) error(403, 'That node is not yours to change');
-			return json(updated);
+			if (!setNodeVisibility(node.id, user.id, body.visibility)) {
+				error(403, 'That node is not yours to change');
+			}
 		}
 		return json(
 			saveNode({

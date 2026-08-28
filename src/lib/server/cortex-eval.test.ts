@@ -211,8 +211,8 @@ describe('the two mechanisms, held to account', () => {
  * the suite red, and one that halves recall should.
  */
 const FLOOR = {
-	search: 0.9,
-	traversal: 0.85,
-	convergence: 0.85,
-	precisionAtK: 0.7
+	search: 0.95,
+	traversal: 0.9,
+	convergence: 0.9,
+	precisionAtK: 0.75
 };

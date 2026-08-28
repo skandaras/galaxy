@@ -373,12 +373,37 @@ export function listAssociations(nodeId: string, userId: string): CortexAssociat
  * right region of the lattice. Matching on the node's own text has no such gap,
  * and when embeddings arrive they drop into exactly this step.
  */
+export interface Seed {
+	node: CortexNode;
+	/** 0–1, normalised so the best match of a given query is 1. */
+	strength: number;
+}
+
 export function seedNodes(query: string, userId: string, limit = 6): CortexNode[] {
-	// `any`, not `all`. A question is not a keyword list: the first version of
-	// this ANDed the terms, so anything phrased differently from the node it
-	// should have matched returned no seed whatsoever — and with no seed there is
-	// nothing to spread from, so the whole traversal silently produced nothing.
-	// The eval found this on its first run; every failing query failed here.
+	return seedNodesScored(query, userId, limit).map((s) => s.node);
+}
+
+/**
+ * Seed nodes for a query, each with how well it actually matched.
+ *
+ * The strength is the point. An earlier version computed this score, sorted by
+ * it, and then threw it away — every seed started at full activation whether it
+ * matched five query terms or one. "people learning the press across a year"
+ * seeded `apprentices` (all five terms) alongside `press-maintenance` and
+ * `paper-stock` (on "press") and `ink-mixing` (on "across"), gave all four the
+ * same push, and the letterpress cluster crowded the teaching concepts that
+ * were the actual answer out of the results.
+ *
+ * FTS over the node's own name and description, rather than the keyword→circuit
+ * routing map the original design used: a map is only as good as the entries
+ * someone remembered to write, and its failure mode is silent — the query
+ * simply stops reaching the right region of the lattice.
+ */
+export function seedNodesScored(query: string, userId: string, limit = 6): Seed[] {
+	// `any`, not `all`. A question is not a keyword list: the first version ANDed
+	// the terms, so anything phrased differently from the node it should have
+	// matched returned no seed whatsoever — and with no seed there is nothing to
+	// spread from, so the whole traversal silently produced nothing.
 	const match = ftsQuery(query.trim(), 'any');
 	if (!match) return [];
 	const hits = db.all<{ id: string }>(
@@ -387,19 +412,31 @@ export function seedNodes(query: string, userId: string, limit = 6): CortexNode[
 	// Scoped by construction: only visible nodes are in the map, so an FTS hit on
 	// someone else's personal node is dropped here.
 	const visible = new Map(listNodes(userId).map((n) => [n.id, n]));
+
 	// Relevance leads, priority nudges. Sorting by priority alone threw away the
 	// ranking FTS had just done, so a node that barely matched outranked the one
 	// the question was about; sorting by rank alone makes priority dead weight.
 	// Multiplying by (0.5 + priority) lets a node the lattice considers important
 	// climb a place or two without ever leapfrogging a much better match.
 	const rank = new Map(hits.map((h, i) => [h.id, i]));
-	const relevance = (n: CortexNode) =>
-		(1 / (1 + rank.get(n.id)!)) * (0.5 + n.activationPriority);
-	return hits
+	const scored = hits
 		.map((h) => visible.get(h.id))
 		.filter((n): n is CortexNode => !!n)
-		.sort((a, b) => relevance(b) - relevance(a))
+		.map((node) => ({
+			node,
+			raw: (1 / (1 + rank.get(node.id)!)) * (0.5 + node.activationPriority)
+		}))
+		.sort((a, b) => b.raw - a.raw)
 		.slice(0, limit);
+
+	const best = scored[0]?.raw ?? 1;
+	return scored.map((s) => ({
+		node: s.node,
+		// Normalised against the best match rather than an absolute scale: what
+		// matters is how much better the front-runner is than the rest, which is
+		// exactly what decides whose neighbourhood gets explored.
+		strength: best > 0 ? s.raw / best : 1
+	}));
 }
 
 export interface ActivatedNode {
@@ -481,10 +518,14 @@ export function activate(opts: {
 	/** Defaults **off**: measured as no gain at a small cost. See CONVERGENCE_BOOST. */
 	convergenceBoost?: boolean;
 }): ActivationResult {
-	const seeds = opts.fromNodeId
-		? [getNode(opts.fromNodeId, opts.userId)].filter((n): n is CortexNode => !!n)
-		: seedNodes(opts.query ?? '', opts.userId);
-	if (!seeds.length) return { seeds: [], nodes: [] };
+	const seeded = opts.fromNodeId
+		? [getNode(opts.fromNodeId, opts.userId)]
+				.filter((n): n is CortexNode => !!n)
+				// Starting from a named node is a statement, not a guess.
+				.map((node) => ({ node, strength: 1 }))
+		: seedNodesScored(opts.query ?? '', opts.userId);
+	if (!seeded.length) return { seeds: [], nodes: [] };
+	const seeds = seeded.map((s) => s.node);
 
 	const byId = new Map(listNodes(opts.userId).map((n) => [n.id, n]));
 	const edges = visibleEdges(opts.userId);
@@ -524,9 +565,12 @@ export function activate(opts: {
 
 	const activation = new Map<string, number>();
 	const hops = new Map<string, number>();
-	for (const s of seeds) {
-		activation.set(s.id, 1);
-		hops.set(s.id, 0);
+	for (const s of seeded) {
+		// Proportional to how well it matched, not a flat 1.0 each. A node that
+		// matched on one incidental word should nudge its neighbourhood, not
+		// flood it — see seedNodesScored.
+		activation.set(s.node.id, s.strength);
+		hops.set(s.node.id, 0);
 	}
 
 	const rounds = Math.max(1, Math.min(opts.depth ?? ITERATIONS, 4));
