@@ -131,10 +131,18 @@ Ordinary prose. A blank line starts a new paragraph, exactly as in Markdown.
 
 **Fonts.** Only what the compiler embeds: *Libertinus Serif*, *New Computer Modern*, *DejaVu Sans Mono*. Naming anything else falls back silently and the document will not look as you intended.
 
-## Limits on this instance
+## Packages
 
-- **No packages.** \`#import "@preview/..."\` fails: the compiler runs with no network. Everything you need is in the language itself.
-- **No local files.** The compile happens in an empty scratch directory, so \`image("logo.png")\` has nothing to read. Draw the shape you want with Typst's own \`#rect\`, \`#circle\` and \`#line\`, or use a table.
+\`#import "@preview/..."\` works. The package is downloaded from the registry the first time any document asks for it and kept after that, so the first use of one is slower than the rest. Two are worth knowing:
+
+- **cetz** — drawn diagrams: \`#import "@preview/cetz:0.3.1"\`, then \`#cetz.canvas({ ... })\` for boxes, arrows, plots and trees. This is what to reach for when a table will not do.
+- **tablex** — tables past what \`#table\` handles comfortably: merged cells, per-cell styling, rows that repeat across a page break.
+
+Pin the version, as in the examples above; an unpinned import will not resolve. And keep to packages you are sure exist — a wrong name costs a failed compile and a round trip. If the instance has no outbound network the import fails with a network error naming the package, in which case write it in plain Typst instead.
+
+## Other limits
+
+- **No local files.** The compile happens in an empty scratch directory, so \`image("logo.png")\` has nothing to read, and nothing outside that directory can be read either. Draw the shape you want with Typst's own \`#rect\`, \`#circle\` and \`#line\`, or with cetz.
 - **One file.** Nothing is included that you have not written into \`source\`.
 
 ## When it fails

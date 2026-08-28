@@ -11,9 +11,9 @@ export const createPdfToolDef = {
 		'Typeset a PDF from Typst markup and attach it to this conversation. Use it whenever the ' +
 		'user wants a document to keep, print or send — a report, a letter, a summary, an invoice, ' +
 		'a one-pager. Load the "typst" skill first for the syntax; it is close to Markdown but not ' +
-		'the same, and @preview packages are unavailable here. Returns a link: include it in your ' +
-		'reply or the user has no way to open the file. If the compile fails you get the ' +
-		"compiler's own errors back — fix the markup and call it again.",
+		'the same. Returns a link: include it in your reply or the user has no way to open the ' +
+		"file. If the compile fails you get the compiler's own errors back — fix the markup and " +
+		'call it again.',
 	parameters: {
 		type: 'object',
 		properties: {

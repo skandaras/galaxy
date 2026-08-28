@@ -17,8 +17,12 @@ const run = promisify(execFile);
  */
 const TYPST_BIN = process.env.TYPST_BIN || 'typst';
 
-/** Generous for a document, short enough that a runaway compile cannot sit forever. */
-const COMPILE_TIMEOUT_MS = 30_000;
+/**
+ * Generous for a document, short enough that a runaway compile cannot sit
+ * forever. The headroom is for a cold package cache: the first document to
+ * import something spends this budget downloading it rather than typesetting.
+ */
+const COMPILE_TIMEOUT_MS = 60_000;
 
 /** A PDF large enough to be a mistake rather than a document. */
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
@@ -64,22 +68,38 @@ export function resetTypstProbe(): void {
 }
 
 /**
+ * Where Typst keeps `@preview` packages it has downloaded, and any local ones.
+ *
+ * Under DATA_DIR, which is a volume, so a package is fetched once for the
+ * instance rather than once per document — and, more to the point, survives a
+ * redeploy. Typst's own default would put it in the container's `~/.cache`,
+ * which every new image throws away.
+ */
+const packagesDir = () => join(dataDir, 'typst');
+
+/**
  * Compile Typst markup to PDF bytes.
  *
- * The compile is sealed in a throwaway directory: `--root` keeps any file
- * reference inside it, and the package cache is pointed at an empty path so an
- * `@preview` import fails immediately instead of reaching for the network from
- * a server that may not have any.
+ * `--root` is the throwaway directory the source was written into, which is the
+ * confinement that matters: a document cannot read a file outside it, and says
+ * so plainly when it tries. Packages are a different question — Typst has no
+ * offline mode, so an `@preview` import reaches packages.typst.org wherever the
+ * instance has egress. That is allowed on purpose (cetz and friends are most of
+ * what makes a typeset document worth having) and it is what the compiler runs
+ * from, not something a document can direct elsewhere.
  *
  * A failure throws with the compiler's own diagnostics, which is the useful
  * part — the agent loop hands that text straight back to the model, and it
- * fixes its own markup from it.
+ * fixes its own markup from it. An instance with no egress gets a network error
+ * naming the package, which is as clear as this can be made.
  */
 export async function compileTypst(source: string): Promise<Buffer> {
 	if (!source.trim()) throw new TypstError('The document is empty.');
 
 	const scratch = join(dataDir, 'tmp');
 	mkdirSync(scratch, { recursive: true });
+	const packages = packagesDir();
+	mkdirSync(packages, { recursive: true });
 	const dir = mkdtempSync(join(scratch, 'typst-'));
 	try {
 		const input = join(dir, 'main.typ');
@@ -91,10 +111,12 @@ export async function compileTypst(source: string): Promise<Buffer> {
 				maxBuffer: 4 * 1024 * 1024,
 				env: {
 					...process.env,
-					// Both are consulted; an empty directory under the scratch dir
-					// means "no packages", not "go and fetch them".
-					TYPST_PACKAGE_PATH: join(dir, 'packages'),
-					TYPST_PACKAGE_CACHE_PATH: join(dir, 'packages')
+					// Outside the throwaway directory, so what one document downloads
+					// the next one already has. TYPST_PACKAGE_PATH is the @local
+					// namespace and TYPST_PACKAGE_CACHE_PATH the @preview downloads;
+					// both are set so nothing Typst writes lands outside DATA_DIR.
+					TYPST_PACKAGE_PATH: packages,
+					TYPST_PACKAGE_CACHE_PATH: packages
 				}
 			});
 		} catch (err) {
