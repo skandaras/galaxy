@@ -323,6 +323,16 @@ on the node's own name and description rather than on a mapping someone
 remembered to add. Seeds come from `cortex_fts`, ranked by bm25 and nudged by
 `activationPriority`, filtered to what the reader may see.
 
+**Seeds start at the strength they earned.** Every seed used to begin at full
+activation whether it matched five query terms or one, so a question could be
+answered by whichever cluster happened to share an incidental word: "people
+learning the press across a year" seeded one teaching concept and three
+letterpress ones (on "press" and "across"), gave all four the same push, and the
+letterpress side crowded out the answer. `seedNodesScored` returns the relevance
+it computes rather than discarding it, normalised against the best match of that
+query — what decides whose neighbourhood gets explored is how far ahead the
+front-runner is. Overall recall went 0.98 → 1.00 and precision 0.80 → 0.82.
+
 **Match any term, not all of them.** The first version ANDed the query's terms,
 which is what FTS5 does with a bare space, and the eval found the consequence on
 its first run: a question is almost never a term-for-term subset of the text it
@@ -754,6 +764,35 @@ already looking at the map.
 Manual is a superset, so the expensive whole-lattice prompt only ever fires
 because a person asked for it. That is a stronger cost control than any
 heuristic, and it is what lets the cadence be daily rather than weekly.
+
+### Who may file a concept under an area
+
+**Only the reviewed pass.** `cortex_write` has no way to name an area, so a
+concept an agent writes arrives unfiled; the groomer's `create` and `circuit`
+proposals carry areas, and a person reads them first.
+
+That is not agent-versus-agent, it is reviewed-versus-not — the same line drawn
+everywhere else here. But the reasoning is worth keeping, because it is not only
+about trust:
+
+- **The two agents are not equally placed.** A chat agent sees area *names* in
+  its digest line and nothing else — no counts, no contents, no view of the
+  lattice. The groomer sees the whole index and the whole lattice.
+- **Filing early forecloses.** A concept the chat agent puts under "Coastal
+  fieldwork" because that is what exists is one the groomer never gets to
+  consider recutting as fieldwork-versus-lab. Exact name matching would also
+  have drifted — "Coastal fieldwork" against "Coastal field work" — but fuzzy
+  matching answers only the smaller half of the problem.
+
+So **unfiled is the normal arrival state**, not a fault: the detector no longer
+flags it (one complaint per concept would be fifty rows saying nothing), and the
+groom prompt *lists* what is waiting to be filed rather than counting it, so it
+comes back as an actionable proposal naming an area.
+
+The cost is smaller than it sounds. `seedNodes` matches name and description
+through FTS and never consults areas — circuits were kept out of the routing
+path deliberately — so an unfiled concept is retrievable the moment it exists.
+What it lacks is a line in the digest's summary.
 
 ### What never needed a model
 

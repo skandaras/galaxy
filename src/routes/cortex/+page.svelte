@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import LatticeMap from '$lib/components/LatticeMap.svelte';
+	import PaneResizer from '$lib/components/PaneResizer.svelte';
 
 	interface MapNode {
 		id: string;
@@ -86,6 +88,26 @@
 
 	const selected = $derived(nodes.find((n) => n.id === selectedId) ?? null);
 	const areaNames = $derived(new Map(circuits.map((c) => [c.id, c.name])));
+
+	/**
+	 * Width of the side panel, draggable by the divider and remembered per
+	 * browser. It was a fixed 340px, which is too narrow for a concept editor,
+	 * a review queue and a two-answer comparison to share.
+	 */
+	const panel = createResizablePane({
+		key: 'galaxy:cortex-panel-width',
+		min: 300,
+		max: 720,
+		initial: 400
+	});
+
+	const TABS = [
+		['edit', 'Concept'],
+		['review', 'Suggestions'],
+		['history', 'History'],
+		['effect', 'Effect'],
+		['data', 'File']
+	] as const;
 
 	/**
 	 * The list is not a fallback for the map — it is the same interface, and the
@@ -330,7 +352,9 @@
 		<LatticeMap {nodes} {edges} {selectedId} onselect={select} areaNames={areaNames} />
 	</section>
 
-	<section class="panel">
+	<PaneResizer pane={panel} label="Resize the Cortex panel" />
+
+	<section class="panel" style={`--panel-width:${panel.width}px`}>
 		<header>
 			<h1>Cortex</h1>
 			<span class="meta">
@@ -376,18 +400,28 @@
 			{/each}
 		</ul>
 
-		<div class="tabs" role="tablist">
-			{#each [['edit', 'Concept'], ['review', `Suggestions${proposals.length ? ` (${proposals.length})` : ''}`], ['history', 'History'], ['effect', 'Effect'], ['data', 'File']] as [id, label] (id)}
-				<button
-					role="tab"
-					class="tab"
-					class:on={tab === id}
-					aria-selected={tab === id}
-					onclick={() => (tab = id as typeof tab)}>{label}</button
-				>
-			{/each}
-		</div>
 
+		<div class="body">
+			<!-- A rail rather than a strip: five labels stacked read at a glance
+			     where five squeezed across a narrow panel do not. Falls back to a
+			     row under the mobile breakpoint, where the panel is full width. -->
+			<div class="rail" role="tablist" aria-orientation="vertical">
+				{#each TABS as [id, label] (id)}
+					<button
+						role="tab"
+						class="tab"
+						class:on={tab === id}
+						aria-selected={tab === id}
+						onclick={() => (tab = id as typeof tab)}
+					>
+						{label}{#if id === 'review' && proposals.length}<span class="count"
+								>{proposals.length}</span
+							>{/if}
+					</button>
+				{/each}
+			</div>
+
+			<div class="pane-body">
 		{#if tab === 'effect'}
 			<div class="editor">
 				<p class="empty">
@@ -608,6 +642,8 @@
 			{/if}
 		</div>
 		{/if}
+			</div>
+		</div>
 	</section>
 </div>
 
@@ -623,13 +659,41 @@
 		min-width: 0;
 	}
 	.panel {
-		width: 340px;
+		/* Set from the drag handle and remembered per browser — see PaneResizer,
+		   which also draws the dividing line this used to carry as a border. */
+		width: var(--panel-width, 400px);
 		flex-shrink: 0;
 		padding: 0.75rem;
 		box-sizing: border-box;
-		overflow-y: auto;
-		border-left: 1px solid var(--border);
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
 		background: var(--bg-pane);
+	}
+	.body {
+		display: flex;
+		gap: 0.6rem;
+		flex: 1;
+		min-height: 0;
+	}
+	.rail {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+		flex-shrink: 0;
+		border-right: 1px solid var(--border);
+		padding-right: 0.5rem;
+	}
+	.pane-body {
+		flex: 1;
+		min-width: 0;
+		overflow-y: auto;
+	}
+	.count {
+		margin-left: 0.3rem;
+		font-size: 0.65rem;
+		padding: 0 0.25rem;
+		border: 1px solid var(--border);
 	}
 	header {
 		display: flex;
@@ -781,24 +845,20 @@
 		font-size: var(--text-sm);
 		color: var(--danger);
 	}
-	.tabs {
-		display: flex;
-		gap: 0.2rem;
-		margin: 0.6rem 0 0.2rem;
-		border-bottom: 1px solid var(--border);
-	}
 	.tab {
 		background: none;
 		border: none;
-		border-bottom: 2px solid transparent;
+		border-left: 2px solid transparent;
 		color: var(--fg-dim);
-		padding: 0.3rem 0.5rem;
+		padding: 0.35rem 0.5rem;
 		cursor: pointer;
 		font-size: var(--text-sm);
+		text-align: left;
+		white-space: nowrap;
 	}
 	.tab.on {
 		color: var(--heading);
-		border-bottom-color: var(--accent);
+		border-left-color: var(--accent);
 	}
 	.answer {
 		font-size: var(--text-sm);
@@ -839,9 +899,28 @@
 			flex-direction: column;
 		}
 		.panel {
+			/* Beats the inline --panel-width: full width here, not a column. */
 			width: 100%;
-			border-left: none;
 			border-top: 1px solid var(--border);
+		}
+		/* No room beside the content on a phone, so the rail lies down. */
+		.body {
+			flex-direction: column;
+		}
+		.rail {
+			flex-direction: row;
+			overflow-x: auto;
+			border-right: none;
+			border-bottom: 1px solid var(--border);
+			padding: 0 0 0.3rem;
+		}
+		.tab {
+			border-left: none;
+			border-bottom: 2px solid transparent;
+		}
+		.tab.on {
+			border-left-color: transparent;
+			border-bottom-color: var(--accent);
 		}
 	}
 </style>
