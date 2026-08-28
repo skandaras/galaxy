@@ -9,11 +9,13 @@ import {
 	findNodeByName,
 	getNode,
 	listAssociations,
+	listCircuits,
 	listNodes,
 	logChange,
 	seedNodes,
 	mergeNodes,
 	saveAssociation,
+	saveCircuit,
 	saveNode,
 	syncFts,
 	visibleEdges,
@@ -246,16 +248,13 @@ export function detect(userId: string): Detected[] {
 		}
 	}
 
-	for (const node of nodes) {
-		if (node.circuits?.length) continue;
-		out.push({
-			kind: 'circuit',
-			title: `"${node.name}" is not filed under an area`,
-			rationale:
-				'The context index agents see is grouped by area, so an unfiled concept is invisible in it however well connected it is.',
-			node: node.id
-		});
-	}
+	// No unfiled check here any more.
+	//
+	// Nothing else can file a concept — see the prompt below — so arriving
+	// unfiled is now the normal state rather than a fault, and one proposal per
+	// unfiled concept would be fifty complaints saying nothing the model is not
+	// already being asked to do. Filing is a job of the groom pass, which sees
+	// the area index and can name a specific area.
 
 	return out;
 }
@@ -302,6 +301,41 @@ export function listProposals(userId: string, status: 'open' | 'all' = 'open') {
  * proposal whose concepts have been deleted since it was raised fails and stays
  * open rather than half-applying.
  */
+/**
+ * Turn whatever the model called an area into an id that exists.
+ *
+ * It is given ids and asked to prefer them, but it is a model: it will
+ * sometimes answer with the display name, and occasionally with a name for an
+ * area that should exist and does not. An id matches first, then a name, and
+ * only then is one created — which is allowed here because a person read this
+ * proposal before it ran, and is the reason `cortex_write` cannot do the same.
+ */
+function resolveAreas(userId: string, raw: unknown): string[] | undefined {
+	if (!Array.isArray(raw)) return undefined;
+	const known = listCircuits(userId);
+	const out: string[] = [];
+	for (const entry of raw) {
+		const wanted = String(entry ?? '').trim();
+		if (!wanted) continue;
+		const match =
+			known.find((c) => c.id === wanted) ??
+			known.find((c) => c.name.toLowerCase() === wanted.toLowerCase());
+		if (match) {
+			out.push(match.id);
+			continue;
+		}
+		try {
+			const made = saveCircuit({ name: wanted, ownerId: userId });
+			known.push(made);
+			out.push(made.id);
+		} catch {
+			// An area belonging to somebody else. Skip it rather than fail the
+			// whole proposal over a label.
+		}
+	}
+	return out.length ? out : undefined;
+}
+
 export function applyProposal(id: string, userId: string): boolean {
 	const p = db
 		.select()
@@ -328,6 +362,9 @@ export function applyProposal(id: string, userId: string): boolean {
 				const node = saveNode({
 					name,
 					description: str(payload.description),
+					// Filing happens here and only here: this proposal was read by a
+					// person, which is what the tool path cannot claim.
+					circuits: resolveAreas(userId, payload.areas),
 					ownerId: userId,
 					actor: 'groom',
 					runId
@@ -397,7 +434,7 @@ export function applyProposal(id: string, userId: string): boolean {
 					id: node.id,
 					name: p.kind === 'rename' ? (str(payload.name) ?? node.name) : node.name,
 					ownerId: userId,
-					circuits: Array.isArray(payload.areas) ? payload.areas.map(String) : undefined,
+					circuits: resolveAreas(userId, payload.areas),
 					isConvergence:
 						p.kind === 'convergence' ? payload.isConvergence !== false : undefined,
 					actor: 'groom',
@@ -566,6 +603,9 @@ export function buildGroomPrompt(
 		.map((p) => `- [${p.status}] ${p.title}`)
 		.slice(0, 200);
 
+	// Capped: on a large lattice this is the one unbounded list in the prompt,
+	// and a hundred unfiled concepts would crowd out everything else.
+	const unfiledNodes = nodes.filter((n) => !n.circuits?.length).slice(0, 30);
 	const relevant = mode === 'harvest' ? new Set(seedNodes(activity, userId, 25).map((n) => n.id)) : null;
 	const lattice = relevant
 		? [
@@ -583,12 +623,14 @@ export function buildGroomPrompt(
 			? [
 					`Propose at most ${max} concepts worth adding, based on what was said.`,
 					'A concept is a thing facts can be about, not a fact — "prefers dark themes" is an observation, "visual design" is a concept. Propose one only when it would help answer a later question about this person, and give each the connections that make it reachable.',
-					'Nothing worth adding is a fine answer. Reply with an empty array.'
+					'Nothing worth adding is a fine answer. Reply with an empty list.',
+					'Also file anything under NOT YET FILED: nothing else can put a concept in an area, so those are waiting on you. Use an existing area wherever one fits — the index is what every agent navigates by, so it is worth keeping small — and only name a new one when nothing does.'
 				].join(' ')
 			: [
 					`Suggest at most ${max} changes that would make this lattice better at answering questions about its owner.`,
 					'Look for: near-duplicate concepts that should be merged; clusters with no connection leaving them, which add nothing plain search would not already find; obvious missing connections between concepts that clearly relate; concepts bridging several areas that are not marked as bridges.',
-					'Orphans, duplicate names and unfiled concepts are already found without you — do not spend suggestions on them unless you can say something the check could not.'
+					'Also file anything under NOT YET FILED: nothing else can put a concept in an area. Prefer an existing area — the index is what every agent navigates by, so it is worth keeping small.',
+					'Orphans and duplicate names are already found without you — do not spend suggestions on them unless you can say something the check could not.'
 				].join(' ');
 
 	return [
@@ -599,7 +641,13 @@ export function buildGroomPrompt(
 		lattice,
 		`--- AREAS ---`,
 		circuits.map((c) => `- ${c.id} "${c.name}" (${c.count})`).join('\n') || '(none defined)',
-		`unfiled concepts: ${unfiled}`,
+		// Listed rather than counted. Nothing else can file a concept, so these
+		// are waiting on this pass — and a count tells a model there is work
+		// without telling it what the work is.
+		unfiledNodes.length
+			? `--- NOT YET FILED (${unfiled}) — propose an area for these ---\n` +
+				unfiledNodes.map((n) => `- ${n.id} "${n.name}" — ${n.description || '(no description)'}`).join('\n')
+			: 'every concept is filed',
 		// Read-only, and one-directional: the groomer may notice that a recorded
 		// observation implies a concept, and never writes back to memory.
 		`--- RECORDED OBSERVATIONS (never edit these) ---`,
@@ -614,7 +662,7 @@ export function buildGroomPrompt(
 		task,
 		'Reply with ONLY a JSON object: {"proposals":[…]}. Every item in it has "kind", "title" (one line) and "rationale" (why). What else it needs depends on the kind:',
 		[
-			'create   — payload {"name":"…","description":"…","connect":[{"node":"node-id","weight":0.7,"why":"…"}]}. Connections are part of the suggestion, not a follow-up: a concept nothing links to can never surface in a query.',
+			'create   — payload {"name":"…","description":"…","areas":["area-id or a new area name"],"connect":[{"node":"node-id","weight":0.7,"why":"…"}]}. Connections are part of the suggestion, not a follow-up: a concept nothing links to can never surface in a query.',
 			'merge    — "node": the one to keep, "target": the one folded into it.',
 			'connect  — "node" and "target", payload {"weight":0.0-1.0,"why":"…"}.',
 			'disconnect — "node" and "target".',
