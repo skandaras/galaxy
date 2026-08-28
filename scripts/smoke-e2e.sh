@@ -646,6 +646,13 @@ check "the agent asks and the run stays open" "$(grep -c '"type":"question"' $DA
 check "the question carries its options" "$(cat $DATA/ask.sse)" '"Joint"'
 check "an unanswered question keeps the job running" \
   "$(as alice $M/api/chats/$AKCHAT | jqn '.runningJobId !== null')" 'true'
+# The mark the Code pane draws its "working" dot from. A parked run is the one
+# state that holds still long enough to assert on, and it is exactly the case
+# the dot has to survive: silent, but very much running.
+check "the chat list marks a live run" \
+  "$(as alice $M/api/chats | node -pe "JSON.parse(require('fs').readFileSync(0)).find(c=>c.id==='$AKCHAT').running")" 'true'
+check "one person's run never shows in another's list" \
+  "$(as bob $M/api/chats | node -pe "JSON.parse(require('fs').readFileSync(0)).some(c=>c.running)")" 'false'
 check "the question raises a notification" \
   "$(as alice $M/api/notifications | jqn '.notifications[0].kind')" 'question'
 check "and it is marked urgent, the only kind that pushes" \
@@ -659,6 +666,8 @@ check "another user cannot answer it" \
 check "answering resolves it" \
   "$(as alice -X POST $M/api/jobs/$AKJOB/answer -d "{\"questionId\":\"$QID\",\"answer\":\"The joint one\"}")" '"answered":true'
 wait $SSE_PID 2>/dev/null || true
+check "the mark clears once the run finishes" \
+  "$(as alice $M/api/chats | node -pe "JSON.parse(require('fs').readFileSync(0)).find(c=>c.id==='$AKCHAT').running")" 'false'
 check "the answer reaches the model as the tool result" "$(cat $DATA/ask.sse)" 'ANSWERED:The joint one'
 check "the question is closed on the stream" "$(cat $DATA/ask.sse)" '"type":"answer"'
 check "answering twice is a no-op, not an error" \

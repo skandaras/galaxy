@@ -28,8 +28,16 @@
 	let folder = $state('');
 	let author = $state<'user' | 'agent'>('user');
 	let visibility = $state<'personal' | 'shared'>('personal');
-	/** Folders collapsed by hand; everything else stays open. */
+	/**
+	 * Per-folder overrides on top of the default, which is shut for everything
+	 * except Unfiled — a shelf that opens with every folder expanded is a wall
+	 * of documents, and Unfiled is the overflow people actually browse.
+	 *
+	 * Deliberately not remembered between visits: "collapsed on arrival" is the
+	 * point, and a persisted expansion would quietly undo it.
+	 */
 	let collapsed = $state<Record<string, boolean>>({});
+	const isShut = (name: string) => collapsed[name] ?? name !== UNFILED;
 
 	/**
 	 * The shelf, grouped. Unfiled sits last: it is the overflow, not the
@@ -48,6 +56,19 @@
 
 	/** Existing folder names, so the picker suggests rather than demands. */
 	const folders = $derived([...new Set(docs.map((d) => d.folder).filter(Boolean))].sort());
+
+	/** Shut everything, or open everything once it already is. */
+	const allShut = $derived(grouped.every(([name]) => isShut(name)));
+
+	/**
+	 * Written as an explicit entry per folder rather than by clearing the map:
+	 * the default is per-name, so "open all" has to say so for each one or
+	 * Unfiled would be the only thing that moved.
+	 */
+	function setAllCollapsed(shut: boolean) {
+		collapsed = Object.fromEntries(grouped.map(([name]) => [name, shut]));
+	}
+
 	/** False for someone else's shared doc: readable, not editable. */
 	let editable = $state(true);
 	let preview = $state(false);
@@ -161,6 +182,18 @@
 				Upload .md
 				<input type="file" accept=".md,.txt,text/markdown,text/plain" hidden onchange={upload} />
 			</label>
+			<!-- Only ever useful when there is grouping to act on, and search
+			     replaces the folders with a flat ranked list. -->
+			{#if !query.trim() && grouped.length > 1}
+				<button
+					class="collapse-all"
+					title={allShut ? 'Expand all folders' : 'Collapse all folders'}
+					aria-label={allShut ? 'Expand all folders' : 'Collapse all folders'}
+					onclick={() => setAllCollapsed(!allShut)}
+				>
+					{allShut ? '⊞' : '⊟'}
+				</button>
+			{/if}
 		</div>
 		<input
 			class="search"
@@ -194,10 +227,10 @@
 					<div class="folder-head">
 						<button
 							class="folder-name"
-							aria-expanded={!collapsed[name]}
-							onclick={() => (collapsed = { ...collapsed, [name]: !collapsed[name] })}
+							aria-expanded={!isShut(name)}
+							onclick={() => (collapsed = { ...collapsed, [name]: !isShut(name) })}
 						>
-							<span class="caret">{collapsed[name] ? '▸' : '▾'}</span>
+							<span class="caret">{isShut(name) ? '▸' : '▾'}</span>
 							{name}
 							<span class="count">{items.length}</span>
 						</button>
@@ -210,7 +243,7 @@
 							>
 						{/if}
 					</div>
-					{#if !collapsed[name]}
+					{#if !isShut(name)}
 						<ul>
 							{#each items as doc (doc.id)}{@render docRow(doc)}{/each}
 						</ul>
@@ -293,8 +326,26 @@
 	}
 	.list-actions {
 		display: flex;
+		align-items: center;
 		gap: 0.4rem;
 		margin-bottom: 0.6rem;
+	}
+	/* Pane-level control, so unlike the per-folder + button it is visible
+	   without hovering — there is nothing to hover over to find it. */
+	.collapse-all {
+		margin-left: auto;
+		background: none;
+		border: none;
+		border-radius: 4px;
+		color: var(--fg-dim);
+		cursor: pointer;
+		font-family: inherit;
+		font-size: var(--text-lg);
+		line-height: 1;
+		padding: 0.2rem 0.3rem;
+	}
+	.collapse-all:hover {
+		color: var(--accent);
 	}
 	.search {
 		width: 100%;

@@ -8,6 +8,7 @@
 	import { hasFinePointer } from '$lib/pointer';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import AskSheet from '$lib/components/AskSheet.svelte';
+	import GalaxySpinner from '$lib/components/GalaxySpinner.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import ResearchEffort from '$lib/components/ResearchEffort.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
@@ -1010,7 +1011,10 @@
 					{:else if question}
 						<span class="thinking">waiting on your answer</span>
 					{:else if !stages.length && !timeline.length}
-						<span class="thinking">{streamModel || '…'} is thinking</span>
+						<span class="thinking working">
+							<GalaxySpinner label="Thinking" />
+							{streamModel || '…'} is thinking
+						</span>
 					{/if}
 				</div>
 			{/if}
@@ -1395,6 +1399,14 @@
 		color: var(--fg-dim);
 		font-size: var(--text-md);
 		animation: pulse 1.4s ease-in-out infinite;
+	}
+	/* The spinner is the animation on this line. A fading label beside a
+	   turning galaxy is two things saying the same thing. */
+	.thinking.working {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		animation: none;
 	}
 	/* Stays put after the turn ends. Chat had no signal at all for a turn that
 	   ran out of steps — it just stopped. */

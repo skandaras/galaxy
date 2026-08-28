@@ -9,6 +9,7 @@
 	import { copyText } from '$lib/clipboard';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import AskSheet from '$lib/components/AskSheet.svelte';
+	import GalaxySpinner from '$lib/components/GalaxySpinner.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
 	import {
@@ -25,6 +26,8 @@
 		title: string;
 		mode: string;
 		updatedAt: number;
+		/** An agent is working on this session right now — see /api/chats. */
+		running?: boolean;
 	}
 	interface AttachmentRef {
 		id: string;
@@ -192,6 +195,41 @@
 		githubConfigured = g.configured;
 		repos = g.repos;
 	});
+
+	/**
+	 * How often the session list re-asks which sessions have a run in flight.
+	 *
+	 * A run started in another tab, on the phone, or before this page was opened
+	 * is invisible to the local `streaming` flag — which is the whole point of
+	 * the mark, so it cannot be derived from this page's own state alone.
+	 */
+	const RUNNING_POLL_MS = 10_000;
+
+	async function refreshRunning() {
+		const res = await fetch('/api/chats').catch(() => null);
+		if (!res?.ok) return;
+		const running = new Set(
+			((await res.json()) as ChatMeta[]).filter((c) => c.running).map((c) => c.id)
+		);
+		// Only the flag is taken from the response: the list itself is owned
+		// locally, and a session created a moment ago may not be in it yet.
+		sessions = sessions.map((s) => ({ ...s, running: running.has(s.id) }));
+	}
+
+	$effect(() => {
+		// A hidden tab has nobody looking at the dot this would repaint.
+		const timer = setInterval(() => {
+			if (document.visibilityState === 'visible') void refreshRunning();
+		}, RUNNING_POLL_MS);
+		return () => clearInterval(timer);
+	});
+
+	/**
+	 * The session being watched in this tab is known immediately; everything
+	 * else waits for the poll. Without the first half the dot on the session you
+	 * just messaged would take up to ten seconds to appear.
+	 */
+	const isWorking = (s: ChatMeta) => (streaming && current?.chatId === s.id) || Boolean(s.running);
 
 	$effect(() => (threadEl ? scroll.attach(threadEl) : undefined));
 
@@ -742,6 +780,13 @@
 		<ul>
 			{#each sessions as s (s.id)}
 				<li class:selected={current?.chatId === s.id}>
+					<!-- Rendered on every row, coloured only when there is a run: the
+					     space is held so titles stay aligned as runs come and go. -->
+					{#if isWorking(s)}
+						<span class="dot" role="img" aria-label="An agent is working"></span>
+					{:else}
+						<span class="dot idle" aria-hidden="true"></span>
+					{/if}
 					<button class="row" onclick={() => select(s.id)}>{s.title}</button>
 					<button class="icon" title="Delete session" onclick={(e) => removeSession(s.id, e)}
 						>×</button
@@ -929,7 +974,10 @@
 						{#if streamText}
 							<Markdown text={streamText} />
 						{:else if !timeline.length}
-							<span class="thinking">{streamModel || '…'} is working</span>
+							<span class="thinking working">
+								<GalaxySpinner label="Working" />
+								{streamModel || '…'} is working
+							</span>
 						{/if}
 					</div>
 				{/if}
@@ -1098,6 +1146,13 @@
 	}
 	.session-list li.selected {
 		background: var(--border);
+	}
+	.session-list .dot {
+		margin-left: 0.35rem;
+	}
+	.session-list .dot.idle {
+		background: none;
+		animation: none;
 	}
 	.row {
 		flex: 1;
@@ -1457,6 +1512,13 @@
 		color: var(--fg-dim);
 		font-size: var(--text-md);
 		animation: pulse 1.4s ease-in-out infinite;
+	}
+	/* The spinner is the animation on this line — see the same rule in chat. */
+	.thinking.working {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		animation: none;
 	}
 	@keyframes pulse {
 		50% {

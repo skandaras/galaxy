@@ -273,7 +273,7 @@ export const RUNNING_JOB_MAX_MS = 45 * 60 * 1000;
 export function findRunningJobForChat(chatId: string, now = Date.now()): LiveJob | null {
 	for (const job of live.values()) {
 		if (job.chatId !== chatId || job.status !== 'running') continue;
-		if (!job.parked && now - (job.lastChunkAt ?? job.createdAt) > RUNNING_JOB_MAX_MS) {
+		if (isStale(job, now)) {
 			failJob(
 				job,
 				'This run was abandoned — it went quiet for over 45 minutes without finishing. Send your message again.'
@@ -283,6 +283,30 @@ export function findRunningJobForChat(chatId: string, now = Date.now()): LiveJob
 		return job;
 	}
 	return null;
+}
+
+/** Running, but past the watchdog — see RUNNING_JOB_MAX_MS. */
+function isStale(job: LiveJob, now: number): boolean {
+	return !job.parked && now - (job.lastChunkAt ?? job.createdAt) > RUNNING_JOB_MAX_MS;
+}
+
+/**
+ * Chats this user has a live run on, for the "working" marks in the session
+ * and chat lists.
+ *
+ * Stale jobs are skipped rather than failed, which is the one way this differs
+ * from findRunningJobForChat: that one kills a lost job because its caller is
+ * about to refuse a message on its behalf. Drawing a list has no such standing,
+ * and a poll every few seconds is the worst possible place to put a side effect.
+ */
+export function runningChatIds(userId: string, now = Date.now()): Set<string> {
+	const out = new Set<string>();
+	for (const job of live.values()) {
+		if (job.userId !== userId || job.status !== 'running') continue;
+		if (isStale(job, now)) continue;
+		out.add(job.chatId);
+	}
+	return out;
 }
 
 /** How long the blocking job has been running, for the message the user sees. */

@@ -135,6 +135,29 @@ for (const title of ['alpha', 'bravo', 'charlie']) {
 	});
 }
 
+// Two projects, so the project chips and the "turn all off" link have
+// something to act on.
+for (const name of ['Kitchen', 'Garage']) {
+	await as(ALICE, `/api/boards/${alicesBoard.id}/projects`, {
+		method: 'POST',
+		body: JSON.stringify({ name })
+	});
+}
+
+// Library docs in two folders plus one unfiled, which is what the shelf's
+// collapse behaviour is about.
+for (const [title, folder] of [
+	['Boiler manual', 'House'],
+	['Fuse box', 'House'],
+	['Loft plans', 'Projects'],
+	['Scratch note', '']
+]) {
+	await as(ALICE, '/api/library', {
+		method: 'POST',
+		body: JSON.stringify({ title, content: `Body of ${title}`, folder })
+	});
+}
+
 const bobsBoard = await as(BOB, '/api/boards', {
 	method: 'POST',
 	body: JSON.stringify({ name: 'Shared by Bob' })
@@ -455,6 +478,75 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 	await page.waitForTimeout(300);
 	check('showing everything brings them back', (await titles()).length, 1);
 	await shot('board-assignee-filter');
+}
+
+// 4c. Turning every project off, which is how you get down to looking at one.
+{
+	await page.goto(`${B}/boards`);
+	await page.locator('header.bar select').first().waitFor();
+	await page.selectOption('header.bar select', { label: alicesBoard.name });
+	await page.locator('.filters .chip').first().waitFor();
+	await page.waitForTimeout(400);
+
+	const visible = () => page.locator('article.card').count();
+	check('the board starts with its cards showing', (await visible()) > 0);
+
+	await page.locator('.filters .link:text-is("Turn all off")').click();
+	await page.waitForTimeout(300);
+	check('turning all off empties the board', await visible(), 0);
+	check(
+		'every chip reads as off',
+		await page.locator('.filters .chip:not(.off)').count(),
+		0
+	);
+
+	// And the point of the control: one click back to a single project.
+	await page.locator('.filters .chip:text-is("Kitchen")').click();
+	await page.waitForTimeout(300);
+	check('one click brings a single project back', await page.locator('.filters .chip.off').count(), 2);
+	check(
+		'and the link comes back, since there is something to turn off again',
+		await page.locator('.filters .link:text-is("Turn all off")').count(),
+		1
+	);
+	await shot('board-turn-all-off');
+
+	// Leave the board as it was found: the filter is remembered per browser and
+	// the assignee section below reads the same page.
+	await page.locator('.filters .link:text-is("Show everything")').click();
+	await page.waitForTimeout(300);
+}
+
+// 4d. The Library shelf. Folders arrive shut so the pane is a list of folders
+//     rather than a wall of documents, and one control opens or closes the lot.
+{
+	await page.goto(`${B}/library`);
+	await page.locator('.folder').first().waitFor();
+	await page.waitForTimeout(400);
+
+	const rows = () => page.locator('.doc-list .row').count();
+	const openFolders = () => page.locator('.folder-name[aria-expanded="true"]').count();
+
+	check('every named folder starts shut', await page.locator('.folder-name[aria-expanded="false"]').count(), 2);
+	check('unfiled starts open, being the overflow people browse', await openFolders(), 1);
+	check('so only the unfiled document is listed', await rows(), 1);
+
+	// hasText, not the rendered label: the heading is uppercased by CSS, so the
+	// DOM still says "House".
+	await page.locator('.folder-name', { hasText: 'House' }).click();
+	await page.waitForTimeout(200);
+	check('a folder opens when clicked', await rows(), 3);
+
+	await page.locator('.collapse-all').click();
+	await page.waitForTimeout(200);
+	check('collapse all shuts everything, unfiled included', await openFolders(), 0);
+	check('and the shelf is folders only', await rows(), 0);
+
+	await page.locator('.collapse-all').click();
+	await page.waitForTimeout(200);
+	check('the same control opens them all again', await openFolders(), 3);
+	check('and every document is listed', await rows(), 4);
+	await shot('library-folders');
 }
 
 // 5. Alignment. Four tabs that each fetch on mount, a constellation drawn from
