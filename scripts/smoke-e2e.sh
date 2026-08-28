@@ -392,6 +392,34 @@ UCSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$UCJOB/stream)
 check "coding can read a url" "$UCSTREAM" '"name":"fetch_url","status":"ok"'
 check "coding reads it without web search on" "$UCSTREAM" 'Contains FACT-42: true'
 
+# ---------------------------------------------------------------------------
+# Generated assets. The chat agent calls generate_image, which calls the model
+# the `visual` task points at, and the picture reaches the thread only if the
+# whole chain holds: the request carries the image modality, the reply's data
+# URL is decoded, the bytes are stored as an attachment, and the link the tool
+# hands back actually serves them.
+# ---------------------------------------------------------------------------
+PAINT_ID=$(api $B/api/admin/models | node -pe "JSON.parse(require('fs').readFileSync(0)).find(m=>m.modelKey.includes('painter')).id")
+check "image capability is imported from the listing" "$(api $B/api/admin/models)" '"supportsImageOutput":true'
+api -X PATCH $B/api/admin/models/$PAINT_ID -d '{"enabled":true}' > /dev/null
+api -X PUT $B/api/admin/task-configs -d "{\"task\":\"visual\",\"primaryModelId\":\"$PAINT_ID\"}" > /dev/null
+
+ICHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+IJOB=$(api -X POST $B/api/chats/$ICHAT/messages -d '{"content":"Please draw a spiral galaxy"}' | jqn .jobId)
+ISTREAM=$(curl -sN --max-time 60 $B/api/jobs/$IJOB/stream)
+check "the agent can draw" "$ISTREAM" '"name":"generate_image","status":"ok"'
+REPLY=$(api $B/api/chats/$ICHAT | jqn '.messages.at(-1).content')
+check "the reply carries the link, so the picture shows" "$REPLY" "/api/chats/$ICHAT/attachments/"
+# The link in the reply is the one a reader would click, so follow that rather
+# than looking the attachment up another way.
+IMG_URL=$(node -pe "process.argv[1].match(/\\/api\\/chats\\/[^)]+/)[0]" "$REPLY")
+IHDR=$(curl -sI $B$IMG_URL)
+check "the image serves as an image" "$IHDR" 'content-type: image/png'
+check "the image renders inline rather than downloading" "$IHDR" 'content-disposition: inline'
+check "the image is served with sniffing off" "$IHDR" 'x-content-type-options: nosniff'
+# od rather than xxd: xxd ships with vim, which a CI runner need not have.
+check "the bytes are a real PNG" "$(curl -s $B$IMG_URL | od -An -tx1 -N4 | tr -d ' ')" '89504e47'
+
 # The nav cost bar reads this; it must be available to a non-admin user, since
 # the cap blocks everyone's turns.
 BUD=$(api $B/api/usage/budget)
@@ -646,6 +674,13 @@ check "the agent asks and the run stays open" "$(grep -c '"type":"question"' $DA
 check "the question carries its options" "$(cat $DATA/ask.sse)" '"Joint"'
 check "an unanswered question keeps the job running" \
   "$(as alice $M/api/chats/$AKCHAT | jqn '.runningJobId !== null')" 'true'
+# The mark the Code pane draws its "working" dot from. A parked run is the one
+# state that holds still long enough to assert on, and it is exactly the case
+# the dot has to survive: silent, but very much running.
+check "the chat list marks a live run" \
+  "$(as alice $M/api/chats | node -pe "JSON.parse(require('fs').readFileSync(0)).find(c=>c.id==='$AKCHAT').running")" 'true'
+check "one person's run never shows in another's list" \
+  "$(as bob $M/api/chats | node -pe "JSON.parse(require('fs').readFileSync(0)).some(c=>c.running)")" 'false'
 check "the question raises a notification" \
   "$(as alice $M/api/notifications | jqn '.notifications[0].kind')" 'question'
 check "and it is marked urgent, the only kind that pushes" \
@@ -659,6 +694,8 @@ check "another user cannot answer it" \
 check "answering resolves it" \
   "$(as alice -X POST $M/api/jobs/$AKJOB/answer -d "{\"questionId\":\"$QID\",\"answer\":\"The joint one\"}")" '"answered":true'
 wait $SSE_PID 2>/dev/null || true
+check "the mark clears once the run finishes" \
+  "$(as alice $M/api/chats | node -pe "JSON.parse(require('fs').readFileSync(0)).find(c=>c.id==='$AKCHAT').running")" 'false'
 check "the answer reaches the model as the tool result" "$(cat $DATA/ask.sse)" 'ANSWERED:The joint one'
 check "the question is closed on the stream" "$(cat $DATA/ask.sse)" '"type":"answer"'
 check "answering twice is a no-op, not an error" \

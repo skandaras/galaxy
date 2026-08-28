@@ -24,6 +24,16 @@ describe('segmentMarkdown', () => {
 		expect(out).toEqual([{ kind: 'mermaid', content: 'graph TD;\nA-->B;' }]);
 	});
 
+	it('renders a complete svg fence as a drawing', () => {
+		const out = segmentMarkdown('```svg\n<svg viewBox="0 0 2 2"></svg>\n```');
+		expect(out).toEqual([{ kind: 'svg', content: '<svg viewBox="0 0 2 2"></svg>' }]);
+	});
+
+	it('leaves a half-written svg fence as code until it closes', () => {
+		const out = segmentMarkdown('```svg\n<svg viewBox="0 0 2 2"><cir');
+		expect(out.map((s) => s.kind)).toEqual(['code']);
+	});
+
 	it('renders an unterminated fence as code, so streaming does not flash raw text', () => {
 		const out = segmentMarkdown('Here:\n\n```py\nprint("par');
 		expect(out.map((s) => s.kind)).toEqual(['md', 'code']);

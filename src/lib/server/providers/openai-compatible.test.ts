@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
+	createOpenAiCompatAdapter,
 	defaultCacheMode,
 	parseChatCompletionStream,
 	readUsage,
@@ -329,5 +330,92 @@ describe('reporting that the provider is alive', () => {
 			streamOf(chunk({ choices: [{ delta: { content: 'hi' } }] }), 'data: [DONE]\n\n')
 		);
 		expect(progressCount(events)).toBe(0);
+	});
+});
+
+/**
+ * Image generation, which rides the ordinary chat-completions call: the request
+ * asks for the image modality and the reply carries data URLs alongside the
+ * text. Driven through the adapter with a stubbed fetch, since the parsing and
+ * the request body are the two halves that have to agree.
+ */
+describe('image output', () => {
+	const PIXEL = 'iVBORw0KGgoAAAANSUhEUg==';
+	let sent: Record<string, unknown> = {};
+
+	function adapterReturning(body: unknown) {
+		vi.stubGlobal('fetch', async (_url: string, init: RequestInit = {}) => {
+			// listModels is a GET with no body; only a completion has one to read.
+			if (init.body) sent = JSON.parse(String(init.body));
+			return new Response(JSON.stringify(body), {
+				headers: { 'content-type': 'application/json' }
+			});
+		});
+		return createOpenAiCompatAdapter({ baseUrl: 'https://example.test/v1' });
+	}
+
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('sends modalities only when they are asked for', async () => {
+		const adapter = adapterReturning({ choices: [{ message: { content: 'hi' } }] });
+		await adapter.complete({ modelKey: 'm', messages: [] });
+		expect(sent.modalities).toBeUndefined();
+		await adapter.complete({ modelKey: 'm', messages: [], modalities: ['image', 'text'] });
+		expect(sent.modalities).toEqual(['image', 'text']);
+	});
+
+	it('decodes the images off the message', async () => {
+		const adapter = adapterReturning({
+			choices: [
+				{
+					message: {
+						content: 'here you go',
+						images: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${PIXEL}` } }]
+					}
+				}
+			]
+		});
+		const res = await adapter.complete({ modelKey: 'm', messages: [], modalities: ['image'] });
+		expect(res.images).toEqual([{ mime: 'image/png', base64: PIXEL }]);
+	});
+
+	it('keeps the images it can read and drops the ones it cannot', async () => {
+		const adapter = adapterReturning({
+			choices: [
+				{
+					message: {
+						images: [
+							{ image_url: { url: 'https://example.test/not-a-data-url.png' } },
+							{ image_url: { url: `data:image/webp;base64,${PIXEL}` } },
+							{ nothing: true }
+						]
+					}
+				}
+			]
+		});
+		const res = await adapter.complete({ modelKey: 'm', messages: [] });
+		expect(res.images).toEqual([{ mime: 'image/webp', base64: PIXEL }]);
+	});
+
+	it('leaves images absent on an ordinary reply', async () => {
+		const adapter = adapterReturning({ choices: [{ message: { content: 'just words' } }] });
+		expect((await adapter.complete({ modelKey: 'm', messages: [] })).images).toBeUndefined();
+	});
+
+	it('reads image generation off the listing, as the mirror of vision', async () => {
+		const adapter = adapterReturning({
+			data: [
+				{
+					id: 'vendor/painter',
+					architecture: { input_modalities: ['text'], output_modalities: ['text', 'image'] }
+				},
+				{ id: 'vendor/talker', architecture: { input_modalities: ['text', 'image'] } }
+			]
+		});
+		const models = await adapter.listModels();
+		expect(models.map((m) => [m.key, m.supportsImageOutput, m.supportsVision])).toEqual([
+			['vendor/painter', true, false],
+			['vendor/talker', false, true]
+		]);
 	});
 });

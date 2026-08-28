@@ -87,6 +87,22 @@ export interface ChatRequest {
 	maxTokens?: number;
 	/** See models.cacheMode. Absent behaves as 'auto': send nothing. */
 	cacheMode?: CacheMode;
+	/**
+	 * What the model may reply *with*, as opposed to what it can be shown.
+	 *
+	 * Only sent when asked for, because an endpoint that has never heard of the
+	 * field is entitled to reject the whole request over it — the same caution
+	 * cacheMode's 'auto' exists for. `['image', 'text']` is what an
+	 * image-generating model wants; leaving it unset is the text-only default
+	 * every other call makes.
+	 */
+	modalities?: string[];
+}
+
+/** An image a model produced, decoded from the data URL it arrived as. */
+export interface GeneratedImage {
+	mime: string;
+	base64: string;
 }
 
 export interface RemoteModel {
@@ -97,6 +113,8 @@ export interface RemoteModel {
 	supportsVision: boolean;
 	promptCostPerMTok: number | null;
 	completionCostPerMTok: number | null;
+	/** The model draws: it returns images as well as text. */
+	supportsImageOutput: boolean;
 	/** Starting point for models.cacheMode; only ever applied on first import. */
 	cacheMode: CacheMode;
 }
@@ -111,6 +129,11 @@ export interface CompletionResult {
 	finishReason?: string | null;
 	/** True when the model emitted chain-of-thought but no answer text. */
 	reasonedOnly?: boolean;
+	/**
+	 * Images the model drew, when the request asked for the image modality.
+	 * Absent on every ordinary call — nothing else in the engine looks at it.
+	 */
+	images?: GeneratedImage[];
 }
 
 export interface ProviderAdapter {

@@ -8,7 +8,9 @@ import { askUserToolDef } from '../ask-user';
 import { attachmentTools } from './attachments';
 import { boardTools } from './boards';
 import { cortexTools } from './cortex';
+import { createPdfToolDef } from './documents';
 import { fetchUrlToolDef } from './fetch-url';
+import { imageTools } from './images';
 import { knowledgeTools } from './knowledge';
 import { runHistoryToolDef } from '../run-history';
 import { setChatTitleToolDef } from '../chat-title';
@@ -106,6 +108,17 @@ export function builtinDescriptors(): ToolDescriptor[] {
 		'boards',
 		['chat', 'coding'],
 		'parks the run until the user answers'
+	);
+	// Placeholder ids again: they scope execution, never the declaration.
+	add(imageTools('*', '*'), 'visual', ['chat']);
+	// Built from its declaration alone, like web_search above: create_pdf is only
+	// added to a live toolset when the Typst binary is present, but it must be
+	// listed here either way or an admin cannot find it to switch it off.
+	add(
+		[{ def: createPdfToolDef, execute: async () => '' }],
+		'visual',
+		['chat'],
+		'needs the Typst binary; omitted from a turn on an instance without it'
 	);
 	// The chat id only scopes execution, never the declaration.
 	add([{ def: runHistoryToolDef, execute: async () => '' }], 'diagnostics', ['chat', 'coding']);

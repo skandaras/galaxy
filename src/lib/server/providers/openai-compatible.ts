@@ -1,6 +1,7 @@
 import type {
 	CacheMode,
 	ChatRequest,
+	GeneratedImage,
 	MessageContent,
 	ProviderAdapter,
 	ProviderMessage,
@@ -55,6 +56,7 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
 			: {}),
 		...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
 		...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
+		...(req.modalities?.length ? { modalities: req.modalities } : {}),
 		stream,
 		...(stream ? { stream_options: { include_usage: true } } : {})
 	});
@@ -89,10 +91,12 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
 			// content empty when the budget runs out mid-thought.
 			const reasoning =
 				choice?.message?.reasoning_content ?? choice?.message?.reasoning ?? '';
+			const images = toGeneratedImages(choice?.message?.images);
 			return {
 				text,
 				finishReason: choice?.finish_reason ?? null,
 				reasonedOnly: !text && Boolean(reasoning),
+				...(images.length ? { images } : {}),
 				usage: data.usage
 					? {
 							promptTokens: data.usage.prompt_tokens ?? 0,
@@ -199,6 +203,7 @@ function toRemoteModel(m: Record<string, unknown>): RemoteModel {
 	const architecture = (m.architecture ?? {}) as Record<string, unknown>;
 	const supported = (m.supported_parameters ?? []) as unknown[];
 	const modalities = (architecture.input_modalities ?? []) as unknown[];
+	const outputModalities = (architecture.output_modalities ?? []) as unknown[];
 	const perTok = (v: unknown): number | null => {
 		const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : NaN;
 		return Number.isFinite(n) ? n * 1_000_000 : null;
@@ -211,8 +216,33 @@ function toRemoteModel(m: Record<string, unknown>): RemoteModel {
 		supportsVision: modalities.includes('image'),
 		promptCostPerMTok: perTok(pricing.prompt),
 		completionCostPerMTok: perTok(pricing.completion),
+		// The mirror of supportsVision above: what the model can be shown versus
+		// what it can hand back.
+		supportsImageOutput: outputModalities.includes('image'),
 		cacheMode: defaultCacheMode(String(m.id))
 	};
+}
+
+/**
+ * Images off a chat completion, which arrive as data URLs on
+ * `message.images[].image_url.url` — the shape OpenRouter returns for a model
+ * asked for the image modality.
+ *
+ * Anything that is not a decodable data URL is dropped rather than thrown over:
+ * a provider returning one broken entry among several should still deliver the
+ * ones that worked.
+ */
+function toGeneratedImages(raw: unknown): GeneratedImage[] {
+	if (!Array.isArray(raw)) return [];
+	const out: GeneratedImage[] = [];
+	for (const entry of raw) {
+		const url = (entry as { image_url?: { url?: unknown } })?.image_url?.url;
+		if (typeof url !== 'string') continue;
+		const match = /^data:([^;,]+);base64,(.+)$/s.exec(url);
+		if (!match) continue;
+		out.push({ mime: match[1], base64: match[2] });
+	}
+	return out;
 }
 
 /**

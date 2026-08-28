@@ -14,6 +14,7 @@ import {
 	JobCancelledError,
 	pushChunk,
 	RUNNING_JOB_MAX_MS,
+	runningChatIds,
 	subscribeJob,
 	type JobChunk
 } from './jobs';
@@ -204,6 +205,48 @@ describe('findRunningJobForChat', () => {
 	});
 });
 
+
+describe('runningChatIds', () => {
+	/** Distinct chats per test: `live` is module state shared across this file. */
+	const jobFor = (chatId: string, userId: string) =>
+		createJob({ chatId, userId, task: 'coding', persist: false });
+
+	it('reports the chats a person has a run on', () => {
+		jobFor('mark-a', 'u-mark');
+		jobFor('mark-b', 'u-mark');
+		const ids = runningChatIds('u-mark');
+		expect(ids.has('mark-a')).toBe(true);
+		expect(ids.has('mark-b')).toBe(true);
+	});
+
+	it('never reports another person’s run', () => {
+		jobFor('mark-other', 'u-someone-else');
+		expect(runningChatIds('u-mark').has('mark-other')).toBe(false);
+	});
+
+	it('drops a run once it finishes', () => {
+		const job = jobFor('mark-done', 'u-done');
+		completeJob(job);
+		expect(runningChatIds('u-done').size).toBe(0);
+	});
+
+	it('skips a stale job without failing it', () => {
+		// The difference from findRunningJobForChat, which kills one: this is a
+		// listing, drawn on a timer, and a poll is the worst possible place to
+		// put a side effect.
+		const job = jobFor('mark-stale', 'u-stale');
+		const later = Date.now() + RUNNING_JOB_MAX_MS + 1;
+		expect(runningChatIds('u-stale', later).size).toBe(0);
+		expect(job.status).toBe('running');
+	});
+
+	it('keeps reporting a run parked on a question', () => {
+		const job = jobFor('mark-parked', 'u-parked');
+		job.parked = true;
+		const later = Date.now() + RUNNING_JOB_MAX_MS + 1;
+		expect(runningChatIds('u-parked', later).has('mark-parked')).toBe(true);
+	});
+});
 
 describe('reconnecting to a job that already finished', () => {
 	it('unsubscribes even though replay closes the stream synchronously', async () => {

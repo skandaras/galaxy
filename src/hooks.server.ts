@@ -9,6 +9,7 @@ import {
 	migrateChats
 } from '$lib/server/bootstrap';
 import { ensureSkillsRepo } from '$lib/server/skills';
+import { typstAvailable } from '$lib/server/pdf';
 import { startScheduler } from '$lib/server/engine/scheduler';
 import { isTrustedProxy, parseAuthHeaders, isAdminFromGroups } from '$lib/server/auth';
 import { provisionUser } from '$lib/server/users';
@@ -20,6 +21,9 @@ seedTaskConfigs();
 ensureSkillsRepo();
 seedSkills();
 startScheduler();
+// Settle "can this instance make PDFs?" now, so assembling a toolset — which is
+// synchronous — can just read the answer.
+void typstAvailable();
 
 const PUBLIC_PATHS = new Set(['/healthz']);
 

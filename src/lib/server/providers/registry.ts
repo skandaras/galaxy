@@ -42,6 +42,7 @@ export interface ModelListing {
 	providerName: string;
 	supportsTools: boolean;
 	supportsVision: boolean;
+	supportsImageOutput: boolean;
 	contextWindow: number | null;
 }
 
@@ -62,6 +63,7 @@ export function listEnabledModels(): ModelListing[] {
 			providerName: providerRows.get(m.providerId)!.name,
 			supportsTools: m.supportsTools,
 			supportsVision: m.supportsVision,
+			supportsImageOutput: m.supportsImageOutput,
 			contextWindow: m.contextWindow
 		}))
 		.sort((a, b) => a.displayName.localeCompare(b.displayName));
@@ -86,6 +88,9 @@ export async function syncProviderModels(provider: ProviderRow): Promise<number>
 					contextWindow: rm.contextWindow,
 					supportsTools: rm.supportsTools,
 					supportsVision: rm.supportsVision,
+					// A capability the provider reports, so a re-sync corrects it —
+					// unlike cacheMode and enabled below, which an admin owns.
+					supportsImageOutput: rm.supportsImageOutput,
 					promptCostPerMTok: rm.promptCostPerMTok,
 					completionCostPerMTok: rm.completionCostPerMTok
 				})
@@ -101,6 +106,7 @@ export async function syncProviderModels(provider: ProviderRow): Promise<number>
 					contextWindow: rm.contextWindow,
 					supportsTools: rm.supportsTools,
 					supportsVision: rm.supportsVision,
+					supportsImageOutput: rm.supportsImageOutput,
 					promptCostPerMTok: rm.promptCostPerMTok,
 					completionCostPerMTok: rm.completionCostPerMTok,
 					// Both of these are starting points an admin then owns, which is

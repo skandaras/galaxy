@@ -84,6 +84,63 @@ const DEFAULT_PROMPTS: Record<string, string> = {
 		'You are the UX reviewer of Galaxy, a self-hosted AI workspace used mainly by one owner on both desktop and phone. You are given aggregated usage telemetry and the actual interface source — never the content of anyone\'s conversations. Find friction the owner is living with but may have stopped noticing: dead ends, silent failures, states with no feedback, controls that are hard to reach on a small screen, and anything the telemetry shows people repeatedly retry, cancel or abandon. Prefer a few specific, well-evidenced ideas over many generic ones, and ground each in something you can actually point to — a numbers pattern or a named file and control. Never propose work that has already been proposed, whatever became of it.'
 };
 
+const TYPST_SKILL_BODY = `## When to use
+
+Load this before calling **\`create_pdf\`**. That tool typesets [Typst](https://typst.app) markup — not Markdown and not LaTeX. It is close enough to both to be misleading, so the differences below are where documents actually fail.
+
+## The shape of a document
+
+Content is plain text. Commands start with \`#\`. Set-rules configure everything after them and belong at the top:
+
+\`\`\`typst
+#set page(paper: "a4", margin: 2cm, numbering: "1")
+#set text(font: "Libertinus Serif", size: 11pt)
+#set par(justify: true)
+
+= Title of the document
+
+Ordinary prose. A blank line starts a new paragraph, exactly as in Markdown.
+
+== A section
+
+== Another section
+\`\`\`
+
+- Headings are \`=\`, \`==\`, \`===\` — **not** \`#\`, which is how a command starts. \`# Heading\` is the commonest mistake here and it fails loudly.
+- \`*bold*\` and \`_italic_\`. Note the underscore for italic.
+- Inline code in backticks; a fenced block for more, with the language after the fence.
+- Lists: \`-\` for bullets, \`+\` for numbered. Indent two spaces to nest.
+- A link is \`#link("https://example.com")[the text]\`.
+- Escape with a backslash: \`\\#\`, \`\\$\`, \`\\@\`.
+
+## Worth knowing
+
+**Tables** take their cells as a flat run of content, filled row by row:
+
+\`\`\`typst
+#table(
+  columns: (auto, 1fr, auto),
+  [*Item*], [*What it is*], [*Cost*],
+  [Widget], [The usual sort], [12.00],
+)
+\`\`\`
+
+**Maths** sits between dollars: \`$x^2 + y^2 = z^2$\` inline, and \`$ ... $\` with spaces inside the delimiters for a display equation.
+
+**Page furniture.** \`#pagebreak()\`, \`#v(1cm)\` for vertical space, \`#align(center)[...]\`, \`#outline()\` for a table of contents.
+
+**Fonts.** Only what the compiler embeds: *Libertinus Serif*, *New Computer Modern*, *DejaVu Sans Mono*. Naming anything else falls back silently and the document will not look as you intended.
+
+## Limits on this instance
+
+- **No packages.** \`#import "@preview/..."\` fails: the compiler runs with no network. Everything you need is in the language itself.
+- **No local files.** The compile happens in an empty scratch directory, so \`image("logo.png")\` has nothing to read. Draw the shape you want with Typst's own \`#rect\`, \`#circle\` and \`#line\`, or use a table.
+- **One file.** Nothing is included that you have not written into \`source\`.
+
+## When it fails
+
+You get the compiler's own diagnostics, which name the line and the problem. Read them and fix the markup rather than starting again — Typst errors are unusually precise, and \`unclosed delimiter\` almost always means a missing \`)\` or \`]\` a few lines above where it points.`;
+
 /** Idempotent boot seeding: make sure every core task has a config row. */
 export function seedTaskConfigs(): void {
 	const existing = new Set(db.select({ task: taskConfigs.task }).from(taskConfigs).all().map((r) => r.task));
@@ -128,16 +185,31 @@ There is **no** write path, no live selection context, no design-system variable
  * Admin is respected, so we never overwrite an existing row.
  */
 export function seedSkills(): void {
-	if (db.select({ name: skills.name }).from(skills).where(eq(skills.name, 'figma-reading')).get()) return;
-	saveSkill({
-		name: 'figma-reading',
+	// Checked per skill rather than behind one early return, so a skill added
+	// later still lands on an install that already has the earlier ones.
+	seedSkill('figma-reading', {
 		category: 'figma',
-		description: 'Read Figma files: pull a frame/node tree and image renditions via the figma-developer-mcp tools (chat-only).',
+		description:
+			'Read Figma files: pull a frame/node tree and image renditions via the figma-developer-mcp tools (chat-only).',
 		triggers: 'figma, design file, figma link, figma url',
-		author: 'user',
-		body: FIGMA_SKILL_BODY,
-		enabled: true
+		body: FIGMA_SKILL_BODY
 	});
+	seedSkill('typst', {
+		category: 'documents',
+		description:
+			'Typst markup for the create_pdf tool: document structure, tables, maths, and what this instance cannot do.',
+		triggers: 'pdf, create_pdf, typst, document, report, letter, typeset',
+		body: TYPST_SKILL_BODY
+	});
+}
+
+/** Write a skill unless one of that name is already there — never overwrite. */
+function seedSkill(
+	name: string,
+	spec: { category: string; description: string; triggers: string; body: string }
+): void {
+	if (db.select({ name: skills.name }).from(skills).where(eq(skills.name, name)).get()) return;
+	saveSkill({ name, author: 'user', enabled: true, ...spec });
 }
 
 

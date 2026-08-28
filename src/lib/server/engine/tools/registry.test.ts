@@ -44,6 +44,10 @@ const EXPECTED = [
 	'project_add',
 	'board_add',
 	'ask_user',
+	// visual — what a reply can carry back beyond prose
+	'generate_image',
+	'save_svg',
+	'create_pdf',
 	// diagnostics
 	'run_history',
 	'set_chat_title',

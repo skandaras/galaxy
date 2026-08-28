@@ -111,6 +111,17 @@
 		if (selectedId) localStorage.setItem(ASSIGNEE_KEY(selectedId), value);
 	}
 
+	/**
+	 * Hide every project at once, so narrowing to one is two clicks rather than
+	 * one per project you don't want. Leaves the assignee filter alone — that is
+	 * a separate axis, and clearing it here would be a surprise.
+	 */
+	function hideAllProjects() {
+		const next = new Set([...(view?.projects ?? []).map((p) => p.id), 'none']);
+		hidden = next;
+		if (selectedId) localStorage.setItem(HIDDEN_KEY(selectedId), JSON.stringify([...next]));
+	}
+
 	async function addProject() {
 		const name = prompt('Name this project');
 		if (!name?.trim() || !selectedId) return;
@@ -355,6 +366,11 @@
 		).length
 	);
 
+	/** Something is still showing, so "turn all off" would do something. */
+	const anyProjectShown = $derived(
+		[...(view?.projects ?? []).map((p) => p.id), 'none'].some((id) => !hidden.has(id))
+	);
+
 	function clearFilters() {
 		hidden = new Set();
 		setAssignee(EVERYONE);
@@ -429,6 +445,11 @@
 				<button class="chip" class:off={hidden.has('none')} onclick={() => toggleProject('none')}>
 					No project
 				</button>
+				<!-- Pairs with "Show everything" below: getting down to one project
+				     is turn everything off, then click the one you want back. -->
+				{#if anyProjectShown}
+					<button class="link" onclick={hideAllProjects}>Turn all off</button>
+				{/if}
 			{/if}
 
 			{#if hiddenCount}
