@@ -19,6 +19,19 @@
 		target: string;
 		weight: number;
 	}
+	interface ComparisonSide {
+		answer: string;
+		promptChars: number;
+		promptTokens: number | null;
+		completionTokens: number | null;
+		ms: number;
+	}
+	interface Comparison {
+		prompt: string;
+		withLattice: ComparisonSide;
+		without: ComparisonSide;
+		concepts: { id: string; name: string; activation: number }[];
+	}
 	interface Proposal {
 		id: string;
 		kind: string;
@@ -63,9 +76,12 @@
 	let circuits = $state<{ id: string; name: string; count: number }[]>([]);
 	let proposals = $state<Proposal[]>([]);
 	let changes = $state<Change[]>([]);
-	let tab = $state<'edit' | 'review' | 'history' | 'data'>('edit');
+	let tab = $state<'edit' | 'review' | 'history' | 'data' | 'effect'>('edit');
 	let grooming = $state(false);
 	let importing = $state(false);
+	let comparePrompt = $state('');
+	let comparing = $state(false);
+	let comparison = $state<Comparison | null>(null);
 	let fileInput = $state<HTMLInputElement>();
 
 	const selected = $derived(nodes.find((n) => n.id === selectedId) ?? null);
@@ -149,6 +165,27 @@
 		} finally {
 			importing = false;
 			if (fileInput) fileInput.value = '';
+		}
+	}
+
+	async function compare() {
+		if (!comparePrompt.trim()) return;
+		comparing = true;
+		error = '';
+		comparison = null;
+		try {
+			const res = await fetch('/api/cortex/compare', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ prompt: comparePrompt })
+			});
+			if (!res.ok) {
+				error = (await res.json().catch(() => ({}))).message ?? `${res.status}`;
+				return;
+			}
+			comparison = await res.json();
+		} finally {
+			comparing = false;
 		}
 	}
 
@@ -340,7 +377,7 @@
 		</ul>
 
 		<div class="tabs" role="tablist">
-			{#each [['edit', 'Concept'], ['review', `Suggestions${proposals.length ? ` (${proposals.length})` : ''}`], ['history', 'History'], ['data', 'File']] as [id, label] (id)}
+			{#each [['edit', 'Concept'], ['review', `Suggestions${proposals.length ? ` (${proposals.length})` : ''}`], ['history', 'History'], ['effect', 'Effect'], ['data', 'File']] as [id, label] (id)}
 				<button
 					role="tab"
 					class="tab"
@@ -351,7 +388,78 @@
 			{/each}
 		</div>
 
-		{#if tab === 'data'}
+		{#if tab === 'effect'}
+			<div class="editor">
+				<p class="empty">
+					The same question, answered twice — once with what the lattice knows about you, once
+					with nothing. It shows the cost as well: the lattice answer is a longer prompt by
+					construction, and the question is whether it buys enough to be worth that.
+				</p>
+				<textarea
+					placeholder="Ask something where knowing you should matter…"
+					bind:value={comparePrompt}
+				></textarea>
+				<div class="row">
+					<button class="btn" disabled={comparing || !comparePrompt.trim()} onclick={compare}>
+						{comparing ? 'Asking twice…' : 'Compare'}
+					</button>
+				</div>
+				{#if error}<p class="error" role="alert">{error}</p>{/if}
+
+				{#if comparison}
+					<h2>With the lattice</h2>
+					<p class="answer">{comparison.withLattice.answer}</p>
+					<h2>Without</h2>
+					<p class="answer">{comparison.without.answer}</p>
+
+					<h2>What it cost</h2>
+					<ul class="nodes">
+						<li class="proposal">
+							<!-- Characters are measured here and always available; tokens come
+							     from the provider and some do not report them. Showing both
+							     means the cost half is never simply blank. -->
+							<span class="hint">
+								prompt {comparison.withLattice.promptChars} vs
+								{comparison.without.promptChars} characters
+								(+{comparison.withLattice.promptChars - comparison.without.promptChars})
+							</span>
+							{#if comparison.withLattice.promptTokens !== null && comparison.without.promptTokens !== null}
+								<span class="hint">
+									{comparison.withLattice.promptTokens} vs {comparison.without.promptTokens} prompt
+									tokens ({comparison.withLattice.promptTokens - comparison.without.promptTokens > 0
+										? '+'
+										: ''}{comparison.withLattice.promptTokens - comparison.without.promptTokens})
+								</span>
+							{:else}
+								<span class="hint">This provider does not report token counts.</span>
+							{/if}
+							<span class="hint">
+								{comparison.withLattice.ms}ms vs {comparison.without.ms}ms
+							</span>
+						</li>
+					</ul>
+
+					<h2>What it drew on</h2>
+					{#if comparison.concepts.length}
+						<ul class="nodes">
+							{#each comparison.concepts as c (c.id)}
+								<li>
+									<button class="node" onclick={() => { tab = 'edit'; select(c.id); }}>
+										<span class="name">{c.name}</span>
+										<span class="deg">{c.activation.toFixed(2)}</span>
+									</button>
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<p class="empty">
+							Nothing activated, so both answers had the same context. Either the lattice has
+							nothing bearing on this, or the question does not lean on knowing you.
+						</p>
+					{/if}
+				{/if}
+			</div>
+		{:else if tab === 'data'}
 			<div class="editor">
 				<p class="empty">
 					A lattice is far easier to draft in a file than to type in fifty times. Import reads
@@ -691,6 +799,18 @@
 	.tab.on {
 		color: var(--heading);
 		border-bottom-color: var(--accent);
+	}
+	.answer {
+		font-size: var(--text-sm);
+		line-height: 1.55;
+		white-space: pre-wrap;
+		border-left: 2px solid var(--border);
+		padding-left: 0.6rem;
+		margin: 0.3rem 0 0.6rem;
+	}
+	.editor textarea {
+		width: 100%;
+		box-sizing: border-box;
 	}
 	.proposal {
 		display: flex;

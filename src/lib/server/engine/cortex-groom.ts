@@ -612,7 +612,7 @@ export function buildGroomPrompt(
 		decided.join('\n') || '(nothing yet)',
 		`--- YOUR TASK ---`,
 		task,
-		'Reply with ONLY a JSON array. Every item has "kind", "title" (one line) and "rationale" (why). What else it needs depends on the kind:',
+		'Reply with ONLY a JSON object: {"proposals":[…]}. Every item in it has "kind", "title" (one line) and "rationale" (why). What else it needs depends on the kind:',
 		[
 			'create   — payload {"name":"…","description":"…","connect":[{"node":"node-id","weight":0.7,"why":"…"}]}. Connections are part of the suggestion, not a follow-up: a concept nothing links to can never surface in a query.',
 			'merge    — "node": the one to keep, "target": the one folded into it.',
@@ -712,12 +712,12 @@ export async function runCortexGroom(
 		);
 		logUsage('cortex-groom', choice.model.modelKey, usage, 'ok', userId);
 
+		// `.proposals`, not the parsed value itself: extractJson returns an object
+		// by construction, so a prompt asking for a bare array gets nothing back
+		// however well the model complied. See json.ts.
 		const parsed = extractJson(text);
-		const { added, duplicates } = recordProposals(
-			userId,
-			Array.isArray(parsed) ? parsed : [],
-			max
-		);
+		const proposals = Array.isArray(parsed?.proposals) ? parsed.proposals : [];
+		const { added, duplicates } = recordProposals(userId, proposals, max);
 
 		// Only advance the watermark on a pass that actually read the activity,
 		// or a failed run would silently skip a day's conversation.

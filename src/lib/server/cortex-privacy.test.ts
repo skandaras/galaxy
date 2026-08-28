@@ -6,6 +6,7 @@ import { cortexAssociations, cortexChangeLog, cortexNodes } from '$lib/server/db
 import {
 	activate,
 	circuitIndex,
+	comparisonContext,
 	cortexDigest,
 	mapProjection,
 	mergeNodes,
@@ -217,6 +218,18 @@ describe('what leaves the module', () => {
 
 		// Ben's own view still shows him his own label.
 		expect(JSON.stringify(circuitIndex(BEN).circuits)).toContain(BEN_SECRET);
+	});
+
+	it('keeps the other person out of a comparison', () => {
+		// A new way to render the lattice into a prompt, and so a new way to
+		// render the wrong one.
+		//
+		// A surface check rather than a bound test: comparisonContext goes through
+		// `activate`, so what actually protects it is the conduit case above. If
+		// that one ever goes green wrongly, this will not catch it.
+		const { text, concepts } = comparisonContext(ANA, BEN_SECRET);
+		expect(text).not.toContain(BEN_SECRET);
+		expect(JSON.stringify(concepts)).not.toContain(BEN_SECRET);
 	});
 
 	it('keeps the other person out of an export', () => {

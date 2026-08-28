@@ -1249,3 +1249,67 @@ export function importLattice(userId: string, payload: unknown): ImportResult {
 	}
 	return out;
 }
+
+
+// --- does it help? ----------------------------------------------------------
+
+export interface ComparisonSide {
+	answer: string;
+	promptChars: number;
+	promptTokens: number | null;
+	completionTokens: number | null;
+	ms: number;
+}
+
+export interface Comparison {
+	prompt: string;
+	withLattice: ComparisonSide;
+	without: ComparisonSide;
+	/** What activated, so the difference can be attributed rather than guessed at. */
+	concepts: { id: string; name: string; activation: number }[];
+}
+
+/**
+ * The context one side of a comparison gets.
+ *
+ * The same subgraph `cortex_query` would return, rendered the way the tool
+ * renders it — comparing against something the agent could not actually have
+ * been given would flatter the result.
+ */
+export function comparisonContext(
+	userId: string,
+	prompt: string
+): { text: string; concepts: Comparison['concepts'] } {
+	const result = activate({ userId, query: prompt });
+	if (!result.nodes.length) return { text: '', concepts: [] };
+
+	const text = [
+		'[What you already know about this person that bears on the question]',
+		...result.nodes.map((a) => {
+			const links = listAssociations(a.node.id, userId)
+				.sort((x, y) => y.weight - x.weight)
+				.slice(0, 4)
+				.map((e) => {
+					const otherId = e.sourceId === a.node.id ? e.targetId : e.sourceId;
+					const other = getNode(otherId, userId);
+					return other ? `${other.name}${e.description ? ` (${e.description})` : ''}` : null;
+				})
+				.filter(Boolean);
+			return [
+				`- ${a.node.name}: ${a.node.description || '(no description)'}`,
+				links.length ? `  relates to: ${links.join('; ')}` : ''
+			]
+				.filter(Boolean)
+				.join('\n');
+		})
+	].join('\n');
+
+	return {
+		text,
+		concepts: result.nodes.map((a) => ({
+			id: a.node.id,
+			name: a.node.name,
+			activation: Math.round(a.activation * 100) / 100
+		}))
+	};
+}

@@ -446,6 +446,34 @@ there is UI precedent at `/api/admin/memory/candidates`.
 
 ---
 
+## Does it actually help?
+
+The oldest weakness in this design is that everything it claims about itself is
+unfalsifiable — "richer context", "understands how things connect". The eval
+fixture answers half: whether retrieval returns the right concepts. The
+comparison pane answers the half that matters.
+
+`/cortex` → **Effect**: one prompt, two answers from the same model, one with
+the activated subgraph injected and one with nothing.
+
+**What varies is the context, not the agent.** The lattice side is *given* the
+subgraph rather than left to call `cortex_query` itself. That isolates one
+variable — mixing them would leave a poor answer ambiguous between "the lattice
+had nothing useful" and "the agent never looked", and the second question is
+what the context digest exists to answer.
+
+**It shows the cost.** Prompt size for both runs, and the concepts that
+activated with their scores. A comparison that only showed upside would be a
+rigged one: the lattice run is longer by construction, and the question is
+whether it buys enough to be worth that. Size is reported in characters as well
+as tokens, because characters are measured here and always available while
+tokens depend on the provider reporting them — running this against the mock
+provider, which returns a fixed usage number, is what made that gap obvious.
+
+Ephemeral rather than stored: the useful artifact is the judgement you form
+looking at the two, and a saved transcript is only meaningful against the
+lattice as it was on the day.
+
 ## Knowing whether it works
 
 The hardest problem with this design is not building it; it is that every claim
