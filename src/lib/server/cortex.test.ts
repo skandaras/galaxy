@@ -23,6 +23,7 @@ import {
 	saveCircuit,
 	deleteCircuit,
 	exportPayload,
+	comparisonContext,
 	importLattice,
 	revertRun,
 	listAssociations as _listAssociations
@@ -616,5 +617,27 @@ describe('the round trip', () => {
 		// A number telling you what did not fit beats half a lattice and a stack
 		// trace.
 		expect(res.skipped).toBe(2);
+	});
+});
+
+describe('the comparison context', () => {
+	it('carries the concepts a question activates, and what they relate to', () => {
+		const { a, b } = seedChain();
+		const { text, concepts } = comparisonContext(ANA, 'rockpool');
+		expect(text).toContain('Tide pools');
+		// Relationships, not just a list — that is the whole difference between
+		// this and a search result, and so the thing being compared.
+		expect(text).toContain('relates to:');
+		expect(concepts.map((c) => c.id)).toContain(a.id);
+		expect(concepts.map((c) => c.id)).toContain(b.id);
+	});
+
+	it('gives back nothing when nothing activates', () => {
+		seedChain();
+		const { text, concepts } = comparisonContext(ANA, 'quantum chromodynamics');
+		// Both sides then get the same prompt, which is the honest outcome: the
+		// comparison should show no difference rather than invent one.
+		expect(text).toBe('');
+		expect(concepts).toHaveLength(0);
 	});
 });
