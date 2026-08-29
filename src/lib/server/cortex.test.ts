@@ -640,3 +640,32 @@ describe('the comparison context', () => {
 		expect(concepts).toHaveLength(0);
 	});
 });
+
+describe('what the write tool tells a model to do', () => {
+	const write = () => cortexTools(ANA).find((t) => t.def.name === 'cortex_write')!;
+
+	it('says when to reach for it, not only what it is', () => {
+		// A description without a trigger reads as available-on-request. A model
+		// given the first version went a whole conversation without noticing an
+		// occasion, and said so when asked: no behavioural trigger, unlike every
+		// skill description it had.
+		const text = write().def.description.toLowerCase();
+		expect(text).toContain('on your own initiative');
+		expect(text).toContain('not only when asked');
+		expect(text).toMatch(/reach for this when/);
+	});
+
+	it('calibrates the line against memory with something concrete', () => {
+		const text = write().def.description.toLowerCase();
+		// "A concept, not a fact" is the right rule and too abstract to apply.
+		expect(text).toContain('belongs in memory');
+		expect(text).toContain('edges');
+	});
+
+	it('carries no real person in its examples', () => {
+		// The illustrations came from a live conversation. The shape transfers;
+		// the content stays out of the repo, like the fixture.
+		const text = write().def.description;
+		expect(text).not.toMatch(/cosmopsychism|Vazza|Teilhard|noosphere/i);
+	});
+});

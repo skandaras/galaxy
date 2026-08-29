@@ -77,9 +77,16 @@ export interface GroomResult {
 	detected?: number;
 	proposed?: number;
 	duplicates?: number;
-	/** Sizes only, so a caller can tell silence from an unparseable answer. */
+	/** Sizes and flags only, so a caller can tell these apart without any content. */
 	replyChars?: number;
 	parsedItems?: number;
+	/** How much conversation the window returned: read nothing, or read plenty. */
+	activityChars?: number;
+	windowHours?: number;
+	/** Why the model stopped. 'length' with no text is the reasoning failure. */
+	finishReason?: string | null;
+	/** The model thought until its budget ran out and never began answering. */
+	reasonedOnly?: boolean;
 }
 
 export function groomSettings(): CortexGroomSettings {
@@ -722,11 +729,26 @@ export async function runCortexGroom(
 		0
 	)}`;
 
-	if (mode === 'harvest' && !activity.trim() && getSetting<string>(LATTICE_MARK_KEY, '', userId) === latticeMark) {
-		// Nothing said and nothing changed, so there is nothing for a model to
-		// read. Skipping the call outright is what makes a daily — or hourly —
-		// cadence affordable: a quiet day costs nothing at all.
-		return { ran: false, mode, reason: 'nothing new since the last pass', tidied, detected };
+	// A harvest reads conversation. With none there is nothing to harvest from,
+	// whatever the lattice has been doing — the two conditions used to be ANDed,
+	// so on a first run (no stored signature) a pass with nothing to read still
+	// spent a model call and got an empty answer back, which is a correct answer
+	// to an empty question and a waste of a request.
+	if (mode === 'harvest' && !activity.trim()) {
+		return {
+			ran: false,
+			mode,
+			reason: 'no new conversation in the window',
+			tidied,
+			detected,
+			activityChars: 0,
+			windowHours: Math.round((Date.now() - watermark) / 3_600_000)
+		};
+	}
+	if (mode === 'review' && getSetting<string>(LATTICE_MARK_KEY, '', userId) === latticeMark) {
+		// The lattice signature is the review side's question: nothing has been
+		// added, removed or rewritten since the last full read.
+		return { ran: false, mode, reason: 'nothing has changed since the last review', tidied, detected };
 	}
 
 	if (getBudgetStatus().blocked) {
@@ -761,14 +783,17 @@ export async function runCortexGroom(
 
 	const startedAt = Date.now();
 	try {
-		const { text, usage } = await choice.adapter.complete(
+		const { text, usage, finishReason, reasonedOnly } = await choice.adapter.complete(
 			{
 				modelKey: choice.model.modelKey,
 				messages: [
 					{ role: 'system', content: taskCfg?.systemPrompt ?? '' },
 					{ role: 'user', content: buildGroomPrompt(userId, max, mode, activity) }
 				],
-				maxTokens: 4096
+				// A reasoning model spends part of this thinking before it starts
+				// answering, and 4096 was the budget for both — which is one of the
+				// ways a run comes back with no text at all.
+				maxTokens: 8192
 			},
 			AbortSignal.timeout(180_000)
 		);
@@ -784,7 +809,17 @@ export async function runCortexGroom(
 		// detail still holds. Enough to tell a model that said nothing from one
 		// that said plenty and had none of it parsed, which is the ambiguity
 		// behind "it ran but there was no output".
-		const shape = { replyChars: text.length, parsedItems: proposals.length };
+		const shape = {
+			replyChars: text.length,
+			parsedItems: proposals.length,
+			activityChars: activity.length,
+			windowHours: Math.round((Date.now() - watermark) / 3_600_000),
+			finishReason: finishReason ?? null,
+			// The failure research.ts already names: chain-of-thought on its own
+			// channel, no answer text, and indistinguishable from silence without
+			// this flag.
+			reasonedOnly: reasonedOnly === true
+		};
 
 		// Only advance the watermark on a pass that actually read the activity,
 		// or a failed run would silently skip a day's conversation.

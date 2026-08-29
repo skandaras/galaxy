@@ -825,10 +825,44 @@ ordering the twenty it keeps are whichever twenty the database returned, so a
 wide window summarised twenty arbitrary old conversations — slow, and the wrong
 input for a job whose whole purpose is what is new.
 
+### Telling the model when, not just what
+
+`cortex_write`'s description used to say what the tool was and what belonged in
+it, and never when to reach for it. A model went a whole conversation without
+using it and, asked why, gave the right answer: no behavioural trigger, unlike
+every skill description it carries. Compare the coding prompt's "read it with
+the fetch_url tool — never search for a page whose address you already have",
+which tells an agent what to *do*.
+
+It now says to use it unprompted, names the occasions (a position argued for, a
+synthesis, an interest that keeps resurfacing, an idea developed over several
+turns), and calibrates the concept-versus-fact line with examples — the test
+being whether the thing has *edges*. Examples are generic on purpose: the ones
+that prompted this came from a real conversation, and nothing personal belongs
+in the repo.
+
+### When a run finds nothing, say which nothing
+
+Three different outcomes used to look identical in the Observatory — a window
+with no conversation in it, a model that answered with nothing, and a model that
+spent its whole budget reasoning and never began an answer. The last is a
+failure this codebase already names (`openai-compatible.ts` sets `reasonedOnly`,
+`research.ts` reports "spent its whole token budget reasoning"); the groomer
+ignored both that flag and `finishReason`.
+
+A run now reports `activityChars` and `windowHours` — how much conversation it
+read and how far back it looked — alongside `replyChars`, `finishReason` and
+`reasonedOnly`. Sizes and flags only; no message text reaches an event detail.
+The groom's token budget also went up, because a reasoning model spends part of
+it before it starts answering.
+
 ### The skip
 
-A scheduled pass with no new activity and no lattice change **makes no model
-call**. Tidy and the detectors still run, because they are free. That is the
+A harvest with no new conversation **makes no model call**, full stop. Those
+were two conditions ANDed together, which meant a first pass — with no stored
+signature — still asked a model about nothing and got a correct empty answer
+back. A harvest reads conversation; the lattice signature is the *review* side's
+question and now only gates that. Tidy and the detectors still run, because they are free. That is the
 single biggest lever on cost, and what makes a short cadence sane: a quiet day
 costs nothing.
 
