@@ -34,6 +34,17 @@
 		without: ComparisonSide;
 		concepts: { id: string; name: string; activation: number }[];
 	}
+	interface GroomResult {
+		ran: boolean;
+		mode: 'harvest' | 'review';
+		reason?: string;
+		tidied?: number;
+		detected?: number;
+		proposed?: number;
+		duplicates?: number;
+		replyChars?: number;
+		parsedItems?: number;
+	}
 	interface Proposal {
 		id: string;
 		kind: string;
@@ -79,7 +90,9 @@
 	let proposals = $state<Proposal[]>([]);
 	let changes = $state<Change[]>([]);
 	let tab = $state<'edit' | 'review' | 'history' | 'data' | 'effect'>('edit');
-	let grooming = $state(false);
+	/** Per button, so one running does not make both say "Working". */
+	let running = $state<'harvest' | 'review' | null>(null);
+	let lastRun = $state<GroomResult | null>(null);
 	let importing = $state(false);
 	let comparePrompt = $state('');
 	let comparing = $state(false);
@@ -96,6 +109,9 @@
 	 */
 	const panel = createResizablePane({
 		key: 'galaxy:cortex-panel-width',
+		// The panel sits to the *right* of its handle, unlike every other pane in
+		// the app, so the drag delta has to be read the other way round.
+		anchor: 'right',
 		min: 300,
 		max: 720,
 		initial: 400
@@ -105,7 +121,7 @@
 		['edit', 'Concept'],
 		['review', 'Suggestions'],
 		['history', 'History'],
-		['effect', 'Effect'],
+		['effect', 'Compare'],
 		['data', 'File']
 	] as const;
 
@@ -153,13 +169,14 @@
 	}
 
 	async function groom(mode: 'harvest' | 'review') {
-		grooming = true;
+		running = mode;
+		error = '';
+		lastRun = null;
 		try {
-			const res = await send('/api/cortex/groom', 'POST', { mode });
-			if (res && !res.ran && res.reason) error = res.reason;
+			lastRun = await send('/api/cortex/groom', 'POST', { mode });
 			await load();
 		} finally {
-			grooming = false;
+			running = null;
 		}
 	}
 
@@ -519,13 +536,55 @@
 		{:else if tab === 'review'}
 			<div class="editor">
 				<div class="row">
-					<button class="btn" disabled={grooming} onclick={() => groom('harvest')}>
-						{grooming ? 'Working…' : 'Catch up on recent activity'}
+					<button class="btn" disabled={!!running} onclick={() => groom('harvest')}>
+						{running === 'harvest' ? 'Reading recent activity…' : 'Catch up on recent activity'}
 					</button>
-					<button class="btn" disabled={grooming} onclick={() => groom('review')}>
-						{grooming ? 'Working…' : 'Review the whole lattice'}
+					<button class="btn" disabled={!!running} onclick={() => groom('review')}>
+						{running === 'review' ? 'Reading the lattice…' : 'Review the whole lattice'}
 					</button>
 				</div>
+
+				{#if running}
+					<p class="hint" role="status">
+						{running === 'harvest'
+							? 'Looking at what you have been talking about since the last pass.'
+							: 'Reading every concept and connection. This one is the slow pass.'}
+					</p>
+				{/if}
+
+				{#if lastRun}
+					<!-- Kept until the next run. A finished pass used to report nothing,
+					     so one that suggested nothing looked identical to one that
+					     failed. -->
+					<ul class="nodes result" role="status">
+						<li class="proposal">
+							<strong>{lastRun.mode === 'harvest' ? 'Caught up' : 'Reviewed'}</strong>
+							<span class="hint">
+								{lastRun.tidied ?? 0} tidied · {lastRun.detected ?? 0} found by the free checks ·
+								{lastRun.proposed ?? 0} suggested by the model
+								{#if lastRun.duplicates}· {lastRun.duplicates} already raised{/if}
+							</span>
+							{#if !lastRun.ran}
+								<span class="error">Did not reach the model: {lastRun.reason}</span>
+								{#if lastRun.reason === 'no model configured'}
+									<span class="hint">Set one for the cortex-groom task in Admin → Tasks.</span>
+								{/if}
+							{:else if !lastRun.proposed}
+								<!-- Sizes, not content: enough to tell silence from an answer
+								     nothing could be made of. -->
+								<span class="hint">
+									The model replied with {lastRun.replyChars ?? 0} characters and
+									{lastRun.parsedItems ?? 0} usable suggestions in it.
+								</span>
+							{/if}
+							{#if proposals.length}
+								<span class="hint">
+									{proposals.length} waiting below.
+								</span>
+							{/if}
+						</li>
+					</ul>
+				{/if}
 				{#if error}<p class="error" role="alert">{error}</p>{/if}
 				{#if !proposals.length}
 					<p class="empty">
@@ -780,6 +839,9 @@
 		padding: 0 0.3rem;
 		border: 1px solid var(--border);
 		color: var(--fg-dim);
+		/* The proposal rows are a column, so a badge without this stretches the
+		   full width and reads as an empty text field. */
+		align-self: start;
 	}
 	.editor textarea {
 		min-height: 4.5rem;
@@ -871,6 +933,14 @@
 	.editor textarea {
 		width: 100%;
 		box-sizing: border-box;
+	}
+	.result {
+		max-height: none;
+		margin-top: 0.5rem;
+	}
+	.result .error {
+		font-size: var(--text-sm);
+		color: var(--danger);
 	}
 	.proposal {
 		display: flex;

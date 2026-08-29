@@ -7,7 +7,7 @@
 	 * platform's. Same split the memory job uses.
 	 */
 	let groom = $state({ enabled: false, intervalHours: 24, maxProposalsPerRun: 10 });
-	let cortex = $state({ agentWrites: false, kinship: false, maxNodesPerUser: 2000 });
+	let cortex = $state({ agentWrites: true, kinship: false, maxNodesPerUser: 2000 });
 	let lastRun = $state(0);
 	let busy = $state(false);
 	let notice = $state<string | null>(null);
@@ -112,10 +112,16 @@
 			<input type="number" min="10" max="20000" bind:value={cortex.maxNodesPerUser} />
 		</label>
 	</div>
-	<p class="hint">
-		Agent writes ship off. An agent that can mint concepts outruns anyone merging the near
-		duplicates it makes, so the lattice is worth shaping by hand — or through the groomer's review
-		queue — until there is enough of it to be worth automating.
+	<p class="hint" role="status">
+		{#if cortex.agentWrites}
+			<strong>Agents can write.</strong> The <code>cortex_write</code> tool is offered on chat and
+			coding turns, so a conversation can add a concept and connect it. It cannot file one under
+			an area, mark it a bridge, merge or delete — those go through the review queue.
+		{:else}
+			<strong>Agents cannot write.</strong> <code>cortex_write</code> is withheld from every turn,
+			so nothing reaches the lattice except what you add here or accept from a suggestion. It will
+			still appear in Admin → Tools, which lists what exists rather than what is currently offered.
+		{/if}
 	</p>
 	<div class="row">
 		<button class="btn primary" onclick={() => save('cortex', cortex)}>Save lattice</button>
