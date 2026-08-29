@@ -509,11 +509,16 @@ export interface CortexSettings {
 	/**
 	 * Whether agents may write to the lattice, or only read it.
 	 *
-	 * Off, unlike boards. An agent free to mint nodes produces near-duplicates —
-	 * "music discovery", "discovering music", "music curation" — with
-	 * confident-looking weights, and the grooming agent that merges them does not
-	 * exist yet. Until it does, the lattice is worth shaping by hand, which is
-	 * also when shaping it matters most. Flip this on when grooming lands.
+	 * On, now that the thing it was waiting for exists. It shipped off because an
+	 * agent free to mint concepts produces near-duplicates — "music discovery",
+	 * "discovering music", "music curation" — faster than anyone merges them,
+	 * and there was no groomer. There is now: duplicate detection is
+	 * deterministic and runs every pass, merges are proposals a person accepts,
+	 * and since areas became reviewed-only an agent cannot file a concept at all.
+	 *
+	 * So the most an unreviewed write can do is add an unfiled concept with
+	 * connections, which is the conservative end of this design rather than a
+	 * hole in it.
 	 */
 	agentWrites: boolean;
 	/**
@@ -552,7 +557,7 @@ export const DEFAULT_CORTEX_GROOM: CortexGroomSettings = {
 };
 
 export const DEFAULT_CORTEX: CortexSettings = {
-	agentWrites: false,
+	agentWrites: true,
 	kinship: false,
 	maxNodesPerUser: 2000
 };

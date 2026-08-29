@@ -54,8 +54,10 @@ describe('the admin settings API', () => {
 		expect(filled.eventDays).toBe(30);
 	});
 
-	it('ships the lattice with agent writes off', () => {
-		expect(DEFAULT_CORTEX.agentWrites).toBe(false);
+	it('ships agent writes on and the scheduled groomer off', () => {
+		// Writes waited on the groomer and it exists now. The scheduled pass is a
+		// different question: it spends tokens unasked, so it stays opt-in.
+		expect(DEFAULT_CORTEX.agentWrites).toBe(true);
 		expect(DEFAULT_CORTEX_GROOM.enabled).toBe(false);
 	});
 });

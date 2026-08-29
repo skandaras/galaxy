@@ -812,6 +812,19 @@ merge of A into B and of B into A are the same conversation to have, and
 without sorting the ids the detector and the model would duplicate each other
 precisely where they overlap most.
 
+### The first pass looks back three days, not forever
+
+The harvest watermark starts unset, and an unset watermark used to mean *every
+conversation ever had*. The first live run timed out on exactly that. The UX
+audit guards its watermark with a first-run window; this copied the watermark
+and not the guard.
+
+Two fixes, and the second helps the memory job too: a three-day window on a
+first harvest, and `gatherActivity` ordering chats newest-first. Without the
+ordering the twenty it keeps are whichever twenty the database returned, so a
+wide window summarised twenty arbitrary old conversations — slow, and the wrong
+input for a job whose whole purpose is what is new.
+
 ### The skip
 
 A scheduled pass with no new activity and no lattice change **makes no model

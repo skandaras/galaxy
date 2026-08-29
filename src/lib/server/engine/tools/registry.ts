@@ -86,7 +86,7 @@ export function builtinDescriptors(): ToolDescriptor[] {
 		cortexTools('*', true),
 		'knowledge',
 		['chat', 'coding'],
-		'cortex_write is also gated on the cortex agentWrites setting, which ships off'
+		'cortex_write is also gated on the cortex agentWrites setting — this list shows what exists, not what a turn is currently offered'
 	);
 	// The chat id only affects execution, never the declaration.
 	add(attachmentTools('*'), 'attachments', ['chat', 'coding']);

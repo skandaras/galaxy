@@ -55,6 +55,16 @@ import { logUsage } from './usage';
 const LAST_RUN_KEY = 'cortex.groom.lastRun';
 const USER_ENABLED_KEY = 'cortex.groom.userEnabled';
 const WATERMARK_KEY = 'cortex.groom.watermark';
+/**
+ * How far back a *first* harvest looks.
+ *
+ * Without this the watermark starts at 0 and the first pass asks for every
+ * conversation ever had — slow enough to hit the request timeout, and the wrong
+ * input besides for a job whose entire purpose is what is new. The UX audit
+ * guards its watermark the same way; this copied the watermark and not the
+ * guard, and the first live run timed out because of it.
+ */
+const FIRST_RUN_WINDOW_MS = 3 * 86_400_000;
 const LATTICE_MARK_KEY = 'cortex.groom.latticeMark';
 
 export type GroomMode = 'harvest' | 'review';
@@ -67,6 +77,9 @@ export interface GroomResult {
 	detected?: number;
 	proposed?: number;
 	duplicates?: number;
+	/** Sizes only, so a caller can tell silence from an unparseable answer. */
+	replyChars?: number;
+	parsedItems?: number;
 }
 
 export function groomSettings(): CortexGroomSettings {
@@ -699,7 +712,8 @@ export async function runCortexGroom(
 	setSetting(LAST_RUN_KEY, Date.now(), userId);
 
 	const nodes = listNodes(userId);
-	const watermark = getSetting<number>(WATERMARK_KEY, 0, userId);
+	const watermark =
+		getSetting<number>(WATERMARK_KEY, 0, userId) || Date.now() - FIRST_RUN_WINDOW_MS;
 	const activity = mode === 'harvest' ? gatherActivity(userId, watermark).text : '';
 	// Counts plus the newest edit: enough to notice a concept added, removed or
 	// rewritten since the last pass.
@@ -766,6 +780,11 @@ export async function runCortexGroom(
 		const parsed = extractJson(text);
 		const proposals = Array.isArray(parsed?.proposals) ? parsed.proposals : [];
 		const { added, duplicates } = recordProposals(userId, proposals, max);
+		// Sizes, not content — the rule that no concept text reaches an event
+		// detail still holds. Enough to tell a model that said nothing from one
+		// that said plenty and had none of it parsed, which is the ambiguity
+		// behind "it ran but there was no output".
+		const shape = { replyChars: text.length, parsedItems: proposals.length };
 
 		// Only advance the watermark on a pass that actually read the activity,
 		// or a failed run would silently skip a day's conversation.
@@ -780,9 +799,18 @@ export async function runCortexGroom(
 			status: 'ok',
 			durationMs: Date.now() - startedAt,
 			// Counts only. Concept names never reach an event detail.
-			detail: { trigger, mode, tidied, detected, proposed: added, duplicates, concepts: nodes.length }
+			detail: {
+				trigger,
+				mode,
+				tidied,
+				detected,
+				proposed: added,
+				duplicates,
+				concepts: nodes.length,
+				...shape
+			}
 		});
-		return { ran: true, mode, tidied, detected, proposed: added, duplicates };
+		return { ran: true, mode, tidied, detected, proposed: added, duplicates, ...shape };
 	} catch (err) {
 		emitEvent({
 			task: 'cortex-groom',

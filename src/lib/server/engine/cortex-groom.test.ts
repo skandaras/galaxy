@@ -563,7 +563,6 @@ describe('filing', () => {
 describe('the write tool cannot file', () => {
 	it('offers no way to name an area', async () => {
 		const { cortexTools } = await import('$lib/server/engine/tools/cortex');
-		setSetting('cortex', { agentWrites: true });
 		const write = cortexTools(ANA).find((t) => t.def.name === 'cortex_write')!;
 		const params = JSON.stringify(write.def.parameters);
 		// Filing is a taxonomy decision, and this agent sees area names in a
@@ -574,7 +573,6 @@ describe('the write tool cannot file', () => {
 
 	it('leaves what it writes unfiled, and says so in the index', async () => {
 		const { cortexTools } = await import('$lib/server/engine/tools/cortex');
-		setSetting('cortex', { agentWrites: true });
 		const write = cortexTools(ANA).find((t) => t.def.name === 'cortex_write')!;
 		await write.execute({ name: 'Tide pools', description: 'rockpool surveying' });
 		expect(circuitIndex(ANA).unfiled).toBe(1);

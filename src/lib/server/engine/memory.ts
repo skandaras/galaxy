@@ -199,6 +199,11 @@ export function gatherActivity(userId: string, sinceMs: number): ActivityDigest 
 		.select()
 		.from(chats)
 		.where(and(eq(chats.userId, userId), gt(chats.updatedAt, since)))
+		// Newest first, because only twenty are kept. Without an order the
+		// database decides which twenty, so a wide window — a first run, or one
+		// after a reset watermark — would summarise twenty arbitrary old
+		// conversations instead of what actually just happened.
+		.orderBy(desc(chats.updatedAt))
 		.all();
 	for (const chat of newChats.slice(0, 20)) {
 		const msgs = db

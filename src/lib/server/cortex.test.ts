@@ -353,20 +353,20 @@ describe('export', () => {
 });
 
 describe('the write gate', () => {
-	it('withholds cortex_write while agentWrites is off', () => {
-		// Ships off: an agent minting nodes outruns anyone merging the duplicates,
-		// and the groomer that would merge them does not exist yet.
-		const names = cortexTools(ANA).map((t) => t.def.name);
-		expect(names).toEqual(['cortex_query']);
-	});
-
-	it('offers it once the setting is on', () => {
-		setSetting('cortex', { agentWrites: true });
+	it('offers cortex_write by default, now that grooming exists', () => {
+		// It shipped off while there was no groomer to merge the near-duplicates
+		// an agent would make. There is one now, merges are proposals, and since
+		// areas became reviewed-only the most an unreviewed write can do is add an
+		// unfiled concept.
 		expect(cortexTools(ANA).map((t) => t.def.name)).toContain('cortex_write');
 	});
 
+	it('withholds it when the setting is off', () => {
+		setSetting('cortex', { agentWrites: false });
+		expect(cortexTools(ANA).map((t) => t.def.name)).toEqual(['cortex_query']);
+	});
+
 	it('resolves an existing concept rather than creating a near-duplicate', async () => {
-		setSetting('cortex', { agentWrites: true });
 		saveNode({ name: 'Tide pools', ownerId: ANA });
 		const write = cortexTools(ANA).find((t) => t.def.name === 'cortex_write')!;
 		await write.execute({ name: 'tide pools', description: 'from the agent' });
@@ -374,7 +374,6 @@ describe('the write gate', () => {
 	});
 
 	it('says so when a new node was left unconnected', async () => {
-		setSetting('cortex', { agentWrites: true });
 		const write = cortexTools(ANA).find((t) => t.def.name === 'cortex_write')!;
 		const out = await write.execute({ name: 'Tide pools' });
 		expect(out).toMatch(/not surface/);
