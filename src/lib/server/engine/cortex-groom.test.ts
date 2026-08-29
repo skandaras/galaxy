@@ -478,19 +478,30 @@ describe('the two modes', () => {
 	}
 
 	it('a quiet scheduled pass makes no model call at all', async () => {
-		// The lever that makes a daily — or hourly — cadence affordable: nothing
-		// said and nothing changed means there is nothing for a model to read.
+		// The lever that makes a daily — or hourly — cadence affordable. A harvest
+		// reads conversation, so with none there is nothing to read whatever the
+		// lattice has been doing: the signature used to be ANDed into this, which
+		// meant a first pass with nothing to say still spent a call.
 		markAsSeen();
 		const res = await runCortexGroom('schedule', ANA);
 		expect(res.ran).toBe(false);
-		expect(res.reason).toBe('nothing new since the last pass');
+		expect(res.reason).toBe('no new conversation in the window');
+		expect(res.activityChars).toBe(0);
 	});
 
-	it('picks the work back up when the lattice changes', async () => {
+	it('skips a review when the lattice has not moved', async () => {
+		// The signature is the review side's question, and only its question.
+		markAsSeen();
+		const res = await runCortexGroom('manual', ANA);
+		expect(res.ran).toBe(false);
+		expect(res.reason).toBe('nothing has changed since the last review');
+	});
+
+	it('picks a review back up when the lattice changes', async () => {
 		markAsSeen();
 		saveNode({ name: 'Kelp forests', ownerId: ANA });
-		const next = await runCortexGroom('schedule', ANA);
-		expect(next.reason).not.toBe('nothing new since the last pass');
+		const next = await runCortexGroom('manual', ANA);
+		expect(next.reason).not.toBe('nothing has changed since the last review');
 	});
 });
 

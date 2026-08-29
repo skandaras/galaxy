@@ -44,6 +44,10 @@
 		duplicates?: number;
 		replyChars?: number;
 		parsedItems?: number;
+		activityChars?: number;
+		windowHours?: number;
+		finishReason?: string | null;
+		reasonedOnly?: boolean;
 	}
 	interface Proposal {
 		id: string;
@@ -564,18 +568,44 @@
 								{lastRun.proposed ?? 0} suggested by the model
 								{#if lastRun.duplicates}· {lastRun.duplicates} already raised{/if}
 							</span>
+							{#if lastRun.mode === 'harvest' && lastRun.activityChars !== undefined}
+								<span class="hint">
+									{lastRun.activityChars
+										? `Read ${lastRun.activityChars} characters of conversation from the last ${lastRun.windowHours ?? 0} hours.`
+										: `Found no conversation in the last ${lastRun.windowHours ?? 0} hours.`}
+								</span>
+							{/if}
+
 							{#if !lastRun.ran}
 								<span class="error">Did not reach the model: {lastRun.reason}</span>
 								{#if lastRun.reason === 'no model configured'}
 									<span class="hint">Set one for the cortex-groom task in Admin → Tasks.</span>
 								{/if}
 							{:else if !lastRun.proposed}
-								<!-- Sizes, not content: enough to tell silence from an answer
-								     nothing could be made of. -->
-								<span class="hint">
-									The model replied with {lastRun.replyChars ?? 0} characters and
-									{lastRun.parsedItems ?? 0} usable suggestions in it.
-								</span>
+								<!-- Sizes and flags, never content. Three different things used
+								     to look identical here: nothing to read, nothing said, and a
+								     reasoning model that never started answering. -->
+								{#if lastRun.reasonedOnly}
+									<span class="error">
+										The model spent its whole token budget reasoning and never began an
+										answer.
+									</span>
+									<span class="hint">
+										Raise Max tokens for the cortex-groom task, or pick a model that
+										answers rather than thinking to the limit.
+									</span>
+								{:else if !lastRun.replyChars}
+									<span class="hint">
+										The model returned nothing at all{lastRun.finishReason
+											? ` (stopped: ${lastRun.finishReason})`
+											: ''}.
+									</span>
+								{:else}
+									<span class="hint">
+										The model replied with {lastRun.replyChars} characters and
+										{lastRun.parsedItems ?? 0} usable suggestions in it.
+									</span>
+								{/if}
 							{/if}
 							{#if proposals.length}
 								<span class="hint">

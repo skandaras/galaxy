@@ -102,10 +102,28 @@ export function cortexTools(userId: string, writes = cortexWritesAllowed()): Loo
 		def: {
 			name: 'cortex_write',
 			description:
-				'Record a concept in the knowledge lattice and connect it to what it relates to. ' +
-				'For durable ideas worth carrying across conversations, not scratch notes — a ' +
-				'concept, not a fact (facts belong in memory). Connecting it is the point: an ' +
-				'unconnected node is invisible to every future query.',
+				// Prescriptive, not descriptive. The first version said what the tool
+				// was and what belonged in it, and never when to reach for it — so a
+				// model read it as available-on-request and went a whole conversation
+				// without noticing an occasion. Asked why, it said exactly that: no
+				// behavioural trigger, unlike every skill description it had.
+				'Record a concept in the knowledge lattice and connect it to what it relates to.\n\n' +
+				'Use this on your own initiative, not only when asked. A concept worth keeping ' +
+				'almost always surfaces in the middle of a conversation about something else, so ' +
+				'watch for it rather than waiting to be told. Reach for this when: the person ' +
+				'argues for a position of their own; they put two ideas together into a synthesis; ' +
+				'an interest keeps resurfacing across unrelated topics; or they develop an idea ' +
+				'across several turns rather than mentioning it once.\n\n' +
+				'A concept, not a fact — facts belong in memory. The test is whether the thing has ' +
+				'edges. A named position that connects to other ideas is a concept: "the view that ' +
+				"institutions decay by succeeding\", which connects to their reading, their work and " +
+				'their scepticism about growth. "Interested in politics" has nowhere to go and ' +
+				'belongs in memory. Meta-observations qualify when they connect: "keeps finding the ' +
+				'same structure in unrelated fields" is a concept; "asked about physics" is not.\n\n' +
+				'Connect it as you create it. An unconnected concept is invisible to every future ' +
+				'query, so a concept with no connections is a note nobody will ever read. When in ' +
+				'doubt, record it: the lattice is reviewed and pruned, and a missed concept is the ' +
+				'more expensive mistake.',
 			parameters: {
 				type: 'object',
 				properties: {
