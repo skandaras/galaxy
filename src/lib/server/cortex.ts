@@ -23,10 +23,9 @@ const cortexDir = () => join(dataDir, 'cortex');
 export function cortexSettings(): CortexSettings {
 	return { ...DEFAULT_CORTEX, ...getSetting<Partial<CortexSettings>>('cortex', {}) };
 }
-const settings = cortexSettings;
 
 export function cortexWritesAllowed(): boolean {
-	return settings().agentWrites;
+	return cortexSettings().agentWrites;
 }
 
 // --- visibility -------------------------------------------------------------
@@ -162,7 +161,7 @@ export function saveNode(opts: {
 		throw new Error(`"${existing.name}" belongs to someone else`);
 	}
 	if (!existing) {
-		const cap = settings().maxNodesPerUser;
+		const cap = cortexSettings().maxNodesPerUser;
 		if (nodeCount(opts.ownerId) >= cap) {
 			throw new Error(`Lattice is at its ${cap}-node limit; merge or remove some first`);
 		}
@@ -414,7 +413,7 @@ export function effectiveWeight(edge: Pick<CortexAssociation, 'weight' | 'reinfo
 }
 
 function learningEnabled(): boolean {
-	return settings().learning;
+	return cortexSettings().learning;
 }
 
 /**
@@ -447,6 +446,9 @@ export function noteTraversal(edges: { sourceId: string; targetId: string }[]): 
 	}
 }
 
+/** A set key for one stored edge. Ids cannot contain a null byte; names can. */
+const edgeKey = (e: { sourceId: string; targetId: string }) => `${e.sourceId}\u0000${e.targetId}`;
+
 /**
  * Strengthen the edges a reply actually leaned on.
  *
@@ -454,9 +456,6 @@ export function noteTraversal(edges: { sourceId: string; targetId: string }[]): 
  * lattice the learner cannot see — the same bound the walk itself holds to, and
  * worth holding twice for a path that writes.
  */
-/** A set key for one stored edge. Ids cannot contain a null byte; names can. */
-const edgeKey = (e: { sourceId: string; targetId: string }) => `${e.sourceId}\u0000${e.targetId}`;
-
 export function reinforce(
 	edges: { sourceId: string; targetId: string }[],
 	userId: string,

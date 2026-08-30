@@ -227,6 +227,8 @@ export function nameSimilarity(a: string, b: string): number {
 }
 
 const DUPLICATE_THRESHOLD = 0.6;
+/** How many orphans one pass will try to find a neighbour for. */
+const MAX_ORPHAN_PAIRINGS = 40;
 
 export interface Detected {
 	kind: Kind;
@@ -281,7 +283,11 @@ export function detect(userId: string): Detected[] {
 	 * orphan goes to the prompt instead, where a model can do better than a
 	 * string match.
 	 */
-	for (const node of orphans(userId)) {
+	// Bounded, because each of these is an FTS query plus a scoped read. A lattice
+	// that has never been connected is *all* orphans, the queue cannot hold more
+	// than this anyway, and the ones left over reach the model through the prompt
+	// rather than being lost.
+	for (const node of orphans(userId).slice(0, MAX_ORPHAN_PAIRINGS)) {
 		const candidate = seedNodes(`${node.name} ${node.description}`, userId, 4).find(
 			(n) =>
 				n.id !== node.id &&
