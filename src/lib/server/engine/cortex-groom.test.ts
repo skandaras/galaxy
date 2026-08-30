@@ -396,6 +396,17 @@ describe('the free half', () => {
 		expect(listAssociations(a.id, ANA).length).toBeGreaterThan(0);
 	});
 
+	it('never offers to connect two concepts it also calls one concept', () => {
+		saveNode({ name: 'Storm logs', description: 'Notes on coastal storms', ownerId: ANA });
+		saveNode({ name: 'The storm logs', description: 'Notes on coastal storms', ownerId: ANA });
+		const found = detect(ANA);
+		// FTS ranks a near-duplicate first by construction, so without a guard the
+		// orphan check pairs exactly the two the merge check is asking to fold
+		// together — two suggestions contradicting each other in one queue.
+		expect(found.some((d) => d.kind === 'merge')).toBe(true);
+		expect(found.some((d) => d.kind === 'connect')).toBe(false);
+	});
+
 	it('files nothing for an orphan it cannot pair, and hands it to the prompt', () => {
 		saveNode({ name: 'Bicycle repair', ownerId: ANA });
 		// Nothing to pair it with, and inventing a neighbour would be worse than

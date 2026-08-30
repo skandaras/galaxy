@@ -283,7 +283,15 @@ export function detect(userId: string): Detected[] {
 	 */
 	for (const node of orphans(userId)) {
 		const candidate = seedNodes(`${node.name} ${node.description}`, userId, 4).find(
-			(n) => n.id !== node.id && !linked.has(`${node.id} ${n.id}`)
+			(n) =>
+				n.id !== node.id &&
+				!linked.has(`${node.id} ${n.id}`) &&
+				// Never the near-duplicate. FTS ranks it first by construction — two
+				// names sharing most of their words match each other better than
+				// anything else does — and proposing "connect these" beside "these
+				// are the same concept" is two suggestions that contradict each
+				// other. If they are one thing, the merge is the answer.
+				nameSimilarity(node.name, n.name) < DUPLICATE_THRESHOLD
 		);
 		if (!candidate) continue;
 		out.push({
