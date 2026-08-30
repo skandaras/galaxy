@@ -259,6 +259,22 @@ describe('the context bootstrap line', () => {
 		expect(cortexDigest(ANA)).toBe('');
 	});
 
+	it('invites a query without demanding one', () => {
+		seedChain();
+		const digest = cortexDigest(ANA);
+		// This line used to say to query "whenever the answer depends on who this
+		// person is — which is most things that are not purely factual", and an
+		// agent did what it said: queried on nearly every turn and worked its
+		// answers back round to whatever came out. Context that insists on being
+		// used is not context, it is a script.
+		expect(digest).not.toMatch(/most things|whenever/i);
+		// The three things that replaced it, each load-bearing: most turns need
+		// nothing, do not bend the reply toward it, and do not talk about it.
+		expect(digest).toContain('Most turns need nothing from it');
+		expect(digest).toContain('Never steer a reply');
+		expect(digest).toContain('never mention the lattice');
+	});
+
 	it('names the concepts while the lattice is small', () => {
 		seedChain();
 		const digest = cortexDigest(ANA);

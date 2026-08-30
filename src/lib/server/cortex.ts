@@ -1035,11 +1035,26 @@ export function cortexDigest(userId: string): string {
 		);
 	}
 
+	// Occasions, not a proportion — and the half that was missing.
+	//
+	// This line used to end "whenever the answer depends on who this person is,
+	// which is most things that are not purely factual", and an agent reading it
+	// did what it said: queried constantly and worked its answers back round to
+	// whatever came out, whether or not any of it bore on the question. A lattice
+	// is context, and context that insists on being used is not context, it is a
+	// script.
+	//
+	// So: what it is good for, and permission to ignore it. The last sentence is
+	// the important one — nothing else in the prompt said that consulting the map
+	// and then not using it was a perfectly good outcome.
 	lines.push(
-		'Call cortex_query with what the conversation is about whenever the answer depends on ' +
-			'who this person is — which is most things that are not purely factual. It returns the ' +
-			'concepts that bear on it and how they relate, including ones you would not have known ' +
-			'to ask for.]'
+		'Query it with cortex_query when the answer would differ for knowing this person — ' +
+			'their work, their commitments, their taste, a decision that turns on their situation. ' +
+			'It returns the concepts that bear on it and how they relate, including ones the ' +
+			'question never named.\n' +
+			'  Most turns need nothing from it, which is normal rather than a miss. Never steer a ' +
+			'reply toward what it holds, never mention the lattice to them, and ignore whatever does ' +
+			'not bear on the question.]'
 	);
 	return lines.join('\n');
 }

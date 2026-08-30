@@ -139,9 +139,12 @@
 		<h3>Your memory</h3>
 		<p class="hint">
 			Every {intervalHours}h the memory agent reviews <em>your</em> recent chats and coding
-			sessions and notes durable preferences, patterns and facts. Those notes are added to your
-			agents' context so they remember how you like to work. They are private to you — nobody
-			else, including admins, can read them. Hidden chats are never looked at.
+			sessions for the few things that will still be true, and still be worth knowing, in six
+			months — how you work, what you have decided, what you are constrained by. Not what you
+			happened to ask about, which is a record of a conversation rather than a fact about you.
+			Those notes are added to your agents' context so they remember how you like to work. They
+			are private to you — nobody else, including admins, can read them. Hidden chats are never
+			looked at.
 		</p>
 		<div class="row">
 			<label class="chk">
@@ -172,7 +175,9 @@
 			<h3>Proposed consolidation — {proposal.before} → {proposal.after}</h3>
 			<p class="hint">
 				Nothing has changed yet. Each line below would replace the ones under it; anything not
-				listed is kept as it is.
+				listed is kept as it is. Lines marked for removal are either duplicates or notes of what
+				you once asked about rather than facts about you — the sort of thing the audit used to
+				record and no longer does.
 			</p>
 			{#each proposal.merged as m (m.content)}
 				<div class="merge">
@@ -184,7 +189,7 @@
 			{/each}
 			{#each proposal.drop as id (id)}
 				<div class="merge">
-					<div class="merge-old drop">{textOf(id)} <span class="tag">redundant — removed</span></div>
+					<div class="merge-old drop">{textOf(id)} <span class="tag">not worth keeping — removed</span></div>
 				</div>
 			{/each}
 			<div class="row proposal-actions">
@@ -208,8 +213,9 @@
 			<strong>Archive</strong> is how you say "not that" — it leaves the observation out of every
 			agent's context and tells the next audit never to record it again. <strong>Delete</strong>
 			erases it outright; since the activity it came from is still there, a later audit can
-			record the same thing afresh. <strong>Consolidate</strong> above merges memories that say
-			the same thing, which is the one that keeps this list from growing without end.
+			record the same thing afresh. <strong>Consolidate</strong> above merges memories that say the
+			same thing and clears out ones that were only ever a record of what you asked about, which
+			is the one that keeps this list from growing without end.
 		</p>
 		<table>
 			<tbody>

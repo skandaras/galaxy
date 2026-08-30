@@ -6,6 +6,7 @@ import {
 	seedTaskConfigs,
 	seedSkills,
 	migrateSettings,
+	migrateTaskPrompts,
 	migrateChats
 } from '$lib/server/bootstrap';
 import { ensureSkillsRepo } from '$lib/server/skills';
@@ -18,6 +19,10 @@ runMigrations();
 migrateSettings();
 migrateChats();
 seedTaskConfigs();
+// After the seed, so a task that has just been created is already current, and
+// before anything can run: a stored prompt that is still the shipped default is
+// one nobody has claimed, so an improvement to it should actually arrive.
+migrateTaskPrompts();
 ensureSkillsRepo();
 seedSkills();
 startScheduler();

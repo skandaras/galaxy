@@ -47,13 +47,23 @@ export function cortexTools(
 			def: {
 				name: 'cortex_query',
 				description:
+					// Descriptive about what it returns, specific about when it helps, and
+					// explicit that not using the answer is fine. The first version said
+					// this was worth calling "before answering anything where the right
+					// answer depends on who this person is, which is most things that are
+					// not purely factual" — which reads as an instruction to query on
+					// nearly every turn and then to have found something, and that is how
+					// a lattice stops being context and starts being a script.
 					'Read the working map of who you are talking to. The lattice holds their ' +
 					'concepts and how those connect — what is currently true of them, their work ' +
 					'and their world, not a log of past events. Give it what the conversation is ' +
 					'about and it returns the concepts that bear on it plus how they relate, ' +
-					'including ones the question never named and you would not have known to ask ' +
-					'for. Worth calling before answering anything where the right answer depends ' +
-					'on who this person is, which is most things that are not purely factual. ' +
+					'including ones the question never named.\n\n' +
+					'Worth a call when the answer would genuinely differ for knowing them: their ' +
+					'work, their commitments, their taste, a choice that turns on their situation. ' +
+					'Not worth one for a question with a right answer independent of who is asking. ' +
+					'If what comes back does not bear on the question, ignore it — a query that ' +
+					'turns out not to help is a normal outcome, not a reason to work it in.\n\n' +
 					'Pass from_node instead of query to explore outward from a concept you have.',
 				parameters: {
 					type: 'object',
@@ -131,6 +141,10 @@ export function cortexTools(
 				'argues for a position of their own; they put two ideas together into a synthesis; ' +
 				'an interest keeps resurfacing across unrelated topics; or they develop an idea ' +
 				'across several turns rather than mentioning it once.\n\n' +
+				'The bar is that it would still matter in six months. Most conversations do not ' +
+				'clear it, and recording nothing is the ordinary outcome of a turn rather than a ' +
+				'missed one — a lattice full of things that seemed worth noting on the day is ' +
+				'worse than a small one, because every query has to wade through it.\n\n' +
 				'A concept, not a fact — facts belong in memory. The test is whether the thing has ' +
 				'edges. A named position that connects to other ideas is a concept: "the view that ' +
 				"institutions decay by succeeding\", which connects to their reading, their work and " +
@@ -138,9 +152,7 @@ export function cortexTools(
 				'belongs in memory. Meta-observations qualify when they connect: "keeps finding the ' +
 				'same structure in unrelated fields" is a concept; "asked about physics" is not.\n\n' +
 				'Connect it as you create it. An unconnected concept is invisible to every future ' +
-				'query, so a concept with no connections is a note nobody will ever read. When in ' +
-				'doubt, record it: the lattice is reviewed and pruned, and a missed concept is the ' +
-				'more expensive mistake.',
+				'query, so a concept with no connections is a note nobody will ever read.',
 			parameters: {
 				type: 'object',
 				properties: {
