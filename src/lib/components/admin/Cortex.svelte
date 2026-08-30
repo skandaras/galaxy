@@ -7,7 +7,13 @@
 	 * platform's. Same split the memory job uses.
 	 */
 	let groom = $state({ enabled: false, intervalHours: 24, maxProposalsPerRun: 10 });
-	let cortex = $state({ agentWrites: true, kinship: false, maxNodesPerUser: 2000 });
+	let cortex = $state({
+		agentWrites: true,
+		kinship: false,
+		maxNodesPerUser: 2000,
+		learning: true,
+		staleDays: 60
+	});
 	let lastRun = $state(0);
 	let busy = $state(false);
 	let notice = $state<string | null>(null);
@@ -112,6 +118,38 @@
 			<input type="number" min="10" max="20000" bind:value={cortex.maxNodesPerUser} />
 		</label>
 	</div>
+
+	<h3>Learning</h3>
+	<p class="hint">
+		Connections strengthen when a reply <em>uses</em> the concept at the other end, and fade when
+		nothing does. Not when a query merely traverses them: a traversal follows the strongest
+		connections, so rewarding it would teach the lattice to confirm the shape it already has.
+	</p>
+	<p class="hint">
+		The strength somebody set by hand is never overwritten — what moves is a separate learned
+		amount added to it, capped so nothing can strengthen without limit. Fading stops at a floor
+		where a connection no longer reaches the activation threshold: it has stopped crowding
+		results, but it is still on the map and still restorable. Removing one is a suggestion in the
+		owner's Cortex tab, never something this does on its own.
+	</p>
+	<div class="grid">
+		<label class="check">
+			<input type="checkbox" bind:checked={cortex.learning} /> connections learn from use
+		</label>
+		<label>
+			suggest removing after (days unused)
+			<input type="number" min="7" max="3650" bind:value={cortex.staleDays} />
+		</label>
+	</div>
+	<p class="hint" role="status">
+		{#if cortex.learning}
+			<strong>On.</strong> A faded connection that nothing has traversed in
+			{cortex.staleDays} days is raised as a suggestion to disconnect.
+		{:else}
+			<strong>Off.</strong> No strength moves on its own in either direction. Anything already
+			learned is kept and still counts — it is simply frozen where it is.
+		{/if}
+	</p>
 	<p class="hint" role="status">
 		{#if cortex.agentWrites}
 			<strong>Agents can write.</strong> The <code>cortex_write</code> tool is offered on chat and
