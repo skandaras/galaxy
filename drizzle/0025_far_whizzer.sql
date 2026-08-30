@@ -1,0 +1,1 @@
+ALTER TABLE `cortex_associations` ADD `reinforcement` real DEFAULT 0 NOT NULL;

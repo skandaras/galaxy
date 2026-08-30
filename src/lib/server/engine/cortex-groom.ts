@@ -4,8 +4,10 @@ import { db } from '$lib/server/db';
 import { cortexAssociations, cortexNodes, cortexProposals } from '$lib/server/db/schema';
 import {
 	circuitIndex,
+	cortexSettings,
 	deleteAssociation,
 	deleteNode,
+	erodedEdges,
 	findNodeByName,
 	getNode,
 	listAssociations,
@@ -77,6 +79,8 @@ export interface GroomResult {
 	detected?: number;
 	proposed?: number;
 	duplicates?: number;
+	/** Suggestions the model made that could not be filed, and why. */
+	dropped?: { unknownConcept: number; badKind: number; noTitle: number };
 	/** Sizes and flags only, so a caller can tell these apart without any content. */
 	replyChars?: number;
 	parsedItems?: number;
@@ -230,27 +234,73 @@ export interface Detected {
 	rationale: string;
 	node: string;
 	target?: string;
+	/** What accepting it should do, in the same shape a model would send. */
+	payload?: Record<string, unknown>;
+}
+
+/**
+ * Concepts nothing connects to, which no query can reach.
+ *
+ * Exported because the groom prompt lists the ones this pass could not pair up
+ * — see `buildGroomPrompt`. A detector that finds a problem it cannot suggest a
+ * fix for should hand the problem to the half that can, not file a row saying
+ * "something is wrong" that nobody can act on.
+ */
+export function orphans(userId: string): CortexNode[] {
+	const degree = new Map<string, number>();
+	for (const e of visibleEdges(userId)) {
+		degree.set(e.sourceId, (degree.get(e.sourceId) ?? 0) + 1);
+		degree.set(e.targetId, (degree.get(e.targetId) ?? 0) + 1);
+	}
+	return listNodes(userId)
+		.filter((n) => n.ownerId === userId || n.ownerId === null)
+		.filter((n) => !degree.get(n.id));
 }
 
 export function detect(userId: string): Detected[] {
 	const nodes = listNodes(userId).filter((n) => n.ownerId === userId || n.ownerId === null);
 	const edges = visibleEdges(userId);
-	const degree = new Map<string, number>();
-	for (const e of edges) {
-		degree.set(e.sourceId, (degree.get(e.sourceId) ?? 0) + 1);
-		degree.set(e.targetId, (degree.get(e.targetId) ?? 0) + 1);
-	}
+	const linked = new Set(edges.flatMap((e) => [`${e.sourceId} ${e.targetId}`, `${e.targetId} ${e.sourceId}`]));
 
 	const out: Detected[] = [];
 
-	for (const node of nodes) {
-		if (degree.get(node.id)) continue;
+	/**
+	 * An orphan is only worth filing with something to connect it *to*.
+	 *
+	 * The first version filed these as a `connect` with a node and no target,
+	 * which `applyProposal` cannot carry out — every `connect` needs two ends. So
+	 * Accept returned false, the route answered "No such open suggestion", and on
+	 * a young lattice, where most concepts are orphans, most of the review queue
+	 * was rows that failed with a message implying they were stale. That is the
+	 * whole of "it logs what it did and never does anything".
+	 *
+	 * A candidate comes from the retrieval machinery already here: whatever the
+	 * concept's own name and description match best. It is a suggestion about
+	 * *text*, and the rationale says so rather than claiming the two mean
+	 * something to each other. Where FTS offers nothing, nothing is filed and the
+	 * orphan goes to the prompt instead, where a model can do better than a
+	 * string match.
+	 */
+	for (const node of orphans(userId)) {
+		const candidate = seedNodes(`${node.name} ${node.description}`, userId, 4).find(
+			(n) => n.id !== node.id && !linked.has(`${node.id} ${n.id}`)
+		);
+		if (!candidate) continue;
 		out.push({
 			kind: 'connect',
-			title: `"${node.name}" connects to nothing`,
+			title: `"${node.name}" connects to nothing — link it to "${candidate.name}"?`,
 			rationale:
-				'Traversal can only reach a concept through a connection, so this one cannot surface in any query. Connect it to whatever it relates to, or remove it.',
-			node: node.id
+				`Traversal can only reach a concept through a connection, so "${node.name}" cannot surface in any query as it stands. ` +
+				`"${candidate.name}" is the closest match by name and description, which is a starting point rather than a claim that the two belong together — ` +
+				'dismiss it and connect it to something better if this is the wrong neighbour.',
+			node: node.id,
+			target: candidate.id,
+			payload: {
+				// Modest on purpose: a connection nobody has vouched for should not
+				// arrive as strong as one somebody argued for.
+				weight: 0.4,
+				why: `Related by name and description; recorded so "${node.name}" is reachable at all.`
+			}
 		});
 	}
 
@@ -266,6 +316,34 @@ export function detect(userId: string): Detected[] {
 				target: nodes[j].id
 			});
 		}
+	}
+
+	/**
+	 * Connections that learning has eroded as far as it goes, and that nothing
+	 * has traversed in a long time.
+	 *
+	 * This is the only place erosion is allowed to end in a removal, and it ends
+	 * in a *suggestion* to remove. Decay may move a number on its own — that is
+	 * what makes it learning rather than bookkeeping — but the thing it can never
+	 * do unasked is destroy a relationship somebody recorded.
+	 */
+	const stale = cortexSettings().staleDays;
+	for (const edge of erodedEdges(userId, stale)) {
+		const from = nodes.find((n) => n.id === edge.sourceId);
+		const to = nodes.find((n) => n.id === edge.targetId);
+		if (!from || !to) continue;
+		const days = edge.lastTraversedAt
+			? Math.round((Date.now() - edge.lastTraversedAt.getTime()) / 86_400_000)
+			: null;
+		out.push({
+			kind: 'disconnect',
+			title: `"${from.name}" and "${to.name}" have faded`,
+			rationale:
+				`This connection has eroded to the floor and ${days === null ? 'no query has ever traversed it' : `nothing has traversed it in ${days} days`}. ` +
+				'It still costs a hop in every walk through either concept. Remove it, or dismiss this and it will be left alone.',
+			node: edge.sourceId,
+			target: edge.targetId
+		});
 	}
 
 	// No unfiled check here any more.
@@ -288,7 +366,8 @@ export function recordDetected(userId: string, found: Detected[], max: number) {
 			title: d.title,
 			rationale: d.rationale,
 			node: d.node,
-			target: d.target
+			target: d.target,
+			payload: d.payload
 		})),
 		max
 	);
@@ -296,17 +375,121 @@ export function recordDetected(userId: string, found: Detected[], max: number) {
 
 // --- proposals --------------------------------------------------------------
 
+/**
+ * The review queue, with its concept ids resolved to names.
+ *
+ * Resolved here rather than in the browser because the panel would otherwise
+ * need the whole lattice to render one row, and because a suggestion whose
+ * concepts have been deleted since should say so rather than showing a slug. A
+ * queue you cannot read without translating it is a queue nobody reads.
+ */
 export function listProposals(userId: string, status: 'open' | 'all' = 'open') {
 	const where =
 		status === 'open'
 			? and(eq(cortexProposals.userId, userId), eq(cortexProposals.status, 'open'))
 			: eq(cortexProposals.userId, userId);
-	return db
+	const rows = db
 		.select()
 		.from(cortexProposals)
 		.where(where)
 		.orderBy(desc(cortexProposals.createdAt), cortexProposals.id)
 		.all();
+	if (!rows.length) return [];
+	const names = new Map(listNodes(userId).map((n) => [n.id, n.name]));
+	const areas = new Map(listCircuits(userId).map((c) => [c.id, c.name]));
+	return rows.map((r) => ({
+		...r,
+		nodeName: r.nodeId ? (names.get(r.nodeId) ?? null) : null,
+		targetName: r.targetId ? (names.get(r.targetId) ?? null) : null,
+		// What accepting would actually do, in terms a person can check: the
+		// concepts a `create` would connect to, and the areas it would file it
+		// under, by name. Accepting blind is most of why the queue felt inert.
+		preview: previewOf(r, names, areas)
+	}));
+}
+
+type ProposalRow = typeof cortexProposals.$inferSelect;
+
+/** Plain lines describing the change, for the row in the review queue. */
+function previewOf(
+	p: ProposalRow,
+	names: Map<string, string>,
+	areas: Map<string, string>
+): string[] {
+	const payload = (p.payload ?? {}) as Record<string, unknown>;
+	const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+	const named = (id: string | null) => (id ? (names.get(id) ?? `${id} (deleted)`) : null);
+	const out: string[] = [];
+
+	if (p.kind === 'create') {
+		const description = str(payload.description);
+		if (description) out.push(description);
+		const filed = Array.isArray(payload.areas)
+			? payload.areas.map((a) => areas.get(String(a)) ?? String(a))
+			: [];
+		if (filed.length) out.push(`Files it under ${filed.join(', ')}.`);
+		const links = (Array.isArray(payload.connect) ? payload.connect : [])
+			.map((raw) => {
+				const link = (raw ?? {}) as Record<string, unknown>;
+				const ref = str(link.node);
+				if (!ref) return null;
+				const to = names.get(ref) ?? ref;
+				const why = str(link.why);
+				return `${to}${why ? ` — ${why}` : ''}`;
+			})
+			.filter((l): l is string => !!l);
+		out.push(
+			links.length
+				? `Connects it to: ${links.join('; ')}.`
+				: 'Connects it to nothing, so it would not surface in a query.'
+		);
+		return out;
+	}
+
+	const from = named(p.nodeId);
+	const to = named(p.targetId);
+	const weight = typeof payload.weight === 'number' ? payload.weight.toFixed(2) : null;
+	switch (p.kind) {
+		case 'merge':
+			if (from && to) out.push(`Folds "${to}" into "${from}", moving its connections across.`);
+			break;
+		case 'connect':
+			if (from && to) {
+				out.push(`Connects "${from}" to "${to}"${weight ? ` at ${weight}` : ''}.`);
+				const why = str(payload.why);
+				if (why) out.push(why);
+			}
+			break;
+		case 'disconnect':
+			if (from && to) out.push(`Removes the connection between "${from}" and "${to}".`);
+			break;
+		case 'weight':
+			if (from && to) out.push(`Sets "${from}" to "${to}" to ${weight ?? '?'}.`);
+			break;
+		case 'circuit': {
+			const filed = Array.isArray(payload.areas)
+				? payload.areas.map((a) => areas.get(String(a)) ?? String(a))
+				: [];
+			if (from) out.push(`Files "${from}" under ${filed.join(', ') || 'nothing'}.`);
+			break;
+		}
+		case 'convergence':
+			if (from) {
+				out.push(
+					payload.isConvergence === false
+						? `Stops treating "${from}" as a bridge between areas.`
+						: `Marks "${from}" as a bridge between areas.`
+				);
+			}
+			break;
+		case 'rename':
+			if (from) out.push(`Renames "${from}" to "${str(payload.name) ?? '?'}".`);
+			break;
+		case 'delete':
+			if (from) out.push(`Deletes "${from}" and every connection to it.`);
+			break;
+	}
+	return out;
 }
 
 /**
@@ -356,7 +539,21 @@ function resolveAreas(userId: string, raw: unknown): string[] | undefined {
 	return out.length ? out : undefined;
 }
 
-export function applyProposal(id: string, userId: string): boolean {
+/**
+ * What came of trying to carry a suggestion out.
+ *
+ * A boolean was not enough. Every refusal in here came back as `false`, the
+ * route turned that into `404 "No such open suggestion"`, and a person who had
+ * just watched a row fail was told the row did not exist. Saying which of half a
+ * dozen things went wrong is the difference between a queue you trust and one
+ * you stop reading.
+ */
+export interface ApplyResult {
+	ok: boolean;
+	reason?: string;
+}
+
+export function applyProposal(id: string, userId: string): ApplyResult {
 	const p = db
 		.select()
 		.from(cortexProposals)
@@ -368,7 +565,7 @@ export function applyProposal(id: string, userId: string): boolean {
 			)
 		)
 		.get();
-	if (!p) return false;
+	if (!p) return { ok: false, reason: 'missing' };
 
 	const runId = randomUUID();
 	const payload = (p.payload ?? {}) as Record<string, unknown>;
@@ -410,12 +607,18 @@ export function applyProposal(id: string, userId: string): boolean {
 				break;
 			}
 			case 'merge': {
-				if (!p.nodeId || !p.targetId) return false;
-				if (!mergeNodes(p.nodeId, p.targetId, userId, 'groom')) return false;
+				if (!p.nodeId || !p.targetId) {
+					return { ok: false, reason: 'that suggestion does not name two concepts to merge' };
+				}
+				if (!mergeNodes(p.nodeId, p.targetId, userId, 'groom')) {
+					return { ok: false, reason: 'one of those concepts is gone, or is not yours to merge' };
+				}
 				break;
 			}
 			case 'connect': {
-				if (!p.nodeId || !p.targetId) return false;
+				if (!p.nodeId || !p.targetId) {
+					return { ok: false, reason: 'that suggestion does not name what to connect it to' };
+				}
 				saveAssociation({
 					sourceId: p.nodeId,
 					targetId: p.targetId,
@@ -428,12 +631,23 @@ export function applyProposal(id: string, userId: string): boolean {
 				break;
 			}
 			case 'disconnect': {
-				if (!p.nodeId || !p.targetId) return false;
-				if (!deleteAssociation(p.nodeId, p.targetId, userId, 'groom')) return false;
+				if (!p.nodeId || !p.targetId) {
+					return { ok: false, reason: 'that suggestion does not name a connection' };
+				}
+				// Either orientation: a symmetric connection is stored once, and which
+				// way round is an implementation detail the suggestion did not choose.
+				if (
+					!deleteAssociation(p.nodeId, p.targetId, userId, 'groom') &&
+					!deleteAssociation(p.targetId, p.nodeId, userId, 'groom')
+				) {
+					return { ok: false, reason: 'that connection is already gone' };
+				}
 				break;
 			}
 			case 'weight': {
-				if (!p.nodeId || !p.targetId || num(payload.weight) === undefined) return false;
+				if (!p.nodeId || !p.targetId || num(payload.weight) === undefined) {
+					return { ok: false, reason: 'that suggestion does not name a connection and a strength' };
+				}
 				saveAssociation({
 					sourceId: p.nodeId,
 					targetId: p.targetId,
@@ -447,9 +661,9 @@ export function applyProposal(id: string, userId: string): boolean {
 			case 'circuit':
 			case 'convergence':
 			case 'rename': {
-				if (!p.nodeId) return false;
+				if (!p.nodeId) return { ok: false, reason: 'that suggestion does not name a concept' };
 				const node = getNode(p.nodeId, userId);
-				if (!node) return false;
+				if (!node) return { ok: false, reason: 'that concept has been deleted since' };
 				saveNode({
 					id: node.id,
 					name: p.kind === 'rename' ? (str(payload.name) ?? node.name) : node.name,
@@ -463,32 +677,35 @@ export function applyProposal(id: string, userId: string): boolean {
 				break;
 			}
 			case 'delete': {
-				if (!p.nodeId) return false;
-				if (!deleteNode(p.nodeId, userId, 'groom')) return false;
+				if (!p.nodeId) return { ok: false, reason: 'that suggestion does not name a concept' };
+				if (!deleteNode(p.nodeId, userId, 'groom')) {
+					return { ok: false, reason: 'that concept is gone, or is not yours to delete' };
+				}
 				break;
 			}
 			default:
-				return false;
+				return { ok: false, reason: `nothing here knows how to apply a "${p.kind}" suggestion` };
 		}
-	} catch {
+	} catch (err) {
 		// A concept gone since the suggestion was raised, or the cap reached.
 		// Leave it open: a half-applied change nobody was told about is worse
-		// than one that plainly did not happen.
-		return false;
+		// than one that plainly did not happen. The store's own message is the
+		// useful one — it is the half that knows which rule was hit.
+		return { ok: false, reason: err instanceof Error ? err.message : 'could not apply that' };
 	}
 
 	db.update(cortexProposals)
 		.set({ status: 'actioned', decidedAt: new Date() })
 		.where(eq(cortexProposals.id, id))
 		.run();
-	return true;
+	return { ok: true };
 }
 
 export function decideProposal(
 	id: string,
 	userId: string,
 	status: 'actioned' | 'discarded'
-): boolean {
+): ApplyResult {
 	// Accepting means doing the thing. Only a dismissal is a bare status change.
 	if (status === 'actioned') return applyProposal(id, userId);
 	const res = db
@@ -502,7 +719,7 @@ export function decideProposal(
 			)
 		)
 		.run();
-	return res.changes > 0;
+	return res.changes > 0 ? { ok: true } : { ok: false, reason: 'missing' };
 }
 
 /**
@@ -512,11 +729,21 @@ export function decideProposal(
  * accepted is done, and something turned down was considered and declined.
  * Re-raising either is how a review queue teaches people to stop reading it.
  */
-export function recordProposals(
-	userId: string,
-	raw: unknown[],
-	max: number
-): { added: number; duplicates: number } {
+export interface RecordResult {
+	added: number;
+	duplicates: number;
+	/**
+	 * What was thrown away, and why.
+	 *
+	 * Counted rather than silently dropped, because "the model suggested nothing"
+	 * and "the model suggested six things and every one named a concept that does
+	 * not exist" are different problems with the same old readout, and only one
+	 * of them is fixed by trying again.
+	 */
+	dropped: { unknownConcept: number; badKind: number; noTitle: number };
+}
+
+export function recordProposals(userId: string, raw: unknown[], max: number): RecordResult {
 	const known = new Set(
 		db
 			.select({ fingerprint: cortexProposals.fingerprint })
@@ -525,24 +752,53 @@ export function recordProposals(
 			.all()
 			.map((r) => r.fingerprint)
 	);
-	const visible = new Set(listNodes(userId).map((n) => n.id));
+	const nodes = listNodes(userId);
+	const visible = new Set(nodes.map((n) => n.id));
+	/**
+	 * Ids are what the prompt asks for; names are what a model sometimes sends.
+	 *
+	 * The first version dropped anything that was not already an id, so a
+	 * perfectly good "merge Tide pools into Rockpools" vanished without a word
+	 * for naming the concepts the way a person would. Resolving here costs
+	 * nothing and is the same courtesy `resolveAreas` already extends to areas.
+	 */
+	const resolve = (ref: string | null): string | null => {
+		if (!ref) return null;
+		if (visible.has(ref)) return ref;
+		return findNodeByName(ref, userId)?.id ?? null;
+	};
+
 	let added = 0;
 	let duplicates = 0;
+	const dropped = { unknownConcept: 0, badKind: 0, noTitle: 0 };
 
 	for (const item of raw.slice(0, max)) {
 		const p = (item ?? {}) as Record<string, unknown>;
 		const kind = String(p.kind ?? '');
 		const title = String(p.title ?? '').trim();
-		if (!title || !KINDS.includes(kind as Kind)) continue;
+		if (!KINDS.includes(kind as Kind)) {
+			dropped.badKind++;
+			continue;
+		}
+		if (!title) {
+			dropped.noTitle++;
+			continue;
+		}
 
-		const nodeId = typeof p.node === 'string' ? p.node : null;
-		const targetId = typeof p.target === 'string' ? p.target : null;
+		const nodeRef = typeof p.node === 'string' ? p.node : null;
+		const targetRef = typeof p.target === 'string' ? p.target : null;
 		// A proposal naming a node this person cannot see is either a model
 		// hallucination or a boundary crossing. Neither is worth filing.
 		// `create` is the exception by definition: its concept does not exist yet.
+		let nodeId = nodeRef;
+		let targetId = targetRef;
 		if (kind !== 'create') {
-			if (nodeId && !visible.has(nodeId)) continue;
-			if (targetId && !visible.has(targetId)) continue;
+			nodeId = resolve(nodeRef);
+			targetId = resolve(targetRef);
+			if ((nodeRef && !nodeId) || (targetRef && !targetId)) {
+				dropped.unknownConcept++;
+				continue;
+			}
 		}
 
 		const fp = fingerprint(kind, nodeId ?? title, targetId ?? '');
@@ -560,7 +816,11 @@ export function recordProposals(
 				rationale: String(p.rationale ?? '').slice(0, 2000),
 				nodeId,
 				targetId,
-				payload: (p.payload ?? null) as unknown,
+				// A model told to put its detail under `payload` mostly does, and
+				// sometimes puts the fields at the top level instead. Falling back to
+				// the item means a stray `{"kind":"weight","weight":0.8}` is applied
+				// rather than filed as a suggestion with nothing in it.
+				payload: (p.payload ?? p) as unknown,
 				fingerprint: fp,
 				status: 'open',
 				createdAt: new Date()
@@ -568,7 +828,7 @@ export function recordProposals(
 			.run();
 		added++;
 	}
-	return { added, duplicates };
+	return { added, duplicates, dropped };
 }
 
 const KINDS = [
@@ -626,6 +886,9 @@ export function buildGroomPrompt(
 	// Capped: on a large lattice this is the one unbounded list in the prompt,
 	// and a hundred unfiled concepts would crowd out everything else.
 	const unfiledNodes = nodes.filter((n) => !n.circuits?.length).slice(0, 30);
+	// Capped for the same reason: on a lattice that has never been connected this
+	// is every concept, and it would crowd out the activity the pass is here for.
+	const stranded = orphans(userId).slice(0, 30);
 	const relevant = mode === 'harvest' ? new Set(seedNodes(activity, userId, 25).map((n) => n.id)) : null;
 	const lattice = relevant
 		? [
@@ -668,6 +931,14 @@ export function buildGroomPrompt(
 			? `--- NOT YET FILED (${unfiled}) — propose an area for these ---\n` +
 				unfiledNodes.map((n) => `- ${n.id} "${n.name}" — ${n.description || '(no description)'}`).join('\n')
 			: 'every concept is filed',
+		// The free check pairs an orphan with whatever matches its text, which is
+		// a string match and knows it. These are the ones it could not pair at
+		// all, handed over because reading two descriptions and seeing that they
+		// belong together is the one thing a model is better at than the check.
+		stranded.length
+			? `--- CONNECTS TO NOTHING (${stranded.length}) — no query can reach these; propose connections ---\n` +
+				stranded.map((n) => `- ${n.id} "${n.name}" — ${n.description || '(no description)'}`).join('\n')
+			: 'every concept is reachable',
 		// Read-only, and one-directional: the groomer may notice that a recorded
 		// observation implies a concept, and never writes back to memory.
 		`--- RECORDED OBSERVATIONS (never edit these) ---`,
@@ -715,7 +986,11 @@ export async function runCortexGroom(
 	// Free, and so unconditional: tidying and the detectors run on every pass
 	// whether or not a model is configured, and whichever job this is.
 	const tidied = tidy(userId, runId);
-	const detected = recordDetected(userId, detect(userId), max).added;
+	// Uncapped, unlike the model's half. These are graph facts rather than
+	// opinions, they cost nothing to find, and capping them meant a lattice with
+	// thirty orphans filed the same first ten every run and never got to the
+	// rest. The per-run cap is there to stop a model burying the queue.
+	const detected = recordDetected(userId, detect(userId), Math.max(max, 50)).added;
 	setSetting(LAST_RUN_KEY, Date.now(), userId);
 
 	const nodes = listNodes(userId);
@@ -745,9 +1020,16 @@ export async function runCortexGroom(
 			windowHours: Math.round((Date.now() - watermark) / 3_600_000)
 		};
 	}
-	if (mode === 'review' && getSetting<string>(LATTICE_MARK_KEY, '', userId) === latticeMark) {
-		// The lattice signature is the review side's question: nothing has been
-		// added, removed or rewritten since the last full read.
+	if (
+		mode === 'review' &&
+		// Only the scheduler is allowed to skip on this. The signature is a cost
+		// control on a pass nobody asked for; a person who pressed the button has
+		// already decided the expensive prompt is worth running, and telling them
+		// "nothing has changed since the last review" is how the button came to
+		// look broken — reject everything in the queue and it says that forever.
+		trigger === 'schedule' &&
+		getSetting<string>(LATTICE_MARK_KEY, '', userId) === latticeMark
+	) {
 		return { ran: false, mode, reason: 'nothing has changed since the last review', tidied, detected };
 	}
 
@@ -804,7 +1086,7 @@ export async function runCortexGroom(
 		// however well the model complied. See json.ts.
 		const parsed = extractJson(text);
 		const proposals = Array.isArray(parsed?.proposals) ? parsed.proposals : [];
-		const { added, duplicates } = recordProposals(userId, proposals, max);
+		const { added, duplicates, dropped } = recordProposals(userId, proposals, max);
 		// Sizes, not content — the rule that no concept text reaches an event
 		// detail still holds. Enough to tell a model that said nothing from one
 		// that said plenty and had none of it parsed, which is the ambiguity
@@ -841,11 +1123,12 @@ export async function runCortexGroom(
 				detected,
 				proposed: added,
 				duplicates,
+				dropped,
 				concepts: nodes.length,
 				...shape
 			}
 		});
-		return { ran: true, mode, tidied, detected, proposed: added, duplicates, ...shape };
+		return { ran: true, mode, tidied, detected, proposed: added, duplicates, dropped, ...shape };
 	} catch (err) {
 		emitEvent({
 			task: 'cortex-groom',

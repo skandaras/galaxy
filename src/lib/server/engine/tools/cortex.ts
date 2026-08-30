@@ -2,6 +2,7 @@ import type { LoopTool } from '../loop';
 import {
 	activate,
 	cortexWritesAllowed,
+	effectiveWeight,
 	findNodeByName,
 	getNode,
 	listAssociations,
@@ -10,6 +11,7 @@ import {
 	type CortexNode
 } from '$lib/server/cortex';
 import { toolResultMaxChars } from '../limits';
+import { rememberActivation } from '../cortex-learn';
 
 /**
  * Lattice access for agents.
@@ -29,7 +31,16 @@ import { toolResultMaxChars } from '../limits';
  * and read were one operation reached four ways, and `depth`/`from_node` cover
  * the difference.
  */
-export function cortexTools(userId: string, writes = cortexWritesAllowed()): LoopTool[] {
+export function cortexTools(
+	userId: string,
+	writes = cortexWritesAllowed(),
+	/**
+	 * Which conversation this toolset belongs to, so a query can be checked
+	 * against the reply it fed. Absent for the catalogue in Admin -> Tools, which
+	 * builds a toolset only to read its definitions.
+	 */
+	chatId: string | null = null
+): LoopTool[] {
 	const tools: LoopTool[] = [
 		{
 			parallelSafe: true,
@@ -81,6 +92,12 @@ export function cortexTools(userId: string, writes = cortexWritesAllowed()): Loo
 					activated: result.nodes.length,
 					maxHops: result.nodes.reduce((m, n) => Math.max(m, n.hops), 0)
 				});
+
+				// Held until the turn ends, when whichever of these concepts the
+				// reply actually used strengthens the connections that delivered it.
+				// Nothing is written here: a query is not evidence that its answer
+				// was worth anything, which is the whole point of waiting.
+				rememberActivation(chatId, userId, result);
 
 				if (!result.nodes.length) {
 					return fromNodeId
@@ -206,13 +223,16 @@ export function cortexTools(userId: string, writes = cortexWritesAllowed()): Loo
 
 function renderNode(node: CortexNode, activation: number, hops: number, userId: string): string {
 	const edges = listAssociations(node.id, userId)
-		.sort((a, b) => b.weight - a.weight)
+		// Effective strength, which is what the traversal actually spent getting
+		// here — showing the authored number instead would explain the ordering
+		// wrongly whenever learning has moved one.
+		.sort((a, b) => effectiveWeight(b) - effectiveWeight(a))
 		.slice(0, 5)
 		.map((e) => {
 			const otherId = e.sourceId === node.id ? e.targetId : e.sourceId;
 			const other = getNode(otherId, userId);
 			if (!other) return null;
-			return `  → ${other.name} (${e.weight.toFixed(2)})${e.description ? `: ${e.description}` : ''}`;
+			return `  → ${other.name} (${effectiveWeight(e).toFixed(2)})${e.description ? `: ${e.description}` : ''}`;
 		})
 		.filter(Boolean);
 

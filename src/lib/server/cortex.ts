@@ -19,9 +19,11 @@ export type CortexCircuit = typeof cortexCircuits.$inferSelect;
 
 const cortexDir = () => join(dataDir, 'cortex');
 
-function settings(): CortexSettings {
+/** Platform settings for the lattice, defaults filled in. */
+export function cortexSettings(): CortexSettings {
 	return { ...DEFAULT_CORTEX, ...getSetting<Partial<CortexSettings>>('cortex', {}) };
 }
+const settings = cortexSettings;
 
 export function cortexWritesAllowed(): boolean {
 	return settings().agentWrites;
@@ -238,6 +240,11 @@ export function saveAssociation(opts: {
 	contextTags?: string[];
 	description?: string;
 	directionality?: 'symmetric' | 'asymmetric';
+	/**
+	 * The learned half. Only an import carrying one ever sets it; every other
+	 * caller leaves it alone and it survives the write — see the row below.
+	 */
+	reinforcement?: number;
 	userId: string;
 	actor?: 'user' | 'agent' | 'groom';
 	runId?: string;
@@ -297,6 +304,11 @@ export function saveAssociation(opts: {
 		description: opts.description ?? existing?.description ?? '',
 		directionality: direction,
 		createdAt: existing?.createdAt ?? now,
+		// Carried, not defaulted. The update below writes this whole row, so
+		// anything left out here is silently reset — and re-describing an edge
+		// would throw away months of learning along with the traversal history
+		// that decides when an eroded edge is old enough to raise.
+		reinforcement: opts.reinforcement ?? existing?.reinforcement ?? 0,
 		lastTraversedAt: existing?.lastTraversedAt ?? null,
 		traversalCount: existing?.traversalCount ?? 0
 	};
@@ -327,6 +339,214 @@ export function saveAssociation(opts: {
 }
 
 const clamp = (n: number) => Math.max(0, Math.min(1, n));
+
+// --- learning ---------------------------------------------------------------
+
+/**
+ * The most use can add to an edge's authored strength.
+ *
+ * Capped, and that is the whole of the answer to the failure the original
+ * "+0.01 per co-activation, no decay and no cap" would have had: unbounded
+ * strengthening drifts a lattice monotonically toward a fully connected mesh,
+ * where activation spreads everywhere, which is the same as spreading nowhere.
+ *
+ * There is deliberately no matching floor on this column. Weakening is bounded
+ * by `MIN_EFFECTIVE_WEIGHT` on the *sum* instead, so a connection authored at
+ * 0.9 and one authored at 0.2 both erode to the same place rather than to two
+ * different places a fixed delta happens to reach.
+ */
+export const REINFORCE_CEILING = 0.25;
+/** What one reply that actually used a concept is worth. */
+export const REINFORCE_STEP = 0.04;
+/**
+ * How weak an edge is allowed to get, and where erosion stops.
+ *
+ * Not zero, and not removal. At this strength an edge delivers
+ * `source × 0.05 × DECAY`, which is under the activation threshold from any
+ * source — so it has stopped crowding results entirely — while remaining a
+ * connection somebody can see on the map, read in the panel and restore by
+ * hand. Decay is allowed to move a number; destroying a relationship somebody
+ * recorded stays a proposal they accept.
+ */
+export const MIN_EFFECTIVE_WEIGHT = 0.05;
+
+/**
+ * The fraction of an edge's strength that survives a day of not being used.
+ *
+ * Multiplicative on the *effective* strength rather than a flat subtraction
+ * from the learned half, and both halves of that matter:
+ *
+ * - **Multiplicative**, so erosion is a proportion of what is there. A flat
+ *   drift on the learned half alone can only ever undo learning, settling every
+ *   unused edge back at exactly the number somebody first guessed — which is
+ *   amnesia about the learning, not erosion of the connection.
+ * - **Exponential**, so it composes exactly. Ten days of decay in one pass and
+ *   ten one-day passes reach the same number to the bit, which is what lets
+ *   this run off elapsed time and be correct after an outage. The first version
+ *   mixed a retained fraction with a flat drift and the two answers differed by
+ *   a seventh.
+ *
+ * At 0.98 the arithmetic is: a half-life of about five weeks; roughly four
+ * months from a typical 0.8 down to the floor; and, against a step of 0.04, one
+ * use every four days or so holds a mid-strength edge steady. Untuned, like the
+ * traversal constants above — first plausible values, put where the arithmetic
+ * can be checked rather than fitted to a lattice nobody has yet.
+ */
+const DECAY_RETAIN_PER_DAY = 0.98;
+
+/**
+ * What a traversal actually uses: what somebody authored, plus what use has
+ * taught since.
+ *
+ * Every reader goes through this one function — the walk, the map, the tool's
+ * rendering, the comparison pane — because two readers disagreeing about how
+ * strong an edge is would be a bug nothing would ever catch.
+ */
+export function effectiveWeight(edge: Pick<CortexAssociation, 'weight' | 'reinforcement'>): number {
+	const sum = Math.max(MIN_EFFECTIVE_WEIGHT, Math.min(1, edge.weight + (edge.reinforcement ?? 0)));
+	// Rounded, because the two halves are floats and their sum is not exactly the
+	// number either of them meant. An edge decayed to the floor came back as
+	// 0.050000000000000044, which is above the floor by every comparison that
+	// matters and made "has this eroded as far as it goes" permanently false.
+	// Four places is far past anything a traversal, a chart or a person can tell
+	// apart, and `cortex-layout.ts` rounds its coordinates for the same reason.
+	return Math.round(sum * 10_000) / 10_000;
+}
+
+function learningEnabled(): boolean {
+	return settings().learning;
+}
+
+/**
+ * Note that activation crossed these edges. Counts and a timestamp; no weight
+ * moves here, ever.
+ *
+ * Reinforcing on traversal would reward the walk for its own output and teach
+ * the lattice to confirm the shape it already has — the failure docs/CORTEX.md
+ * names. So traversal is recorded as what it is, telemetry, and answers a
+ * different question from `reinforce` below: not "was this useful" but "is
+ * anything even reaching this any more", which is what decides when an eroded
+ * edge is stale enough to raise.
+ */
+export function noteTraversal(edges: { sourceId: string; targetId: string }[]): void {
+	if (!edges.length) return;
+	const now = new Date();
+	for (const e of edges) {
+		db.update(cortexAssociations)
+			.set({
+				lastTraversedAt: now,
+				traversalCount: sql`${cortexAssociations.traversalCount} + 1`
+			})
+			.where(
+				and(
+					eq(cortexAssociations.sourceId, e.sourceId),
+					eq(cortexAssociations.targetId, e.targetId)
+				)
+			)
+			.run();
+	}
+}
+
+/**
+ * Strengthen the edges a reply actually leaned on.
+ *
+ * Owner-scoped through `visibleEdges`, so this cannot move a weight in a
+ * lattice the learner cannot see — the same bound the walk itself holds to, and
+ * worth holding twice for a path that writes.
+ */
+/** A set key for one stored edge. Ids cannot contain a null byte; names can. */
+const edgeKey = (e: { sourceId: string; targetId: string }) => `${e.sourceId}\u0000${e.targetId}`;
+
+export function reinforce(
+	edges: { sourceId: string; targetId: string }[],
+	userId: string,
+	step = REINFORCE_STEP
+): number {
+	if (!edges.length || !learningEnabled()) return 0;
+	const mine = new Set(visibleEdges(userId).map(edgeKey));
+	let moved = 0;
+	for (const e of edges) {
+		if (!mine.has(edgeKey(e))) continue;
+		db.update(cortexAssociations)
+			.set({
+				// Ceiling only. There is no matching lower clamp because the floor
+				// that matters is on the *effective* strength, which is where erosion
+				// stops — see MIN_EFFECTIVE_WEIGHT.
+				reinforcement: sql`MIN(${REINFORCE_CEILING}, ${cortexAssociations.reinforcement} + ${step})`
+			})
+			.where(
+				and(
+					eq(cortexAssociations.sourceId, e.sourceId),
+					eq(cortexAssociations.targetId, e.targetId)
+				)
+			)
+			.run();
+		moved++;
+	}
+	return moved;
+}
+
+const DECAY_MARK_KEY = 'cortex.learn.lastDecay';
+
+/**
+ * Let unused connections erode, by however long it has actually been.
+ *
+ * Elapsed time rather than a per-tick nudge, because a server that was off for
+ * a week should decay once by a week rather than skipping it or, worse, catching
+ * up in a burst the first time the scheduler runs again. `now` is a parameter so
+ * a test can age a lattice without waiting for one.
+ */
+export function decayReinforcement(now = Date.now()): { days: number; edges: number } {
+	if (!learningEnabled()) return { days: 0, edges: 0 };
+	const last = getSetting<number>(DECAY_MARK_KEY, 0) || now;
+	const days = (now - last) / 86_400_000;
+	// Under an hour of elapsed time is not worth a table write; this sits on a
+	// five-minute tick and would otherwise rewrite every edge each time.
+	if (days < 1 / 24) {
+		if (!getSetting<number>(DECAY_MARK_KEY, 0)) setSetting(DECAY_MARK_KEY, now);
+		return { days: 0, edges: 0 };
+	}
+	const retain = DECAY_RETAIN_PER_DAY ** days;
+	// Written back as the learned half so the authored weight stays untouched:
+	// what the column holds is still "the difference use has made", it is simply
+	// allowed to go well below zero once nothing is using the connection.
+	//
+	// The MIN(0, …) in the lower bound is for an edge somebody deliberately set
+	// weaker than the floor. Without it the bound is positive and decay would
+	// *strengthen* it, which is a strange way to erode something.
+	const res = db
+		.update(cortexAssociations)
+		.set({
+			reinforcement: sql`MAX(
+				MIN(0, ${MIN_EFFECTIVE_WEIGHT} - ${cortexAssociations.weight}),
+				(${cortexAssociations.weight} + ${cortexAssociations.reinforcement}) * ${retain}
+					- ${cortexAssociations.weight}
+			)`
+		})
+		.where(
+			sql`${cortexAssociations.weight} + ${cortexAssociations.reinforcement} > ${MIN_EFFECTIVE_WEIGHT}`
+		)
+		.run();
+	setSetting(DECAY_MARK_KEY, now);
+	return { days, edges: res.changes };
+}
+
+/**
+ * Connections that have eroded as far as they go and that nothing has reached
+ * in a long time. The groomer turns these into disconnect suggestions.
+ *
+ * Both halves are required. An edge at the floor that activation still crosses
+ * every week is doing its job quietly; one nothing has touched in two months is
+ * the dead weight this was built to find.
+ */
+export function erodedEdges(userId: string, staleDays: number, now = Date.now()) {
+	const cutoff = now - staleDays * 86_400_000;
+	return visibleEdges(userId).filter(
+		(e) =>
+			effectiveWeight(e) <= MIN_EFFECTIVE_WEIGHT &&
+			(e.lastTraversedAt?.getTime() ?? e.createdAt?.getTime() ?? 0) < cutoff
+	);
+}
 
 /**
  * Every association where *both* endpoints are visible to this user.
@@ -445,9 +665,30 @@ export interface ActivatedNode {
 	hops: number;
 }
 
+/** One stored edge, named the way it is stored so a writer can find the row. */
+export interface EdgeRef {
+	sourceId: string;
+	targetId: string;
+}
+
 export interface ActivationResult {
 	seeds: string[];
 	nodes: ActivatedNode[];
+	/**
+	 * Every edge activation crossed, deduplicated. Telemetry, and the input to
+	 * `noteTraversal`.
+	 */
+	traversed: EdgeRef[];
+	/**
+	 * How each node was reached: node id → the chain of edges from a seed to it.
+	 * A seed's chain is empty.
+	 *
+	 * This is what makes learning-on-use possible at all. Knowing *that* a
+	 * concept came back says nothing about which connections earned it; knowing
+	 * the path means a reply that used the concept can strengthen exactly the
+	 * edges that delivered it, and nothing else.
+	 */
+	pathTo: Map<string, EdgeRef[]>;
 }
 
 /**
@@ -524,7 +765,7 @@ export function activate(opts: {
 				// Starting from a named node is a statement, not a guess.
 				.map((node) => ({ node, strength: 1 }))
 		: seedNodesScored(opts.query ?? '', opts.userId);
-	if (!seeded.length) return { seeds: [], nodes: [] };
+	if (!seeded.length) return { seeds: [], nodes: [], traversed: [], pathTo: new Map() };
 	const seeds = seeded.map((s) => s.node);
 
 	const byId = new Map(listNodes(opts.userId).map((n) => [n.id, n]));
@@ -534,19 +775,33 @@ export function activate(opts: {
 	// the way it points: one concept can strongly imply another while the reverse
 	// is weak, and flattening that would make every specific node as loud as the
 	// general one it feeds.
-	const out = new Map<string, { to: string; weight: number; tags: string[] | null }[]>();
-	const push = (from: string, to: string, weight: number, tags: string[] | null) => {
-		out.set(from, [...(out.get(from) ?? []), { to, weight, tags }]);
+	type Hop = { to: string; weight: number; tags: string[] | null; edge: EdgeRef };
+	const out = new Map<string, Hop[]>();
+	const push = (from: string, to: string, e: CortexAssociation) => {
+		out.set(from, [
+			...(out.get(from) ?? []),
+			{
+				to,
+				// What a traversal spends is the authored weight plus what use has
+				// taught, never one without the other — see effectiveWeight.
+				weight: effectiveWeight(e),
+				tags: e.contextTags,
+				// The row as stored, not as walked: a symmetric edge is traversed in
+				// both directions and stored once, so a learner handed the walked
+				// orientation would look for a row that is not there.
+				edge: { sourceId: e.sourceId, targetId: e.targetId }
+			}
+		]);
 	};
 	for (const e of edges) {
-		push(e.sourceId, e.targetId, e.weight, e.contextTags);
-		if (e.directionality === 'symmetric') push(e.targetId, e.sourceId, e.weight, e.contextTags);
+		push(e.sourceId, e.targetId, e);
+		if (e.directionality === 'symmetric') push(e.targetId, e.sourceId, e);
 	}
 	// Belt to the braces of the write-side fix above: any row pair that predates
 	// it would otherwise still deliver twice. Strongest weight wins, so
 	// collapsing a duplicate never weakens a real connection.
 	for (const [from, list] of out) {
-		const best = new Map<string, { to: string; weight: number; tags: string[] | null }>();
+		const best = new Map<string, Hop>();
 		for (const edge of list) {
 			const seen = best.get(edge.to);
 			if (!seen || edge.weight > seen.weight) best.set(edge.to, edge);
@@ -565,12 +820,18 @@ export function activate(opts: {
 
 	const activation = new Map<string, number>();
 	const hops = new Map<string, number>();
+	// How each node was reached, so a reply that used it can strengthen exactly
+	// the connections that delivered it. Rewritten whenever a stronger route
+	// arrives, which is the rule the activation itself already follows.
+	const pathTo = new Map<string, EdgeRef[]>();
+	const crossed = new Map<string, EdgeRef>();
 	for (const s of seeded) {
 		// Proportional to how well it matched, not a flat 1.0 each. A node that
 		// matched on one incidental word should nudge its neighbourhood, not
 		// flood it — see seedNodesScored.
 		activation.set(s.node.id, s.strength);
 		hops.set(s.node.id, 0);
+		pathTo.set(s.node.id, []);
 	}
 
 	const rounds = Math.max(1, Math.min(opts.depth ?? ITERATIONS, 4));
@@ -596,8 +857,12 @@ export function activate(opts: {
 				// Accumulate rather than overwrite: arriving from two directions is
 				// exactly what should make a node matter more, not the same amount.
 				const total = Math.min(1, prior + delivered);
+				// Recorded whether or not this route wins: activation genuinely
+				// travelled the edge, and travelling is what traversal counts.
+				crossed.set(edgeKey(edge.edge), edge.edge);
 				if (total <= prior) continue;
 				activation.set(edge.to, total);
+				pathTo.set(edge.to, [...(pathTo.get(id) ?? []), edge.edge]);
 				if (!hops.has(edge.to)) hops.set(edge.to, i + 1);
 				next.push(edge.to);
 			}
@@ -612,8 +877,10 @@ export function activate(opts: {
 		.sort((a, b) => b.activation - a.activation)
 		.slice(0, opts.limit ?? MAX_RESULTS);
 
+	const traversed = [...crossed.values()];
 	recordActivation(nodes.map((n) => n.node.id));
-	return { seeds: seeds.map((s) => s.id), nodes };
+	noteTraversal(traversed);
+	return { seeds: seeds.map((s) => s.id), nodes, traversed, pathTo };
 }
 
 /**
@@ -883,6 +1150,11 @@ export function mergeNodes(
 			sourceId: keepId,
 			targetId: otherId,
 			weight: Math.max(edge.weight, already?.weight ?? 0),
+			// The learned half moves with the edge for the same reason the authored
+			// one does: a merge must never make the lattice remember *less* about a
+			// relationship than it did before, and how often a connection has proved
+			// useful is part of what it remembers.
+			reinforcement: Math.max(edge.reinforcement, already?.reinforcement ?? 0),
 			contextTags: edge.contextTags ?? already?.contextTags ?? undefined,
 			description: already?.description || edge.description || undefined,
 			userId,
@@ -957,7 +1229,14 @@ export function mapProjection(userId: string): { nodes: MapNode[]; edges: MapEdg
 			circuits: n.circuits,
 			degree: degree.get(n.id) ?? 0
 		})),
-		edges: edges.map((e) => ({ source: e.sourceId, target: e.targetId, weight: e.weight }))
+		// The strength a traversal would actually spend, so a connection that has
+		// been earning its place draws brighter and one that has eroded fades —
+		// the learning made visible rather than asserted.
+		edges: edges.map((e) => ({
+			source: e.sourceId,
+			target: e.targetId,
+			weight: effectiveWeight(e)
+		}))
 	};
 }
 
@@ -988,7 +1267,9 @@ export function refreshLayout(): { recomputed: boolean; nodes: number; edges: nu
 
 	const points = layout(
 		nodes.map((n) => ({ id: n.id })),
-		edges.map((e) => ({ source: e.sourceId, target: e.targetId, weight: e.weight }))
+		// Effective, like everything else that reads a strength: a connection the
+		// lattice has learned to trust should pull its ends together on the map.
+		edges.map((e) => ({ source: e.sourceId, target: e.targetId, weight: effectiveWeight(e) }))
 	);
 	for (const [id, p] of points) {
 		// Deliberately not touching updatedAt. It feeds the signature above, so
@@ -1280,6 +1561,8 @@ export function importLattice(userId: string, payload: unknown): ImportResult {
 				sourceId: source,
 				targetId: target,
 				weight: typeof raw?.weight === 'number' ? raw.weight : undefined,
+				reinforcement:
+					typeof raw?.reinforcement === 'number' ? raw.reinforcement : undefined,
 				contextTags: Array.isArray(raw?.contextTags) ? raw.contextTags.map(String) : undefined,
 				description: String(raw?.description ?? '') || undefined,
 				directionality: raw?.directionality === 'asymmetric' ? 'asymmetric' : 'symmetric',
@@ -1331,7 +1614,7 @@ export function comparisonContext(
 		'[What you already know about this person that bears on the question]',
 		...result.nodes.map((a) => {
 			const links = listAssociations(a.node.id, userId)
-				.sort((x, y) => y.weight - x.weight)
+				.sort((x, y) => effectiveWeight(y) - effectiveWeight(x))
 				.slice(0, 4)
 				.map((e) => {
 					const otherId = e.sourceId === a.node.id ? e.targetId : e.sourceId;

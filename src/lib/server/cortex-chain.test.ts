@@ -135,7 +135,7 @@ describe('conversation → concept → context', () => {
 		expect(proposal, 'the harvest should have proposed a concept').toBeTruthy();
 
 		// 2. Accepting applies it — the link that was a status flag for a phase.
-		expect(decideProposal(proposal!.id, ANA, 'actioned')).toBe(true);
+		expect(decideProposal(proposal!.id, ANA, 'actioned').ok).toBe(true);
 
 		const made = listNodes(ANA).find((n) => n.name === 'Tide pools');
 		expect(made, 'accepting should have created the concept').toBeTruthy();

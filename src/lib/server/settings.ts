@@ -538,6 +538,28 @@ export interface CortexSettings {
 	 * that conversation happens.
 	 */
 	maxNodesPerUser: number;
+	/**
+	 * Whether connections strengthen when a reply actually uses them, and erode
+	 * when nothing does.
+	 *
+	 * On. The alternative is a lattice whose weights are whatever somebody
+	 * guessed on the day the concept was written, which never gets better and
+	 * never gets worse — and the whole bet of a weighted mesh is that use is a
+	 * better judge of a connection than a first estimate was.
+	 *
+	 * Off, `effectiveWeight` still adds a stored delta (so nothing already
+	 * learned is thrown away), but nothing new moves and nothing decays.
+	 */
+	learning: boolean;
+	/**
+	 * Days a connection may sit at the erosion floor, untouched by any
+	 * traversal, before the groomer suggests removing it.
+	 *
+	 * Long by design. This is the one place learning is allowed to propose
+	 * destroying something, and a connection nobody has needed for two months is
+	 * a much safer thing to raise than one nobody needed for a fortnight.
+	 */
+	staleDays: number;
 }
 
 export interface CortexGroomSettings {
@@ -559,5 +581,7 @@ export const DEFAULT_CORTEX_GROOM: CortexGroomSettings = {
 export const DEFAULT_CORTEX: CortexSettings = {
 	agentWrites: true,
 	kinship: false,
-	maxNodesPerUser: 2000
+	maxNodesPerUser: 2000,
+	learning: true,
+	staleDays: 60
 };

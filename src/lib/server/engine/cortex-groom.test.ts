@@ -35,6 +35,8 @@ import {
 	applyProposal,
 	fingerprint,
 	detect,
+	orphans,
+	recordDetected,
 	nameSimilarity,
 	tidy
 } from './cortex-groom';
@@ -128,7 +130,7 @@ describe('proposals', () => {
 		const p = suggest({ node: 'tide-pools', target: 'rockpools' });
 		recordProposals(ANA, [p], 10);
 		const open = listProposals(ANA)[0];
-		expect(decideProposal(open.id, ANA, 'discarded')).toBe(true);
+		expect(decideProposal(open.id, ANA, 'discarded').ok).toBe(true);
 
 		const second = recordProposals(ANA, [p], 10);
 		// Re-raising something turned down is how a review queue teaches people
@@ -147,7 +149,9 @@ describe('proposals', () => {
 	it('refuses a decision from someone else', () => {
 		recordProposals(ANA, [suggest({ node: 'tide-pools' })], 10);
 		const open = listProposals(ANA)[0];
-		expect(decideProposal(open.id, BEN, 'actioned')).toBe(false);
+		// Not "could not apply" but "there is no such suggestion", because from
+		// where Ben is standing there genuinely is not one.
+		expect(decideProposal(open.id, BEN, 'actioned')).toEqual({ ok: false, reason: 'missing' });
 	});
 
 	it('honours the per-run cap', () => {
@@ -287,7 +291,7 @@ describe('accepting a suggestion', () => {
 			}
 		});
 
-		expect(applyProposal(id, ANA)).toBe(true);
+		expect(applyProposal(id, ANA).ok).toBe(true);
 		const made = listNodes(ANA).find((n) => n.name === 'Tide pools')!;
 		expect(made).toBeTruthy();
 		expect(made.description).toContain('Rockpool');
@@ -302,7 +306,7 @@ describe('accepting a suggestion', () => {
 		const dupe = saveNode({ name: 'Rockpools', ownerId: ANA });
 		const id = file({ kind: 'merge', title: 'Merge', node: keep.id, target: dupe.id });
 
-		expect(applyProposal(id, ANA)).toBe(true);
+		expect(applyProposal(id, ANA).ok).toBe(true);
 		expect(listNodes(ANA).map((n) => n.name)).toEqual(['Tide pools']);
 	});
 
@@ -328,8 +332,12 @@ describe('accepting a suggestion', () => {
 		deleteNode(b.id, ANA);
 
 		// A half-applied change nobody was told about is worse than one that
-		// plainly did not happen.
-		expect(applyProposal(id, ANA)).toBe(false);
+		// plainly did not happen — and it has to say *why*, or the person who
+		// pressed Accept is told the suggestion never existed.
+		const failed = applyProposal(id, ANA);
+		expect(failed.ok).toBe(false);
+		expect(failed.reason).toBeTruthy();
+		expect(failed.reason).not.toBe('missing');
 		expect(listProposals(ANA)).toHaveLength(1);
 	});
 
@@ -338,14 +346,14 @@ describe('accepting a suggestion', () => {
 		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
 		const id = file({ kind: 'connect', title: 'Connect', node: a.id, target: b.id });
 
-		expect(decideProposal(id, ANA, 'discarded')).toBe(true);
+		expect(decideProposal(id, ANA, 'discarded').ok).toBe(true);
 		expect(listAssociations(a.id, ANA)).toHaveLength(0);
 	});
 
 	it('will not apply someone else’s suggestion', () => {
 		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
 		const id = file({ kind: 'delete', title: 'Delete', node: a.id });
-		expect(applyProposal(id, BEN)).toBe(false);
+		expect(applyProposal(id, BEN).ok).toBe(false);
 		expect(listNodes(ANA)).toHaveLength(1);
 	});
 });
@@ -367,14 +375,35 @@ describe('fingerprints', () => {
 });
 
 describe('the free half', () => {
-	it('flags a concept nothing connects to', () => {
+	it('pairs an orphan with the nearest concept, so accepting it does something', () => {
+		saveNode({ name: 'Tide pools', description: 'Rockpool surveying', ownerId: ANA });
+		saveNode({ name: 'Rockpool photography', description: 'Photographing tide pools', ownerId: ANA });
+		const found = detect(ANA).filter((d) => d.kind === 'connect');
+		expect(found.length).toBeGreaterThan(0);
+		// The whole point of the pairing. A `connect` with one end is a row
+		// `applyProposal` cannot carry out, which is what every orphan finding
+		// used to be — Accept failed, and the API said "no such suggestion".
+		for (const d of found) expect(d.target).toBeTruthy();
+	});
+
+	it('an orphan finding can actually be accepted, and makes the connection', () => {
+		const a = saveNode({ name: 'Tide pools', description: 'Rockpool surveying', ownerId: ANA });
+		saveNode({ name: 'Rockpool photography', description: 'Photographing tide pools', ownerId: ANA });
+		recordDetected(ANA, detect(ANA), 20);
+		const orphanFix = listProposals(ANA).find((p) => p.kind === 'connect')!;
+		expect(orphanFix).toBeTruthy();
+		expect(applyProposal(orphanFix.id, ANA).ok).toBe(true);
+		expect(listAssociations(a.id, ANA).length).toBeGreaterThan(0);
+	});
+
+	it('files nothing for an orphan it cannot pair, and hands it to the prompt', () => {
 		saveNode({ name: 'Bicycle repair', ownerId: ANA });
-		const found = detect(ANA);
-		// Traversal reaches a concept only through a connection, so an orphan
-		// cannot surface however good it is.
-		expect(found.some((d) => d.kind === 'connect' && d.title.includes('connects to nothing'))).toBe(
-			true
-		);
+		// Nothing to pair it with, and inventing a neighbour would be worse than
+		// admitting there isn't one. It goes to the model instead, which can read
+		// two descriptions and see what a string match cannot.
+		expect(detect(ANA).some((d) => d.kind === 'connect')).toBe(false);
+		expect(orphans(ANA).map((n) => n.name)).toEqual(['Bicycle repair']);
+		expect(buildGroomPrompt(ANA, 5)).toContain('CONNECTS TO NOTHING');
 	});
 
 	it('flags two names that look like one concept', () => {
@@ -405,8 +434,10 @@ describe('the free half', () => {
 	});
 
 	it('runs with no model configured, and files what it found', async () => {
-		saveNode({ name: 'Bicycle repair', ownerId: ANA });
-		saveNode({ name: 'Storm logs', ownerId: ANA });
+		// A near-duplicate pair: something the free half can find on its own, and
+		// a finding that does not depend on a model being configured.
+		saveNode({ name: 'Tide pools', ownerId: ANA });
+		saveNode({ name: 'The tide pools', ownerId: ANA });
 		saveNode({ name: 'Seabird counts', ownerId: ANA });
 		const res = await runCortexGroom('manual', ANA);
 		// The half that needs a model stands down; the half that does not still
@@ -417,8 +448,8 @@ describe('the free half', () => {
 	});
 
 	it('does not raise the same finding twice', async () => {
-		saveNode({ name: 'Bicycle repair', ownerId: ANA });
-		saveNode({ name: 'Storm logs', ownerId: ANA });
+		saveNode({ name: 'Tide pools', ownerId: ANA });
+		saveNode({ name: 'The tide pools', ownerId: ANA });
 		saveNode({ name: 'Seabird counts', ownerId: ANA });
 		await runCortexGroom('manual', ANA);
 		const first = listProposals(ANA).length;
@@ -489,18 +520,28 @@ describe('the two modes', () => {
 		expect(res.activityChars).toBe(0);
 	});
 
-	it('skips a review when the lattice has not moved', async () => {
+	it('skips a scheduled review when the lattice has not moved', async () => {
 		// The signature is the review side's question, and only its question.
 		markAsSeen();
-		const res = await runCortexGroom('manual', ANA);
+		const res = await runCortexGroom('schedule', ANA, 'review');
 		expect(res.ran).toBe(false);
 		expect(res.reason).toBe('nothing has changed since the last review');
+	});
+
+	it('runs a review somebody asked for, whatever the signature says', async () => {
+		// The signature is a cost control on a pass nobody asked for. Applied to
+		// the button it meant that rejecting everything in the queue left the
+		// button saying "nothing has changed" forever, which is most of how the
+		// groomer came to look broken.
+		markAsSeen();
+		const res = await runCortexGroom('manual', ANA);
+		expect(res.reason).not.toBe('nothing has changed since the last review');
 	});
 
 	it('picks a review back up when the lattice changes', async () => {
 		markAsSeen();
 		saveNode({ name: 'Kelp forests', ownerId: ANA });
-		const next = await runCortexGroom('manual', ANA);
+		const next = await runCortexGroom('schedule', ANA, 'review');
 		expect(next.reason).not.toBe('nothing has changed since the last review');
 	});
 });
@@ -518,7 +559,7 @@ describe('filing', () => {
 			title: 'Add "Tide pools"',
 			payload: { name: 'Tide pools', areas: [area.id] }
 		});
-		expect(applyProposal(id, ANA)).toBe(true);
+		expect(applyProposal(id, ANA).ok).toBe(true);
 		// Asserted through the digest, because being in the index is the thing
 		// filing is *for*.
 		expect(cortexDigest(ANA)).toContain('Coastal fieldwork (1)');
@@ -555,7 +596,7 @@ describe('filing', () => {
 			node: node.id,
 			payload: { areas: [area.id] }
 		});
-		expect(applyProposal(id, ANA)).toBe(true);
+		expect(applyProposal(id, ANA).ok).toBe(true);
 		expect(cortexDigest(ANA)).toContain('Coastal fieldwork (1)');
 	});
 

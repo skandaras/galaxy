@@ -14,7 +14,7 @@ import {
 	type RetentionSettings,
 	type UxAuditSettings
 } from '$lib/server/settings';
-import { refreshLayout } from '$lib/server/cortex';
+import { decayReinforcement, refreshLayout } from '$lib/server/cortex';
 import { groomSettings, groomStatus, runCortexGroom } from './cortex-groom';
 import { getSynthesisStatus, runAlignmentSynthesis } from './alignment';
 import { emitEvent } from './events';
@@ -44,12 +44,30 @@ export function startScheduler(): void {
 	timer.unref?.();
 }
 
-async function tick(): Promise<void> {
+/**
+ * One pass over every scheduled job.
+ *
+ * **Every sweep defined in this file belongs in this list.** Three of them were
+ * not: the layout refresh, the Cortex groomer and the alignment letter were each
+ * written, tested on their own and never called from here, so on every install
+ * ever run they were dead code that looked shipped. Nothing caught it —
+ * `noUnusedLocals` is off, so a sweep nobody calls type-checks perfectly — which
+ * is why `scheduler.test.ts` now asserts this function reaches each one.
+ *
+ * Ordered cheapest first: the two synchronous Cortex sweeps answer "has anything
+ * changed" without doing any work on most ticks, and the per-user model jobs run
+ * sequentially after them so they cannot race the budget cap.
+ */
+export async function tick(): Promise<void> {
 	// A slow sweep must not overlap the next tick.
 	if (sweeping) return;
 	sweeping = true;
 	try {
+		sweepCortexLayout();
+		sweepCortexLearning();
 		await sweepMemory();
+		await sweepCortexGroom();
+		await sweepAlignmentSynthesis();
 		await sweepUxAudit();
 		prune();
 	} finally {
@@ -121,6 +139,37 @@ function sweepCortexLayout(): void {
 		emitEvent({
 			type: 'job',
 			name: 'cortex.layout',
+			status: 'error',
+			detail: { error: err instanceof Error ? err.message : String(err) }
+		});
+	}
+}
+
+/**
+ * Let unused connections erode.
+ *
+ * Global rather than per user: it is one arithmetic pass over the whole edge
+ * table, and it decays by elapsed time rather than by tick, so running it on
+ * every five-minute tick and running it once a day come to the same answer. That
+ * is what makes it safe to sit here beside the layout check — a server that was
+ * off for a week decays once by a week rather than catching up in a burst.
+ */
+function sweepCortexLearning(): void {
+	try {
+		const res = decayReinforcement();
+		if (!res.edges) return;
+		emitEvent({
+			type: 'job',
+			name: 'cortex.decay',
+			status: 'ok',
+			// Counts only, like every other Cortex event.
+			detail: { edges: res.edges, days: Math.round(res.days * 100) / 100 }
+		});
+	} catch (err) {
+		// Decay failing must not take the rest of the sweep with it.
+		emitEvent({
+			type: 'job',
+			name: 'cortex.decay',
 			status: 'error',
 			detail: { error: err instanceof Error ? err.message : String(err) }
 		});

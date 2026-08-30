@@ -28,6 +28,7 @@ import { askUserTool } from './ask-user';
 import { attachmentTools } from './tools/attachments';
 import { boardTools } from './tools/boards';
 import { cortexTools } from './tools/cortex';
+import { forgetActivation, learnFromReply } from './cortex-learn';
 import { documentTools } from './tools/documents';
 import { fetchUrlTool } from './tools/fetch-url';
 import { imageTools } from './tools/images';
@@ -106,8 +107,9 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		// Scoped to this user's boards and anything shared with them.
 		...boardTools(opts.userId),
 		// Likewise scoped: their own concepts plus anything shared. Activation
-		// never crosses into a lattice they cannot see.
-		...cortexTools(opts.userId),
+		// never crosses into a lattice they cannot see. The chat id is what lets
+		// a query be judged against the reply it fed — see cortex-learn.
+		...cortexTools(opts.userId, undefined, chat.id),
 		// Drawing and typesetting. Scoped to this chat: what they make is saved
 		// as an attachment on it, which is how the result reaches the thread.
 		...imageTools(chat.id, opts.userId),
@@ -173,6 +175,20 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 				// still says so when it is scrolled back to.
 				trace: summary.trace.length ? { steps: summary.trace } : null
 			});
+			// Which of the concepts the lattice offered this turn the reply went on
+			// to use, so the connections that delivered them strengthen and the
+			// rest quietly do not. After the reply for the same reason compaction
+			// is, and never on a hidden chat: those are deliberately never written
+			// down, and baking one into edge weights is writing it down.
+			if (persist) {
+				try {
+					learnFromReply(chat.id, text);
+				} catch {
+					// Learning is a nicety. A turn must never fail because of it.
+				}
+			} else {
+				forgetActivation(chat.id);
+			}
 			// Compaction and titling both run after the reply so neither delays
 			// streaming, and neither can fail the turn.
 			void (async () => {
