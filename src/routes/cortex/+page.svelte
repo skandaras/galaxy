@@ -42,6 +42,7 @@
 		detected?: number;
 		proposed?: number;
 		duplicates?: number;
+		dropped?: { unknownConcept: number; badKind: number; noTitle: number };
 		replyChars?: number;
 		parsedItems?: number;
 		activityChars?: number;
@@ -54,7 +55,13 @@
 		kind: string;
 		title: string;
 		rationale: string;
+		nodeName: string | null;
+		targetName: string | null;
+		/** What accepting it would do, in plain lines. Resolved server-side. */
+		preview: string[];
 		createdAt: number;
+		/** Set when Accept was pressed and could not carry it out. */
+		failure?: string;
 	}
 	interface Change {
 		id: string;
@@ -68,7 +75,11 @@
 	interface Link {
 		otherId: string;
 		otherName: string;
+		/** What somebody set. Learning never touches it. */
 		weight: number;
+		/** What use has added, or disuse taken away. */
+		reinforcement: number;
+		traversalCount: number;
 		description: string;
 		outbound: boolean;
 	}
@@ -168,8 +179,22 @@
 	}
 
 	async function decide(id: string, status: 'actioned' | 'discarded') {
-		await send(`/api/cortex/proposals/${id}`, 'POST', { status });
+		const before = error;
+		error = '';
+		const done = await send(`/api/cortex/proposals/${id}`, 'POST', { status });
+		if (!done) {
+			// On the row rather than at the top of the panel. A failure floating
+			// above a list of twenty suggestions does not say which one it is about,
+			// and this list is the one place a person can act on the answer.
+			const failure = error || 'Could not apply that suggestion.';
+			error = before;
+			proposals = proposals.map((p) => (p.id === id ? { ...p, failure } : p));
+			return;
+		}
 		await loadProposals();
+		// Accepting changes the lattice, so the map and the concept list beside it
+		// are stale the moment it succeeds.
+		if (status === 'actioned') await load();
 	}
 
 	async function groom(mode: 'harvest' | 'review') {
@@ -607,6 +632,15 @@
 									</span>
 								{/if}
 							{/if}
+							{#if lastRun.dropped?.unknownConcept}
+								<!-- The difference between "it suggested nothing" and "it
+								     suggested six things naming concepts that do not exist",
+								     which used to read identically from out here. -->
+								<span class="hint">
+									{lastRun.dropped.unknownConcept} named a concept that is not in your lattice
+									and could not be filed.
+								</span>
+							{/if}
 							{#if proposals.length}
 								<span class="hint">
 									{proposals.length} waiting below.
@@ -625,12 +659,19 @@
 						anything unfiled.
 					</p>
 				{/if}
-				<ul class="nodes">
+				<ul class="nodes queue">
 					{#each proposals as p (p.id)}
 						<li class="proposal">
 							<span class="badge">{p.kind}</span>
 							<strong>{p.title}</strong>
+							<!-- What Accept would actually do. Without this the only way to
+							     find out was to press it and read the history afterwards,
+							     which is not a review. -->
+							{#each p.preview as line (line)}
+								<span class="does">{line}</span>
+							{/each}
 							{#if p.rationale}<span class="hint">{p.rationale}</span>{/if}
+							{#if p.failure}<span class="error" role="alert">{p.failure}</span>{/if}
 							<div class="row">
 								<button class="btn" onclick={() => decide(p.id, 'actioned')}>Accept</button>
 								<button class="btn" onclick={() => decide(p.id, 'discarded')}>Dismiss</button>
@@ -698,7 +739,22 @@
 								<button class="link-name" onclick={() => select(link.otherId)}>
 									{link.otherName}
 								</button>
-								<span class="deg">{link.weight.toFixed(2)}</span>
+								<!-- The strength a query actually spends, and then the learned
+								     half of it. Shown because a number that moves on its own is
+								     only trustworthy if you can see what moved it and by how
+								     much; otherwise it is a weight that drifts for no stated
+								     reason. -->
+								<span
+									class="deg"
+									title={`set ${link.weight.toFixed(2)}, learned ${link.reinforcement >= 0 ? '+' : ''}${link.reinforcement.toFixed(2)}, traversed ${link.traversalCount}×`}
+								>
+									{Math.max(0.05, Math.min(1, link.weight + link.reinforcement)).toFixed(2)}
+									{#if Math.abs(link.reinforcement) >= 0.01}
+										<span class={link.reinforcement > 0 ? 'up' : 'down'}>
+											{link.reinforcement > 0 ? '+' : ''}{link.reinforcement.toFixed(2)}
+										</span>
+									{/if}
+								</span>
 								<button
 									class="unlink"
 									aria-label={`Disconnect ${selected.name} from ${link.otherName}`}
@@ -710,6 +766,13 @@
 				{:else}
 					<p class="empty">
 						Nothing connects to this yet, so no query will ever reach it.
+					</p>
+				{/if}
+				{#if links.length}
+					<p class="hint">
+						The number is what a query spends crossing that connection: the strength somebody
+						set, plus what use has taught since. It rises when a reply actually draws on the
+						concept at the other end and fades when nothing does. Hover one for the breakdown.
 					</p>
 				{/if}
 				<div class="row">
@@ -804,6 +867,12 @@
 	.deg {
 		font-size: var(--text-sm);
 		color: var(--fg-dim);
+	}
+	.up {
+		color: var(--accent);
+	}
+	.down {
+		opacity: 0.7;
 	}
 	.empty {
 		font-size: var(--text-sm);
@@ -982,6 +1051,16 @@
 	.hint {
 		font-size: var(--text-sm);
 		color: var(--fg-dim);
+	}
+	/* What accepting would do, as against why it was suggested. Set in the
+	   body colour because it is the substance of the row, not a footnote. */
+	.does {
+		font-size: var(--text-sm);
+		color: var(--fg);
+		line-height: 1.45;
+	}
+	.queue {
+		max-height: none;
 	}
 	.sr-only {
 		position: absolute;

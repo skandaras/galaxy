@@ -176,6 +176,13 @@
       "when": 1787906521954,
       "tag": "0024_large_squirrel_girl",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1788126709715,
+      "tag": "0025_far_whizzer",
+      "breakpoints": true
     }
   ]
 }

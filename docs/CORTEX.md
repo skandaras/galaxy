@@ -1,9 +1,10 @@
 # Cortex — the knowledge lattice
 
-> Status: **Phases 1 and 2 shipped.** Store, FTS seeding, spreading activation,
-> two agent tools, the retrieval eval, a human write path, the layout sweep and
-> the map at `/cortex`. Phases 3–4 are still design. Agent writes ship **off** —
-> see "Writes need a gate".
+> Status: **Phases 1 through 4 shipped, and P3.5 with them.** Store, FTS
+> seeding, spreading activation, two agent tools, the retrieval eval, a human
+> write path, the grooming agent and its review queue, the file round trip,
+> Hebbian learning, and the 3D map at `/cortex`. Agent writes ship **on** — see
+> "Writes need a gate".
 
 Memory, the Library and Boards each hold something Galaxy knows, and none of
 them hold how those things relate. Memory is a flat list of facts. The Library
@@ -46,6 +47,24 @@ they will drift into disagreement.
 A memory item may cite a node. A node never duplicates a memory item's text.
 When the two disagree, the memory item wins — it is the one a human curates.
 
+**Both stores have the same failure mode, and memory hit it first.** Its prompt
+asked for observations that were "durable" and "clearly supported", and "asked
+about connection pooling" is both — plainly supported by the activity, durably
+recorded. So the list filled with notes about conversations rather than facts
+about a person, each one re-sent on every turn and changing no reply. The fix is
+a test that can fail — *would this change how you answer a different question,
+on a different day?* — plus the explicit exclusion, because that class passes
+every other test: never what somebody asked about, searched for, read or was
+curious about, and never anything true of one occasion only. The consolidation
+pass carries the same test, which is what clears out what is already stored.
+
+A prompt change only reaches an install through `migrateTaskPrompts()`.
+`seedTaskConfigs()` writes a task's prompt once and never again, so editing a
+default reaches nobody who has ever booted the app — a rewritten prompt would
+ship as dead text. The migration replaces a stored prompt only while it still
+equals the default it supersedes, so one edited in Admin → Tasks is never
+touched.
+
 ---
 
 ## How big is a node?
@@ -63,8 +82,8 @@ traversal does something specific with a node.
 
 ### An over-large node is a firehose
 
-`activate` delivers `source × weight × DECAY` along *every* edge, with **no
-normalisation by degree**, and `MAX_RESULTS` is 12. So a node with forty edges
+`activate` delivers `source × effectiveWeight × DECAY` along *every* edge, with
+**no normalisation by degree**, and `MAX_RESULTS` is 12. So a node with forty edges
 pushes full-strength activation to all forty, and a single query landing on it
 returns twelve arbitrary things ranked by edge weight. A category node does not
 add context — it displaces whatever the question was actually about.
@@ -195,8 +214,15 @@ export const cortexAssociations = sqliteTable(
 		targetId: text('target_id')
 			.notNull()
 			.references(() => cortexNodes.id),
-		/** 0.0–1.0. How strongly the two co-activate. */
+		/** 0.0–1.0. How strongly the two co-activate, as somebody authored it. */
 		weight: real('weight').notNull(),
+		/**
+		 * The learned half, added to `weight` at read time by `effectiveWeight`.
+		 * Capped above; bounded below by the floor on the sum. See "Hebbian
+		 * learning" — the split is what lets a number a person typed survive
+		 * months of decay.
+		 */
+		reinforcement: real('reinforcement').notNull().default(0),
 		/** JSON array. Which conversational domains make this edge relevant. */
 		contextTags: text('context_tags', { mode: 'json' }).$type<string[]>(),
 		/** Why they connect, in a sentence. More useful than a type label. */
@@ -228,12 +254,13 @@ export const cortexCircuits = sqliteTable('cortex_circuits', {
 `cortex_change_log` ships alongside them — see "Grooming" below. Writes exist
 from the first phase, so the first one should already be auditable.
 
-Three tables from the original design do **not** ship yet.
-`cortex_activation_log` has no consumer until learning exists, and
-`cortex_index_cache` has no purpose at all once seeding goes through FTS5
-rather than a maintained keyword map. `cortex_proposals` and `cortex_kinship`
-arrive with the grooming agent: adding a table later is a cheap additive
-migration, and shipping dead ones now is worse than not shipping them.
+Two tables from the original design still do **not** ship, and one never will.
+`cortex_index_cache` has no purpose at all once seeding goes through FTS5 rather
+than a maintained keyword map. `cortex_kinship` waits on a second populated
+lattice. `cortex_activation_log` was to be learning's input, and learning did
+not need it: what a query returned is only interesting until the reply lands, so
+it lives in memory for the length of a turn rather than as a row and a sweep to
+trim the rows — see "Hebbian learning".
 
 ### Full-text index
 
@@ -418,6 +445,28 @@ activated, subgraph size — to the Observatory event. `PLAN.md` calls the event
 bus "built into the engine from day one, not bolted on", and without it there
 is no way to see why a query surfaced something strange.
 
+### The digest invites; it does not insist
+
+The line ended "call `cortex_query` whenever the answer depends on who this
+person is — **which is most things that are not purely factual**", and
+`cortex_query`'s own description said the same. An agent did what it was told:
+queried on nearly every turn, and worked its answers back round to whatever came
+out, whether or not any of it bore on the question. Context that insists on
+being used is not context, it is a script.
+
+What replaced it names occasions rather than a proportion, and carries three
+things the first version never said: **most turns need nothing from it, and that
+is normal rather than a miss**; **never steer a reply toward what it holds, and
+never mention the lattice to the person**; **if what comes back does not bear on
+the question, ignore it**. `cortex_write` lost "when in doubt, record it" — which
+is how a lattice fills with things that seemed worth noting on the day — and
+gained the bar instead: it would still matter in six months.
+
+Worth stating plainly, because it is the first thing anyone asks: **none of this
+is tunable from the prompt in Admin → Tasks.** The chat prompt says nothing about
+Cortex. All of the pressure came from `cortexDigest()` and the two tool
+descriptions, which are code. `cortex.test.ts` now holds the replacement down.
+
 ### Context cost: one line in the bootstrap
 
 `bootstrapContext()` gets **one line** saying a lattice exists, roughly how
@@ -593,18 +642,48 @@ run in the browser and no idle loop — the canvas redraws on pan, zoom, select
 and resize, and otherwise sits still. That makes `prefers-reduced-motion` a
 non-question rather than a special case.
 
-Depth is hinted rather than drawn: a node the flat layout had to squeeze sits
-slightly back. Same information the 3D tier will show properly, without
-pretending this one is 3D.
+Depth was hinted rather than drawn: a node the flat layout had to squeeze sat
+slightly back. Tier 2 draws it properly, and **Flat** returns to this reading in
+one click — so the 2D map is a camera angle now rather than a separate mode.
 
 Follow `GalaxyBackdrop.svelte` exactly on the mechanics: `requestAnimationFrame`
 rather than `setInterval` "so the browser suspends this on a hidden tab", a
 capped frame rate, and an explicit `prefers-reduced-motion` bail-out.
 
-**Tier 2 — 3D, later, only if tier 1 proves it earns the weight.** Dynamically
-imported so it never enters the initial bundle — `MermaidBlock.svelte` shows
-the pattern with `(await import('mermaid')).default` — offered as a toggle
-rather than the default, and off by default on phones and under reduced motion.
+**Tier 2 — 3D. Shipped, and it cost nothing.** The premise of deferring this was
+that 3D meant a library and a library meant weight. It did not. The coordinates
+were already three-dimensional and already stable, so what was missing was a
+camera and a projection: yaw and pitch, a mild perspective divide, painter's
+algorithm, about eighty lines in the same canvas. No dependency, no dynamic
+import, nothing added to the bundle.
+
+Rotation is middle-drag, shift-drag, or a latch button — a phone and most
+trackpads have no middle button, and the canvas is the only way to turn the
+chart. **Flat** returns to looking straight down, which is the tier-1 map
+exactly. The angle is kept per browser, because a chart that resets every visit
+cannot become spatial memory, which was most of the argument for precomputing
+positions at all.
+
+**Depth is lifted, and that is a rendering decision rather than a change to what
+`z` means.** On a real lattice `z` spans well under a tenth of what `x` and `y`
+do — it is a correction to a flat layout, exactly as designed — so drawn at its
+stored scale the chart is a sheet you can tilt and the depth genuinely there
+stays invisible. The renderer scales the depth axis to a fixed fraction of the
+planar spread: a pure scalar on one axis, so every node keeps its exact share of
+the depth the layout computed, nothing is invented and nothing is reordered.
+Taken from the lattice's own spread rather than a constant, so it holds at
+seventeen concepts and at seventeen hundred.
+
+**Nodes glow by degree**, which is the diagnostic this section already wanted
+made continuous rather than categorical: brightness is the square root of a
+node's share of the most-connected node in view, so one hub cannot wash the rest
+out and every lattice has a brightest thing. Drawn additively from one cached
+sprite per colour — a gradient built per node per frame makes a rotation drag
+stutter on a phone, and `shadowBlur` is slower still. A dense region genuinely
+lights up, and an orphan reads at a glance as the faint dot it is.
+
+Still nothing animates on its own: the camera moves while a pointer is down and
+at no other time, so `prefers-reduced-motion` stays a non-question.
 
 ### Two requirements that are not optional
 
@@ -642,32 +721,37 @@ digest (see "Retrieval"), areas made real with an editor and cluster labels on
 the map, the grooming agent with its apply/propose line, the review queue, undo,
 and change-log retention.
 
-**P3.5 — Learning.** Only once P2's eval can say whether a change helped.
-Strengthening paired with decay or per-node normalisation — the original
-"+0.01 per co-activation with no decay and no cap" drifts monotonically toward
-a fully connected mesh, where activation spreads everywhere, which is the same
-as spreading nowhere. Reinforce on whether a turn actually *used* the retrieved
-context (`events`, `usageLog`, `messages.trace` all record enough), not on
-co-retrieval, which just teaches the lattice to confirm itself. Connection
-suggestions, cluster proposals and staleness flagging go through a review queue.
+**P3.5 — Learning. Shipped.** Strengthening on use, paired with decay, and
+staleness flagged through the review queue. See "Hebbian learning" below for
+what "use" turned out to mean and why the decay is shaped the way it is.
 
 **P4 — Usable and fillable. Shipped.** Every setting reachable (Admin → Cortex
 for the schedule and the lattice caps, Settings → Cortex for a person's own
 opt-out, and the change-history window beside the other retention controls), and
 the file round trip: export what you have, draft a lattice in a file, import it.
 
-**The groomer's cadence** lives in Admin → Cortex: weekly by default
-(`intervalHours: 168`), per user, off until switched on, ten suggestions a run.
+**The groomer's cadence** lives in Admin → Cortex: daily by default
+(`intervalHours: 24`), per user, off until switched on, ten suggestions a run.
 `tidy` runs on every pass whether or not a model is configured for the
 `cortex-groom` task, because that half needs none.
+
+**And for a long time it never ran at all.** `tick()` in `scheduler.ts` called
+the memory audit, the UX audit and the prune. `sweepCortexGroom`,
+`sweepCortexLayout` and `sweepAlignmentSynthesis` were defined directly beneath
+it and were never called — written, tested, and dead on every install that ever
+existed. Nothing caught it: `noUnusedLocals` is off, so a sweep nobody calls
+type-checks perfectly, and a job that never runs is indistinguishable from a job
+with nothing to do.
+
+A sweep tested in isolation cannot catch this, by construction. Only its caller
+can, so `scheduler-tick.test.ts` asserts one tick reaches every sweep in the
+file. **Anything added to that file belongs in that list and in that test.**
 
 **Still deferred, with reasons rather than silence.** *Embeddings* — FTS scores
 0.98 recall on the fixture, and replacing it needs new provider surface plus an
 answer for when no embedding model is configured, to chase a gain nothing has
-demonstrated. *Tier-2 3D* — the z coordinates are computed and stable so this is
-mostly a lazily-imported renderer, but the stated bar was that tier 1 earn it,
-and tier 1 has had no real lattice to prove anything on. *Kinship* — still needs
-a second populated lattice; design intact above.
+demonstrated. *Kinship* — still needs a second populated lattice; design intact
+above.
 
 ---
 
@@ -880,6 +964,31 @@ replayed to later runs, because re-raising something already turned down is how
 a review queue teaches people to stop reading it. Reviewed in the Cortex tab
 rather than Admin — it is somebody's own lattice, not a platform setting.
 
+**Every suggestion has to be one that can be carried out.** The free check filed
+an orphan as a `connect` naming one concept, and a `connect` needs two — so
+Accept failed, and the route answered "No such open suggestion", telling
+somebody who had just watched a row fail that the row was never there. On a
+young lattice, where most concepts are orphans, that was most of the queue, and
+it is the whole of "the groomer logs what it did and never does anything".
+
+An orphan is now paired with the nearest concept by name and description,
+through `seedNodes` — the retrieval machinery already here — and the rationale
+says it is a text match rather than a claim about meaning. Where nothing
+matches, nothing is filed and the orphan is listed in the groom prompt instead,
+where a model can read two descriptions and see what a string match cannot.
+
+**A refusal says which refusal it was.** `applyProposal` returns
+`{ ok, reason }`, and 404 is reserved for a row that genuinely is not there.
+
+**The queue shows what accepting would do** — the concept a `create` would add,
+what it would connect it to, under which area; the two concepts a merge or a
+disconnect names. Pressing the button to find out is not a review.
+
+**A review somebody asked for always runs.** The lattice-signature skip is a
+cost control on the pass nobody asked for; applied to the button it meant that
+rejecting everything in the queue left it saying "nothing has changed since the
+last review" for ever.
+
 **Accepting carries out the change**, through the ordinary write path under one
 `runId`, so an accepted suggestion is logged like a hand edit and undone the
 same way. A proposal whose concepts have gone since it was raised fails and
@@ -911,6 +1020,102 @@ carried a sweep for edges whose far end no longer exists. It was unreachable
 code dressed as diligence — a scoped read cannot see such an edge in the first
 place, and cleaning it would take an unscoped query over rows belonging to
 nobody. A wasted row is much the cheaper problem.
+
+## Hebbian learning
+
+Connections that get used strengthen; connections nothing uses erode. Both
+halves shipped together, because either alone is a worse system than neither:
+strengthening without decay walks the lattice toward a fully connected mesh, and
+decay without strengthening is just forgetting.
+
+### What "used" means, and what it deliberately does not
+
+The obvious implementation reinforces every edge the traversal crossed. It is
+one line inside `activate`, and it is wrong: a traversal's output is a function
+of the weights, so rewarding it means the lattice grades its own homework. The
+strongest edges are walked most, so they strengthen most, and the mesh converges
+on whatever shape it happened to start with.
+
+So the signal is **use in the answer**. `activate` returns `pathTo` — the chain
+of edges that delivered each concept — the `cortex_query` tool remembers what it
+handed over, and when the turn's reply lands, the concepts the reply actually
+named strengthen the edges that reached them. A concept that came back and went
+unmentioned strengthens nothing.
+
+That test is a heuristic and worth saying so. A reply can lean on a concept
+without naming it, and name one in passing without leaning on it. What makes it
+safe is not its accuracy but the shape around it: a step is 0.04 against a
+ceiling of 0.25, decay pulls everything back continuously, and nothing it does
+can remove a connection. A run of wrong guesses buys a slightly mis-ordered
+result for a few weeks.
+
+Traversal is still recorded — `traversalCount` and `lastTraversedAt`, columns
+that existed for two phases with nothing writing them. As telemetry, not as a
+weight input: "is anything reaching this at all" is a different question from
+"was it worth anything", and the first is what decides when an eroded edge is
+stale enough to raise.
+
+Episodes live in a module map, not a table. One is interesting for the seconds
+between a tool call and the reply it fed; a row per query plus a sweep to trim
+them is a schema commitment to a heuristic that may well change. A restart
+mid-turn loses that turn's reinforcement, which is the right amount to care.
+
+**Never from a hidden chat.** Those are deliberately never written to the
+database, and baking one into an edge weight is writing it down.
+
+### The authored weight is never touched
+
+`weight` is what a person, an agent, an accepted suggestion or an import set.
+`reinforcement` is what use has added since, and `effectiveWeight()` adds them
+at read time. Every reader goes through that one function — the walk, the map,
+the tool's rendering, the comparison pane — because two readers disagreeing
+about how strong an edge is would be a bug nothing would ever catch.
+
+Keeping them apart is what lets a number somebody typed survive months of decay,
+and what lets the learned half be shown in the panel, reasoned about, and reset
+on its own. `saveAssociation` writes the whole row, so it carries
+`reinforcement` and the traversal counters forward explicitly — anything left
+out of that row is silently reset, and re-describing an edge would otherwise
+throw away months of learning.
+
+### Erosion is multiplicative and exponential
+
+Both halves of that were got wrong first, and the tests said so.
+
+**Multiplicative on the effective strength**, not a flat drift on the learned
+half. A flat drift can only undo learning, settling every unused edge back at
+exactly the number somebody first guessed — which is amnesia about the learning
+rather than erosion of the connection. Multiplicative means an edge authored at
+0.9 and one authored at 0.2 erode to the same place, so where a connection ends
+up depends on whether it gets used rather than on how confident whoever created
+it happened to feel.
+
+**Exponential in elapsed time**, so it composes exactly: ten days of decay in one
+pass and ten one-day passes agree to the bit. That is what lets the sweep run off
+a stored timestamp rather than a tick count, and what makes an outage not a
+holiday. The first version mixed a retained fraction with a flat drift, and the
+two answers differed by a seventh.
+
+At 0.98 a day: a half-life around five weeks, roughly four months from a typical
+0.8 to the floor, and — against a step of 0.04 — one use every four days or so
+holds a mid-strength edge steady. Untuned, like the traversal constants: first
+plausible values, put where the arithmetic can be checked.
+
+### Erosion stops; removal is still a proposal
+
+An edge floors at `MIN_EFFECTIVE_WEIGHT`, where `source × 0.05 × DECAY` is below
+the activation threshold from any source. It has stopped crowding results
+entirely, and it is still on the map, still in the panel, still restorable.
+
+Removing it is a `disconnect` suggestion in the owner's own queue, raised once
+the edge is both at the floor **and** untraversed for `staleDays` (60 by
+default). Both halves are required: an edge at the floor that activation still
+crosses weekly is doing its job quietly. Decay is allowed to move a number,
+which is what makes it learning rather than bookkeeping; the thing it may never
+do unasked is destroy a relationship somebody recorded.
+
+`cortex.learning` switches the whole mechanism off. Off, anything already
+learned is kept and still counts — it is frozen where it is, not discarded.
 
 ## The file round trip
 
@@ -945,7 +1150,13 @@ rather than a stack trace over a half-imported lattice.
    work in the same concept, a note may stop being enough. Any answer has to
    survive the conduit test above, which is a high bar and probably the right
    one.
-3. **When `agentWrites` flips on.** Currently gated on the groomer existing.
-   Whether that is the right trigger, or whether it wants a period of
-   supervised writing first, is worth revisiting once P2's map makes the
-   duplicate rate visible.
+3. **Whether the reinforcement heuristic is good enough.** "The reply named the
+   concept" is a proxy for "the reply used it", and the honest defence of it is
+   the bounds around it rather than its accuracy — see "Hebbian learning". The
+   thing that would settle it is a lattice with a few months of real use on it
+   and the eval run against the weights before and after. Nothing else here can
+   answer it.
+4. **Whether decay should know about `activationPriority`.** A concept the
+   lattice considers important currently erodes at the same rate as anything
+   else, which may be right — importance is about the node, erosion is about the
+   edge — or may be how a valuable but rarely-queried region quietly fades.

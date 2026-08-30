@@ -1088,8 +1088,28 @@ export const cortexAssociations = sqliteTable(
 		targetId: text('target_id')
 			.notNull()
 			.references(() => cortexNodes.id),
-		/** 0.0–1.0. How strongly the two co-activate. */
+		/**
+		 * 0.0–1.0. How strongly the two co-activate, as somebody *authored* it —
+		 * by hand, by an agent, by an accepted suggestion or by an import.
+		 *
+		 * Learning never touches this column. What use and disuse move is
+		 * `reinforcement` below, and the two are added at read time. Keeping them
+		 * apart is what lets a number a person typed survive months of decay, and
+		 * what lets the learned half be shown, reset or argued with on its own.
+		 */
 		weight: real('weight').notNull().default(0.5),
+		/**
+		 * The learned half of the strength, added to `weight` at read time — see
+		 * `effectiveWeight` in cortex.ts, which every reader goes through.
+		 *
+		 * Positive when replies have actually drawn on the concepts this edge
+		 * connects, and drifting negative when nothing has. Capped above, because
+		 * unbounded strengthening walks a lattice toward a fully connected mesh
+		 * where activation spreads everywhere and therefore nowhere; bounded below
+		 * by what it is added to, so erosion stops at a floor on the sum rather
+		 * than at a fixed distance from wherever the edge started.
+		 */
+		reinforcement: real('reinforcement').notNull().default(0),
 		/** JSON array. Which conversational domains make this edge relevant. */
 		contextTags: text('context_tags', { mode: 'json' }).$type<string[]>(),
 		/**
@@ -1107,6 +1127,17 @@ export const cortexAssociations = sqliteTable(
 			.notNull()
 			.default('symmetric'),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		/**
+		 * When activation last crossed this edge, and how often it has.
+		 *
+		 * Telemetry, not a weight input. Reinforcing on co-retrieval would teach
+		 * the lattice to confirm the shape it already has, so these two record
+		 * traversal and `reinforcement` records use — which are different
+		 * questions and deliberately answered by different columns.
+		 *
+		 * `lastTraversedAt` also decides when an eroded edge is old enough to
+		 * propose disconnecting: at the floor *and* untouched for a long time.
+		 */
 		lastTraversedAt: integer('last_traversed_at', { mode: 'timestamp_ms' }),
 		traversalCount: integer('traversal_count').notNull().default(0)
 	},

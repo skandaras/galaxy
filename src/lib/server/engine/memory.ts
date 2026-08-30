@@ -320,7 +320,16 @@ export async function runMemory(
 					{
 						role: 'user',
 						content: [
-							'MEMORY-AUDIT: Review the activity below. Extract durable, clearly-supported observations and (rarely) reusable skill candidates.',
+							'MEMORY-AUDIT: Review the activity below and record only what will still be true, and still be worth knowing, in six months.',
+							// Repeated here as well as in the system prompt, because that one
+							// is editable in Admin -> Tasks and may have been replaced with
+							// something that has never heard of this. The test is the whole
+							// difference between a memory and a topic log, so it should not
+							// live in only one of the two places.
+							'The test for every candidate: would this change how you answer a *different* question, on a *different* day? If not, leave it out.',
+							'Never record what the person asked about, searched for, read or was curious about — a topic is not a fact about them, and the conversation already records it. Never record something that was true of one occasion only.',
+							'Do record: standing preferences, constraints they work under, how they like to work, their tools and environment, decisions already taken, and roles or relationships that recur. Write the fact, not the occasion you learnt it on.',
+							'Prefer fewer, and an empty list is the right answer on most days. Every line is re-sent on every future turn, so a memory has to be worth more than it costs.',
 							'Reply with ONLY a JSON object: {"memories":[{"kind":"preference|pattern|fact","content":"…"}],"skill_candidates":[{"name":"kebab-case","category":"…","description":"…","triggers":"a, b","body":"markdown instructions","rationale":"why this is worth a skill"}]}',
 							'Do not repeat existing memories. Do not propose skills that already exist.',
 							`Existing memories:\n${existingMemories || '(none)'}`,
@@ -479,15 +488,23 @@ export async function consolidateMemory(
 					{
 						role: 'user',
 						content: [
-							'MEMORY-CONSOLIDATE: Below is everything currently remembered about one user. It is injected into the system prompt of every chat and coding turn, so length has a real cost. Combine what overlaps and drop what is redundant.',
+							'MEMORY-CONSOLIDATE: Below is everything currently remembered about one user. It is injected into the system prompt of every chat and coding turn, so length has a real cost. Combine what overlaps, and drop what was never worth keeping.',
 							'Rules:',
 							'- Never introduce a fact that is not already in the list. You are merging wording, not inferring.',
 							'- Never merge two items that contradict each other. Keep the later one and leave the other alone.',
 							'- Keep specifics: names, numbers, versions, dates, tool and file names. A merge that loses them is worse than no merge.',
 							'- Merge only genuine overlap. Two unrelated preferences stay two items.',
 							'- Leave anything that is already concise and distinct out of your answer entirely; untouched items are kept.',
+							// The audit only ever added, and until now it was told to record
+							// anything "clearly supported" — which a note of what somebody
+							// once asked about passes easily. So a list built under the old
+							// instruction is full of topic logs, and this is the only pass
+							// that can get them out. It proposes; the person applying it sees
+							// every line first.
+							'- Also drop anything that is a record of what the person asked about, searched for, read or was curious about, rather than a fact about them. "Asked about connection pooling" and "interested in sourdough" are notes about a conversation, not things that change a future answer. The test is whether the item would change how you answer a different question on a different day; if it would not, list it as redundant.',
+							'- Judge an item on what it says, not on how it is worded. A topic log dressed as a preference is still a topic log.',
 							'Reply with ONLY a JSON object: {"merged":[{"kind":"preference|pattern|fact","content":"…","replaces":[1,4]}],"redundant":[7]}',
-							'"replaces" lists the numbers the merged line stands in for. "redundant" lists numbers to delete outright — use it only for exact duplicates of something else in the list.',
+							'"replaces" lists the numbers the merged line stands in for. "redundant" lists numbers to remove — exact duplicates of something else in the list, and items that do not pass the test above.',
 							`--- MEMORIES (${active.length}) ---`,
 							numbered
 						].join('\n\n')

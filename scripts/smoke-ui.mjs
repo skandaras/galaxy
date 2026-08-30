@@ -761,6 +761,88 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 	if (fail.length) await shot('new-chat');
 }
 
+// 8. The Cortex map. A canvas is the one thing on the page whose failure is
+//    completely silent — nothing throws, nothing is missing from the DOM, it
+//    just draws nothing. So this seeds a small lattice, checks the chart put
+//    pixels on the canvas, and checks that rotating it changes them.
+{
+	const areas = {};
+	for (const name of ['Coastal fieldwork', 'Letterpress']) {
+		areas[name] = (
+			await as(ALICE, '/api/cortex/circuits', { method: 'POST', body: JSON.stringify({ name }) })
+		).id;
+	}
+	const ids = {};
+	for (const [name, area] of [
+		['Tide pools', 'Coastal fieldwork'],
+		['Coastal ecology', 'Coastal fieldwork'],
+		['Seabird counts', 'Coastal fieldwork'],
+		['Press maintenance', 'Letterpress'],
+		['Ink mixing', 'Letterpress']
+	]) {
+		ids[name] = (
+			await as(ALICE, '/api/cortex/nodes', {
+				method: 'POST',
+				body: JSON.stringify({ name, description: `${name}, for the chart`, circuits: [areas[area]] })
+			})
+		).id;
+	}
+	for (const [a, b] of [
+		['Coastal ecology', 'Tide pools'],
+		['Coastal ecology', 'Seabird counts'],
+		['Press maintenance', 'Ink mixing'],
+		['Tide pools', 'Press maintenance']
+	]) {
+		await as(ALICE, '/api/cortex/links', {
+			method: 'POST',
+			body: JSON.stringify({ source: ids[a], target: ids[b], weight: 0.8 })
+		});
+	}
+
+	problems = [];
+	await page.goto(B + '/cortex');
+	await page.locator('.map canvas').waitFor();
+	await page.waitForTimeout(900);
+	check('the map renders quietly', problems, []);
+
+	/** How much of the canvas is not the background. A blank chart scores 0. */
+	const inked = () =>
+		page.evaluate(() => {
+			const canvas = document.querySelector('.map canvas');
+			const ctx = canvas?.getContext('2d');
+			if (!ctx || !canvas.width) return -1;
+			const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+			let lit = 0;
+			for (let i = 3; i < data.length; i += 4) if (data[i] > 8) lit++;
+			return lit;
+		});
+
+	const first = await inked();
+	check('the chart actually draws', first > 500);
+
+	// Rotating has to move something, which is the whole difference between a
+	// 3D view and a picture of one.
+	const box = await page.locator('.map canvas').boundingBox();
+	const mid = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+	await page.mouse.move(mid.x, mid.y);
+	await page.mouse.down({ button: 'middle' });
+	await page.mouse.move(mid.x + 200, mid.y - 70, { steps: 12 });
+	await page.mouse.up({ button: 'middle' });
+	await page.waitForTimeout(400);
+	check('middle-drag rotates it', (await inked()) !== first);
+
+	// And the angle is remembered, or the chart cannot become spatial memory.
+	const view = await page.evaluate(() => localStorage.getItem('galaxy:cortex-view'));
+	check('the angle is remembered', typeof view === 'string' && view.includes('yaw'));
+
+	// Flat is the escape hatch back to the 2D reading.
+	await page.getByRole('button', { name: 'Flat' }).click();
+	await page.waitForTimeout(400);
+	check('Flat is one click away', await page.getByRole('button', { name: 'Flat' }).isVisible());
+	check('the map is still quiet after all that', problems, []);
+	if (fail.length) await shot('cortex-map');
+}
+
 if (fail.length) await shot('final-state');
 await browser.close();
 

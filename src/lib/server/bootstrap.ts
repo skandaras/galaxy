@@ -24,6 +24,43 @@ import { deleteEmptyChats } from '$lib/server/chats';
 const OUTPUT_FORMAT =
 	'Format your replies to be read on a screen, not parsed out of a paragraph. Use short paragraphs of two or three sentences, separated by a blank line. Use a bulleted list whenever you are reporting more than one thing — files changed, options considered, problems found — one item per line, never as a run-on sentence. Give each bullet or section a short bold lead-in naming what it is about, so the reply can be skimmed. Use a heading only when the reply has genuinely distinct sections. Never answer with a single long paragraph.';
 
+/**
+ * What the memory audit is for, and — the half that was missing — what it is
+ * not for.
+ *
+ * The old prompt was one sentence: audit recent activity for durable patterns,
+ * preferences and candidate skills, extract only what is clearly supported. Two
+ * words in it did all the work and neither did it well. "Clearly supported" is
+ * trivially true of "asked about connection pooling" — the activity plainly
+ * supports it — and "durable" describes the record rather than the fact, so a
+ * permanent note of a passing question passes.
+ *
+ * The result was a topic log: a list of things somebody had asked about, in the
+ * system prompt of every chat and coding turn, none of which changed a single
+ * reply. What was missing was a test that can fail, and an explicit list of the
+ * things that pass every other test and are still worthless.
+ */
+const MEMORY_PROMPT =
+	'You are the memory agent of Galaxy. You read recent activity and record the few things about ' +
+	'this person that will still be true, and still be worth knowing, in six months.\n\n' +
+	'The test, and apply it to every candidate: **would this change how you answer a different ' +
+	'question, on a different day?** If not, it is not a memory, however true it is.\n\n' +
+	'Never record what somebody asked about, searched for, read, or was curious about. A topic is ' +
+	'not a fact about a person. "Asked about Postgres connection pooling", "interested in ' +
+	'sourdough", "wanted help with a CV" — all true, all useless, and all things the conversation ' +
+	'itself already records. The same goes for anything that happened once: a single question, a ' +
+	'single task, a single mood.\n\n' +
+	'What does qualify: standing preferences ("wants diffs kept minimal, no drive-by refactors"); ' +
+	'constraints they work under ("no outbound network on the production box"); how they work ' +
+	'("thinks by writing, so wants a draft to react to rather than options"); their tools and ' +
+	'environment; decisions already taken and not to be relitigated; and roles and relationships ' +
+	'that recur. Write it as the fact, not as the occasion you learnt it on.\n\n' +
+	'Prefer fewer. Every line you record is paid for on every future turn, so a memory has to earn ' +
+	'more than it costs. Returning nothing is the correct answer on most days and is never a ' +
+	'failure — a run that finds one real thing has done better than one that finds six plausible ' +
+	'ones. Skill candidates are rarer still: propose one only for a procedure you have watched ' +
+	'repeat.';
+
 const DEFAULT_PROMPTS: Record<string, string> = {
 	chat:
 		'You are the chat agent of Galaxy, a self-hosted AI workspace. Be direct, capable and concise. When you are given a URL, read it with the fetch_url tool — never search for a page whose address you already have, and never describe a link you have not opened. Use the web_search tool when current or factual information would help and you have no address to go to — but search deliberately: open broadly, read the titles and domains that come back, then search again aimed at what they showed you, and never repeat a query. If the results are thin, answer with what you have and say what you could not confirm rather than searching repeatedly.\n\n' +
@@ -44,8 +81,7 @@ const DEFAULT_PROMPTS: Record<string, string> = {
 		'You are the research agent of Galaxy. Plan searches, gather sources, verify claims across them, and synthesise findings with citations.',
 	visual:
 		'You are the visual agent of Galaxy. Produce clear diagrams and charts (Mermaid, SVG) that communicate structure at a glance.',
-	memory:
-		'You are the memory agent of Galaxy. Audit recent activity for durable patterns, preferences and candidate skills. Extract only what is clearly supported.',
+	memory: MEMORY_PROMPT,
 	'skill-optimiser':
 		'You are the skill optimiser of Galaxy. Review existing skills for clarity, overlap and effectiveness, and propose focused improvements.',
 	'chat-title':
@@ -209,6 +245,41 @@ export function seedSkills(): void {
 		triggers: 'pdf, create_pdf, typst, document, report, letter, typeset',
 		body: TYPST_SKILL_BODY
 	});
+}
+
+/**
+ * The prompts a stored row is allowed to have replaced.
+ *
+ * `seedTaskConfigs` only inserts tasks that are *absent*, which is right —
+ * a prompt somebody has edited is theirs. But it also means changing a default
+ * reaches nobody who has ever booted this app, so a rewritten prompt ships as
+ * dead text and the behaviour it was meant to fix carries on.
+ *
+ * This closes that gap the way `migrateWebSearchSettings` does: replace a stored
+ * value only while it still equals the default it is replacing. Edit the prompt
+ * in Admin -> Tasks and this never touches it again; leave it alone and you get
+ * the improvement. Each entry keeps the superseded text verbatim, which is the
+ * only way to tell "never edited" from "edited back to something similar".
+ */
+const SUPERSEDED_PROMPTS: Record<string, string[]> = {
+	memory: [
+		'You are the memory agent of Galaxy. Audit recent activity for durable patterns, preferences and candidate skills. Extract only what is clearly supported.'
+	]
+};
+
+/**
+ * Bring a stored task prompt up to the current default, but only where nobody
+ * has made it their own. Runs on every boot; a no-op after the first.
+ */
+export function migrateTaskPrompts(): void {
+	for (const [task, olds] of Object.entries(SUPERSEDED_PROMPTS)) {
+		const next = DEFAULT_PROMPTS[task];
+		if (!next) continue;
+		const row = db.select().from(taskConfigs).where(eq(taskConfigs.task, task)).get();
+		if (!row || !olds.includes(row.systemPrompt ?? '')) continue;
+		db.update(taskConfigs).set({ systemPrompt: next }).where(eq(taskConfigs.task, task)).run();
+		console.log(`Updated the ${task} prompt, which was still the shipped default.`);
+	}
 }
 
 /** Write a skill unless one of that name is already there — never overwrite. */
