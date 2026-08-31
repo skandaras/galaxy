@@ -26,6 +26,14 @@ export type JobChunk =
 			 * tool — that is the answer, and clearing it would lose the work.
 			 */
 			consumedText?: boolean;
+			/**
+			 * The consumed text in full, for the step's body.
+			 *
+			 * The label keeps a first sentence at most, so without this a model
+			 * that narrates in paragraphs had the rest of what it wrote dropped
+			 * from the reply and recorded nowhere. See RunStep.note.
+			 */
+			note?: string;
 	  }
 	| {
 			type: 'tool';

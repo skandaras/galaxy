@@ -171,24 +171,27 @@ const STEP_LABEL_MAX = 100;
  * Longest a piece of text can be and still be read as a lead-in rather than
  * something the model wrote for the user.
  *
- * Real narration is one short line — "Reading the loop to see how legs are
- * driven" is 45 characters, and even a wordy one rarely passes 150.
+ * Deliberately loose. This was 200, which made length the discriminator, and a
+ * model that narrates in paragraphs — several sentences naming what it is about
+ * to read — landed on both sides of it from one leg to the next: some lead-ins
+ * became steps and some piled up in the reply, for no reason a reader could
+ * see. The bound is now only a backstop against a genuine page of writing.
  */
-const NARRATION_MAX = 200;
+const NARRATION_MAX = 1_500;
 
 /**
  * Is this iteration's text a line introducing the tools it is about to call,
  * or is it content that happens to be followed by a tool call?
  *
- * The distinction is the whole safety of turning narration into step labels.
- * Asked to redraft an email, a model writes the new draft *and* calls a tool
- * in the same message — and treating that draft as a label threw the user's
- * actual work away, leaving them a reply that only described it.
+ * The structural tests are what actually separate the two, and they are the
+ * ones that matter: a blank line means more than one paragraph, a code fence is
+ * never a lead-in, and past a couple of lines this is a document rather than an
+ * introduction. Length is the weakest of the signals and is now the last resort.
  *
- * So the test is deliberately mean: anything long, anything with a blank line,
- * anything with a code fence or more than a couple of lines is content. Being
- * wrong that way merely leaves a lead-in sitting in the reply, which is what
- * used to happen to all of them. Being wrong the other way destroys writing.
+ * Getting it wrong used to be expensive in one direction: the label keeps 100
+ * characters and the rest was dropped, so a draft read as narration was
+ * destroyed. It is no longer — the whole text is carried on the step as `note`
+ * and shown when the step is opened — which is what lets this be generous.
  */
 export function isNarration(text: string): boolean {
 	const t = text.trim();
@@ -238,6 +241,24 @@ function describeBatch(calls: ToolCall[], tools: Map<string, LoopTool>): string 
 	const detail = tools.get(first.name)?.describe?.(safeParseArgs(first.arguments)) ?? '';
 	const head = detail ? `${first.name} ${detail}` : first.name;
 	return calls.length > 1 ? `${head} (+${calls.length - 1} more)` : head;
+}
+
+/**
+ * The lead-in in full, for the body of the step it named — or nothing, when the
+ * label already carries all of it.
+ *
+ * `stepLabel` takes the first sentence and cuts at 100 characters, which for a
+ * one-line lead-in is the whole text. Storing it again would draw it twice in
+ * the same step: once as the summary, once underneath.
+ */
+export function noteFor(narration: string, label: string): string | undefined {
+	const text = narration.trim();
+	if (!text) return undefined;
+	// Compared on the text alone: the label has had its bullet and bold marks
+	// stripped, so "- **Reading the loop**" and "Reading the loop" are the same
+	// sentence and only one of them should be kept.
+	const bare = text.replace(/^[#>*\-+\s]+/, '').replace(/\*\*/g, '').trim();
+	return bare === label ? undefined : text;
 }
 
 /**
@@ -464,7 +485,20 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		};
 	}
 
-	let assistantText = '';
+	/**
+	 * The reply, one entry per leg that kept its text.
+	 *
+	 * A list rather than a running string because these are joined with a blank
+	 * line: appending them straight onto each other ran one leg's last sentence
+	 * into the next leg's first — "…convert correctly.Now the remaining shapes"
+	 * — and produced a reply that read as a wall. The browser assembles its copy
+	 * the same way; see applyStreamText.
+	 */
+	const replyParts: string[] = [];
+	const keep = (text: string) => {
+		if (text.trim()) replyParts.push(text.trim());
+	};
+	const replyText = () => replyParts.join('\n\n');
 	let usage: Usage | null = null;
 	// Assume the step cap wins; every other exit path below sets its own reason.
 	let stopReason: StopReason = 'exhausted';
@@ -514,7 +548,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			// through to the normal finish, so the partial reply is saved rather
 			// than thrown away by the failure path.
 			if (isCancellation(err, job.controller.signal)) {
-				assistantText += iterationText;
+				keep(iterationText);
 				stopReason = 'cancelled';
 				emitEvent(
 					{
@@ -565,7 +599,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			// The model answered instead of calling anything, so it considers the
 			// task done — even if it only narrated an edit it never made. This is
 			// the only iteration whose text is the reply.
-			assistantText += iterationText;
+			keep(iterationText);
 			stopReason = 'complete';
 			break;
 		}
@@ -578,7 +612,11 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		const label = consumedText
 			? stepLabel(iterationText, describeBatch(toolCalls, toolByName))
 			: describeBatch(toolCalls, toolByName);
-		if (!consumedText) assistantText += iterationText;
+		// The lead-in in full, kept only when the label is a summary of it rather
+		// than the whole thing — a one-sentence lead-in would otherwise print
+		// twice in the same step.
+		const note = consumedText ? noteFor(iterationText, label) : undefined;
+		if (!consumedText) keep(iterationText);
 		lastStepLabel = label;
 		// Stop before spending money on a toolchain the user has abandoned.
 		if (job.controller.signal.aborted) {
@@ -591,7 +629,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		// consumedText tells the browser whether the text it has been streaming
 		// just became this label — and so should leave the reply — or is part of
 		// the answer and must stay put.
-		pushChunk(job, { type: 'step', id: stepId, label, status: 'running', consumedText });
+		pushChunk(job, { type: 'step', id: stepId, label, status: 'running', consumedText, note });
 
 		messages.push({ role: 'assistant', content: iterationText, tool_calls: toolCalls });
 		// The prompt tells the model to batch independent calls into one turn,
@@ -634,8 +672,8 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		// A step is only as good as its calls: one failure leaves the group open
 		// in the timeline instead of collapsing it out of sight.
 		const stepStatus = stepCalls.some((c) => c.status === 'error') ? 'error' : 'ok';
-		pushChunk(job, { type: 'step', id: stepId, label, status: stepStatus, consumedText });
-		trace.push({ id: stepId, label, status: stepStatus, toolCalls: stepCalls });
+		pushChunk(job, { type: 'step', id: stepId, label, status: stepStatus, consumedText, note });
+		trace.push({ id: stepId, label, status: stepStatus, toolCalls: stepCalls, note });
 
 		if (job.controller.signal.aborted) {
 			stopReason = 'cancelled';
@@ -671,6 +709,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		}
 	}
 
+	const assistantText = replyText();
 	const usedFallback = !assistantText.trim() && !!lastStepLabel;
 	const summary: TurnSummary = {
 		stopReason,

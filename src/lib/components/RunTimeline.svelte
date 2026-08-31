@@ -62,7 +62,11 @@
 	{#each items as item, i (item.kind === 'step' ? item.id : `${item.kind}-${i}`)}
 		{#if item.kind === 'step'}
 			<li class="step s-{item.status}">
-				{#if item.tools.length}
+				<!-- A note is reason enough to open: a step whose lead-in ran to a
+				     paragraph has something to read even before its first call
+				     lands, and it used to render as a flat line with the rest of
+				     what the model wrote nowhere at all. -->
+				{#if item.tools.length || item.note}
 					<!-- A step whose only call drew a box already says that call's name
 					     and query in its own label — describeBatch built it from exactly
 					     that. Repeating it underneath was invisible while the step
@@ -84,6 +88,9 @@
 							<span class="label">{item.label || `${item.tools.length} tool calls`}</span>
 							{#if solo?.results}<span class="r-count">{plural(solo.results.length)}</span>{/if}
 						</summary>
+						<!-- What the model said it was doing, in full. The summary above
+						     carries only its first sentence. -->
+						{#if item.note}<p class="note">{item.note}</p>{/if}
 						<ul class="tools">
 							{#each item.tools as tool, t (tool.callId ?? `${tool.name}-${t}`)}
 								<li class="t-{tool.status}">
@@ -192,6 +199,16 @@
 		gap: 0.1rem;
 		border-left: 1px solid var(--border);
 		margin-left: 0.28rem;
+	}
+	/* Prose, so unlike a tool line it wraps rather than being cut with an
+	   ellipsis — the whole point of keeping it is that all of it can be read.
+	   Shares the tools' rail so it reads as part of the same step. */
+	.note {
+		margin: 0.15rem 0 0.25rem 0.28rem;
+		padding: 0 0.5rem 0 1.55rem;
+		border-left: 1px solid var(--border);
+		color: var(--fg-dim);
+		white-space: pre-wrap;
 	}
 	/* A column, so a call that carries a result box can put it under its own
 	   line rather than beside it. Without a box this renders as it always did.

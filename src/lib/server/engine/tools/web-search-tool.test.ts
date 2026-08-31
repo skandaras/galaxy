@@ -433,14 +433,18 @@ describe('search pacing on the chat path', () => {
 	it('spaces searches out by whatever gap the pacer states', async () => {
 		// Tool calls in a batch already run serially, so concurrency was never the
 		// problem — the absence of any wait between them was.
-		const gate = createGate({ pacing: { concurrency: 1, gapMs: 60, throttled: false }, observe: () => false });
+		const gate = createGate({ pacing: { concurrency: 1, gapMs: 100, throttled: false }, observe: () => false });
 		const started: number[] = [];
 		for (let i = 0; i < 3; i++) {
 			await gate();
 			started.push(Date.now());
 		}
-		expect(started[1] - started[0]).toBeGreaterThanOrEqual(55);
-		expect(started[2] - started[1]).toBeGreaterThanOrEqual(55);
+		// A fifth of the gap as slack, because the marks are not the gate's own
+		// clock: it starts waiting when it returns, and this samples a moment
+		// later, so a loaded machine measures slightly *less* than it waited. At
+		// a 5ms margin this failed intermittently under a full parallel run.
+		expect(started[1] - started[0]).toBeGreaterThanOrEqual(80);
+		expect(started[2] - started[1]).toBeGreaterThanOrEqual(80);
 	});
 
 	it('reads the pacer on every claim, so a mid-run throttle catches the rest', async () => {
