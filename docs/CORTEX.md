@@ -964,12 +964,40 @@ replayed to later runs, because re-raising something already turned down is how
 a review queue teaches people to stop reading it. Reviewed in the Cortex tab
 rather than Admin — it is somebody's own lattice, not a platform setting.
 
-**Every suggestion has to be one that can be carried out.** The free check filed
-an orphan as a `connect` naming one concept, and a `connect` needs two — so
-Accept failed, and the route answered "No such open suggestion", telling
-somebody who had just watched a row fail that the row was never there. On a
-young lattice, where most concepts are orphans, that was most of the queue, and
-it is the whole of "the groomer logs what it did and never does anything".
+**Every suggestion has to be one that can be carried out**, and `REQUIRES` in
+`cortex-groom.ts` is where that rule lives. Until it existed the rule lived
+nowhere: `recordProposals` decided what to file and `applyProposal` decided what
+it could do, they disagreed, and every disagreement surfaced as a button that
+did nothing. It happened twice in two different kinds, found weeks apart, and
+each was fixed where it was found — which is what a missing invariant looks like
+from the inside.
+
+The first: the free check filed an orphan as a `connect` naming one concept, and
+a `connect` needs two, so Accept failed and the route answered "No such open
+suggestion" — telling somebody who had just watched a row fail that the row was
+never there. On a young lattice, where most concepts are orphans, that was most
+of the queue, and it is the whole of "the groomer logs what it did and never
+does anything".
+
+The second: a `circuit` filed with no concept at all. The prompt read
+`circuit — "node", payload {"areas":[…]}`, which compresses two nesting levels
+into one comma, so a model put the node *inside* the payload. `p.node` was
+undefined, the guard that drops a bad reference only caught one that was present
+and unresolvable, and the row was filed dead. The prompt now shows a complete
+object per kind and says outright that `node` and `target` are top-level keys;
+`recordProposals` reads either place, because a suggestion answered correctly in
+the wrong envelope is not worth losing.
+
+`REQUIRES` also names the payload fields without which applying would be a
+*silent* no-op — the worse failure. A `rename` with no new name saved the
+concept under the name it already had, reported success and marked the
+suggestion done; a `circuit` with no areas kept the areas it had. Both are
+refused now, at filing and again at apply.
+
+**The test is generic.** For every kind, a well-formed suggestion is filed and
+applies, and one missing anything its kind needs is never filed. Driven off
+`REQUIRES`, so a kind added later without a rule fails the suite rather than
+shipping another dead button.
 
 An orphan is now paired with the nearest concept by name and description,
 through `seedNodes` — the retrieval machinery already here — and the rationale

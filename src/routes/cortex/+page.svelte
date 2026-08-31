@@ -42,7 +42,12 @@
 		detected?: number;
 		proposed?: number;
 		duplicates?: number;
-		dropped?: { unknownConcept: number; badKind: number; noTitle: number };
+		dropped?: {
+			unknownConcept: number;
+			badKind: number;
+			noTitle: number;
+			incomplete: number;
+		};
 		replyChars?: number;
 		parsedItems?: number;
 		activityChars?: number;
@@ -639,6 +644,15 @@
 								<span class="hint">
 									{lastRun.dropped.unknownConcept} named a concept that is not in your lattice
 									and could not be filed.
+								</span>
+							{/if}
+							{#if lastRun.dropped?.incomplete}
+								<!-- Not filed rather than filed-and-broken: a row that fails on
+								     click reads as a broken button, not as a suggestion the
+								     model got wrong. -->
+								<span class="hint">
+									{lastRun.dropped.incomplete} left out something needed to carry it out — those
+									are dropped rather than left here to fail when you accept them.
 								</span>
 							{/if}
 							{#if proposals.length}
