@@ -6,6 +6,7 @@ import {
 	cortexAssociations,
 	cortexChangeLog,
 	cortexNodes,
+	cortexCircuits,
 	cortexProposals,
 	events
 } from '$lib/server/db/schema';
@@ -18,6 +19,7 @@ import {
 	circuitIndex,
 	cortexDigest,
 	deleteNode,
+	getNode,
 	revertChange,
 	revertRun,
 	saveAssociation,
@@ -34,6 +36,8 @@ import {
 	groomStatus,
 	applyProposal,
 	fingerprint,
+	KINDS,
+	REQUIRES,
 	detect,
 	orphans,
 	recordDetected,
@@ -53,6 +57,10 @@ beforeEach(() => {
 	db.delete(cortexChangeLog).run();
 	db.delete(cortexProposals).run();
 	db.delete(cortexNodes).run();
+	// Areas were never cleared, which held only while nothing outside the filing
+	// suite made one — a case that leaks into every test after it, and the sort
+	// of shared state that shows up as an unrelated suite failing.
+	db.delete(cortexCircuits).run();
 	db.delete(events).run();
 	db.run(`DELETE FROM cortex_fts`);
 });
@@ -147,7 +155,7 @@ describe('proposals', () => {
 	});
 
 	it('refuses a decision from someone else', () => {
-		recordProposals(ANA, [suggest({ node: 'tide-pools' })], 10);
+		recordProposals(ANA, [suggest({ node: 'tide-pools', target: 'rockpools' })], 10);
 		const open = listProposals(ANA)[0];
 		// Not "could not apply" but "there is no such suggestion", because from
 		// where Ben is standing there genuinely is not one.
@@ -167,7 +175,7 @@ describe('the prompt', () => {
 		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
 		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
 		saveAssociation({ sourceId: a.id, targetId: b.id, userId: ANA });
-		recordProposals(ANA, [{ kind: 'merge', title: 'An old idea', node: a.id }], 10);
+		recordProposals(ANA, [{ kind: 'merge', title: 'An old idea', node: a.id, target: b.id }], 10);
 
 		const prompt = buildGroomPrompt(ANA, 10);
 		expect(prompt).toContain('Tide pools');
@@ -355,6 +363,160 @@ describe('accepting a suggestion', () => {
 		const id = file({ kind: 'delete', title: 'Delete', node: a.id });
 		expect(applyProposal(id, BEN).ok).toBe(false);
 		expect(listNodes(ANA)).toHaveLength(1);
+	});
+});
+
+describe('every kind of suggestion, applied', () => {
+	/**
+	 * The rule, held for all nine kinds at once rather than for whichever one
+	 * somebody last noticed was broken: **a suggestion that reaches the queue can
+	 * be carried out.**
+	 *
+	 * Two kinds shipped violating it, found weeks apart — an orphan `connect`
+	 * with only one end, then a `circuit` with no concept at all — and each was
+	 * fixed where it was found. Both were the same fault: nothing said what a
+	 * kind needed, so the half that files and the half that applies disagreed,
+	 * and the disagreement surfaced as a button that did nothing. Driving this
+	 * off `REQUIRES` means a kind added later without a rule fails here instead
+	 * of shipping a dead row.
+	 */
+
+	/** A complete, applicable suggestion of every kind, against a real lattice. */
+	function wellFormed(kind: string, a: string, b: string): Record<string, unknown> {
+		const base = { kind, title: `A ${kind} suggestion`, rationale: 'because' };
+		const payload: Record<string, unknown> = {};
+		if (kind === 'create') {
+			Object.assign(payload, { name: 'A new concept', connect: [{ node: a }] });
+			return { ...base, payload };
+		}
+		if (kind === 'weight') payload.weight = 0.7;
+		if (kind === 'circuit') payload.areas = ['Somewhere'];
+		if (kind === 'rename') payload.name = 'A different name';
+		if (kind === 'convergence') payload.isConvergence = true;
+		return {
+			...base,
+			node: a,
+			...(REQUIRES[kind as keyof typeof REQUIRES].target ? { target: b } : {}),
+			payload
+		};
+	}
+
+	function lattice() {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		saveAssociation({ sourceId: a.id, targetId: b.id, weight: 0.5, userId: ANA });
+		return { a: a.id, b: b.id };
+	}
+
+	for (const kind of KINDS) {
+		it(`files a complete ${kind} and can carry it out`, () => {
+			const { a, b } = lattice();
+			expect(recordProposals(ANA, [wellFormed(kind, a, b)], 10).added).toBe(1);
+			const open = listProposals(ANA)[0];
+			const done = applyProposal(open.id, ANA);
+			expect(done.reason ?? '').toBe('');
+			expect(done.ok).toBe(true);
+		});
+
+		it(`never files a ${kind} that could not be carried out`, () => {
+			const { a, b } = lattice();
+			const needs = REQUIRES[kind];
+			// Every way this kind can arrive unusable: no concept, no second
+			// concept, or missing a field without which applying is a no-op.
+			const broken: Record<string, unknown>[] = [];
+			const full = wellFormed(kind, a, b) as Record<string, unknown>;
+			if (needs.node) broken.push({ ...full, node: undefined });
+			if (needs.target) broken.push({ ...full, target: undefined });
+			for (const key of needs.payload) {
+				const payload = { ...(full.payload as Record<string, unknown>) };
+				delete payload[key];
+				broken.push({ ...full, payload });
+			}
+			if (!broken.length) return; // `create` needs nothing, by definition
+
+			const res = recordProposals(ANA, broken, 20);
+			expect(res.added).toBe(0);
+			expect(res.dropped.incomplete).toBe(broken.length);
+			expect(listProposals(ANA)).toHaveLength(0);
+		});
+	}
+});
+
+describe('where the model put it', () => {
+	it('takes a concept nested inside payload, and applies it', () => {
+		const area = saveCircuit({ name: 'Geographic connection', ownerId: ANA });
+		const node = saveNode({ name: 'Life in Norway', ownerId: ANA });
+		// What a model actually sent. The prompt read `circuit — "node", payload
+		// {…}`, which compresses two nesting levels into one comma, so the node
+		// went inside the payload — a right answer in the wrong envelope, filed
+		// with no concept and dead on arrival.
+		expect(
+			recordProposals(
+				ANA,
+				[
+					{
+						kind: 'circuit',
+						title: 'File life-in-norway under geographic-connection',
+						rationale: 'it is explicitly about living in a country',
+						payload: { node: node.id, areas: [area.id] }
+					}
+				],
+				10
+			).added
+		).toBe(1);
+		const open = listProposals(ANA)[0];
+		expect(open.nodeId).toBe(node.id);
+		expect(applyProposal(open.id, ANA).ok).toBe(true);
+		expect(getNode(node.id, ANA)?.circuits).toEqual([area.id]);
+	});
+
+	it('recovers a row filed before the queue enforced its own shape', () => {
+		const area = saveCircuit({ name: 'Geographic connection', ownerId: ANA });
+		const node = saveNode({ name: 'Life in Norway', ownerId: ANA });
+		// Straight to the table, because this is the row that is already sitting
+		// in somebody's queue: no nodeId, and the reference one level down.
+		db.insert(cortexProposals)
+			.values({
+				id: 'stuck',
+				userId: ANA,
+				kind: 'circuit',
+				title: 'File life-in-norway under geographic-connection',
+				rationale: 'raised before the check existed',
+				nodeId: null,
+				targetId: null,
+				payload: { node: node.id, areas: [area.id] },
+				fingerprint: 'circuit|stuck',
+				status: 'open',
+				createdAt: new Date()
+			})
+			.run();
+		expect(applyProposal('stuck', ANA).ok).toBe(true);
+		expect(getNode(node.id, ANA)?.circuits).toEqual([area.id]);
+	});
+
+	it('says what to do when nothing names the concept at all', () => {
+		saveNode({ name: 'Life in Norway', ownerId: ANA });
+		db.insert(cortexProposals)
+			.values({
+				id: 'hopeless',
+				userId: ANA,
+				kind: 'circuit',
+				title: 'File it somewhere',
+				rationale: 'named the concept only in the title',
+				nodeId: null,
+				targetId: null,
+				payload: { areas: ['somewhere'] },
+				fingerprint: 'circuit|hopeless',
+				status: 'open',
+				createdAt: new Date()
+			})
+			.run();
+		const failed = applyProposal('hopeless', ANA);
+		expect(failed.ok).toBe(false);
+		// Actionable rather than a restatement of the schema, and it stays open
+		// so the person decides — nothing auto-dismisses somebody's queue.
+		expect(failed.reason).toContain('dismiss it');
+		expect(listProposals(ANA)).toHaveLength(1);
 	});
 });
 

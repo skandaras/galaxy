@@ -80,7 +80,7 @@ export interface GroomResult {
 	proposed?: number;
 	duplicates?: number;
 	/** Suggestions the model made that could not be filed, and why. */
-	dropped?: { unknownConcept: number; badKind: number; noTitle: number };
+	dropped?: RecordResult['dropped'];
 	/** Sizes and flags only, so a caller can tell these apart without any content. */
 	replyChars?: number;
 	parsedItems?: number;
@@ -586,6 +586,30 @@ export function applyProposal(id: string, userId: string): ApplyResult {
 	const num = (v: unknown) => (typeof v === 'number' ? v : undefined);
 	const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
 
+	/**
+	 * Which concepts this suggestion is about.
+	 *
+	 * The columns, or — where they are empty — whatever the payload still holds.
+	 * `recordProposals` now reads both places, so nothing filed after this change
+	 * needs the fallback; what needs it is every row filed *before* it, which
+	 * sits in somebody's queue with a null `nodeId` and the reference the model
+	 * sent stored one level down. Recovering it is exact rather than a guess: it
+	 * is the model's own value, in the wrong envelope.
+	 */
+	const refFrom = (key: string): string | null => {
+		const raw = str(payload[key]);
+		if (!raw) return null;
+		return (getNode(raw, userId) ?? findNodeByName(raw, userId))?.id ?? null;
+	};
+	const nodeId = p.nodeId ?? refFrom('node');
+	const targetId = p.targetId ?? refFrom('target');
+	/** Said once: a row from before the queue enforced its own shape. */
+	const unnamed = {
+		ok: false as const,
+		reason:
+			'this suggestion never named which concept it is about — dismiss it, and the next pass will raise it properly'
+	};
+
 	try {
 		switch (p.kind) {
 			case 'create': {
@@ -621,21 +645,21 @@ export function applyProposal(id: string, userId: string): ApplyResult {
 				break;
 			}
 			case 'merge': {
-				if (!p.nodeId || !p.targetId) {
+				if (!nodeId || !targetId) {
 					return { ok: false, reason: 'that suggestion does not name two concepts to merge' };
 				}
-				if (!mergeNodes(p.nodeId, p.targetId, userId, 'groom')) {
+				if (!mergeNodes(nodeId, targetId, userId, 'groom')) {
 					return { ok: false, reason: 'one of those concepts is gone, or is not yours to merge' };
 				}
 				break;
 			}
 			case 'connect': {
-				if (!p.nodeId || !p.targetId) {
+				if (!nodeId || !targetId) {
 					return { ok: false, reason: 'that suggestion does not name what to connect it to' };
 				}
 				saveAssociation({
-					sourceId: p.nodeId,
-					targetId: p.targetId,
+					sourceId: nodeId,
+					targetId,
 					weight: num(payload.weight),
 					description: str(payload.why),
 					userId,
@@ -645,26 +669,26 @@ export function applyProposal(id: string, userId: string): ApplyResult {
 				break;
 			}
 			case 'disconnect': {
-				if (!p.nodeId || !p.targetId) {
+				if (!nodeId || !targetId) {
 					return { ok: false, reason: 'that suggestion does not name a connection' };
 				}
 				// Either orientation: a symmetric connection is stored once, and which
 				// way round is an implementation detail the suggestion did not choose.
 				if (
-					!deleteAssociation(p.nodeId, p.targetId, userId, 'groom') &&
-					!deleteAssociation(p.targetId, p.nodeId, userId, 'groom')
+					!deleteAssociation(nodeId, targetId, userId, 'groom') &&
+					!deleteAssociation(targetId, nodeId, userId, 'groom')
 				) {
 					return { ok: false, reason: 'that connection is already gone' };
 				}
 				break;
 			}
 			case 'weight': {
-				if (!p.nodeId || !p.targetId || num(payload.weight) === undefined) {
+				if (!nodeId || !targetId || num(payload.weight) === undefined) {
 					return { ok: false, reason: 'that suggestion does not name a connection and a strength' };
 				}
 				saveAssociation({
-					sourceId: p.nodeId,
-					targetId: p.targetId,
+					sourceId: nodeId,
+					targetId,
 					weight: num(payload.weight),
 					userId,
 					actor: 'groom',
@@ -675,9 +699,20 @@ export function applyProposal(id: string, userId: string): ApplyResult {
 			case 'circuit':
 			case 'convergence':
 			case 'rename': {
-				if (!p.nodeId) return { ok: false, reason: 'that suggestion does not name a concept' };
-				const node = getNode(p.nodeId, userId);
+				if (!nodeId) return unnamed;
+				const node = getNode(nodeId, userId);
 				if (!node) return { ok: false, reason: 'that concept has been deleted since' };
+				// Two silent no-ops, said out loud. Without the new name a rename
+				// saves the concept under the name it already has; without the areas
+				// a filing keeps the ones it already had. Both then report success
+				// and mark the suggestion done, which is the failure this whole queue
+				// was rebuilt to stop — a button that looks like it worked.
+				if (p.kind === 'rename' && !str(payload.name)) {
+					return { ok: false, reason: 'that suggestion does not say what to rename it to' };
+				}
+				if (p.kind === 'circuit' && !Array.isArray(payload.areas)) {
+					return { ok: false, reason: 'that suggestion does not name an area to file it under' };
+				}
 				saveNode({
 					id: node.id,
 					name: p.kind === 'rename' ? (str(payload.name) ?? node.name) : node.name,
@@ -691,8 +726,8 @@ export function applyProposal(id: string, userId: string): ApplyResult {
 				break;
 			}
 			case 'delete': {
-				if (!p.nodeId) return { ok: false, reason: 'that suggestion does not name a concept' };
-				if (!deleteNode(p.nodeId, userId, 'groom')) {
+				if (!nodeId) return unnamed;
+				if (!deleteNode(nodeId, userId, 'groom')) {
 					return { ok: false, reason: 'that concept is gone, or is not yours to delete' };
 				}
 				break;
@@ -754,7 +789,13 @@ export interface RecordResult {
 	 * not exist" are different problems with the same old readout, and only one
 	 * of them is fixed by trying again.
 	 */
-	dropped: { unknownConcept: number; badKind: number; noTitle: number };
+	dropped: {
+		unknownConcept: number;
+		badKind: number;
+		noTitle: number;
+		/** Named no concept, or left out a field without which it is a no-op. */
+		incomplete: number;
+	};
 }
 
 export function recordProposals(userId: string, raw: unknown[], max: number): RecordResult {
@@ -784,7 +825,7 @@ export function recordProposals(userId: string, raw: unknown[], max: number): Re
 
 	let added = 0;
 	let duplicates = 0;
-	const dropped = { unknownConcept: 0, badKind: 0, noTitle: 0 };
+	const dropped = { unknownConcept: 0, badKind: 0, noTitle: 0, incomplete: 0 };
 
 	for (const item of raw.slice(0, max)) {
 		const p = (item ?? {}) as Record<string, unknown>;
@@ -799,8 +840,20 @@ export function recordProposals(userId: string, raw: unknown[], max: number): Re
 			continue;
 		}
 
-		const nodeRef = typeof p.node === 'string' ? p.node : null;
-		const targetRef = typeof p.target === 'string' ? p.target : null;
+		// Top level is where the prompt asks for these, and where they usually
+		// are. Inside `payload` is where they land when a model reads
+		// `circuit — "node", payload {…}` as one nesting rather than two, which
+		// is a fair misreading and not worth losing a good suggestion over — it
+		// answered the question correctly, in the wrong envelope.
+		const payload = (p.payload ?? {}) as Record<string, unknown>;
+		const ref = (key: string): string | null => {
+			const top = p[key];
+			if (typeof top === 'string' && top.trim()) return top.trim();
+			const nested = payload[key];
+			return typeof nested === 'string' && nested.trim() ? nested.trim() : null;
+		};
+		const nodeRef = ref('node');
+		const targetRef = ref('target');
 		// A proposal naming a node this person cannot see is either a model
 		// hallucination or a boundary crossing. Neither is worth filing.
 		// `create` is the exception by definition: its concept does not exist yet.
@@ -813,6 +866,22 @@ export function recordProposals(userId: string, raw: unknown[], max: number): Re
 				dropped.unknownConcept++;
 				continue;
 			}
+		}
+
+		// The rule this table exists for: nothing reaches the queue that the
+		// apply path could not carry out. A row that fails on click is worse than
+		// no row, because it costs somebody the click and reads as a broken
+		// button rather than a suggestion the model got wrong.
+		const needs = REQUIRES[kind as Kind];
+		const complete =
+			(!needs.node || !!nodeId) &&
+			(!needs.target || !!targetId) &&
+			// The payload as it will actually be stored — the whole item when the
+			// model put its detail at the top level rather than under `payload`.
+			needs.payload.every((key) => hasField((p.payload ?? p) as Record<string, unknown>, key));
+		if (!complete) {
+			dropped.incomplete++;
+			continue;
 		}
 
 		const fp = fingerprint(kind, nodeId ?? title, targetId ?? '');
@@ -845,7 +914,7 @@ export function recordProposals(userId: string, raw: unknown[], max: number): Re
 	return { added, duplicates, dropped };
 }
 
-const KINDS = [
+export const KINDS = [
 	'create',
 	'merge',
 	'connect',
@@ -857,6 +926,46 @@ const KINDS = [
 	'delete'
 ] as const;
 type Kind = (typeof KINDS)[number];
+
+/**
+ * What each kind needs before it can be carried out.
+ *
+ * **The queue must never hold a row that cannot be applied.** This table is
+ * where that rule lives, because until it existed the rule lived nowhere:
+ * `recordProposals` decided what to file and `applyProposal` decided what it
+ * could do, they disagreed, and every disagreement surfaced as a button that
+ * did nothing. Twice, in two different kinds, found weeks apart — an orphan
+ * `connect` filed with only one end, then a `circuit` filed with no concept at
+ * all.
+ *
+ * `payload` names the fields without which the change would be a *silent*
+ * no-op, which is the worse failure: a `rename` with no new name saves the
+ * concept under the name it already has, reports success, and marks the
+ * suggestion done. Requiring the field up front is what stops that.
+ *
+ * `create` needs nothing: its concept does not exist yet, and its name falls
+ * back to the title.
+ */
+export const REQUIRES: Record<Kind, { node: boolean; target: boolean; payload: string[] }> = {
+	create: { node: false, target: false, payload: [] },
+	merge: { node: true, target: true, payload: [] },
+	connect: { node: true, target: true, payload: [] },
+	disconnect: { node: true, target: true, payload: [] },
+	weight: { node: true, target: true, payload: ['weight'] },
+	circuit: { node: true, target: false, payload: ['areas'] },
+	convergence: { node: true, target: false, payload: [] },
+	rename: { node: true, target: false, payload: ['name'] },
+	delete: { node: true, target: false, payload: [] }
+};
+
+/** Whether a payload carries a usable value under this key. */
+function hasField(payload: Record<string, unknown>, key: string): boolean {
+	const value = payload[key];
+	if (typeof value === 'string') return value.trim().length > 0;
+	if (typeof value === 'number') return Number.isFinite(value);
+	if (Array.isArray(value)) return value.length > 0;
+	return value !== undefined && value !== null;
+}
 
 // --- the prompt -------------------------------------------------------------
 
@@ -965,19 +1074,25 @@ export function buildGroomPrompt(
 		decided.join('\n') || '(nothing yet)',
 		`--- YOUR TASK ---`,
 		task,
-		'Reply with ONLY a JSON object: {"proposals":[…]}. Every item in it has "kind", "title" (one line) and "rationale" (why). What else it needs depends on the kind:',
+		'Reply with ONLY a JSON object: {"proposals":[…]}. Every item has "kind", "title" (one line) and "rationale" (why), plus whatever its kind needs below.',
+		// Whole objects rather than a shorthand. The shorthand read
+		// `circuit — "node", payload {"areas":[…]}`, which compresses two nesting
+		// levels into one comma: a model read it as "circuit takes a node and a
+		// payload" and put the node *inside* the payload. The suggestion was
+		// right and unusable, and there was no way to tell from the row.
+		'"node" and "target" are always top-level keys, beside "kind" and "title" — never inside "payload". Copy the shape of these exactly:',
 		[
-			'create   — payload {"name":"…","description":"…","areas":["area-id or a new area name"],"connect":[{"node":"node-id","weight":0.7,"why":"…"}]}. Connections are part of the suggestion, not a follow-up: a concept nothing links to can never surface in a query.',
-			'merge    — "node": the one to keep, "target": the one folded into it.',
-			'connect  — "node" and "target", payload {"weight":0.0-1.0,"why":"…"}.',
-			'disconnect — "node" and "target".',
-			'weight   — "node" and "target", payload {"weight":0.0-1.0}.',
-			'circuit  — "node", payload {"areas":["area-id", …]} (the full set it should be in).',
-			'convergence — "node", payload {"isConvergence":true|false}.',
-			'rename   — "node", payload {"name":"…"}.',
-			'delete   — "node".'
-		].join('\n'),
-		'Use the exact ids given above; a node id you invent will be dropped. Propose nothing you cannot justify from what you were shown.'
+			'create — the concept does not exist yet, so it has no "node":\n{"kind":"create","title":"…","rationale":"…","payload":{"name":"…","description":"…","areas":["area-id or a new area name"],"connect":[{"node":"node-id","weight":0.7,"why":"…"}]}}\nConnections are part of the suggestion, not a follow-up: a concept nothing links to can never surface in a query.',
+			'merge — "node" is the one to keep, "target" the one folded into it:\n{"kind":"merge","title":"…","rationale":"…","node":"node-id","target":"node-id"}',
+			'connect:\n{"kind":"connect","title":"…","rationale":"…","node":"node-id","target":"node-id","payload":{"weight":0.7,"why":"…"}}',
+			'disconnect:\n{"kind":"disconnect","title":"…","rationale":"…","node":"node-id","target":"node-id"}',
+			'weight — the strength is required, or there is no change to make:\n{"kind":"weight","title":"…","rationale":"…","node":"node-id","target":"node-id","payload":{"weight":0.7}}',
+			'circuit — "areas" is the full set the concept should be in, and is required:\n{"kind":"circuit","title":"…","rationale":"…","node":"node-id","payload":{"areas":["area-id"]}}',
+			'convergence:\n{"kind":"convergence","title":"…","rationale":"…","node":"node-id","payload":{"isConvergence":true}}',
+			'rename — the new name is required:\n{"kind":"rename","title":"…","rationale":"…","node":"node-id","payload":{"name":"…"}}',
+			'delete:\n{"kind":"delete","title":"…","rationale":"…","node":"node-id"}'
+		].join('\n\n'),
+		'Use the exact ids given above; a node id you invent will be dropped, and so will a suggestion missing anything its kind requires. Propose nothing you cannot justify from what you were shown.'
 	].join('\n\n');
 }
 
