@@ -7,7 +7,13 @@ import type {
 } from '$lib/server/providers/types';
 import { isRetryable, StreamTimeoutError } from '$lib/server/providers/types';
 import { isCancellation } from './jobs';
-import { elideOldToolOutput, isNarration, stepLabel, streamWithIdleTimeout } from './loop';
+import {
+	elideOldToolOutput,
+	isNarration,
+	noteFor,
+	stepLabel,
+	streamWithIdleTimeout
+} from './loop';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -158,11 +164,29 @@ describe('isNarration', () => {
 		expect(isNarration(email)).toBe(false);
 	});
 
-	it('refuses anything long, multi-paragraph, or holding code', () => {
-		expect(isNarration('x'.repeat(201))).toBe(false);
+	it('refuses a second paragraph, a code fence, or a third line', () => {
+		// The structural tests, which are what actually tell writing from a
+		// lead-in. Length is only the backstop below.
 		expect(isNarration('First thought.\n\nSecond thought.')).toBe(false);
 		expect(isNarration('Here it is:\n```\nconst x = 1;\n```')).toBe(false);
 		expect(isNarration('one\ntwo\nthree')).toBe(false);
+	});
+
+	it('accepts a lead-in that runs to a paragraph', () => {
+		// The reason this changed: a model that narrates in paragraphs sat either
+		// side of the old 200-character line from one leg to the next, so some of
+		// its lead-ins became steps and the rest piled into the reply. Nothing is
+		// lost by taking this one — the step carries it in full.
+		const paragraph =
+			'Now the remaining shapes I need: the player store I extended last session, ' +
+			'notesToScore option units, how ControlRack invokes controls, the revisions ' +
+			'API for the history UI, and where lyrics would slot into render/MusicXML.';
+		expect(paragraph.length).toBeGreaterThan(200);
+		expect(isNarration(paragraph)).toBe(true);
+	});
+
+	it('still refuses a genuine page of writing', () => {
+		expect(isNarration('x'.repeat(1_501))).toBe(false);
 	});
 
 	it('allows a lead-in that wrapped onto a second line', () => {
@@ -199,6 +223,30 @@ describe('stepLabel', () => {
 		const label = stepLabel('y'.repeat(300), FALLBACK);
 		expect(label).toHaveLength(100);
 		expect(label.endsWith('…')).toBe(true);
+	});
+});
+
+describe('noteFor', () => {
+	it('keeps the lead-in the label could only summarise', () => {
+		const long = `First sentence. ${'y'.repeat(200)}`;
+		expect(noteFor(long, stepLabel(long, 'fallback'))).toBe(long);
+	});
+
+	it('drops one the label already says in full', () => {
+		// Otherwise a one-line lead-in prints twice in the same step: once as the
+		// summary and once underneath it.
+		const line = 'Checking how the loop handles a cancelled turn.';
+		expect(noteFor(line, stepLabel(line, 'fallback'))).toBeUndefined();
+	});
+
+	it('sees through the marks stepLabel strips', () => {
+		const line = '- **Reading the loop**';
+		expect(noteFor(line, stepLabel(line, 'fallback'))).toBeUndefined();
+	});
+
+	it('has nothing to keep when the model narrated nothing', () => {
+		expect(noteFor('', 'read_file loop.ts')).toBeUndefined();
+		expect(noteFor('   ', 'read_file loop.ts')).toBeUndefined();
 	});
 });
 

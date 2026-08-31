@@ -679,7 +679,20 @@ const server = createServer(async (req, res) => {
 						delta(res, { content: 'Done: picked up after the step limit and pushed.' });
 						delta(res, {}, 'stop');
 					}
-				} else if (toolResults === 0) call('read_file', { path: 'README.md' });
+				} else if (toolResults === 0) {
+					// A lead-in of the length a verbose model actually writes — well
+					// past the old 200-character line, which used to send it to the
+					// reply instead of onto the step. The smoke asserts it lands on
+					// the step and stays out of the saved message.
+					delta(res, {
+						content:
+							'Reading the README before I touch it, so the description I add ' +
+							'matches the shape of what is already there rather than replacing ' +
+							'a heading somebody wrote on purpose, and so the commit afterwards ' +
+							'has something honest to say about what actually changed.'
+					});
+					call('read_file', { path: 'README.md' });
+				}
 				else if (toolResults === 1)
 					call('write_file', {
 						path: 'README.md',

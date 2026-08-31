@@ -46,6 +46,16 @@ export interface RunStep {
 	label: string;
 	status: 'ok' | 'error';
 	toolCalls: RunToolCall[];
+	/**
+	 * The lead-in in full, when the model wrote more than fits on the label.
+	 *
+	 * The label is a glance — a first sentence, cut at 100 characters — and for
+	 * a model that narrates in paragraphs that used to be the only thing kept:
+	 * the rest was dropped from the reply and never written anywhere else.
+	 * Holding it here is what lets the loop treat a long lead-in as narration at
+	 * all, since doing so no longer loses anything.
+	 */
+	note?: string;
 }
 
 /** What is kept alongside an assistant message once the run is over. */
@@ -71,6 +81,8 @@ export interface TimelineStep {
 	label: string;
 	status: 'running' | 'ok' | 'error';
 	tools: TimelineTool[];
+	/** The lead-in in full — see RunStep.note. */
+	note?: string;
 }
 
 export interface TimelineStage {
@@ -114,6 +126,8 @@ export type TimelineChunk =
 			status: 'running' | 'ok' | 'error';
 			/** The streamed text became this label and should leave the reply. */
 			consumedText?: boolean;
+			/** That text in full, for the step's body — see RunStep.note. */
+			note?: string;
 	  }
 	| {
 			type: 'tool';
@@ -178,13 +192,27 @@ export function applyChunk(items: TimelineItem[], chunk: TimelineChunk): Timelin
 		if (idx === -1) {
 			return [
 				...items,
-				{ kind: 'step', id: chunk.id, label: chunk.label, status: chunk.status, tools: [] }
+				{
+					kind: 'step',
+					id: chunk.id,
+					label: chunk.label,
+					status: chunk.status,
+					tools: [],
+					...(chunk.note ? { note: chunk.note } : {})
+				}
 			];
 		}
 		const existing = items[idx] as TimelineStep;
 		const next = [...items];
-		// A later chunk may resolve the label, but must never blank one we have.
-		next[idx] = { ...existing, label: chunk.label || existing.label, status: chunk.status };
+		// A later chunk may resolve the label, but must never blank one we have —
+		// and the same goes for the note, since a step is pushed twice: once when
+		// it opens and again when its calls have settled.
+		next[idx] = {
+			...existing,
+			label: chunk.label || existing.label,
+			note: chunk.note || existing.note,
+			status: chunk.status
+		};
 		return next;
 	}
 
@@ -263,6 +291,7 @@ export function itemsFromTrace(trace: MessageTrace | null | undefined): Timeline
 		id: s.id,
 		label: s.label,
 		status: s.status,
+		...(s.note ? { note: s.note } : {}),
 		tools: s.toolCalls.map((c) => ({
 			name: c.name,
 			status: c.status ?? 'ok',
@@ -270,4 +299,42 @@ export function itemsFromTrace(trace: MessageTrace | null | undefined): Timeline
 			results: c.results
 		}))
 	}));
+}
+
+/**
+ * The reply as it is being streamed, and how much of it is settled.
+ *
+ * `mark` is where the text kept by earlier legs ends. Everything after it is
+ * the leg in flight, which may yet turn out to be a lead-in that belongs in the
+ * timeline rather than in the reply.
+ */
+export interface StreamText {
+	text: string;
+	mark: number;
+}
+
+export const emptyStreamText = (): StreamText => ({ text: '', mark: 0 });
+
+/**
+ * Settle the streamed reply when a leg ends, per the server's verdict on
+ * whether that leg's text became a step label.
+ *
+ * A leg the server consumed is dropped back to the mark — only *that* leg's
+ * narration goes. Both pages used to clear the whole buffer instead, so a leg
+ * that wrote something for the user followed by a leg that narrated lost the
+ * writing too; it came back on the code page only because it re-reads the
+ * thread afterwards, and on chat it did not come back at all.
+ *
+ * A leg that was kept ends with a blank line and moves the mark, which is what
+ * puts a paragraph between one leg and the next — `assistantText` on the server
+ * is assembled the same way, so the two agree byte for byte.
+ */
+export function applyStreamText(current: StreamText, chunk: TimelineChunk): StreamText {
+	if (chunk.type !== 'step') return current;
+	if (chunk.consumedText) return { text: current.text.slice(0, current.mark), mark: current.mark };
+	// Nothing streamed this leg: no paragraph to open, and moving the mark past
+	// a separator we did not write would strand the next consumed leg.
+	if (current.text.length === current.mark) return current;
+	const text = `${current.text.trimEnd()}\n\n`;
+	return { text, mark: text.length };
 }

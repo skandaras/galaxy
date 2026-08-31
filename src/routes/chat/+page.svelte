@@ -15,6 +15,7 @@
 	import type { ResearchEffort as Effort } from '$lib/research-effort';
 	import {
 		applyChunk,
+		applyStreamText,
 		itemsFromTrace,
 		unfinishedNote,
 		type MessageTrace,
@@ -124,6 +125,12 @@
 	let question = $state<{ id: string; prompt: string; options: string[] } | null>(null);
 	let stopping = $state(false);
 	let streamText = $state('');
+	/**
+	 * Where the text kept by earlier legs ends. Everything past it belongs to
+	 * the leg in flight, which may yet turn out to be a lead-in the server
+	 * takes for a step label — see applyStreamText.
+	 */
+	let streamMark = $state(0);
 	let streamModel = $state('');
 	/**
 	 * Steps and their tool calls for the turn in flight. Stages stay separate
@@ -464,6 +471,7 @@
 		stopping = false;
 		streaming = true;
 		streamText = '';
+		streamMark = 0;
 		streamModel = '';
 		timeline = [];
 		lastStopReason = null;
@@ -480,13 +488,18 @@
 				// partial text from a failed attempt so it isn't duplicated.
 				streamModel = chunk.model;
 				streamText = '';
+				streamMark = 0;
 			} else if (chunk.type === 'delta') streamText += chunk.text;
 			else if (chunk.type === 'stage') stages = [...stages, { name: chunk.name, detail: chunk.detail }];
 			else if (chunk.type === 'step' || chunk.type === 'tool' || chunk.type === 'search') {
-				// Only drop the buffered text when the server says it became this
-				// step's label — see the same guard on the code page. Text the model
-				// wrote for the user before calling a tool is the reply.
-				if (chunk.type === 'step' && chunk.consumedText) streamText = '';
+				// A step settles the leg that just streamed — see the same block on
+				// the code page: dropped back to the mark when the server took its
+				// text for the label, closed with a blank line when it did not.
+				if (chunk.type === 'step') {
+					const settled = applyStreamText({ text: streamText, mark: streamMark }, chunk);
+					streamText = settled.text;
+					streamMark = settled.mark;
+				}
 				timeline = applyChunk(timeline, chunk);
 			} else if (chunk.type === 'notice') notices = [...notices, chunk.text];
 			else if (chunk.type === 'question') {
@@ -697,7 +710,7 @@
 				{
 					id: `local-a-${Date.now()}`,
 					role: 'assistant',
-					content: streamText,
+					content: streamText.trimEnd(),
 					modelKey: streamModel || null,
 					attachments: null,
 					trace: localTrace()
@@ -709,6 +722,7 @@
 		stopping = false;
 		question = null;
 		streamText = '';
+		streamMark = 0;
 		timeline = [];
 		stages = [];
 		closeStream();

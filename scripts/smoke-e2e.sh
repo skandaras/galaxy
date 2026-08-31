@@ -369,8 +369,19 @@ git clone -q --bare "$ORIGIN" "$ORIGIN.git"
 api -X PUT $B/api/admin/task-configs -d "{\"task\":\"coding\",\"primaryModelId\":\"$MODEL_ID\"}" > /dev/null
 SID=$(api -X POST $B/api/code/sessions -d "{\"repoUrl\":\"$ORIGIN.git\",\"repoName\":\"local/origin\",\"mode\":\"implement\"}" | jqn .chatId)
 CJOB=$(api -X POST $B/api/code/sessions/$SID/messages -d '{"content":"Update the README"}' | jqn .jobId)
-curl -sN --max-time 90 $B/api/jobs/$CJOB/stream > /dev/null
+CSTREAM=$(curl -sN --max-time 90 $B/api/jobs/$CJOB/stream)
 check "coding pushed to origin" "$(git -C $ORIGIN.git log --all --oneline)" "Add project description"
+
+# A lead-in that runs to a paragraph belongs on its step, not in the reply. It
+# used to land on both sides of a 200-character line from one leg to the next,
+# which is why a verbose model's run read as a wall of glued-together prose.
+check "a long lead-in names its step" "$CSTREAM" '"label":"Reading the README before I touch it'
+check "and is kept in full on the step" "$CSTREAM" 'commit afterwards has something honest to say'
+check "and the browser is told to take it out of the reply" "$CSTREAM" '"consumedText":true'
+CREPLY=$(api $B/api/code/sessions/$SID | jqn '.messages.at(-1).content')
+check_absent "so it is not in the saved reply" "$CREPLY" 'Reading the README before I touch it'
+# The run-on this fixes: one leg's full stop against the next leg's capital.
+check_absent "and nothing is glued mid-sentence" "$CREPLY" '.Reading'
 
 # Web search inside a coding session: on by default, and actually withheld when
 # the composer toggle is off.

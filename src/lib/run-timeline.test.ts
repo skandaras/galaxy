@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
 	applyChunk,
+	applyStreamText,
+	emptyStreamText,
 	itemsFromTrace,
 	type TimelineChunk,
 	type TimelineItem,
@@ -195,5 +197,86 @@ describe('search results in the timeline', () => {
 		expect(steps(items)[0].tools[0].results).toEqual(ROWS);
 		// A call that never had results still has none, rather than an empty box.
 		expect(steps(items)[0].tools[1].results).toBeUndefined();
+	});
+});
+
+describe('the note on a step', () => {
+	const stepChunk = (over: Partial<TimelineChunk & { type: 'step' }> = {}): TimelineChunk => ({
+		type: 'step',
+		id: 's1',
+		label: 'Reading the loop',
+		status: 'running',
+		...over
+	});
+
+	it('is carried onto the step', () => {
+		const [step] = steps(fold([stepChunk({ note: 'Reading the loop, then the session file.' })]));
+		expect(step.note).toBe('Reading the loop, then the session file.');
+	});
+
+	it('survives the second chunk, which carries the settled status', () => {
+		// A step is pushed twice. The first push is the only one that has to
+		// carry the note, and the second must not blank what the first set.
+		const [step] = steps(
+			fold([stepChunk({ note: 'The long lead-in.' }), stepChunk({ status: 'ok' })])
+		);
+		expect(step.note).toBe('The long lead-in.');
+		expect(step.status).toBe('ok');
+	});
+
+	it('is absent when the model wrote nothing worth keeping', () => {
+		expect(steps(fold([stepChunk()]))[0].note).toBeUndefined();
+	});
+
+	it('comes back out of a stored trace', () => {
+		const items = itemsFromTrace({
+			steps: [
+				{ id: 's1', label: 'Reading the loop', status: 'ok', toolCalls: [], note: 'In full.' }
+			]
+		});
+		expect(steps(items)[0].note).toBe('In full.');
+	});
+});
+
+describe('applyStreamText', () => {
+	const settle = (consumedText: boolean): TimelineChunk => ({
+		type: 'step',
+		id: 's',
+		label: 'x',
+		status: 'ok',
+		consumedText
+	});
+	const streamed = (text: string, into = emptyStreamText()) => ({ ...into, text: into.text + text });
+
+	it('drops a consumed leg and nothing else', () => {
+		// The defect this replaces cleared the whole buffer, so a leg that wrote
+		// for the user followed by a leg that narrated lost both.
+		let s = applyStreamText(streamed('The answer so far.'), settle(false));
+		s = applyStreamText(streamed('Now reading the loop.', s), settle(true));
+		expect(s.text).toBe('The answer so far.\n\n');
+	});
+
+	it('puts a blank line between legs it keeps', () => {
+		let s = applyStreamText(streamed('First leg.'), settle(false));
+		s = applyStreamText(streamed('Second leg.', s), settle(false));
+		expect(s.text).toBe('First leg.\n\nSecond leg.\n\n');
+		// The run-on this fixes: "correctly.Now the remaining shapes".
+		expect(s.text).not.toContain('leg.Second');
+	});
+
+	it('leaves an empty buffer empty, so a fallback reply still streams clean', () => {
+		// loop.ts appends the stand-in reply as a delta on the strength of this.
+		expect(applyStreamText(emptyStreamText(), settle(true))).toEqual(emptyStreamText());
+		expect(applyStreamText(emptyStreamText(), settle(false))).toEqual(emptyStreamText());
+	});
+
+	it('ignores a leg that streamed nothing rather than opening a paragraph', () => {
+		const kept = applyStreamText(streamed('Only leg.'), settle(false));
+		expect(applyStreamText(kept, settle(false))).toEqual(kept);
+	});
+
+	it('leaves everything that is not a step alone', () => {
+		const s = streamed('mid-flight');
+		expect(applyStreamText(s, { type: 'notice', text: 'x' })).toBe(s);
 	});
 });

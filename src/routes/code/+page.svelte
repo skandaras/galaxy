@@ -14,6 +14,7 @@
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
 	import {
 		applyChunk,
+		applyStreamText,
 		isTimelineChunk,
 		itemsFromTrace,
 		unfinishedNote,
@@ -148,6 +149,12 @@
 	let question = $state<{ id: string; prompt: string; options: string[] } | null>(null);
 	let stopping = $state(false);
 	let streamText = $state('');
+	/**
+	 * Where the text kept by earlier legs ends. Everything past it belongs to
+	 * the leg in flight, which may yet turn out to be a lead-in the server
+	 * takes for a step label — see applyStreamText.
+	 */
+	let streamMark = $state(0);
 	let streamModel = $state('');
 	/** Steps, stages and notices for the run in flight, in the order they arrived. */
 	let timeline = $state<TimelineItem[]>([]);
@@ -402,6 +409,7 @@
 		stopping = false;
 		streaming = true;
 		streamText = '';
+		streamMark = 0;
 		streamModel = '';
 		timeline = [];
 		// Refilled from the replayed chunks; a stale row from a previous attach
@@ -422,13 +430,18 @@
 				// what it is for.
 				streamModel = chunk.model;
 				streamText = '';
+				streamMark = 0;
 			} else if (chunk.type === 'delta') streamText += chunk.text;
 			else if (isTimelineChunk(chunk)) {
-				// Only drop the buffered text when the server says it became this
-				// step's label. A model that writes something substantial and then
-				// calls a tool — a redrafted email, say — is writing the reply, and
-				// clearing it here threw that work away.
-				if (chunk.type === 'step' && chunk.consumedText) streamText = '';
+				// A step settles the leg that just streamed: dropped back to the
+				// mark when the server took its text for the label, and closed with
+				// a blank line when it did not. Clearing the whole buffer here threw
+				// away what earlier legs had written for the user.
+				if (chunk.type === 'step') {
+					const settled = applyStreamText({ text: streamText, mark: streamMark }, chunk);
+					streamText = settled.text;
+					streamMark = settled.mark;
+				}
 				timeline = applyChunk(timeline, chunk);
 			} else if (chunk.type === 'agent') {
 				// Same id on every update, so replay after a reconnect converges
@@ -566,7 +579,7 @@
 				{
 					id: `local-a-${Date.now()}`,
 					role: 'assistant',
-					content: streamText,
+					content: streamText.trimEnd(),
 					modelKey: streamModel,
 					trace: localTrace()
 				}
@@ -577,6 +590,7 @@
 		stopping = false;
 		question = null;
 		streamText = '';
+		streamMark = 0;
 		timeline = [];
 		subAgents = [];
 		runStartedAt = null;
