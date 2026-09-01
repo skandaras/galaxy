@@ -59,6 +59,7 @@
 		modelMs?: number;
 		retried?: boolean;
 		completionTokens?: number;
+		reasoningTokens?: number;
 		modelKey?: string;
 		survey?: {
 			concepts: number;
@@ -71,6 +72,7 @@
 			modelMs: number;
 			retried: boolean;
 			completionTokens: number;
+			reasoningTokens: number;
 			maxTokens: number;
 			allowedMs: number;
 		};
@@ -81,6 +83,7 @@
 			modelMs: number;
 			retried: boolean;
 			completionTokens: number;
+			reasoningTokens: number;
 			maxTokens: number;
 			allowedMs: number;
 		};
@@ -741,8 +744,23 @@
 								     invited to spend minutes. The model name is here because
 								     pickModel falls back to the first enabled one in silence. -->
 								<span class="hint">
-									{lastRun.modelKey ?? 'the model'} wrote {lastRun.completionTokens ?? 0} tokens.
+									{lastRun.modelKey ?? 'the model'} wrote {lastRun.completionTokens ?? 0} tokens{lastRun.reasoningTokens
+										? `, ${lastRun.reasoningTokens} of them thinking`
+										: ''}.
 								</span>
+								{#if lastRun.reasoningTokens && lastRun.completionTokens && lastRun.reasoningTokens > lastRun.completionTokens * 0.5}
+									<!-- The failure that cost three rounds to find. Reasoning
+									     tokens are output tokens: they are the wall clock, and
+									     max tokens does not govern them — a call capped at 4,096
+									     once wrote 13,851 and was not truncated. -->
+									<span class="hint">
+										Most of that run was deliberation, not answer. This job asks for low
+										effort; a model that ignores it, or one whose provider does not
+										advertise the setting, is the thing to change — set
+										<strong>Reasoning</strong> on the model in Admin → Providers, or point
+										the cortex-groom task at a model that does not reason.
+									</span>
+								{/if}
 							{/if}
 							{#if lastRun.dropped?.unknownConcept}
 								<!-- The difference between "it suggested nothing" and "it

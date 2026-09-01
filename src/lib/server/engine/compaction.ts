@@ -1,7 +1,9 @@
+import { reasoningFor } from '$lib/server/providers/registry';
 import type { ChatMeta, StoredMessage } from '$lib/server/chats';
 import { getMessages, updateChat } from '$lib/server/chats';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import type { CompactionSettings } from '$lib/server/settings';
+
 import { emitEvent } from './events';
 
 // Cheap deterministic token estimate (~4 chars/token). Good enough to decide
@@ -102,7 +104,11 @@ async function summarise(
 						: transcript
 				}
 			],
-			maxTokens: 1024
+			maxTokens: 1024,
+			// Reads what it was given and emits a short structured answer, which is
+			// the class of task where deliberation buys nothing and costs the wall
+			// clock. Sent only to models that accept it — see reasoningFor.
+			reasoning: reasoningFor(choice, 'low')
 		},
 		AbortSignal.timeout(60_000)
 	);

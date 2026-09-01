@@ -1,3 +1,4 @@
+import { reasoningFor } from '$lib/server/providers/registry';
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
@@ -416,7 +417,11 @@ export async function runUxAudit(trigger: 'schedule' | 'manual'): Promise<UxAudi
 						content: await buildAuditPrompt({ since, now: startedAt, maxIdeas })
 					}
 				],
-				maxTokens: 4096
+				maxTokens: 4096,
+				// Reads what it was given and emits a short structured answer, which is
+				// the class of task where deliberation buys nothing and costs the wall
+				// clock. Sent only to models that accept it — see reasoningFor.
+				reasoning: reasoningFor(choice, 'low')
 			},
 			AbortSignal.timeout(180_000)
 		);

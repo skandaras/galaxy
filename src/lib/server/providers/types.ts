@@ -47,6 +47,22 @@ export interface Usage {
 	 * positive.
 	 */
 	cacheDiscountUsd?: number;
+	/**
+	 * Output tokens the model spent thinking rather than answering, when the
+	 * provider breaks it out (`completion_tokens_details.reasoning_tokens`).
+	 *
+	 * The number that makes a slow run legible, and it was missing for the whole
+	 * of three separate investigations. A groom run reported 13,851 completion
+	 * tokens against a 1,596-character answer — about four hundred tokens of
+	 * reply and thirteen thousand of chain-of-thought, at four and a half
+	 * minutes. Completion tokens alone cannot tell that apart from a model that
+	 * wrote a very long answer.
+	 *
+	 * Optional rather than defaulted to zero, for the same reason as the cache
+	 * fields above: "the provider said nothing" and "nothing was reasoned" are
+	 * different answers.
+	 */
+	reasoningTokens?: number;
 }
 
 export type StreamEvent =
@@ -79,6 +95,15 @@ export type StreamEvent =
 
 export type CacheMode = 'auto' | 'explicit' | 'none';
 
+/**
+ * How much of its output budget a model may spend thinking.
+ *
+ * `low` is the floor rather than an off switch, and deliberately so: models
+ * with mandatory reasoning reject a request that tries to disable it outright,
+ * so there is no value here that is safe everywhere *and* means none.
+ */
+export type ReasoningEffort = 'low' | 'medium' | 'high';
+
 export interface ChatRequest {
 	modelKey: string;
 	messages: ProviderMessage[];
@@ -87,6 +112,21 @@ export interface ChatRequest {
 	maxTokens?: number;
 	/** See models.cacheMode. Absent behaves as 'auto': send nothing. */
 	cacheMode?: CacheMode;
+	/**
+	 * How hard the model should think, for the models that can be told.
+	 *
+	 * The lever this app spent three incidents not having. `maxTokens` does not
+	 * govern reasoning — a run capped at 4,096 wrote 13,851 tokens and was not
+	 * truncated — so every attempt to make a job faster by moving that number,
+	 * or the timeout under it, was aimed at the wrong thing. Reasoning tokens
+	 * are output tokens: they are the wall clock.
+	 *
+	 * Absent sends nothing, exactly as an unset `cacheMode` and `modalities` do.
+	 * An endpoint that has never heard of the field is entitled to reject the
+	 * whole request over it, so a caller asking for this is only honoured when
+	 * the model is known to accept it — see `reasoningFor` in engine.ts.
+	 */
+	reasoning?: ReasoningEffort;
 	/**
 	 * What the model may reply *with*, as opposed to what it can be shown.
 	 *
@@ -115,6 +155,15 @@ export interface RemoteModel {
 	completionCostPerMTok: number | null;
 	/** The model draws: it returns images as well as text. */
 	supportsImageOutput: boolean;
+	/**
+	 * The model accepts being told how hard to think — it advertises `reasoning`
+	 * among its supported parameters.
+	 *
+	 * A capability the provider reports, like `supportsTools`, so a re-sync
+	 * corrects it. It gates whether the field may be *sent* at all; how much to
+	 * think is the job's business and the admin's.
+	 */
+	supportsReasoning: boolean;
 	/** Starting point for models.cacheMode; only ever applied on first import. */
 	cacheMode: CacheMode;
 }

@@ -17,6 +17,13 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 		patch.displayName = body.displayName.trim();
 	if (body.cacheMode === 'auto' || body.cacheMode === 'explicit' || body.cacheMode === 'none')
 		patch.cacheMode = body.cacheMode;
+	// No 'off'. Models with mandatory reasoning reject a request that tries to
+	// disable it outright, so an off switch would be a setting that breaks some
+	// models — 'low' is the floor. `auto` honours whatever the calling job asks
+	// for, which is how the structured-output jobs get low effort without an
+	// admin needing to know they exist.
+	if (['auto', 'low', 'medium', 'high'].includes(body.reasoningMode))
+		patch.reasoningMode = body.reasoningMode;
 	if (Object.keys(patch).length) {
 		db.update(models).set(patch).where(eq(models.id, row.id)).run();
 	}

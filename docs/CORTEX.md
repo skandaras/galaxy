@@ -737,6 +737,84 @@ below, which is what that number is the width of). `tidy` runs on every pass
 whether or not a model is configured for the `cortex-groom` task, because that
 half needs none.
 
+### The lever: `max_tokens` never governed reasoning at all
+
+**This is the root cause of every timeout this job has had, and it took three
+rounds to find because nothing reported the number that shows it.**
+
+A groom run on a *nine-concept* lattice:
+
+```
+"maxTokens": 4096,          ← what we asked for
+"completionTokens": 13851,  ← what it wrote
+"finishReason": "stop",     ← and it was not truncated
+"replyChars": 1596,
+"modelMs": 277298
+```
+
+The model wrote **3.4× our limit and was not cut off**, so `max_tokens` was
+simply not applied to it. And 1,596 characters of reply is roughly four hundred
+tokens — meaning about **13,450 of those 13,851 tokens were chain-of-thought
+that gets thrown away**. At the ~50 tokens/sec that run averaged, the answer
+itself took about eight seconds. The other 269 were thinking.
+
+Reasoning tokens *are* output tokens. They are charged as output and generated
+at output speed: **they are the wall clock**. And on these routes `max_tokens`
+does not bound them. So every fix aimed at that number, or at the timeout under
+it, was aimed at something that could not help:
+
+- raise `max_tokens` → more room to think
+- lower `max_tokens` → ignored, as the run above proves
+- raise `timeoutSeconds` → wait longer for the same thinking
+- split into two passes → two lots of the same thinking
+
+**The app had no way to ask for less thinking.** `ChatRequest` had `tools`,
+`temperature`, `maxTokens`, `cacheMode`, `modalities` — and no reasoning field.
+The adapter *read* chain-of-thought (`reasoning_content` on DeepSeek and vLLM,
+`reasoning` on OpenRouter) and detected the pathological case (`reasonedOnly`),
+so the codebase plainly knew these models existed. It had simply never been able
+to govern one.
+
+It can now. `ChatRequest.reasoning` maps to `reasoning: { effort }`, and three
+things about how it is sent are load-bearing, each from how a real endpoint
+behaves:
+
+- **Never unsolicited.** Same caution `modalities` carries — an endpoint that
+  has never heard of the field may reject the whole request, which would take
+  out every job at once. `models.supportsReasoning` is read from the provider's
+  listing (`supported_parameters`, exactly as `supportsTools` is) and gates it.
+- **Never `reasoning` and `reasoning_effort` together.** Reasoning models return
+  400 on both.
+- **Never `exclude: true`.** It keeps the chain-of-thought out of the response,
+  which is the only thing `reasonedOnly` can be detected from — the retry that
+  rescues a model which thought itself out of room would go blind to the case it
+  exists for. It saves no time either: the model still reasons.
+- **No off switch.** Models with mandatory reasoning reject a request that tries
+  to disable it, so `low` is the floor and there is nothing honest to call a
+  setting that breaks some models.
+
+Three answers combine in `reasoningFor` (`providers/registry.ts`), so no call
+site has to know the rules: the **job** says what it needs (every
+structured-output job in the app asks for `low` — groom, memory, alignment, the
+UX audit, chat titles, run summaries, compaction, research triage), the **model
+row** says whether it can be sent, and an **admin** can override on the model in
+Admin → Providers. Deliberately unchanged: the research synthesis and the
+chat/coding loop, where thinking is the product.
+
+### Two numbers, one parser
+
+`complete()` parsed `usage` inline and kept prompt and completion tokens, while
+the streaming path used an exported `readUsage()` that also read
+`prompt_tokens_details.cached_tokens` and `cache_discount`. So **every
+non-streaming job — which is all of them but chat — silently dropped its cache
+statistics**, and would have dropped reasoning tokens the same way. One reader
+now, and `reasoningTokens` (from `completion_tokens_details.reasoning_tokens`)
+reaches every job, the `usage_log`, and the panel at once.
+
+**"Wrote 13,851 tokens, 13,450 of them thinking" ends this investigation in one
+glance.** Completion tokens alone cannot tell a long answer from a long
+deliberation, and only the second is usually a fault.
+
 ### `max_tokens` is permission to think, not a safety ceiling
 
 **Read this before changing any number in Admin → Cortex.** It is the fault
@@ -794,6 +872,18 @@ call came back empty.
 
 The rule, stated once: **ask for the size of the answer.** A budget larger than
 the answer buys nothing except time, and time is what was running out.
+
+### Instruction is not free either
+
+Beside the above but in the same direction: the close-read prompt sent all nine
+per-kind JSON schemas every time — about 2,600 characters of instruction against
+4,000 of actual lattice on a nine-concept review. A pass that cannot propose a
+`create` has no use for its shape, and every line of unused instruction is
+something a reasoning model dutifully considers. Each pass now sends only the
+shapes for the kinds it may actually propose (`proposalShapes`), and `max` is
+capped at a third of the lattice — asking for "at most 10 changes" across nine
+concepts invites a model to work for ten. Measured on the same nine-concept
+lattice: **9,657 characters down to 4,093**.
 
 ### The three numbers that would have found this in ten seconds
 

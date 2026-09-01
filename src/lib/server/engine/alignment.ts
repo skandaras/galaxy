@@ -1,3 +1,4 @@
+import { reasoningFor } from '$lib/server/providers/registry';
 import { randomUUID } from 'node:crypto';
 import { db } from '$lib/server/db';
 import {
@@ -383,7 +384,11 @@ export async function assessEntry(userId: string, entryId: string): Promise<Asse
 						content: assessmentUserMessage(entry, principles, tensions, dimensions, distress.flagged)
 					}
 				],
-				maxTokens: 3072
+				maxTokens: 3072,
+				// Reads what it was given and emits a short structured answer, which is
+				// the class of task where deliberation buys nothing and costs the wall
+				// clock. Sent only to models that accept it — see reasoningFor.
+				reasoning: reasoningFor(choice, 'low')
 			},
 			AbortSignal.timeout(CALL_TIMEOUT_MS)
 		);
@@ -587,7 +592,11 @@ export async function runAlignmentSynthesis(
 							.join('\n\n')
 					}
 				],
-				maxTokens: 1536
+				maxTokens: 1536,
+				// Reads what it was given and emits a short structured answer, which is
+				// the class of task where deliberation buys nothing and costs the wall
+				// clock. Sent only to models that accept it — see reasoningFor.
+				reasoning: reasoningFor(choice, 'low')
 			},
 			AbortSignal.timeout(CALL_TIMEOUT_MS)
 		);

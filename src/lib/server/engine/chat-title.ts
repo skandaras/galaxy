@@ -1,3 +1,4 @@
+import { reasoningFor } from '$lib/server/providers/registry';
 import { getChat, getMessages, updateChat } from '$lib/server/chats';
 import type { ToolDef } from '$lib/server/providers/types';
 import type { LoopTool } from './loop';
@@ -149,7 +150,11 @@ export async function maybeTitleChat(chatId: string, userId: string): Promise<st
 						].join('\n\n')
 					}
 				],
-				maxTokens: TITLE_MAX_TOKENS
+				maxTokens: TITLE_MAX_TOKENS,
+				// Reads what it was given and emits a short structured answer, which is
+				// the class of task where deliberation buys nothing and costs the wall
+				// clock. Sent only to models that accept it — see reasoningFor.
+				reasoning: reasoningFor(choice, 'low')
 			},
 			AbortSignal.timeout(30_000)
 		);

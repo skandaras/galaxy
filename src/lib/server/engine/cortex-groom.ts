@@ -1,3 +1,4 @@
+import { reasoningFor } from '$lib/server/providers/registry';
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
@@ -170,6 +171,14 @@ export interface GroomResult {
 	 * `pickModel` falls back to the first enabled model silently.
 	 */
 	completionTokens?: number;
+	/**
+	 * Of those, the ones spent thinking rather than answering.
+	 *
+	 * Part of `completionTokens`, not additional to it. The split is the point:
+	 * a run that wrote 13,851 tokens against a 1,596-character reply spent about
+	 * four hundred of them on the answer, and the rest is the wall clock.
+	 */
+	reasoningTokens?: number;
 	modelKey?: string;
 	/**
 	 * The wide pass of a review: what it looked at, and what it came back with.
@@ -192,6 +201,7 @@ export interface GroomResult {
 		modelMs: number;
 		retried: boolean;
 		completionTokens: number;
+		reasoningTokens: number;
 		/** What it was allowed to write, and how long it was given. */
 		maxTokens: number;
 		allowedMs: number;
@@ -207,6 +217,7 @@ export interface GroomResult {
 		modelMs: number;
 		retried: boolean;
 		completionTokens: number;
+		reasoningTokens: number;
 		maxTokens: number;
 		allowedMs: number;
 	};
@@ -1237,22 +1248,43 @@ function decidedList(userId: string, by: 'title' | 'id' = 'title'): string {
  * takes a node and a payload" and put the node *inside* the payload. The
  * suggestion was right and unusable, and there was no way to tell from the row.
  */
-const PROPOSAL_SHAPES = [
-	'Reply with ONLY a JSON object: {"proposals":[…]}. Every item has "kind", "title" (one line) and "rationale" (why), plus whatever its kind needs below.',
-	'"node" and "target" are always top-level keys, beside "kind" and "title" — never inside "payload". Copy the shape of these exactly:',
-	[
+const SHAPE_BY_KIND: Record<Kind, string> = {
+	create:
 		'create — the concept does not exist yet, so it has no "node":\n{"kind":"create","title":"…","rationale":"…","payload":{"name":"…","description":"…","areas":["area-id or a new area name"],"connect":[{"node":"node-id","weight":0.7,"why":"…"}]}}\nConnections are part of the suggestion, not a follow-up: a concept nothing links to can never surface in a query.',
+	merge:
 		'merge — "node" is the one to keep, "target" the one folded into it:\n{"kind":"merge","title":"…","rationale":"…","node":"node-id","target":"node-id"}',
+	connect:
 		'connect:\n{"kind":"connect","title":"…","rationale":"…","node":"node-id","target":"node-id","payload":{"weight":0.7,"why":"…"}}',
+	disconnect:
 		'disconnect:\n{"kind":"disconnect","title":"…","rationale":"…","node":"node-id","target":"node-id"}',
+	weight:
 		'weight — the strength is required, or there is no change to make:\n{"kind":"weight","title":"…","rationale":"…","node":"node-id","target":"node-id","payload":{"weight":0.7}}',
+	circuit:
 		'circuit — "areas" is the full set the concept should be in, and is required:\n{"kind":"circuit","title":"…","rationale":"…","node":"node-id","payload":{"areas":["area-id"]}}',
+	convergence:
 		'convergence:\n{"kind":"convergence","title":"…","rationale":"…","node":"node-id","payload":{"isConvergence":true}}',
+	rename:
 		'rename — the new name is required:\n{"kind":"rename","title":"…","rationale":"…","node":"node-id","payload":{"name":"…"}}',
-		'delete:\n{"kind":"delete","title":"…","rationale":"…","node":"node-id"}'
-	].join('\n\n'),
-	'Use the exact ids given above; a node id you invent will be dropped, and so will a suggestion missing anything its kind requires. Propose nothing you cannot justify from what you were shown.'
-];
+	delete: 'delete:\n{"kind":"delete","title":"…","rationale":"…","node":"node-id"}'
+};
+
+/**
+ * The shapes for the kinds this pass may actually propose.
+ *
+ * All nine used to go in every prompt, which on a nine-concept lattice was
+ * ~2,600 characters of schema against ~4,000 of actual lattice — the model read
+ * more instruction than data. A pass that cannot propose a `create` has no use
+ * for its shape, and every line of unused instruction is something a reasoning
+ * model dutifully considers.
+ */
+function proposalShapes(kinds: readonly Kind[]): string[] {
+	return [
+		'Reply with ONLY a JSON object: {"proposals":[…]}. Every item has "kind", "title" (one line) and "rationale" (why), plus whatever its kind needs below.',
+		'"node" and "target" are always top-level keys, beside "kind" and "title" — never inside "payload". Copy the shape of these exactly:',
+		kinds.map((k) => SHAPE_BY_KIND[k]).join('\n\n'),
+		'Use the exact ids given above; a node id you invent will be dropped, and so will a suggestion missing anything its kind requires. Propose nothing you cannot justify from what you were shown.'
+	];
+}
 
 /**
  * A handful of words that stand for the whole window.
@@ -1433,7 +1465,10 @@ export function buildHarvestPrompt(userId: string, max: number, activity = ''): 
 			'Nothing worth adding is a fine answer. Reply with an empty list.',
 			'Also file anything under NOT YET FILED: nothing else can put a concept in an area, so those are waiting on you. Use an existing area wherever one fits — the index is what every agent navigates by, so it is worth keeping small — and only name a new one when nothing does.'
 		].join(' '),
-		...PROPOSAL_SHAPES
+		// A harvest adds and files. It is not asked to consolidate, so the seven
+		// shapes for consolidating are seven paragraphs of instruction it would
+		// have to read and then not use.
+		...proposalShapes(['create', 'circuit'])
 	].join('\n\n');
 }
 
@@ -1673,7 +1708,10 @@ export function buildConfirmPrompt(
 			'Dropping everything is a fine answer. Do not invent a suggestion to fill the number; a suggestion nobody can justify costs somebody a decision.',
 			'Also file anything shown as unfiled: nothing else can put a concept in an area. Prefer an existing area — the index is what every agent navigates by, so it is worth keeping small.'
 		].join(' '),
-		...PROPOSAL_SHAPES
+		// Everything except `create`: a close read judges concepts it was shown,
+		// and adding one from nothing is a harvest's job, done from what was
+		// actually said rather than inferred from a gap in a shape.
+		...proposalShapes(SURVEY_KINDS)
 	].join('\n\n');
 }
 
@@ -1821,7 +1859,18 @@ export async function runCortexGroom(
 ): Promise<GroomResult> {
 	const cfg = groomSettings();
 	const runId = randomUUID();
-	const max = Math.max(1, Math.min(cfg.maxProposalsPerRun, 25));
+	/**
+	 * Suggestions this run may raise, and never more than the lattice can bear.
+	 *
+	 * Asking for "at most 10 changes" across nine concepts invites a model to
+	 * work for ten, which is the same over-ask that had a survey naming twenty
+	 * concepts out of fifteen. A third of the lattice is a generous ceiling on
+	 * how much of it can really want changing at once.
+	 */
+	const max = Math.max(
+		1,
+		Math.min(cfg.maxProposalsPerRun, 25, Math.ceil(listNodes(userId).length / 3) || 1)
+	);
 	const shortlist = Math.max(
 		1,
 		Math.min(cfg.shortlistSize ?? DEFAULT_CORTEX_GROOM.shortlistSize, 100)
@@ -1984,7 +2033,14 @@ export async function runCortexGroom(
 							{ role: 'system', content: taskCfg?.systemPrompt ?? '' },
 							{ role: 'user', content: prompt }
 						],
-						maxTokens
+						maxTokens,
+						// A survey reads a graph and names concepts; a close read reads
+						// descriptions and emits JSON. Neither is a deliberation task, and
+						// reasoning tokens are output tokens — they are the wall clock.
+						// This is the lever that was missing while three fixes moved
+						// `maxTokens` and the timeout under it, neither of which governs
+						// how long a model thinks.
+						reasoning: reasoningFor(choice, 'low')
 					},
 					AbortSignal.timeout(allowedMs)
 				);
@@ -2021,9 +2077,12 @@ export async function runCortexGroom(
 				finishReason: res.finishReason ?? null,
 				reasonedOnly: res.reasonedOnly === true,
 				retried,
-				// The number that was missing. "It wrote 16,384 tokens" is the whole
-				// diagnosis of a slow run, and nothing reported it.
+				// The two numbers that were missing. "It wrote 13,851 tokens, 13,450 of
+				// them thinking" is the whole diagnosis of a slow run, and the split
+				// is the half that matters: a long answer and a long deliberation
+				// have the same completion count and only one of them is a fault.
 				completionTokens: res.usage?.completionTokens ?? 0,
+				reasoningTokens: res.usage?.reasoningTokens ?? 0,
 				maxTokens: budget(want),
 				allowedMs: res.allowedMs,
 				promptChars: prompt.length,
@@ -2036,6 +2095,7 @@ export async function runCortexGroom(
 		let modelMs = 0;
 		let retried = false;
 		let completionTokens = 0;
+		let reasoningTokens = 0;
 		let reply = { text: '', finishReason: null as string | null, reasonedOnly: false };
 		let proposals: unknown[] = [];
 		/** Every concept whose shape reached the model, so the run can stamp them. */
@@ -2054,6 +2114,7 @@ export async function runCortexGroom(
 			modelMs = res.modelMs;
 			retried = res.retried;
 			completionTokens = res.completionTokens;
+			reasoningTokens = res.reasoningTokens;
 
 			// `.proposals`, not the parsed value itself: extractJson returns an
 			// object by construction, so a prompt asking for a bare array gets
@@ -2087,6 +2148,7 @@ export async function runCortexGroom(
 				modelMs = first.modelMs;
 				retried = first.retried;
 				completionTokens = first.completionTokens;
+				reasoningTokens = first.reasoningTokens;
 				looked = wide.window.map((n) => n.id);
 
 				const parsed = extractJson(first.text);
@@ -2118,6 +2180,7 @@ export async function runCortexGroom(
 					modelMs: first.modelMs,
 					retried: first.retried,
 					completionTokens: first.completionTokens,
+					reasoningTokens: first.reasoningTokens,
 					maxTokens: first.maxTokens,
 					allowedMs: first.allowedMs
 				};
@@ -2135,6 +2198,7 @@ export async function runCortexGroom(
 				modelMs += second.modelMs;
 				retried = retried || second.retried;
 				completionTokens += second.completionTokens;
+				reasoningTokens += second.reasoningTokens;
 				examined = [
 					...new Set(
 						candidates.flatMap((c) => (c.target ? [c.node.id, c.target.id] : [c.node.id]))
@@ -2149,6 +2213,7 @@ export async function runCortexGroom(
 					modelMs: second.modelMs,
 					retried: second.retried,
 					completionTokens: second.completionTokens,
+					reasoningTokens: second.reasoningTokens,
 					maxTokens: second.maxTokens,
 					allowedMs: second.allowedMs
 				};
@@ -2187,6 +2252,7 @@ export async function runCortexGroom(
 			// the task is even using the one somebody configured — `pickModel`
 			// falls back to the first enabled model without saying so.
 			completionTokens,
+			reasoningTokens,
 			modelKey: choice.model.modelKey,
 			// What the run cost, so "it grinds" is a number rather than a report.
 			// Totals across every call the run made, so the one line the panel has

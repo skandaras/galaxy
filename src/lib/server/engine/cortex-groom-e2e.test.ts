@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, afterAll, describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { eq } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
 import {
 	cortexAssociations,
@@ -39,7 +40,9 @@ const ANA = 'user-ana-e2e';
 let prompts: string[] = [];
 let replies: string[] = [];
 /** The request bodies as they actually arrived, for what was asked of the model. */
-let sent: { max_tokens?: number; model?: string }[] = [];
+let sent: { max_tokens?: number; model?: string; reasoning?: unknown }[] = [];
+/** What the mock says it spent thinking, when a test cares. */
+let reasoningTokens = 0;
 
 const server = createServer((req, res) => {
 	let body = '';
@@ -58,7 +61,11 @@ const server = createServer((req, res) => {
 		res.end(
 			JSON.stringify({
 				choices: [{ index: 0, message: { role: 'assistant', content: reply }, finish_reason: 'stop' }],
-				usage: { prompt_tokens: Math.ceil((prompts.at(-1)?.length ?? 0) / 4), completion_tokens: 40 }
+				usage: {
+					prompt_tokens: Math.ceil((prompts.at(-1)?.length ?? 0) / 4),
+					completion_tokens: 40 + reasoningTokens,
+					completion_tokens_details: { reasoning_tokens: reasoningTokens }
+				}
 			})
 		);
 	});
@@ -147,6 +154,11 @@ beforeEach(() => {
 	prompts = [];
 	replies = [];
 	sent = [];
+	reasoningTokens = 0;
+	// Back to the shipped default, so a test that changes it does not leak into
+	// the next one.
+	db.update(models).set({ supportsReasoning: false, reasoningMode: 'auto' })
+		.where(eq(models.id, 'm-groom')).run();
 });
 
 describe('a review, all the way through a provider', () => {
@@ -252,6 +264,49 @@ describe('a review, all the way through a provider', () => {
 		const after = listNodes(ANA).filter((n) => n.id === made[0].id)[0];
 		expect(after.lastGroomedAt).toBeTruthy();
 		expect(after.lastExaminedAt).toBeTruthy();
+	});
+
+	it('tells a reasoning model to think lightly, on the wire', async () => {
+		db.update(models).set({ supportsReasoning: true, reasoningMode: 'auto' })
+			.where(eq(models.id, 'm-groom')).run();
+		seed(15);
+		replies = ['{"proposals":[]}'];
+		await runCortexGroom('manual', ANA);
+		// The lever three fixes did not have. `max_tokens` does not govern
+		// reasoning — a run capped at 4,096 wrote 13,851 and was not truncated —
+		// and reasoning tokens are output tokens, so they are the wall clock.
+		expect(sent[0].reasoning).toEqual({ effort: 'low' });
+	});
+
+	it('sends nothing to a model that does not advertise the setting', async () => {
+		db.update(models).set({ supportsReasoning: false }).where(eq(models.id, 'm-groom')).run();
+		seed(15);
+		replies = ['{"proposals":[]}'];
+		await runCortexGroom('manual', ANA);
+		// An endpoint that has never heard of the field is entitled to reject the
+		// whole request, which would take out every job at once.
+		expect(sent[0].reasoning).toBeUndefined();
+	});
+
+	it('honours an admin who overrides the level for a model', async () => {
+		db.update(models).set({ supportsReasoning: true, reasoningMode: 'high' })
+			.where(eq(models.id, 'm-groom')).run();
+		seed(15);
+		replies = ['{"proposals":[]}'];
+		await runCortexGroom('manual', ANA);
+		expect(sent[0].reasoning).toEqual({ effort: 'high' });
+	});
+
+	it('records what the model spent thinking', async () => {
+		seed(15);
+		replies = ['{"proposals":[]}'];
+		reasoningTokens = 900;
+		const res = await runCortexGroom('manual', ANA);
+		// The number that makes a slow run legible: a long answer and a long
+		// deliberation have the same completion count, and only one is a fault.
+		expect(res.reasoningTokens).toBe(900);
+		const row = db.select().from(usageLog).all().at(-1);
+		expect(row!.reasoningTokens).toBe(900);
 	});
 
 	it('never asks the provider for more tokens than the answer needs', async () => {

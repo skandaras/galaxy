@@ -1,3 +1,4 @@
+import { reasoningFor } from '$lib/server/providers/registry';
 import { getBudgetStatus } from './budget';
 import { getTaskConfig, pickModel } from './engine';
 import { emitEvent } from './events';
@@ -93,7 +94,11 @@ export async function summariseLeg(opts: {
 					{ role: 'system', content: cfg?.systemPrompt ?? '' },
 					{ role: 'user', content: formatLegForSummary(opts.summary) }
 				],
-				maxTokens: SUMMARY_MAX_TOKENS
+				maxTokens: SUMMARY_MAX_TOKENS,
+				// Reads what it was given and emits a short structured answer, which is
+				// the class of task where deliberation buys nothing and costs the wall
+				// clock. Sent only to models that accept it — see reasoningFor.
+				reasoning: reasoningFor(choice, 'low')
 			},
 			AbortSignal.timeout(SUMMARY_TIMEOUT_MS)
 		);
