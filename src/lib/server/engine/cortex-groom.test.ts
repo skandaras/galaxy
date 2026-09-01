@@ -12,6 +12,7 @@ import {
 } from '$lib/server/db/schema';
 import {
 	adjacency,
+	noteGroomed,
 	listNodes,
 	listAssociations,
 	listChanges,
@@ -32,6 +33,8 @@ import {
 	buildHarvestPrompt,
 	buildSurvey,
 	surveyWindow,
+	groomingOrder,
+	everyConcept,
 	shortlistFallback,
 	readCandidates,
 	decideProposal,
@@ -213,7 +216,7 @@ describe('the survey — wide, and shallow', () => {
 		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
 		saveAssociation({ sourceId: a.id, targetId: b.id, userId: ANA });
 
-		const { prompt } = buildSurvey(ANA, 20, null);
+		const { prompt } = buildSurvey(ANA, 20);
 		expect(prompt).toContain(`- ${a.id} "Tide pools" {${area.id}} → ${b.id}`);
 		// The whole reason this pass is affordable. A survey that could read
 		// descriptions would start judging from them, which is the expensive
@@ -225,7 +228,7 @@ describe('the survey — wide, and shallow', () => {
 		saveNode({ name: 'Tide pools', ownerId: ANA });
 		saveNode({ name: 'Coastal ecology', ownerId: ANA });
 		saveNode({ name: 'Storm logs', ownerId: ANA });
-		const { prompt } = buildSurvey(ANA, 20, null);
+		const { prompt } = buildSurvey(ANA, 20);
 		// Unfiled and unreachable were two sections showing the first thirty of
 		// each. On the line, for every concept, they cost nothing and cannot run
 		// out — which is what a lattice of any size needs them to do.
@@ -235,17 +238,16 @@ describe('the survey — wide, and shallow', () => {
 
 	it('marks a bridge, since that is a thing only the shape shows', () => {
 		const a = saveNode({ name: 'Tide pools', isConvergence: true, ownerId: ANA });
-		expect(buildSurvey(ANA, 20, null).prompt).toContain(`- ${a.id} "Tide pools" [bridge]`);
+		expect(buildSurvey(ANA, 20).prompt).toContain(`- ${a.id} "Tide pools" [bridge]`);
 	});
 
 	it('is a fraction of the old whole-lattice prompt, on the same lattice', () => {
 		wide(200);
-		const { prompt, covered, total, nextCursor } = buildSurvey(ANA, 20, null);
+		const { prompt, covered, total } = buildSurvey(ANA, 20);
 		// Two hundred concepts fit in one window with room to spare, so nothing is
-		// deferred and the cursor goes back to the top.
+		// deferred to a later run.
 		expect(covered).toBe(200);
 		expect(total).toBe(200);
-		expect(nextCursor).toBeNull();
 		// The old review sent every description it could afford and ran to ~25KB
 		// on a quarter of this. Structure only is a different order of thing.
 		expect(prompt.length).toBeLessThan(25_000);
@@ -255,7 +257,7 @@ describe('the survey — wide, and shallow', () => {
 	it('never shows another person’s lattice', () => {
 		saveNode({ name: 'Tide pools', ownerId: ANA });
 		saveNode({ name: 'Ben private concept', ownerId: BEN });
-		expect(buildSurvey(ANA, 20, null).prompt).not.toContain('Ben private concept');
+		expect(buildSurvey(ANA, 20).prompt).not.toContain('Ben private concept');
 	});
 
 	it('never shows another person’s areas as a filing', () => {
@@ -269,13 +271,13 @@ describe('the survey — wide, and shallow', () => {
 			ownerId: BEN,
 			visibility: 'shared'
 		});
-		const { prompt } = buildSurvey(ANA, 20, null);
+		const { prompt } = buildSurvey(ANA, 20);
 		expect(prompt).toContain(`- ${shared.id} "A shared concept" {unfiled}`);
 		expect(prompt).not.toContain(theirs.id);
 	});
 });
 
-describe('the survey window', () => {
+describe('the survey window, and what has waited longest', () => {
 	function lattice(count: number) {
 		return Array.from({ length: count }, (_, i) =>
 			saveNode({ name: `Concept ${String(i).padStart(2, '0')}`, ownerId: ANA })
@@ -283,56 +285,131 @@ describe('the survey window', () => {
 	}
 
 	const line = (n: { id: string }) => `- ${n.id}`;
+	/** Backdate a concept's grooming stamp, as a run days ago would have left it. */
+	const groomedAt = (id: string, when: Date) =>
+		db.update(cortexNodes).set({ lastGroomedAt: when }).where(eq(cortexNodes.id, id)).run();
 
-	it('takes the whole lattice when it fits, and asks for nothing back', () => {
+	it('takes the whole lattice when it fits', () => {
 		lattice(5);
-		const { window, nextCursor, covered, total } = surveyWindow(listNodes(ANA), line, null, 10_000);
+		const { window, covered, total } = surveyWindow(listNodes(ANA), line, 10_000);
 		expect(window).toHaveLength(5);
 		expect(covered).toBe(5);
 		expect(total).toBe(5);
-		expect(nextCursor).toBeNull();
 	});
 
-	it('stops at the budget and names where to start next time', () => {
+	it('stops at the budget, and says there is more', () => {
 		lattice(10);
-		const nodes = listNodes(ANA);
-		const first = surveyWindow(nodes, line, null, 40);
-		expect(first.window.length).toBeGreaterThan(0);
-		expect(first.window.length).toBeLessThan(10);
-		expect(first.nextCursor).toBe(nodes[first.window.length].id);
-
-		// The point of the cursor: run it again and it looks at different
-		// concepts. The old ceiling simply dropped the tail, so on a large
-		// lattice there were concepts no review ever looked at.
-		const second = surveyWindow(nodes, line, first.nextCursor, 40);
-		expect(second.window[0].id).toBe(first.nextCursor);
-		expect(second.window.map((n) => n.id)).not.toContain(first.window[0].id);
-	});
-
-	it('wraps round rather than running off the end', () => {
-		lattice(6);
-		const nodes = listNodes(ANA);
-		const { window } = surveyWindow(nodes, line, nodes[4].id, 40);
-		expect(window[0].id).toBe(nodes[4].id);
-		// Past the end and back to the top, so a lattice three windows wide is
-		// covered in three runs and then covered again.
-		expect(window.map((n) => n.id)).toContain(nodes[0].id);
-	});
-
-	it('starts from the top when the cursor points at a deleted concept', () => {
-		lattice(4);
-		const nodes = listNodes(ANA);
-		const { window } = surveyWindow(nodes, line, 'a-concept-since-deleted', 10_000);
-		expect(window[0].id).toBe(nodes[0].id);
+		const { window, covered, total } = surveyWindow(listNodes(ANA), line, 40);
+		expect(window.length).toBeGreaterThan(0);
+		expect(covered).toBeLessThan(total);
 	});
 
 	it('surveys a concept whose line alone exceeds the budget', () => {
 		lattice(3);
-		// Otherwise the window comes back empty and the cursor never moves off it,
-		// which is a lattice that is never reviewed again.
-		const { window, nextCursor } = surveyWindow(listNodes(ANA), line, null, 1);
-		expect(window).toHaveLength(1);
-		expect(nextCursor).toBe(listNodes(ANA)[1].id);
+		// Otherwise the window comes back empty, nothing is ever stamped, and the
+		// lattice is never reviewed again.
+		expect(surveyWindow(listNodes(ANA), line, 1).window).toHaveLength(1);
+	});
+
+	it('puts what has never been groomed first', () => {
+		const made = lattice(4);
+		for (const n of made) groomedAt(n.id, new Date(Date.now() - 86_400_000));
+		const fresh = saveNode({ name: 'Zebra, added since', ownerId: ANA });
+
+		const order = groomingOrder(listNodes(ANA), adjacency(ANA));
+		// A concept nothing has ever looked at is the one the groomer owes
+		// attention to, and it gets it without anything having to remember it is
+		// new — which the stored cursor into name order could not do.
+		expect(order[0].id).toBe(fresh.id);
+	});
+
+	it('then takes the longest neglected', () => {
+		const made = lattice(3);
+		groomedAt(made[0].id, new Date(Date.now() - 3 * 86_400_000));
+		groomedAt(made[1].id, new Date(Date.now() - 9 * 86_400_000));
+		groomedAt(made[2].id, new Date(Date.now() - 86_400_000));
+
+		const order = groomingOrder(listNodes(ANA), adjacency(ANA));
+		expect(order.map((n) => n.id)).toEqual([made[1].id, made[0].id, made[2].id]);
+	});
+
+	it('walks the whole lattice across runs without remembering where it stopped', () => {
+		const made = lattice(12);
+		const links = adjacency(ANA);
+		const seen = new Set<string>();
+		// Three windows of four. The stamps this run writes push those concepts to
+		// the back, so the next window is the next four — no cursor, and nothing
+		// to be disturbed by a deletion.
+		for (let run = 0; run < 3; run++) {
+			const { window } = surveyWindow(groomingOrder(listNodes(ANA), links), line, 60);
+			for (const n of window) seen.add(n.id);
+			noteGroomed(
+				window.map((n) => n.id),
+				'lastGroomedAt',
+				ANA
+			);
+		}
+		expect(seen.size).toBe(made.length);
+	});
+
+	it('falls back to what is most worth judging when nothing has been groomed', () => {
+		const made = lattice(4);
+		for (let i = 1; i < made.length; i++) {
+			saveAssociation({ sourceId: made[0].id, targetId: made[i].id, userId: ANA });
+		}
+		// Every stamp equal, so `judgingOrder` decides — most connected first. On a
+		// small lattice that is the whole of the ordering, and it comes for free.
+		expect(groomingOrder(listNodes(ANA), adjacency(ANA))[0].id).toBe(made[0].id);
+	});
+});
+
+describe('stamping what the groomer looked at', () => {
+	it('records a shape and a close read separately', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		noteGroomed([a.id], 'lastGroomedAt', ANA);
+		expect(getNode(a.id, ANA)!.lastGroomedAt).toBeTruthy();
+		// Different amounts of attention, and on a large lattice the gap between
+		// them is where a problem hides.
+		expect(getNode(a.id, ANA)!.lastExaminedAt).toBeNull();
+		noteGroomed([a.id], 'lastExaminedAt', ANA);
+		expect(getNode(a.id, ANA)!.lastExaminedAt).toBeTruthy();
+	});
+
+	it('never stamps a concept somebody else owns', () => {
+		const shared = saveNode({
+			name: 'A shared concept',
+			ownerId: BEN,
+			visibility: 'shared'
+		});
+		noteGroomed([shared.id], 'lastGroomedAt', ANA);
+		// The groomer never writes across an ownership boundary, and a timestamp
+		// is still a write.
+		expect(getNode(shared.id, ANA)!.lastGroomedAt).toBeNull();
+	});
+
+	it('survives an edit, which is the whole reason it is worth having', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		noteGroomed([a.id], 'lastGroomedAt', ANA);
+		noteGroomed([a.id], 'lastExaminedAt', ANA);
+		saveNode({ id: a.id, name: 'Rockpools', ownerId: ANA });
+		// `saveNode` builds a whole row and hands it to `.set()`, so a column left
+		// out of it is wiped by every edit, rename and accepted proposal — and a
+		// stamp that reset on a rename would send that concept to the front of
+		// every survey for ever.
+		const after = getNode(a.id, ANA)!;
+		expect(after.name).toBe('Rockpools');
+		expect(after.lastGroomedAt).toBeTruthy();
+		expect(after.lastExaminedAt).toBeTruthy();
+	});
+
+	it('leaves a shortlist fallback preferring what no model has read', () => {
+		const read = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const unread = saveNode({ name: 'Storm logs', ownerId: ANA });
+		saveAssociation({ sourceId: read.id, targetId: unread.id, userId: ANA });
+		noteGroomed([read.id], 'lastExaminedAt', ANA);
+		// No model has ever seen what this concept says, which is the plainest
+		// claim on attention there is.
+		expect(shortlistFallback(ANA, adjacency(ANA), 1).map((c) => c.node.id)).toEqual([unread.id]);
 	});
 });
 
@@ -482,6 +559,9 @@ describe('the shortlist a review falls back on', () => {
 		const other = saveNode({ name: 'Coastal ecology', circuits: [area.id], ownerId: ANA });
 		saveAssociation({ sourceId: linkedAndFiled.id, targetId: other.id, userId: ANA });
 		const stranded = saveNode({ name: 'Storm logs', ownerId: ANA });
+		// All three read at some point, so the never-examined tier is empty and
+		// this is testing the tier below it.
+		noteGroomed([linkedAndFiled.id, other.id, stranded.id], 'lastExaminedAt', ANA);
 
 		const picked = shortlistFallback(ANA, adjacency(ANA), 1);
 		// A wide pass that returns prose should not cost the whole run: the deep
@@ -531,7 +611,7 @@ describe('what has already been settled', () => {
 		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
 		saveNode({ name: 'Storm logs', ownerId: ANA });
 		recordProposals(ANA, [{ kind: 'merge', title: 'An old idea', node: a.id, target: b.id }], 10);
-		const prompt = buildSurvey(ANA, 20, null).prompt;
+		const prompt = buildSurvey(ANA, 20).prompt;
 		expect(prompt).toContain(`merge ${a.id}+${b.id}`);
 		// The titles bought nothing a pass answering in concept ids could use, and
 		// at two hundred rows they were ten kilobytes of it.
@@ -586,7 +666,7 @@ describe('what the prompts cost to build', () => {
 		// Counted rather than timed: a wall-clock assertion passes on a small
 		// fixture whatever the shape of the work, which is exactly how this went
 		// unnoticed.
-		expect(edgeReadsDuring(() => buildSurvey(ANA, 20, null))).toBeLessThan(6);
+		expect(edgeReadsDuring(() => buildSurvey(ANA, 20))).toBeLessThan(6);
 		expect(edgeReadsDuring(() => buildHarvestPrompt(ANA, 10, 'concept'))).toBeLessThan(6);
 		// And the close read costs nothing extra when it is handed the map the
 		// survey already built, which is how the run calls it.
@@ -1021,7 +1101,7 @@ describe('the free half', () => {
 		expect(buildHarvestPrompt(ANA, 5, 'bicycle repair')).toContain('CONNECTS TO NOTHING');
 		// A review says the same thing on the line rather than in a capped list,
 		// which is what lets it say it for every concept instead of thirty.
-		expect(buildSurvey(ANA, 20, null).prompt).toContain('→ nothing');
+		expect(buildSurvey(ANA, 20).prompt).toContain('→ nothing');
 	});
 
 	it('flags two names that look like one concept', () => {
@@ -1085,7 +1165,7 @@ describe('the two modes', () => {
 	});
 
 	it('a review reads the whole lattice’s shape, and every concept’s connections', () => {
-		const prompt = buildSurvey(ANA, 20, null).prompt;
+		const prompt = buildSurvey(ANA, 20).prompt;
 		expect(prompt).toContain('A SURVEY OF THE LATTICE');
 		expect(prompt).toContain('Seabird counts');
 		// Every concept, not the ones that fit in a description budget. That is
@@ -1105,7 +1185,7 @@ describe('the two modes', () => {
 
 	it('asks for concepts on a harvest and consolidation on a review', () => {
 		expect(buildHarvestPrompt(ANA, 10, 'x')).toContain('worth adding');
-		expect(buildSurvey(ANA, 20, null).prompt).toContain('worth a closer look');
+		expect(buildSurvey(ANA, 20).prompt).toContain('worth a closer look');
 		expect(
 			buildConfirmPrompt(ANA, 10, [{ node: getNode('tide-pools', ANA)! }])
 		).toContain('better at answering questions');
@@ -1236,7 +1316,7 @@ describe('filing', () => {
 		expect(harvest).toContain('rockpool surveying');
 		// A review marks it on the concept's own line, so it cannot run out at
 		// thirty the way the list does.
-		expect(buildSurvey(ANA, 20, null).prompt).toContain('"Tide pools" {unfiled}');
+		expect(buildSurvey(ANA, 20).prompt).toContain('"Tide pools" {unfiled}');
 	});
 });
 

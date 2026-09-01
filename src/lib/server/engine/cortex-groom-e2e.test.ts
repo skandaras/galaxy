@@ -38,14 +38,17 @@ const ANA = 'user-ana-e2e';
 /** What the mock answers, in order, and what it was asked. */
 let prompts: string[] = [];
 let replies: string[] = [];
+/** The request bodies as they actually arrived, for what was asked of the model. */
+let sent: { max_tokens?: number; model?: string }[] = [];
 
 const server = createServer((req, res) => {
 	let body = '';
 	req.on('data', (c) => (body += c));
 	req.on('end', () => {
-		const sent = JSON.parse(body || '{}');
+		const req = JSON.parse(body || '{}');
+		sent.push(req);
 		prompts.push(
-			(sent.messages ?? []).find((m: { role: string }) => m.role === 'user')?.content ?? ''
+			(req.messages ?? []).find((m: { role: string }) => m.role === 'user')?.content ?? ''
 		);
 		const reply = replies[Math.min(prompts.length - 1, replies.length - 1)] ?? '{}';
 		// The groomer uses `complete`, which is the non-streaming path — a real
@@ -143,6 +146,7 @@ beforeEach(() => {
 	db.run(`DELETE FROM cortex_fts`);
 	prompts = [];
 	replies = [];
+	sent = [];
 });
 
 describe('a review, all the way through a provider', () => {
@@ -227,6 +231,37 @@ describe('a review, all the way through a provider', () => {
 		// one-pass prompt managed: it described what fitted in its budget and cut
 		// the rest down to names.
 		for (const node of listNodes(ANA)) expect(prompts[0]).toContain(node.id);
+	});
+
+	it('reviews a small lattice in one call, and stamps what it read', async () => {
+		// Fifteen concepts and room for twenty: every one of them goes forward, so
+		// a survey would be a whole model call spent selecting all of them. This
+		// is the shape of a dev lattice, and the shape that was timing out.
+		const { made } = seed(15);
+		replies = ['{"proposals":[]}'];
+		const res = await runCortexGroom('manual', ANA);
+
+		expect(res.reason).toBeUndefined();
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]).toContain('A CLOSE READ');
+		expect(res.survey).toBeUndefined();
+		expect(res.confirm?.everything).toBe(true);
+
+		// And the stamps land, which is what makes coverage checkable rather than
+		// hoped for.
+		const after = listNodes(ANA).filter((n) => n.id === made[0].id)[0];
+		expect(after.lastGroomedAt).toBeTruthy();
+		expect(after.lastExaminedAt).toBeTruthy();
+	});
+
+	it('never asks the provider for more tokens than the answer needs', async () => {
+		seed(60);
+		replies = ['{"candidates":[]}'];
+		await runCortexGroom('manual', ANA);
+		// On the wire, which is the only place that counts. `max_tokens` is not a
+		// safety ceiling — it is permission to think, and this job was asking for
+		// 16,384 of it on a question whose answer is a short JSON list.
+		expect(sent[0].max_tokens).toBeLessThanOrEqual(2_048);
 	});
 
 	it('gives up inside the time limit rather than hanging on one pass', async () => {

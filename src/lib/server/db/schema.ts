@@ -1072,6 +1072,30 @@ export const cortexNodes = sqliteTable(
 		lastVerifiedAt: integer('last_verified_at', { mode: 'timestamp_ms' }),
 		lastActivatedAt: integer('last_activated_at', { mode: 'timestamp_ms' }),
 		activationCount: integer('activation_count').notNull().default(0),
+		/**
+		 * When the groomer last looked at this concept's **shape** — its name,
+		 * areas and connections — because it was in a survey window, or in a close
+		 * read of a lattice small enough not to need one.
+		 *
+		 * This is what makes coverage a fact rather than a hope. The rotating
+		 * window used to be driven by one stored id into name order, which a
+		 * deletion disturbed and which could not answer "has the groomer seen all
+		 * of my lattice?" at all. Ordering a survey by this column instead means
+		 * the longest-neglected concepts go first, a new concept sorts to the front
+		 * on its own, and the question is answerable by looking.
+		 */
+		lastGroomedAt: integer('last_groomed_at', { mode: 'timestamp_ms' }),
+		/**
+		 * When the groomer last read this concept's **description**, in the close
+		 * pass that actually judges it.
+		 *
+		 * Separate from the above because they are different amounts of attention,
+		 * and on a large lattice the gap between them is where a problem hides: the
+		 * same well-connected twenty can be examined every run while everything
+		 * else is only ever glanced at. Null means no model has read what this
+		 * concept says.
+		 */
+		lastExaminedAt: integer('last_examined_at', { mode: 'timestamp_ms' }),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
 	},

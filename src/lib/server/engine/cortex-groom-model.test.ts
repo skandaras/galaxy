@@ -14,7 +14,7 @@ import {
 	usageLog
 } from '$lib/server/db/schema';
 import { listNodes, saveAssociation, saveNode } from '$lib/server/cortex';
-import { getSetting } from '$lib/server/settings';
+import { getSetting, setSetting } from '$lib/server/settings';
 
 /**
  * The half of the groomer that talks to a model, which until now had no test at
@@ -75,6 +75,17 @@ vi.mock('./engine', async (importOriginal) => {
 						}
 					// A reasoning model that spent its whole budget thinking: text is
 					// empty and reasonedOnly says why.
+					// Burns the clock as well as the budget, so the run has no room left
+					// to ask again.
+					if (reply === '__slow_reasoned__') {
+						await new Promise((r) => setTimeout(r, 900));
+						return {
+							text: '',
+							usage: { promptTokens: 100, completionTokens: 20 },
+							finishReason: 'length',
+							reasonedOnly: true
+						};
+					}
 					if (reply === '__reasoned__') {
 						return {
 							text: '',
@@ -261,13 +272,14 @@ describe('the watermark', () => {
 });
 
 describe('what each mode sends', () => {
-	it('a review sends the lattice’s shape first, and no descriptions with it', async () => {
-		scripted = [pointsAt('tide-pools'), '{"proposals":[]}'];
+	it('a review of three concepts goes straight to the close read', async () => {
+		scripted = ['{"proposals":[]}'];
 		await runCortexGroom('manual', ANA);
-		expect(calls[0].user).toContain('A SURVEY OF THE LATTICE');
-		expect(calls[0].user).toContain('coastal-ecology');
-		// The whole reason the wide pass is affordable.
-		expect(calls[0].user).not.toContain('rockpool surveying');
+		// A survey exists to choose. With three concepts and room for twenty,
+		// every one of them goes forward anyway, so surveying them is a whole
+		// model call spent selecting all of them.
+		expect(calls).toHaveLength(1);
+		expect(calls[0].user).toContain('rockpool surveying');
 	});
 
 	it('a harvest sends the activity window and only a slice', async () => {
@@ -380,12 +392,15 @@ describe('a review, in two passes', () => {
 		// the full limit would quietly mean twice it: what each call is allowed is
 		// what is *left* of the run, never the setting again.
 		expect(allowed.every((ms) => ms <= whole)).toBe(true);
-		// The survey may have half at most, so a slow wide pass cannot leave the
-		// close read with nothing...
-		expect(allowed[0]).toBeLessThanOrEqual(whole / 2);
+		// The survey gets everything except a floor held back for the close read.
+		// It used to get a flat half, and on a slow model that starved it where
+		// the single call it replaced had the lot — which is how a six-kilobyte
+		// prompt came to report a three-hundred-second timeout.
+		expect(allowed[0]).toBeGreaterThan(whole * 0.7);
+		expect(allowed[0]).toBeLessThanOrEqual(whole * 0.75);
 		// ...and hands its slack forward rather than keeping it: this survey came
 		// back at once, so the close read gets nearly the whole run.
-		expect(allowed[1]).toBeGreaterThan(whole / 2);
+		expect(allowed[1]).toBeGreaterThan(whole * 0.9);
 	});
 
 	it('says how much of the lattice it looked at', async () => {
@@ -415,6 +430,88 @@ describe('a review, in two passes', () => {
 		// were concepts no review ever looked at. This one moves on.
 		expect(second.survey?.concepts).toBeGreaterThan(0);
 		expect(calls[0].user).not.toBe(seenFirst);
+	});
+
+	/**
+	 * The regression that caused the incident, and nothing guarded it.
+	 *
+	 * `max_tokens` is not a safety ceiling — the adapter passes it straight to the
+	 * provider, and on a reasoning model it is *permission to think*. This job was
+	 * asking for 16,384 and, on retry, 65,536: four and sixteen times the largest
+	 * budget anything else in this codebase uses, on a question whose answer is a
+	 * short JSON list. A six-kilobyte prompt then took longer than five minutes,
+	 * and every diagnosis went looking at the prompt.
+	 */
+	describe('the size of the ask', () => {
+		it('asks for the size of the answer, not the size of the budget', async () => {
+			wide(50);
+			scripted = [pointsAt('concept-007'), '{"proposals":[]}'];
+			await runCortexGroom('manual', ANA);
+			// The UX audit reviews an entire application and returns structured
+			// findings in 4,096 tokens. This is the same job.
+			expect(calls[0].maxTokens).toBeLessThanOrEqual(2_048);
+			expect(calls[1].maxTokens).toBeLessThanOrEqual(4_096);
+		});
+
+		it('does not spend more just because the ceiling was raised', async () => {
+			setSetting('cortexGroom', { maxTokens: 200_000 });
+			wide(50);
+			scripted = [pointsAt('concept-007'), '{"proposals":[]}'];
+			await runCortexGroom('manual', ANA);
+			// The setting is a ceiling over each pass's own ask, never the ask
+			// itself. A budget larger than the answer buys nothing except time, and
+			// time is the thing that was running out.
+			expect(calls[0].maxTokens).toBeLessThanOrEqual(2_048);
+			expect(calls[1].maxTokens).toBeLessThanOrEqual(4_096);
+		});
+
+		it('still lets the ceiling bite when it is lowered', async () => {
+			setSetting('cortexGroom', { maxTokens: 1_000 });
+			wide(50);
+			scripted = [pointsAt('concept-007'), '{"proposals":[]}'];
+			await runCortexGroom('manual', ANA);
+			expect(calls[0].maxTokens).toBe(1_000);
+		});
+
+		it('keeps the retry bounded rather than multiplying a big number', async () => {
+			wide(50);
+			scripted = ['__reasoned__', pointsAt('concept-007'), '{"proposals":[]}'];
+			await runCortexGroom('manual', ANA);
+			expect(calls[1].maxTokens).toBeGreaterThan(calls[0].maxTokens);
+			// `Math.max(cfg.maxTokens * 4, 32_768)` gave 65,536 — a number no model
+			// finishes inside any timeout this app offers, so the retry that existed
+			// to rescue a run was guaranteeing its failure. The multiplier came from
+			// research.ts, which multiplies a much smaller base.
+			expect(calls[1].maxTokens).toBeLessThanOrEqual(8_192);
+		});
+
+		it('does not fire a doomed retry when there is no room for one', async () => {
+			// A run whose whole budget the first call eats.
+			setSetting('cortexGroom', { timeoutSeconds: 1 });
+			wide(50);
+			scripted = ['__slow_reasoned__', '{"proposals":[]}'];
+			const res = await runCortexGroom('manual', ANA);
+			// Asking again with no time left returns an abort that reads as a
+			// timeout, which hides why the first call came back empty. So the
+			// survey is asked once and the run moves on to the close read, which
+			// is the second call here — not a retry of the first.
+			expect(res.survey?.retried).toBe(false);
+			expect(calls).toHaveLength(2);
+			expect(calls[1].user).toContain('A CLOSE READ');
+		});
+	});
+
+	it('says what the model wrote, and which model wrote it', async () => {
+		wide(50);
+		scripted = [pointsAt('concept-007'), '{"proposals":[]}'];
+		const res = await runCortexGroom('manual', ANA);
+		// The number that was missing. A completion count near the budget is the
+		// whole explanation of a slow run, and nothing reported it — nor which
+		// model answered, which matters because `pickModel` falls back to the
+		// first enabled model without saying so.
+		expect(res.completionTokens).toBeGreaterThan(0);
+		expect(res.modelKey).toBe('mock/model');
+		expect(res.survey!.maxTokens).toBeLessThanOrEqual(2_048);
 	});
 
 	it('a harvest stays one call', async () => {
@@ -540,9 +637,13 @@ describe('a model that thinks instead of answering', () => {
 		expect(res.retried).toBe(true);
 		expect(res.proposed).toBe(1);
 		expect(calls).toHaveLength(2);
-		// Headroom, not a nudge. A second attempt at the same budget would fail
-		// the same way and cost a second call to find that out.
-		expect(calls[1].maxTokens).toBeGreaterThan(calls[0].maxTokens * 2);
+		// Headroom, not a nudge: a second attempt at the same budget would fail
+		// the same way and cost a second call to find that out. Bounded, though —
+		// the old rule multiplied the *ceiling* by four and asked for 65,536,
+		// which no model finishes inside any timeout this app offers, so the
+		// retry that existed to rescue a run was guaranteeing its failure.
+		expect(calls[1].maxTokens).toBeGreaterThanOrEqual(calls[0].maxTokens * 2);
+		expect(calls[1].maxTokens).toBeLessThanOrEqual(8_192);
 		// And the same prompt both times: it is the budget that was wrong, not
 		// what was asked, and rebuilding it would be work for nothing.
 		expect(calls[1].user).toBe(calls[0].user);
