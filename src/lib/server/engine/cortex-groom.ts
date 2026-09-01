@@ -3,6 +3,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { cortexAssociations, cortexNodes, cortexProposals } from '$lib/server/db/schema';
 import {
+	adjacency,
 	circuitIndex,
 	cortexSettings,
 	deleteAssociation,
@@ -10,7 +11,6 @@ import {
 	erodedEdges,
 	findNodeByName,
 	getNode,
-	listAssociations,
 	listCircuits,
 	listNodes,
 	logChange,
@@ -21,6 +21,7 @@ import {
 	saveNode,
 	syncFts,
 	visibleEdges,
+	type CortexAssociation,
 	type CortexNode
 } from '$lib/server/cortex';
 import { gatherActivity, listMemoryItems } from './memory';
@@ -68,6 +69,12 @@ const WATERMARK_KEY = 'cortex.groom.watermark';
  */
 const FIRST_RUN_WINDOW_MS = 3 * 86_400_000;
 const LATTICE_MARK_KEY = 'cortex.groom.latticeMark';
+/**
+ * Floor for the retry after a reasoning model burns its budget, so a small
+ * configured cap still gets real room on the second attempt. Copied from
+ * `research.ts`, which has had exactly this for exactly this reason.
+ */
+const RETRY_TOKENS_FLOOR = 32_768;
 
 export type GroomMode = 'harvest' | 'review';
 
@@ -91,6 +98,12 @@ export interface GroomResult {
 	finishReason?: string | null;
 	/** The model thought until its budget ran out and never began answering. */
 	reasonedOnly?: boolean;
+	/** How big the prompt was, and where the seconds actually went. */
+	promptChars?: number;
+	buildMs?: number;
+	modelMs?: number;
+	/** The first call came back empty on length, so it was asked again with room. */
+	retried?: boolean;
 }
 
 export function groomSettings(): CortexGroomSettings {
@@ -969,11 +982,80 @@ function hasField(payload: Record<string, unknown>, key: string): boolean {
 
 // --- the prompt -------------------------------------------------------------
 
-function describeNode(node: CortexNode, userId: string): string {
-	const links = listAssociations(node.id, userId)
+/**
+ * One concept in full: what it is, and what it reaches.
+ *
+ * Takes the adjacency map rather than looking its own connections up. The
+ * lookup costs a full node select plus a full edge select, and this runs once
+ * per concept — so a fifty-concept review spent about a hundred and fifty
+ * full-table reads assembling one string, and it grew as the square of the
+ * lattice.
+ */
+function describeNode(node: CortexNode, links: Map<string, CortexAssociation[]>): string {
+	const to = (links.get(node.id) ?? [])
 		.map((e) => (e.sourceId === node.id ? e.targetId : e.sourceId))
 		.join(', ');
-	return `- ${node.id} "${node.name}"${node.isConvergence ? ' [bridge]' : ''} — ${node.description || '(no description)'}${links ? `\n    connects to: ${links}` : '\n    connects to: nothing'}`;
+	return `- ${node.id} "${node.name}"${node.isConvergence ? ' [bridge]' : ''} — ${node.description || '(no description)'}${to ? `\n    connects to: ${to}` : '\n    connects to: nothing'}`;
+}
+
+/** A concept the model only needs to know exists, so it does not propose it again. */
+const nameOnly = (n: CortexNode) => `- ${n.id} "${n.name}"`;
+
+/**
+ * A handful of words that stand for the whole window.
+ *
+ * `seedNodes` decides which concepts a harvest sees in full, and `ftsQuery`
+ * keeps only the first eight usable terms of whatever it is handed. Handed the
+ * raw activity, those eight came from the opening line of the newest chat — so
+ * on a five-thousand-character read, the slice of the lattice shown in full was
+ * chosen by how one conversation happened to start.
+ *
+ * Sampling across the window instead: a word from every few hundred characters,
+ * so the terms come from the whole of what was said rather than the top of it.
+ * Crude, and enough — this only has to land in the right neighbourhood, and the
+ * eight-term cap means anything cleverer is thrown away anyway.
+ */
+export function activityGist(activity: string, stride = 400): string {
+	const words = activity.split(/\s+/).filter((w) => w.length > 3 && /[a-z]/i.test(w));
+	if (words.length < 40) return activity;
+	const out: string[] = [];
+	// Spread the picks evenly rather than taking a prefix, which is the whole
+	// point; `ftsQuery` will drop stopwords and keep the first eight survivors.
+	const step = Math.max(1, Math.floor(activity.length / stride / 8) || 1);
+	for (let i = 0; i < words.length && out.length < 40; i += Math.max(step, 1)) out.push(words[i]);
+	return out.join(' ');
+}
+
+/**
+ * How much of the prompt the concept descriptions may take.
+ *
+ * A review used to send every concept with its description and its connections,
+ * on the argument that merges cannot be judged from a slice. True, and it stops
+ * being affordable well before the lattice stops being useful — the prompt grows
+ * with the lattice and the model's patience does not.
+ *
+ * So the budget buys full detail for the concepts most worth judging, and every
+ * other concept still appears by name. Nothing is invisible; what is rationed is
+ * description and connection lists.
+ */
+const LATTICE_BUDGET_CHARS = 24_000;
+
+/**
+ * Which concepts earn their full description first.
+ *
+ * Most connected leads, because a merge, a bridge and a cluster with no way out
+ * are all judged from connections, and a concept with none of them can be judged
+ * from its name. Unfiled next, since filing is a job only this pass can do, then
+ * most recently touched, because that is where a person has been working.
+ */
+function judgingOrder(nodes: CortexNode[], links: Map<string, CortexAssociation[]>): CortexNode[] {
+	return [...nodes].sort((a, b) => {
+		const degree = (links.get(b.id)?.length ?? 0) - (links.get(a.id)?.length ?? 0);
+		if (degree) return degree;
+		const filed = Number(!a.circuits?.length) - Number(!b.circuits?.length);
+		if (filed) return -filed;
+		return (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0);
+	});
 }
 
 /**
@@ -1012,17 +1094,61 @@ export function buildGroomPrompt(
 	// Capped for the same reason: on a lattice that has never been connected this
 	// is every concept, and it would crowd out the activity the pass is here for.
 	const stranded = orphans(userId).slice(0, 30);
-	const relevant = mode === 'harvest' ? new Set(seedNodes(activity, userId, 25).map((n) => n.id)) : null;
-	const lattice = relevant
+	// Once, for every concept below, rather than once per concept.
+	const links = adjacency(userId);
+
+	/**
+	 * Which concepts get a full description, and which only a name.
+	 *
+	 * The two modes ration for different reasons, and both reasons are real.
+	 *
+	 * A **harvest** rations by *relevance*: only what the new conversation
+	 * actually touches is worth describing, however much room there is. That is
+	 * a judgement about usefulness, so it holds on a small lattice too.
+	 *
+	 * A **review** rations by *cost*: every concept deserves detail in principle
+	 * — merges and structure are judged from connections — but the prompt cannot
+	 * grow with the lattice for ever. Most connected first, since a merge, a
+	 * bridge and a cluster with no way out are all read off connections.
+	 *
+	 * The budget then applies to both as a ceiling. Either way every concept is
+	 * still named, so nothing is proposed twice.
+	 */
+	const candidates =
+		mode === 'harvest'
+			? (() => {
+					const relevant = new Set(seedNodes(activityGist(activity), userId, 25).map((n) => n.id));
+					return nodes.filter((n) => relevant.has(n.id));
+				})()
+			: judgingOrder(nodes, links);
+	const rest = new Set(nodes.filter((n) => !candidates.includes(n)));
+
+	const inFull: CortexNode[] = [];
+	const byName: CortexNode[] = [...rest];
+	let spent = 0;
+	for (const node of candidates) {
+		const described = describeNode(node, links);
+		// `inFull.length` guards the degenerate case: one concept whose
+		// description alone exceeds the budget still gets described, or a harvest
+		// could come back with no detail at all.
+		if (spent + described.length > LATTICE_BUDGET_CHARS && inFull.length) {
+			byName.push(node);
+			continue;
+		}
+		spent += described.length;
+		inFull.push(node);
+	}
+	// Listed in the lattice's own order, not the budget's: the model is reading
+	// this to hold a shape in mind, and a list sorted by how it was rationed is
+	// a harder shape to hold.
+	const named = (list: CortexNode[]) => nodes.filter((n) => list.includes(n));
+	const lattice = byName.length
 		? [
-				nodes.filter((n) => relevant.has(n.id)).map((n) => describeNode(n, userId)).join('\n'),
-				'--- EVERY OTHER CONCEPT (names only, so you do not propose one that exists) ---',
-				nodes
-					.filter((n) => !relevant.has(n.id))
-					.map((n) => `- ${n.id} "${n.name}"`)
-					.join('\n')
+				named(inFull).map((n) => describeNode(n, links)).join('\n'),
+				`--- EVERY OTHER CONCEPT (${byName.length}; names only, so you do not propose one that exists) ---`,
+				named(byName).map(nameOnly).join('\n')
 			].join('\n\n')
-		: nodes.map((n) => describeNode(n, userId)).join('\n');
+		: named(inFull).map((n) => describeNode(n, links)).join('\n');
 
 	const task =
 		mode === 'harvest'
@@ -1194,20 +1320,47 @@ export async function runCortexGroom(
 
 	const startedAt = Date.now();
 	try {
-		const { text, usage, finishReason, reasonedOnly } = await choice.adapter.complete(
-			{
-				modelKey: choice.model.modelKey,
-				messages: [
-					{ role: 'system', content: taskCfg?.systemPrompt ?? '' },
-					{ role: 'user', content: buildGroomPrompt(userId, max, mode, activity) }
-				],
-				// A reasoning model spends part of this thinking before it starts
-				// answering, and 4096 was the budget for both — which is one of the
-				// ways a run comes back with no text at all.
-				maxTokens: 8192
-			},
-			AbortSignal.timeout(180_000)
-		);
+		const builtAt = Date.now();
+		const prompt = buildGroomPrompt(userId, max, mode, activity);
+		const buildMs = Date.now() - builtAt;
+
+		const ask = (maxTokens: number) =>
+			choice.adapter.complete(
+				{
+					modelKey: choice.model.modelKey,
+					messages: [
+						{ role: 'system', content: taskCfg?.systemPrompt ?? '' },
+						{ role: 'user', content: prompt }
+					],
+					maxTokens
+				},
+				AbortSignal.timeout(cfg.timeoutSeconds * 1000)
+			);
+
+		const askedAt = Date.now();
+		let { text, usage, finishReason, reasonedOnly } = await ask(cfg.maxTokens);
+
+		/**
+		 * A reasoning model can spend the whole budget thinking and return no
+		 * answer at all. That is what a 52-concept lattice did on 4,860 characters
+		 * of conversation: `finishReason: "length"`, `reasonedOnly: true`, nothing
+		 * written. The run detected it, reported it, and stopped — and told the
+		 * person to raise a Max tokens field that does not exist.
+		 *
+		 * So it retries once with real headroom, the same rule and the same gate
+		 * `research.ts` has used for this since it shipped: nothing came back
+		 * *and* it hit the wall. A model that simply had nothing to suggest
+		 * returns an empty list and never triggers this, so the common path pays
+		 * nothing.
+		 */
+		let retried = false;
+		if (!text.trim() && (reasonedOnly === true || finishReason === 'length')) {
+			retried = true;
+			({ text, usage, finishReason, reasonedOnly } = await ask(
+				Math.max(cfg.maxTokens * 4, RETRY_TOKENS_FLOOR)
+			));
+		}
+		const modelMs = Date.now() - askedAt;
 		logUsage('cortex-groom', choice.model.modelKey, usage, 'ok', userId);
 
 		// `.proposals`, not the parsed value itself: extractJson returns an object
@@ -1229,7 +1382,15 @@ export async function runCortexGroom(
 			// The failure research.ts already names: chain-of-thought on its own
 			// channel, no answer text, and indistinguishable from silence without
 			// this flag.
-			reasonedOnly: reasonedOnly === true
+			reasonedOnly: reasonedOnly === true,
+			// What the run cost, so "it grinds" is a number rather than a report.
+			// Answering that question the first time meant reading the source to
+			// find out where the seconds could even go. Sizes and timings only; no
+			// concept text reaches an event detail.
+			promptChars: prompt.length,
+			buildMs,
+			modelMs,
+			retried
 		};
 
 		// Only advance the watermark on a pass that actually read the activity,
@@ -1259,6 +1420,12 @@ export async function runCortexGroom(
 		});
 		return { ran: true, mode, tidied, detected, proposed: added, duplicates, dropped, ...shape };
 	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		// `AbortSignal.timeout` throws a TimeoutError; some runtimes only say so
+		// in the message. Both readings, because naming a timeout as one is the
+		// difference between "raise the limit" and "something is broken".
+		const timedOut =
+			(err instanceof Error && err.name === 'TimeoutError') || /timeout|aborted/i.test(message);
 		emitEvent({
 			task: 'cortex-groom',
 			userId,
@@ -1266,8 +1433,23 @@ export async function runCortexGroom(
 			name: 'cortex.groom',
 			status: 'error',
 			durationMs: Date.now() - startedAt,
-			detail: { trigger, mode, tidied, detected, error: err instanceof Error ? err.message : String(err) }
+			detail: { trigger, mode, tidied, detected, error: message }
 		});
-		return { ran: false, mode, reason: 'model call failed', tidied, detected };
+		// The provider's own words, not "model call failed".
+		//
+		// Every failure used to come back as that one phrase, so the actual
+		// message — "The operation was aborted due to timeout" — existed only in
+		// the Observatory and had to be dug out by hand to find out what had gone
+		// wrong. The panel is where somebody looks first; it should not be the
+		// least informative place in the system.
+		return {
+			ran: false,
+			mode,
+			reason: timedOut
+				? `the model did not answer within ${cfg.timeoutSeconds}s — raise the time limit in Admin → Cortex, or use a faster model`
+				: message,
+			tidied,
+			detected
+		};
 	}
 }

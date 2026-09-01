@@ -54,6 +54,10 @@
 		windowHours?: number;
 		finishReason?: string | null;
 		reasonedOnly?: boolean;
+		promptChars?: number;
+		buildMs?: number;
+		modelMs?: number;
+		retried?: boolean;
 	}
 	interface Proposal {
 		id: string;
@@ -620,8 +624,13 @@
 										The model spent its whole token budget reasoning and never began an
 										answer.
 									</span>
+									<!-- This used to say "raise Max tokens for the cortex-groom
+								     task", and no such control existed anywhere in the app —
+								     every job hard-coded its budget. Following the advice
+								     changed nothing. -->
 									<span class="hint">
-										Raise Max tokens for the cortex-groom task, or pick a model that
+										It was already asked a second time with four times the room. Raise
+										<strong>Max tokens</strong> in Admin → Cortex, or pick a model that
 										answers rather than thinking to the limit.
 									</span>
 								{:else if !lastRun.replyChars}
@@ -636,6 +645,17 @@
 										{lastRun.parsedItems ?? 0} usable suggestions in it.
 									</span>
 								{/if}
+							{/if}
+							{#if lastRun.promptChars}
+								<!-- What it cost. "It grinds to a halt" was a report nobody
+								     could act on, because nothing said whether the seconds went
+								     into assembling the prompt or waiting on the model. -->
+								<span class="hint">
+									Sent {Math.round(lastRun.promptChars / 100) / 10}k characters; the model took
+									{Math.round((lastRun.modelMs ?? 0) / 100) / 10}s{lastRun.buildMs && lastRun.buildMs > 250
+										? `, assembling it took ${Math.round(lastRun.buildMs / 100) / 10}s`
+										: ''}{lastRun.retried ? ', after a retry with more room' : ''}.
+								</span>
 							{/if}
 							{#if lastRun.dropped?.unknownConcept}
 								<!-- The difference between "it suggested nothing" and "it

@@ -27,7 +27,7 @@ import { getSetting } from '$lib/server/settings';
  */
 
 let scripted: string[] = [];
-let calls: { system: string; user: string }[] = [];
+let calls: { system: string; user: string; maxTokens: number }[] = [];
 
 vi.mock('./engine', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('./engine')>();
@@ -38,10 +38,16 @@ vi.mock('./engine', async (importOriginal) => {
 			model: { modelKey: 'mock/model' },
 			provider: {},
 			adapter: {
-				complete: async (req: { messages: { role: string; content: string }[] }) => {
+				complete: async (req: {
+					messages: { role: string; content: string }[];
+					maxTokens: number;
+				}) => {
 					calls.push({
 						system: req.messages.find((m) => m.role === 'system')?.content ?? '',
-						user: req.messages.find((m) => m.role === 'user')?.content ?? ''
+						user: req.messages.find((m) => m.role === 'user')?.content ?? '',
+						// Recorded so the retry can be asserted on what it actually asked
+						// for, rather than on the fact that a second call happened.
+						maxTokens: req.maxTokens
 					});
 					const reply = scripted[Math.min(calls.length - 1, scripted.length - 1)] ?? '[]';
 					// A provider that fails outright, which is a different thing from
@@ -210,7 +216,10 @@ describe('the watermark', () => {
 		// never picks anything up.
 		const res = await runCortexGroom('schedule', ANA);
 		expect(res.ran).toBe(false);
-		expect(res.reason).toBe('model call failed');
+		// The provider's own words. Every failure used to come back as "model
+		// call failed", so the one thing worth knowing — which wall was hit —
+		// existed only in the Observatory and had to be dug out by hand.
+		expect(res.reason).toBe('provider exploded');
 		expect(mark()).toBe(0);
 	});
 
@@ -314,13 +323,62 @@ describe('what the harvest actually reads', () => {
 });
 
 describe('a model that thinks instead of answering', () => {
-	it('says so, rather than looking like silence', async () => {
+	/**
+	 * The failure that actually stopped this job on a real lattice: a reasoning
+	 * model spent its whole 8,192-token budget on chain-of-thought and never
+	 * began an answer, on 4,860 characters of conversation. The run detected it,
+	 * reported it, and stopped — and told the person to raise a Max tokens field
+	 * that does not exist anywhere in the app.
+	 */
+	it('asks again with real headroom, and gets an answer', async () => {
+		haveTalked('a rich conversation worth harvesting');
+		// Thinks itself out of room, then answers when given space.
+		scripted = ['__reasoned__', '{"proposals":[{"kind":"create","title":"Tide pools"}]}'];
+		const res = await runCortexGroom('schedule', ANA);
+
+		expect(res.ran).toBe(true);
+		expect(res.retried).toBe(true);
+		expect(res.proposed).toBe(1);
+		expect(calls).toHaveLength(2);
+		// Headroom, not a nudge. A second attempt at the same budget would fail
+		// the same way and cost a second call to find that out.
+		expect(calls[1].maxTokens).toBeGreaterThan(calls[0].maxTokens * 2);
+		// And the same prompt both times: it is the budget that was wrong, not
+		// what was asked, and rebuilding it would be work for nothing.
+		expect(calls[1].user).toBe(calls[0].user);
+	});
+
+	it('does not retry a model that simply had nothing to suggest', async () => {
+		haveTalked('a quiet conversation');
+		scripted = ['{"proposals":[]}'];
+		const res = await runCortexGroom('schedule', ANA);
+		// An empty list is an answer. Retrying it would double the cost of the
+		// commonest outcome the groomer has — most passes find nothing.
+		expect(res.ran).toBe(true);
+		expect(res.retried).toBe(false);
+		expect(calls).toHaveLength(1);
+	});
+
+	it('says so when even the headroom is not enough', async () => {
 		haveTalked('a rich conversation worth harvesting');
 		scripted = ['__reasoned__'];
 		const res = await runCortexGroom('schedule', ANA);
-		// The failure research.ts already names, which this job used to report as
-		// an ordinary empty answer.
 		expect(res.reasonedOnly).toBe(true);
 		expect(res.replyChars).toBe(0);
+		// Having tried is the thing worth reporting: it tells the person that
+		// raising the budget is the second thing to try, not the first.
+		expect(res.retried).toBe(true);
+		expect(calls).toHaveLength(2);
+	});
+
+	it('reports what the run cost, so "it grinds" is a number', async () => {
+		haveTalked('a rich conversation worth harvesting');
+		scripted = ['{"proposals":[]}'];
+		const res = await runCortexGroom('schedule', ANA);
+		// Answering "where did the time go" the first time meant reading the
+		// source to work out where it could possibly have gone.
+		expect(res.promptChars).toBeGreaterThan(0);
+		expect(res.buildMs).toBeGreaterThanOrEqual(0);
+		expect(res.modelMs).toBeGreaterThanOrEqual(0);
 	});
 });

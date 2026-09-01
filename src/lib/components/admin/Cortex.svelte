@@ -6,7 +6,13 @@
 	 * groomed is yours to decide, and how often the job runs at all is the
 	 * platform's. Same split the memory job uses.
 	 */
-	let groom = $state({ enabled: false, intervalHours: 24, maxProposalsPerRun: 10 });
+	let groom = $state({
+		enabled: false,
+		intervalHours: 24,
+		maxProposalsPerRun: 10,
+		maxTokens: 16_384,
+		timeoutSeconds: 300
+	});
 	let cortex = $state({
 		agentWrites: true,
 		kinship: false,
@@ -92,7 +98,26 @@
 			suggestions per run
 			<input type="number" min="1" max="25" bind:value={groom.maxProposalsPerRun} />
 		</label>
+		<label>
+			max tokens
+			<input type="number" min="1024" max="200000" step="1024" bind:value={groom.maxTokens} />
+		</label>
+		<label>
+			time limit (seconds)
+			<input type="number" min="30" max="1800" step="30" bind:value={groom.timeoutSeconds} />
+		</label>
 	</div>
+	<p class="hint">
+		A reasoning model spends part of its tokens thinking before it writes anything, and with too
+		few it can spend all of them and answer nothing at all. A run that comes back empty on the
+		token limit is asked again automatically with four times the room, so raising this is the
+		second thing to try rather than the first.
+	</p>
+	<p class="hint">
+		A run started by hand is a single request held open for as long as it takes, so if you raise
+		the time limit past your reverse proxy's own read timeout, raise that too — otherwise the
+		browser gives up while the run carries on.
+	</p>
 	<p class="hint">
 		Last run {when(lastRun)}{#if groom.enabled && lastRun}, next due {when(due)}{/if}. Needs a model
 		set for the <code>cortex-groom</code> task; without one it still tidies, since that half needs

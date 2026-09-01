@@ -735,6 +735,93 @@ the file round trip: export what you have, draft a lattice in a file, import it.
 `tidy` runs on every pass whether or not a model is configured for the
 `cortex-groom` task, because that half needs none.
 
+### The budget, and the retry that means you rarely touch it
+
+A groom call's token budget and time limit are settings, beside the cadence.
+They were constants — 8,192 tokens and 180 seconds — and on a real 52-concept
+lattice both failed on the same day, in two different ways.
+
+The harvest was not a timeout at all. Its event said
+`finishReason: "length"`, `reasonedOnly: true`, `replyChars: 0`, on
+`activityChars: 4860` — a reasoning model had spent the entire budget on
+chain-of-thought and never begun an answer, on five kilobytes of conversation.
+**Trawling less would not have helped by one token.** The review was a real
+timeout, at 180 seconds.
+
+Two things followed. **The panel's advice was wrong**: it said to raise Max
+tokens for the `cortex-groom` task, and no such control existed — every job in
+this codebase hard-codes its budget and nothing reads `taskConfigs.options`.
+Following it changed nothing. And **`research.ts` had already solved this**, and
+the groomer had copied half of it: research reads its budget from settings,
+detects the same failure, and retries once with
+`Math.max(cfg.maxTokens * 4, …)`. The groomer had the detection flag and none of
+the response.
+
+So a run that comes back empty *on length* is asked again with four times the
+room, gated exactly as research gates it — nothing came back **and** it hit the
+wall. A model that simply had nothing to suggest returns an empty list and never
+triggers it, which matters because finding nothing is the commonest outcome the
+groomer has. Raising the setting is now the second thing to try.
+
+A manual run is one synchronous request held open for as long as it takes, so
+raising the time limit past a reverse proxy's own read timeout needs the proxy
+raised too, or the browser gives up while the run carries on.
+
+**Every run reports what it cost** — prompt size, milliseconds building it,
+milliseconds waiting on the model, and whether the retry fired. Answering "it
+grinds to a halt" the first time meant reading the source to work out where the
+seconds could even go, which is the same failure as "when a run finds nothing,
+say which nothing" one level up. Sizes and timings only; no concept text reaches
+an event detail.
+
+### What it costs to assemble a prompt
+
+`describeNode` called `listAssociations`, which costs a full node select *plus*
+a full edge select — **per concept**. A fifty-concept review did around a
+hundred and fifty full-table reads to produce one string, and it grew as the
+square of the lattice. It now builds one adjacency map (`adjacency()` in
+`cortex.ts`) and hands it down: two edge reads at forty concepts rather than
+forty-two, and a build that takes single-digit milliseconds.
+
+`cortex-groom.test.ts` asserts the read *count*, not the wall clock. A timing
+assertion passes on a small fixture whatever shape the work is, which is exactly
+how this went unnoticed.
+
+### The lattice section has a budget
+
+A review used to send every concept with its description and connections, on the
+argument above that merges cannot be judged from a slice. True, and it stops
+being affordable well before the lattice stops being useful.
+
+So `LATTICE_BUDGET_CHARS` buys full detail for the concepts most worth judging —
+most connected first, since a merge, a bridge and a cluster with no way out are
+all read off connections, then unfiled, then most recently touched — and every
+other concept still appears by name, so nothing is proposed twice. At 200
+concepts the prompt stays around 25KB instead of growing without limit.
+
+The two modes ration for different reasons and both are real: a **harvest**
+rations by *relevance* (only what the new conversation touched is worth
+describing, however much room there is), a **review** by *cost*. The budget is a
+ceiling on both.
+
+### Reading the window, not the top of it
+
+`gatherActivity` had three small faults rather than one large one, and all three
+pointed at the wrong end of a conversation:
+
+- the messages query had **no `ORDER BY`**, so which thirty a busy chat
+  contributed was the database's choice;
+- `.slice(0, 30)` then kept the **oldest** thirty — where a conversation
+  started, not where it got to, for a job whose whole question is what is new;
+- and `seedNodes` was handed the raw activity, while `ftsQuery` keeps only the
+  first eight usable terms — so the slice of the lattice a harvest saw in full
+  was chosen by how one conversation happened to open. `activityGist` samples
+  across the window instead.
+
+Plus a per-chat character ceiling, because the single truncation at the very end
+was positional: one long conversation could silently push every later one out of
+the digest.
+
 **And for a long time it never ran at all.** `tick()` in `scheduler.ts` called
 the memory audit, the UX audit and the prune. `sweepCortexGroom`,
 `sweepCortexLayout` and `sweepAlignmentSynthesis` were defined directly beneath
