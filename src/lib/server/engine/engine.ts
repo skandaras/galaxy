@@ -53,6 +53,7 @@ export function getTaskConfig(task: string) {
 	return db.select().from(taskConfigs).where(eq(taskConfigs.task, task)).get();
 }
 
+
 export function pickModel(modelId: string | null): ModelChoice | null {
 	if (modelId) {
 		const direct = resolveModel(modelId);

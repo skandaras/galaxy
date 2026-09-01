@@ -356,6 +356,45 @@ describe('image output', () => {
 
 	afterEach(() => vi.unstubAllGlobals());
 
+	/**
+	 * The lever this app spent three incidents not having.
+	 *
+	 * `max_tokens` does not govern reasoning — a groom call capped at 4,096 wrote
+	 * 13,851 tokens and was not truncated — so every attempt to make a job faster
+	 * by moving that number, or the timeout under it, was aimed at the wrong
+	 * thing. Reasoning tokens are output tokens: they are the wall clock.
+	 */
+	describe('telling a model how hard to think', () => {
+		it('sends nothing at all unless asked', async () => {
+			const adapter = adapterReturning({ choices: [{ message: { content: 'hi' } }] });
+			await adapter.complete({ modelKey: 'm', messages: [] });
+			// The same caution modalities carries: an endpoint that has never heard
+			// of the field is entitled to reject the whole request over it, which
+			// would take out every job at once.
+			expect(sent.reasoning).toBeUndefined();
+			expect(sent.reasoning_effort).toBeUndefined();
+		});
+
+		it('sends one form, never both', async () => {
+			const adapter = adapterReturning({ choices: [{ message: { content: 'hi' } }] });
+			await adapter.complete({ modelKey: 'm', messages: [], reasoning: 'low' });
+			expect(sent.reasoning).toEqual({ effort: 'low' });
+			// Reasoning models return 400 when `reasoning` and `reasoning_effort`
+			// both arrive.
+			expect(sent.reasoning_effort).toBeUndefined();
+		});
+
+		it('never excludes the chain-of-thought from the reply', async () => {
+			const adapter = adapterReturning({ choices: [{ message: { content: 'hi' } }] });
+			await adapter.complete({ modelKey: 'm', messages: [], reasoning: 'high' });
+			// `exclude: true` would hide the one thing `reasonedOnly` is detected
+			// from, so the retry that rescues a model which thought itself out of
+			// room would go blind to the case it exists for. It saves no time
+			// either — the model still reasons, it just does not say so.
+			expect((sent.reasoning as Record<string, unknown>).exclude).toBeUndefined();
+		});
+	});
+
 	it('sends modalities only when they are asked for', async () => {
 		const adapter = adapterReturning({ choices: [{ message: { content: 'hi' } }] });
 		await adapter.complete({ modelKey: 'm', messages: [] });
@@ -400,6 +439,43 @@ describe('image output', () => {
 	it('leaves images absent on an ordinary reply', async () => {
 		const adapter = adapterReturning({ choices: [{ message: { content: 'just words' } }] });
 		expect((await adapter.complete({ modelKey: 'm', messages: [] })).images).toBeUndefined();
+	});
+
+	it('reads the usage the same way the stream path does', async () => {
+		const adapter = adapterReturning({
+			choices: [{ message: { content: 'hi' } }],
+			usage: {
+				prompt_tokens: 100,
+				completion_tokens: 13851,
+				prompt_tokens_details: { cached_tokens: 40 },
+				completion_tokens_details: { reasoning_tokens: 13450 }
+			}
+		});
+		const res = await adapter.complete({ modelKey: 'm', messages: [] });
+		// This parsed `usage` inline and kept two fields, so every non-streaming
+		// job in the app — which is all of them but chat — silently dropped its
+		// cache statistics, and would have dropped reasoning tokens the same way.
+		// Two parsers for one payload is one too many.
+		expect(res.usage).toEqual({
+			promptTokens: 100,
+			completionTokens: 13851,
+			cachedPromptTokens: 40,
+			reasoningTokens: 13450
+		});
+	});
+
+	it('reads whether a model can be told how hard to think', async () => {
+		const adapter = adapterReturning({
+			data: [
+				{ id: 'a/thinker', supported_parameters: ['tools', 'reasoning'] },
+				{ id: 'a/plain', supported_parameters: ['tools'] }
+			]
+		});
+		const listed = await adapter.listModels();
+		// Read from the provider's own listing rather than guessed, because the
+		// cost of guessing wrong is a 400 on every call to that model.
+		expect(listed.find((m) => m.key === 'a/thinker')!.supportsReasoning).toBe(true);
+		expect(listed.find((m) => m.key === 'a/plain')!.supportsReasoning).toBe(false);
 	});
 
 	it('reads image generation off the listing, as the mirror of vision', async () => {

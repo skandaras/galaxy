@@ -204,6 +204,36 @@ export const models = sqliteTable('models', {
 	cacheMode: text('cache_mode', { enum: ['auto', 'explicit', 'none'] })
 		.notNull()
 		.default('auto'),
+	/**
+	 * Whether this model accepts being told how hard to think.
+	 *
+	 * Read from the provider's own listing like `supportsTools`, so a re-sync
+	 * corrects it — and read rather than guessed because the cost of guessing
+	 * wrong is a 400 on every call to that model.
+	 */
+	supportsReasoning: integer('supports_reasoning', { mode: 'boolean' })
+		.notNull()
+		.default(false),
+	/**
+	 * How hard this model should think, when it can be told.
+	 *
+	 * `auto` — the default — honours whatever the *job* asks for, which is how
+	 * the app's structured-output jobs get low effort without an admin having to
+	 * know they exist. The other three override that either way, for a model
+	 * whose provider does not advertise its parameters or one an admin has a
+	 * view about.
+	 *
+	 * `off` is deliberately absent. Models with mandatory reasoning reject a
+	 * request that tries to disable it outright, so an off switch would be a
+	 * setting that breaks some models and there is nothing honest to call it.
+	 * `low` is the floor.
+	 *
+	 * An admin preference, like cacheMode beside it, so a re-sync never undoes a
+	 * decision somebody made in the UI.
+	 */
+	reasoningMode: text('reasoning_mode', { enum: ['auto', 'low', 'medium', 'high'] })
+		.notNull()
+		.default('auto'),
 	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true)
 });
 
@@ -425,6 +455,16 @@ export const usageLog = sqliteTable(
 		 * honest reading for a row written before this column existed.
 		 */
 		cachedPromptTokens: integer('cached_prompt_tokens').notNull().default(0),
+		/**
+		 * Completion tokens the model spent thinking rather than answering.
+		 *
+		 * Part of `completion_tokens`, not additional to it — broken out because
+		 * the two together are the difference between a job that writes a lot and
+		 * a job that deliberates a lot, and only the second is usually a fault.
+		 * Zero also covers "the provider never broke it out", which is the honest
+		 * reading for a row written before this column existed.
+		 */
+		reasoningTokens: integer('reasoning_tokens').notNull().default(0),
 		costUsd: real('cost_usd'),
 		status: text('status', { enum: ['ok', 'error'] }).notNull()
 	},

@@ -15,6 +15,7 @@ export function logUsage(
 		promptTokens: number;
 		completionTokens: number;
 		cachedPromptTokens?: number;
+		reasoningTokens?: number;
 	} | null,
 	status: 'ok' | 'error',
 	userId?: string
@@ -30,6 +31,10 @@ export function logUsage(
 			promptTokens: usage?.promptTokens ?? 0,
 			completionTokens: usage?.completionTokens ?? 0,
 			cachedPromptTokens: usage?.cachedPromptTokens ?? 0,
+			// Part of completionTokens, not additional to it. Logged separately
+			// because "wrote a lot" and "deliberated a lot" are different problems
+			// with the same total, and only the second is usually a fault.
+			reasoningTokens: usage?.reasoningTokens ?? 0,
 			costUsd: null,
 			status
 		})

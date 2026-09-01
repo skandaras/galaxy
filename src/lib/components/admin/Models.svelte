@@ -11,6 +11,8 @@
 		promptCostPerMTok: number | null;
 		completionCostPerMTok: number | null;
 		cacheMode: 'auto' | 'explicit' | 'none';
+		supportsReasoning: boolean;
+		reasoningMode: 'auto' | 'low' | 'medium' | 'high';
 		enabled: boolean;
 	}
 
@@ -70,6 +72,15 @@
 		await load();
 	}
 
+	async function setReasoningMode(m: Model, reasoningMode: string) {
+		await fetch(`/api/admin/models/${m.id}`, {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ reasoningMode })
+		});
+		await load();
+	}
+
 	const fmtCost = (v: number | null) => (v == null ? '—' : `$${v.toFixed(2)}/M`);
 </script>
 
@@ -90,6 +101,7 @@
 			<tr>
 				<th>On</th><th>Model</th><th>Caps</th><th>Context</th><th>In</th><th>Out</th>
 				<th title="How this model wants prompt caching asked for">Cache</th>
+				<th title="How hard this model should think. Reasoning tokens are output tokens — they are what a slow call is made of — and max tokens does not govern them. auto lets each job ask for what it needs; the app's structured jobs ask for low.">Think</th>
 			</tr>
 		</thead>
 		<tbody>
@@ -104,6 +116,7 @@
 						{#if m.supportsTools}<span class="badge" title="tool calling">T</span>{/if}
 						{#if m.supportsVision}<span class="badge" title="vision">V</span>{/if}
 					{#if m.supportsImageOutput}<span class="badge" title="image generation">I</span>{/if}
+						{#if m.supportsReasoning}<span class="badge" title="can be told how hard to think">R</span>{/if}
 					</td>
 					<td class="num">{m.contextWindow ? `${Math.round(m.contextWindow / 1024)}k` : '—'}</td>
 					<td class="num">{fmtCost(m.promptCostPerMTok)}</td>
@@ -120,9 +133,26 @@
 							<option value="none">none</option>
 						</select>
 					</td>
+					<td>
+						{#if m.supportsReasoning}
+							<select
+								class="cache"
+								value={m.reasoningMode}
+								onchange={(e) => setReasoningMode(m, e.currentTarget.value)}
+								title="auto: honour what each job asks for — the app's structured jobs ask for low. Otherwise force a level for this model. There is no 'off': models with mandatory reasoning reject a request that tries to disable it, so low is the floor."
+							>
+								<option value="auto">auto</option>
+								<option value="low">low</option>
+								<option value="medium">medium</option>
+								<option value="high">high</option>
+							</select>
+						{:else}
+							<span class="key" title="this provider does not advertise a reasoning setting, so nothing is sent">—</span>
+						{/if}
+					</td>
 				</tr>
 			{:else}
-				<tr><td colspan="7" class="empty">No models — sync a provider first.</td></tr>
+				<tr><td colspan="8" class="empty">No models — sync a provider first.</td></tr>
 			{/each}
 		</tbody>
 	</table>

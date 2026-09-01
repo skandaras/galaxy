@@ -1,3 +1,4 @@
+import type { ReasoningEffort } from './types';
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { models, providers } from '$lib/server/db/schema';
@@ -35,6 +36,37 @@ export function resolveModel(modelId: string): ModelChoice | null {
 	return { model, provider, adapter: adapterFor(provider) };
 }
 
+/**
+ * How hard this model should think on this call, or nothing at all.
+ *
+ * The one place three different answers are combined, so no call site has to
+ * know the rules:
+ *
+ * - the **job** says what it needs. Anything that reads material it was given
+ *   and emits JSON or a short label wants `'low'`: extended deliberation buys
+ *   nothing there and costs everything, because reasoning tokens are output
+ *   tokens and output tokens are the wall clock.
+ * - the **model** says whether the field may be sent at all. An endpoint that
+ *   has never heard of it is entitled to reject the whole request, which is why
+ *   `supportsReasoning` is read from the provider's listing rather than guessed
+ *   — the same gate `supportsTools` puts on `tools` in loop.ts.
+ * - the **admin** may override either way on the model row.
+ *
+ * The failure this exists to stop was invisible for three rounds: a groom call
+ * capped at 4,096 tokens wrote 13,851 and was not truncated, because
+ * `max_tokens` does not govern reasoning. Roughly four hundred of those tokens
+ * were the answer. There was no way to ask for less, so every fix moved a
+ * number that could not help.
+ */
+export function reasoningFor(
+	choice: ModelChoice,
+	want: ReasoningEffort | undefined
+): ReasoningEffort | undefined {
+	if (!choice.model.supportsReasoning) return undefined;
+	const mode = choice.model.reasoningMode;
+	return mode === 'auto' ? want : mode;
+}
+
 export interface ModelListing {
 	id: string;
 	displayName: string;
@@ -43,6 +75,7 @@ export interface ModelListing {
 	supportsTools: boolean;
 	supportsVision: boolean;
 	supportsImageOutput: boolean;
+	supportsReasoning: boolean;
 	contextWindow: number | null;
 }
 
@@ -64,6 +97,7 @@ export function listEnabledModels(): ModelListing[] {
 			supportsTools: m.supportsTools,
 			supportsVision: m.supportsVision,
 			supportsImageOutput: m.supportsImageOutput,
+			supportsReasoning: m.supportsReasoning,
 			contextWindow: m.contextWindow
 		}))
 		.sort((a, b) => a.displayName.localeCompare(b.displayName));
@@ -88,9 +122,11 @@ export async function syncProviderModels(provider: ProviderRow): Promise<number>
 					contextWindow: rm.contextWindow,
 					supportsTools: rm.supportsTools,
 					supportsVision: rm.supportsVision,
-					// A capability the provider reports, so a re-sync corrects it —
-					// unlike cacheMode and enabled below, which an admin owns.
+					// Capabilities the provider reports, so a re-sync corrects them —
+					// unlike cacheMode, reasoningMode and enabled below, which an
+					// admin owns.
 					supportsImageOutput: rm.supportsImageOutput,
+					supportsReasoning: rm.supportsReasoning,
 					promptCostPerMTok: rm.promptCostPerMTok,
 					completionCostPerMTok: rm.completionCostPerMTok
 				})
@@ -107,6 +143,7 @@ export async function syncProviderModels(provider: ProviderRow): Promise<number>
 					supportsTools: rm.supportsTools,
 					supportsVision: rm.supportsVision,
 					supportsImageOutput: rm.supportsImageOutput,
+					supportsReasoning: rm.supportsReasoning,
 					promptCostPerMTok: rm.promptCostPerMTok,
 					completionCostPerMTok: rm.completionCostPerMTok,
 					// Both of these are starting points an admin then owns, which is

@@ -1,3 +1,4 @@
+import { reasoningFor } from '$lib/server/providers/registry';
 import { randomUUID } from 'node:crypto';
 import { desc, eq, gt, and, count } from 'drizzle-orm';
 import { db } from '$lib/server/db';
@@ -365,7 +366,11 @@ export async function runMemory(
 						].join('\n\n')
 					}
 				],
-				maxTokens: 2048
+				maxTokens: 2048,
+				// Reads what it was given and emits a short structured answer, which is
+				// the class of task where deliberation buys nothing and costs the wall
+				// clock. Sent only to models that accept it — see reasoningFor.
+				reasoning: reasoningFor(choice, 'low')
 			},
 			AbortSignal.timeout(120_000)
 		);

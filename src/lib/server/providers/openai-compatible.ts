@@ -56,6 +56,25 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
 			: {}),
 		...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
 		...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
+		/**
+		 * How hard to think, and only when asked.
+		 *
+		 * Three things this must not do, each of which breaks a real endpoint:
+		 *
+		 * **Never send it unsolicited.** The same caution `modalities` carries —
+		 * an endpoint that has never heard of the field may reject the request.
+		 * The caller only asks when the model advertised support.
+		 *
+		 * **Never send `reasoning_effort` beside this.** Reasoning models return
+		 * 400 when both forms arrive, so there is exactly one form here.
+		 *
+		 * **Never send `exclude: true`.** It keeps the chain-of-thought out of the
+		 * response, which is the only thing `reasonedOnly` below can be detected
+		 * from — the retry that rescues a model which thought itself out of room
+		 * would go blind to the case it exists for. It saves no time either: the
+		 * model still reasons, it just does not tell us.
+		 */
+		...(req.reasoning ? { reasoning: { effort: req.reasoning } } : {}),
 		...(req.modalities?.length ? { modalities: req.modalities } : {}),
 		stream,
 		...(stream ? { stream_options: { include_usage: true } } : {})
@@ -86,6 +105,11 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
 			const res = await post(req, false, signal);
 			const data = await res.json();
 			const choice = data.choices?.[0];
+			// Through the same reader the stream path uses. This used to parse
+			// `usage` inline and keep two fields, so every non-streaming job in the
+			// app — which is all of them but chat — silently dropped its cache
+			// statistics, and would have dropped reasoning tokens the same way.
+			// Two parsers for one payload is one too many.
 			const text = choice?.message?.content ?? '';
 			// Reasoning models put chain-of-thought on its own field and leave
 			// content empty when the budget runs out mid-thought.
@@ -97,12 +121,7 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
 				finishReason: choice?.finish_reason ?? null,
 				reasonedOnly: !text && Boolean(reasoning),
 				...(images.length ? { images } : {}),
-				usage: data.usage
-					? {
-							promptTokens: data.usage.prompt_tokens ?? 0,
-							completionTokens: data.usage.completion_tokens ?? 0
-						}
-					: null
+				usage: data.usage ? readUsage(data.usage as Record<string, unknown>) : null
 			};
 		},
 
@@ -187,13 +206,21 @@ export function readUsage(raw: Record<string, unknown>): Usage {
 	const num = (v: unknown): number | undefined =>
 		typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 	const details = (raw.prompt_tokens_details ?? {}) as Record<string, unknown>;
+	const outDetails = (raw.completion_tokens_details ?? {}) as Record<string, unknown>;
 	const cached = num(details.cached_tokens);
 	const discount = num(raw.cache_discount);
+	// Reasoning tokens are output tokens — charged as such, and generated at the
+	// same rate — so this is the wall clock of a slow call, broken out from the
+	// answer it produced. Without it a run that wrote four hundred tokens of
+	// reply after thirteen thousand of thinking is indistinguishable from one
+	// that wrote a very long answer.
+	const reasoning = num(outDetails.reasoning_tokens);
 	return {
 		promptTokens: num(raw.prompt_tokens) ?? 0,
 		completionTokens: num(raw.completion_tokens) ?? 0,
 		...(cached !== undefined ? { cachedPromptTokens: cached } : {}),
-		...(discount !== undefined ? { cacheDiscountUsd: discount } : {})
+		...(discount !== undefined ? { cacheDiscountUsd: discount } : {}),
+		...(reasoning !== undefined ? { reasoningTokens: reasoning } : {})
 	};
 }
 
@@ -213,6 +240,10 @@ function toRemoteModel(m: Record<string, unknown>): RemoteModel {
 		displayName: typeof m.name === 'string' && m.name ? m.name : String(m.id),
 		contextWindow: typeof m.context_length === 'number' ? m.context_length : null,
 		supportsTools: supported.includes('tools'),
+		// Whether this model can be *told* how hard to think. Read the same way
+		// `supportsTools` is, from the provider's own listing, because the cost of
+		// guessing wrong is a 400 on every call to it.
+		supportsReasoning: supported.includes('reasoning') || supported.includes('reasoning_effort'),
 		supportsVision: modalities.includes('image'),
 		promptCostPerMTok: perTok(pricing.prompt),
 		completionCostPerMTok: perTok(pricing.completion),

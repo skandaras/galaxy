@@ -1,3 +1,4 @@
+import { reasoningFor } from '$lib/server/providers/registry';
 import { randomUUID } from 'node:crypto';
 import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db';
@@ -1754,7 +1755,11 @@ export async function triagePages(args: {
 					{ role: 'system', content: args.systemPrompt },
 					{ role: 'user', content }
 				],
-				maxTokens: TRIAGE_TOKENS
+				maxTokens: TRIAGE_TOKENS,
+				// Reads what it was given and emits a short structured answer, which is
+				// the class of task where deliberation buys nothing and costs the wall
+				// clock. Sent only to models that accept it — see reasoningFor.
+				reasoning: reasoningFor(args.choice, 'low')
 			},
 			args.signal
 				? AbortSignal.any([args.signal, AbortSignal.timeout(TRIAGE_TIMEOUT_MS)])
