@@ -568,17 +568,19 @@ export interface CortexGroomSettings {
 	/** Proposals one run may raise, so a first pass cannot bury the review list. */
 	maxProposalsPerRun: number;
 	/**
-	 * Tokens one groom call may spend.
+	 * A **ceiling** on what one groom call may write, not the number it asks for.
 	 *
-	 * A setting rather than a constant because the old constant was 8192 and a
-	 * reasoning model spent all of it thinking about 4,860 characters of
-	 * conversation, returning nothing — and the panel's advice was to raise a
-	 * Max tokens field that does not exist anywhere in this app. A number you
-	 * cannot change is not a budget, it is a wall.
+	 * The difference matters more than it looks. `max_tokens` reaches the
+	 * provider untouched, and on a reasoning model it is *permission to think* —
+	 * hand one a large number and it will spend a large fraction of it before
+	 * writing a word, which is wall-clock time whatever the prompt says.
 	 *
-	 * Generous, because the failure it prevents costs a whole run and the
-	 * headroom costs nothing when it is not used: a model that has said its
-	 * piece stops, and is billed for what it wrote.
+	 * This was 16,384 and each pass asked for all of it, so a six-kilobyte prompt
+	 * could take longer than five minutes. Each pass now asks for the size of its
+	 * own answer — see `SURVEY_TOKENS` and `PROPOSAL_TOKENS` in cortex-groom.ts,
+	 * which carry the comparison against every other job in this codebase — and
+	 * this number caps them. Lowering it still bites; raising it no longer makes
+	 * a run slower.
 	 */
 	maxTokens: number;
 	/**
@@ -611,7 +613,9 @@ export const DEFAULT_CORTEX_GROOM: CortexGroomSettings = {
 	// which is what makes a short cadence affordable at all.
 	intervalHours: 24,
 	maxProposalsPerRun: 10,
-	maxTokens: 16_384,
+	// A ceiling, and double what the largest pass asks for. It is not the number
+	// sent: see the field's own note, and the budgets in cortex-groom.ts.
+	maxTokens: 8_192,
 	timeoutSeconds: 300,
 	shortlistSize: 20
 };

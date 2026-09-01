@@ -183,6 +183,13 @@
       "when": 1788126709715,
       "tag": "0025_far_whizzer",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1788244760647,
+      "tag": "0026_wandering_blur",
+      "breakpoints": true
     }
   ]
 }

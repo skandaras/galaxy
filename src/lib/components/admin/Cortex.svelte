@@ -10,7 +10,7 @@
 		enabled: false,
 		intervalHours: 24,
 		maxProposalsPerRun: 10,
-		maxTokens: 16_384,
+		maxTokens: 8_192,
 		timeoutSeconds: 300,
 		shortlistSize: 20
 	});
@@ -104,7 +104,7 @@
 			<input type="number" min="5" max="60" bind:value={groom.shortlistSize} />
 		</label>
 		<label>
-			max tokens
+			max tokens (ceiling)
 			<input type="number" min="1024" max="200000" step="1024" bind:value={groom.maxTokens} />
 		</label>
 		<label>
@@ -119,11 +119,17 @@
 		descriptions sent, so the expensive half of a review stops growing with the lattice.
 	</p>
 	<p class="hint">
-		A reasoning model spends part of its tokens thinking before it writes anything, and with too
-		few it can spend all of them and answer nothing at all. A run that comes back empty on the
-		token limit is asked again automatically with four times the room, so raising this is the
-		second thing to try rather than the first. The time limit covers the whole run rather than
-		one call, so a review's two passes share it.
+		<strong>Max tokens</strong> is a ceiling, not the number each pass asks for — each asks for
+		the size of its own answer, a few thousand at most. This matters because a reasoning model
+		treats the number as permission to think: raising it buys minutes of thinking rather than
+		better suggestions, which is how a six-kilobyte prompt once took longer than five minutes.
+		Lower it to constrain a run; raising it will not make one finish. A pass that comes back
+		empty on the token limit is asked again automatically with more room, when there is time
+		left to ask in.
+	</p>
+	<p class="hint">
+		The time limit covers the whole run rather than one call, so a review's two passes share it —
+		the survey takes what it needs and the close read keeps a floor it can always finish in.
 	</p>
 	<p class="hint">
 		A run started by hand is a single request held open for as long as it takes, so if you raise

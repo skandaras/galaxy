@@ -58,6 +58,8 @@
 		buildMs?: number;
 		modelMs?: number;
 		retried?: boolean;
+		completionTokens?: number;
+		modelKey?: string;
 		survey?: {
 			concepts: number;
 			total: number;
@@ -68,12 +70,19 @@
 			promptChars: number;
 			modelMs: number;
 			retried: boolean;
+			completionTokens: number;
+			maxTokens: number;
+			allowedMs: number;
 		};
 		confirm?: {
 			concepts: number;
+			everything: boolean;
 			promptChars: number;
 			modelMs: number;
 			retried: boolean;
+			completionTokens: number;
+			maxTokens: number;
+			allowedMs: number;
 		};
 	}
 	interface Proposal {
@@ -627,7 +636,16 @@
 								</span>
 							{/if}
 
-							{#if lastRun.survey}
+							{#if lastRun.confirm?.everything}
+								<!-- A survey exists to choose. With no more concepts than the
+								     close read can hold, every one of them goes forward anyway,
+								     so surveying them is a whole model call spent selecting all
+								     of them. -->
+								<span class="hint">
+									Small enough to read all {lastRun.confirm.concepts} concepts closely, so it
+									skipped the survey.
+								</span>
+							{:else if lastRun.survey}
 								<!-- A review is two passes now: the wide one reads every
 								     concept's shape, the narrow one reads the handful it
 								     picks. Saying which concepts were looked at is what makes
@@ -714,6 +732,16 @@
 									{Math.round((lastRun.modelMs ?? 0) / 100) / 10}s{lastRun.buildMs && lastRun.buildMs > 250
 										? `, assembling it took ${Math.round(lastRun.buildMs / 100) / 10}s`
 										: ''}{lastRun.retried ? ', after a retry with more room' : ''}.
+								</span>
+							{/if}
+							{#if lastRun.completionTokens || lastRun.modelKey}
+								<!-- The number that was missing, and the one that explains a slow
+								     run: max_tokens is permission to think, not a safety ceiling,
+								     so a completion count near the budget says the model was
+								     invited to spend minutes. The model name is here because
+								     pickModel falls back to the first enabled one in silence. -->
+								<span class="hint">
+									{lastRun.modelKey ?? 'the model'} wrote {lastRun.completionTokens ?? 0} tokens.
 								</span>
 							{/if}
 							{#if lastRun.dropped?.unknownConcept}

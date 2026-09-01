@@ -4,6 +4,7 @@ import { db } from '$lib/server/db';
 import { cortexAssociations, cortexNodes, cortexProposals } from '$lib/server/db/schema';
 import {
 	adjacency,
+	canEdit,
 	circuitIndex,
 	cortexSettings,
 	deleteAssociation,
@@ -16,6 +17,7 @@ import {
 	logChange,
 	seedNodes,
 	mergeNodes,
+	noteGroomed,
 	saveAssociation,
 	saveCircuit,
 	saveNode,
@@ -70,20 +72,59 @@ const WATERMARK_KEY = 'cortex.groom.watermark';
 const FIRST_RUN_WINDOW_MS = 3 * 86_400_000;
 const LATTICE_MARK_KEY = 'cortex.groom.latticeMark';
 /**
- * Where the next survey starts.
+ * What each pass asks for, which is the size of its **answer** and not the size
+ * of the budget.
  *
- * The **id** of a concept, not an index into a list: indices shift the moment a
- * concept is deleted, and `listNodes` is name-ordered and stable. Empty means
- * "from the top", which is also what a lattice small enough to survey in one
- * window leaves behind.
+ * `max_tokens` is not a safety ceiling. The adapter passes it straight through,
+ * and on a reasoning model it is *permission to think* — hand one a large
+ * number on an open-ended "find everything wrong with this" question and it
+ * will spend a large fraction of it before writing a word. At any realistic
+ * generation rate that alone is minutes, whatever the prompt says.
+ *
+ * That is how a six-kilobyte prompt came to take longer than three hundred
+ * seconds. This job was asking for 16,384 tokens and, on retry, 65,536 — four
+ * and sixteen times the largest budget anything else in this codebase uses.
+ * For comparison, and these are the whole argument:
+ *
+ * - research triage: 200        - memory, all three calls: 2,048
+ * - run summary, chat title: 256 - alignment: 3,072
+ * - compaction: 1,024           - **the UX audit: 4,096**
+ *
+ * The UX audit reviews an entire application and returns structured findings.
+ * It is the same job as this one and it does it in four thousand tokens. A
+ * survey returns about twenty short JSON items — five hundred tokens. A close
+ * read returns at most ten proposals with rationales — thirteen hundred. Both
+ * numbers below are threefold headroom on that, and `cfg.maxTokens` remains a
+ * ceiling over them for anyone who needs to pull them down.
+ *
+ * The rule this encodes: **ask for the size of the answer.** A budget larger
+ * than the answer buys nothing except time, and time is the thing that was
+ * running out.
  */
-const SURVEY_CURSOR_KEY = 'cortex.groom.surveyCursor';
+const SURVEY_TOKENS = 2_048;
+const PROPOSAL_TOKENS = 4_096;
+
 /**
- * Floor for the retry after a reasoning model burns its budget, so a small
- * configured cap still gets real room on the second attempt. Copied from
- * `research.ts`, which has had exactly this for exactly this reason.
+ * How much a retry may add after a reasoning model writes nothing.
+ *
+ * Three times the pass's own ask, not a fixed floor. The floor this replaces
+ * was `Math.max(cfg.maxTokens * 4, 32_768)`, copied from `research.ts` — which
+ * multiplies a *small* base. Multiplying 16,384 by four gives 65,536, a number
+ * no model finishes inside any timeout this app offers, so the retry that
+ * existed to rescue a run was guaranteeing its failure. Taking a multiplier
+ * from research without taking its base is the same mistake, in the same file,
+ * that `3700e26` was written to fix.
  */
-const RETRY_TOKENS_FLOOR = 32_768;
+const RETRY_MULTIPLIER = 3;
+
+/**
+ * A retry is only worth making with real room to make it in.
+ *
+ * Below this share of the run, asking again buys an abort that reports itself
+ * as a timeout — which is worse than not asking, because it hides why the first
+ * call came back empty.
+ */
+const RETRY_MIN_SHARE = 0.2;
 
 export type GroomMode = 'harvest' | 'review';
 
@@ -120,6 +161,17 @@ export interface GroomResult {
 	/** A call came back empty on length, so it was asked again with room. */
 	retried?: boolean;
 	/**
+	 * What the model wrote, across every call, and which model wrote it.
+	 *
+	 * The number this job most needed and did not have. A completion count sitting
+	 * near the token budget is the whole explanation of a slow run — `max_tokens`
+	 * on a reasoning model is permission to think, not a safety ceiling — and the
+	 * model name says whether the task is using the one somebody configured, since
+	 * `pickModel` falls back to the first enabled model silently.
+	 */
+	completionTokens?: number;
+	modelKey?: string;
+	/**
 	 * The wide pass of a review: what it looked at, and what it came back with.
 	 *
 	 * Absent on a harvest, which is one call and has no survey.
@@ -139,13 +191,24 @@ export interface GroomResult {
 		promptChars: number;
 		modelMs: number;
 		retried: boolean;
+		completionTokens: number;
+		/** What it was allowed to write, and how long it was given. */
+		maxTokens: number;
+		allowedMs: number;
 	};
-	/** The narrow pass of a review. Absent when the survey found nothing to read. */
+	/**
+	 * The narrow pass of a review. Absent when the survey found nothing to read;
+	 * `everything` when the lattice was small enough that no survey was needed.
+	 */
 	confirm?: {
 		concepts: number;
+		everything: boolean;
 		promptChars: number;
 		modelMs: number;
 		retried: boolean;
+		completionTokens: number;
+		maxTokens: number;
+		allowedMs: number;
 	};
 }
 
@@ -1416,52 +1479,67 @@ export interface Candidate {
 
 export interface SurveyWindow {
 	window: CortexNode[];
-	/** The first concept that did not fit, or null when the whole lattice did. */
-	nextCursor: string | null;
 	covered: number;
 	total: number;
 }
 
 /**
- * As much of the lattice as one survey can carry, starting where the last one
- * stopped.
+ * The order a survey works through a lattice: longest neglected first.
  *
- * The cursor is an **id**, not an index: indices shift the moment a concept is
- * deleted, and `listNodes` is name-ordered and therefore stable. It wraps, so a
- * lattice three windows wide is covered in three runs and then covered again —
- * every concept is surveyed eventually, and a run costs two calls whatever the
- * lattice is doing. The old ceiling simply dropped the tail, so on a large
- * lattice there were concepts no review ever looked at.
+ * Never groomed leads — a concept nothing has ever looked at is the one the
+ * groomer owes attention to, and a newly added concept gets it on the next run
+ * without anything having to remember that it is new. Then oldest stamp.
+ *
+ * `judgingOrder` breaks the ties, so on a small lattice — where every concept
+ * carries the same stamp, or none — the order falls back to what is most worth
+ * judging: most connected, then unfiled, then recently touched. That is the
+ * right behaviour and it costs nothing to get.
+ *
+ * This replaces a stored cursor holding one concept id into name order. The
+ * cursor was disturbed by a deletion, said nothing about concepts added since,
+ * and could not answer the only question worth asking of it — whether the
+ * groomer has been all the way round.
+ */
+export function groomingOrder(
+	nodes: CortexNode[],
+	links: Map<string, CortexAssociation[]>
+): CortexNode[] {
+	const byJudgement = new Map(judgingOrder(nodes, links).map((n, i) => [n.id, i]));
+	return [...nodes].sort((a, b) => {
+		const left = a.lastGroomedAt?.getTime() ?? 0;
+		const right = b.lastGroomedAt?.getTime() ?? 0;
+		if (left !== right) return left - right;
+		return (byJudgement.get(a.id) ?? 0) - (byJudgement.get(b.id) ?? 0);
+	});
+}
+
+/**
+ * As much of the lattice as one survey can carry, longest-neglected first.
+ *
+ * Everything left over is simply next run's work: the stamps written by this
+ * one push these concepts to the back, so the window walks the whole lattice
+ * without anything having to remember where it stopped. A run costs two calls
+ * whatever the lattice is doing, and — unlike the ceiling this replaces, which
+ * dropped the tail — there is no part of a large lattice that no review ever
+ * reaches.
  */
 export function surveyWindow(
 	nodes: CortexNode[],
 	line: (n: CortexNode) => string,
-	cursorId: string | null,
 	budget = SURVEY_BUDGET_CHARS
 ): SurveyWindow {
-	const total = nodes.length;
-	if (!total) return { window: [], nextCursor: null, covered: 0, total: 0 };
-	// A cursor pointing at a concept since deleted starts from the top rather
-	// than stalling, which is the only sane reading of "start after that one".
-	const from = Math.max(
-		nodes.findIndex((n) => n.id === cursorId),
-		0
-	);
 	const window: CortexNode[] = [];
 	let spent = 0;
-	for (let i = 0; i < total; i++) {
-		const node = nodes[(from + i) % total];
+	for (const node of nodes) {
 		const cost = line(node).length + 1;
 		// `window.length` guards the degenerate case: one concept whose line alone
 		// exceeds the budget still gets surveyed. Without it the window could come
-		// back empty and the cursor would never move off it.
-		if (spent + cost > budget && window.length) {
-			return { window, nextCursor: node.id, covered: window.length, total };
-		}
+		// back empty and nothing would ever be stamped.
+		if (spent + cost > budget && window.length) break;
 		spent += cost;
 		window.push(node);
 	}
-	return { window, nextCursor: null, covered: total, total };
+	return { window, covered: window.length, total: nodes.length };
 }
 
 /** The wide, shallow pass: structure only, and a shortlist out. */
@@ -1495,8 +1573,8 @@ export function buildSurveyPrompt(
 			// to name it by — adding a concept is a harvest's job, from what was
 			// actually said, not something to infer from a gap in a shape.
 			SURVEY_KINDS.join(', ') +
-			'), and "hypothesis" (one line, what you suspect). Add "target" (another id) when the suspicion is about a pair — a merge, a connection, a weight.',
-		'{"candidates":[{"node":"node-id","target":"node-id","kind":"merge","hypothesis":"Both sit in the same area and reach the same three concepts."}]}',
+			'), and "hypothesis" — **at most ten words**, since the next pass reads the descriptions and forms its own view. Add "target" (another id) when the suspicion is about a pair — a merge, a connection, a weight.',
+		'{"candidates":[{"node":"node-id","target":"node-id","kind":"merge","hypothesis":"same area, same neighbours"}]}',
 		'Use the exact ids given above. An id you invent is dropped, and costs you a slot.'
 	].join('\n\n');
 }
@@ -1600,24 +1678,53 @@ export function buildConfirmPrompt(
 }
 
 /**
- * The survey, ready to send, plus where the next one should start.
+ * The survey, ready to send, and which concepts went into it.
  *
- * The cursor comes in rather than being read here, so this stays a function of
- * its arguments and a test can walk the window round the lattice by hand.
+ * Only concepts this person owns rotate. Ones somebody else shared are pinned
+ * into the listing as context and never stamped — they cannot be stamped
+ * without crossing the ownership boundary, and leaving them unstamped *inside*
+ * the rotation would park them at the front of every survey for ever and
+ * starve the lattice they were meant to give context to.
  */
-export function buildSurvey(userId: string, shortlist: number, cursorId: string | null) {
-	const links = adjacency(userId);
+export function buildSurvey(
+	userId: string,
+	shortlist: number,
+	links: Map<string, CortexAssociation[]> = adjacency(userId)
+) {
 	const areas = visibleAreaIds(userId);
-	const nodes = listNodes(userId);
+	const all = listNodes(userId);
+	const mine = all.filter((n) => canEdit(n, userId));
+	const theirs = all.filter((n) => !canEdit(n, userId));
 	const line = (n: CortexNode) => surveyLine(n, links, userId, areas);
-	const { window, nextCursor, covered, total } = surveyWindow(nodes, line, cursorId);
+
+	const { window, covered, total } = surveyWindow(groomingOrder(mine, links), line);
+	// Listed in the lattice's own order rather than the priority order's: the
+	// model is reading this to hold a shape in mind, and a list sorted by how
+	// long each concept has been waiting is a harder shape to hold.
+	const shown = new Set(window.map((n) => n.id));
+	const listed = all.filter((n) => shown.has(n.id) || theirs.includes(n));
+
 	return {
-		prompt: buildSurveyPrompt(userId, shortlist, window, total, line),
+		prompt: buildSurveyPrompt(userId, shortlist, listed, total, line),
+		window,
 		links,
-		nextCursor,
 		covered,
 		total
 	};
+}
+
+/**
+ * Every concept, as candidates, for a lattice small enough not to need a survey.
+ *
+ * No hypotheses, because nothing suspected anything — the close-read prompt
+ * says so rather than passing this off as a shortlist a model chose.
+ */
+export function everyConcept(
+	userId: string,
+	links: Map<string, CortexAssociation[]> = adjacency(userId)
+): Candidate[] {
+	const mine = listNodes(userId).filter((n) => canEdit(n, userId));
+	return judgingOrder(mine, links).map((node) => ({ node }));
 }
 
 /**
@@ -1671,18 +1778,20 @@ export function readCandidates(
  *
  * A wide pass that returns prose, or nothing, should not cost the whole run:
  * the deep pass is affordable by construction, and there is a defensible
- * shortlist to be had without a model. Unreachable first and unfiled next —
- * the two faults only this job can fix — then whatever `judgingOrder` puts on
- * top, which is where a merge or a bridge is read off.
+ * shortlist to be had without a model. Never read before leads — no model has
+ * ever seen what these concepts say, which is the plainest claim on attention
+ * there is — then unreachable and unfiled, the two faults only this job can
+ * fix, then whatever `judgingOrder` puts on top.
  */
 export function shortlistFallback(
 	userId: string,
 	links: Map<string, CortexAssociation[]>,
 	max: number
 ): Candidate[] {
-	const mine = listNodes(userId).filter((n) => n.ownerId === userId || n.ownerId === null);
+	const mine = listNodes(userId).filter((n) => canEdit(n, userId));
 	const stranded = new Set(orphans(userId).map((o) => o.id));
 	const ranked = [
+		...mine.filter((n) => !n.lastExaminedAt),
 		...mine.filter((n) => stranded.has(n.id)),
 		...mine.filter((n) => !stranded.has(n.id) && !n.circuits?.length),
 		...judgingOrder(mine, links)
@@ -1813,16 +1922,31 @@ export async function runCortexGroom(
 	 * they think it means.
 	 */
 	const deadline = startedAt + cfg.timeoutSeconds * 1000;
-	// Never zero: a signal already past its deadline aborts before the request is
-	// made, which reports a timeout without having waited for one.
-	const remaining = () => Math.max(deadline - Date.now(), 1_000);
 	/**
-	 * The survey may have half the run at most, so a slow wide pass cannot leave
-	 * the close read with nothing. It hands its slack forward — a survey that
-	 * comes back in ten seconds leaves the rest to the pass that needs it.
+	 * What is honestly left, which may be nothing at all.
+	 *
+	 * Kept separate from what a signal is handed, below. Folding the floor into
+	 * this made "the run is nearly out of time" indistinguishable from "there is
+	 * a second left", so anything trying to decide whether another call is worth
+	 * making could not tell.
 	 */
+	const remainingMs = () => deadline - Date.now();
+	// A signal already past its deadline aborts before the request is even made,
+	// which reports a timeout without having waited for one.
+	const allow = (ms: number) => Math.max(ms, 1_000);
+	const remaining = () => allow(remainingMs());
+	/**
+	 * The survey gets everything except a floor held back for the close read.
+	 *
+	 * Not a flat half, which is what this was and what starved it. The close
+	 * read's prompt is bounded by the shortlist rather than by the lattice, so it
+	 * is the pass whose need can be predicted; the survey is the unbounded one
+	 * and gets the larger share. A survey that comes back quickly hands the rest
+	 * forward.
+	 */
+	const CLOSE_READ_SHARE = 0.25;
 	const surveyLimit = () =>
-		Math.min(remaining(), Math.max(Math.floor((cfg.timeoutSeconds * 1000) / 2), 1_000));
+		allow(remainingMs() - Math.floor(cfg.timeoutSeconds * 1000 * CLOSE_READ_SHARE));
 
 	// Which pass a failure happened in. "The model did not answer" was already
 	// the least useful sentence in the system when there was one call to blame.
@@ -1846,9 +1970,14 @@ export async function runCortexGroom(
 		 * The time limit is recomputed per call rather than captured, so a retry
 		 * spends what is left of the run rather than starting the clock again.
 		 */
-		const ask = async (prompt: string, limit: () => number) => {
-			const call = (maxTokens: number) =>
-				choice.adapter.complete(
+		const ask = async (prompt: string, want: number, limit: () => number) => {
+			// `cfg.maxTokens` is a ceiling over the pass's own ask, never the ask
+			// itself. Raising the setting must not make a pass slower; lowering it
+			// must still bite.
+			const budget = (tokens: number) => Math.max(Math.min(cfg.maxTokens, tokens), 256);
+			const call = async (maxTokens: number) => {
+				const allowedMs = limit();
+				const res = await choice.adapter.complete(
 					{
 						modelKey: choice.model.modelKey,
 						messages: [
@@ -1857,22 +1986,46 @@ export async function runCortexGroom(
 						],
 						maxTokens
 					},
-					AbortSignal.timeout(limit())
+					AbortSignal.timeout(allowedMs)
 				);
+				// Per call, not per ask. This used to run once after the retry, so a
+				// run that timed out wrote no usage row at all — and completion
+				// tokens were the one number that would have explained the timeout.
+				logUsage('cortex-groom', choice.model.modelKey, res.usage, 'ok', userId);
+				return { ...res, allowedMs };
+			};
 
 			const askedAt = Date.now();
-			let res = await call(cfg.maxTokens);
+			let res = await call(budget(want));
 			let retried = false;
+			/**
+			 * A reasoning model can spend the whole budget thinking and return no
+			 * answer. The gate is `research.ts`'s and unchanged: nothing came back
+			 * *and* it hit the wall. A model that simply had nothing to suggest
+			 * returns an empty list and never triggers this.
+			 *
+			 * What is new is the second condition. Asking again with no time left
+			 * returns an abort that reads as a timeout, which hides the reason the
+			 * first call came back empty — so below a real share of the run it says
+			 * so instead of spending a call to say nothing.
+			 */
+			const roomToRetry = remainingMs() > cfg.timeoutSeconds * 1000 * RETRY_MIN_SHARE;
 			if (!res.text.trim() && (res.reasonedOnly === true || res.finishReason === 'length')) {
-				retried = true;
-				res = await call(Math.max(cfg.maxTokens * 4, RETRY_TOKENS_FLOOR));
+				if (roomToRetry) {
+					retried = true;
+					res = await call(budget(want * RETRY_MULTIPLIER));
+				}
 			}
-			logUsage('cortex-groom', choice.model.modelKey, res.usage, 'ok', userId);
 			return {
 				text: res.text,
 				finishReason: res.finishReason ?? null,
 				reasonedOnly: res.reasonedOnly === true,
 				retried,
+				// The number that was missing. "It wrote 16,384 tokens" is the whole
+				// diagnosis of a slow run, and nothing reported it.
+				completionTokens: res.usage?.completionTokens ?? 0,
+				maxTokens: budget(want),
+				allowedMs: res.allowedMs,
 				promptChars: prompt.length,
 				modelMs: Date.now() - askedAt
 			};
@@ -1882,19 +2035,25 @@ export async function runCortexGroom(
 		let promptChars = 0;
 		let modelMs = 0;
 		let retried = false;
+		let completionTokens = 0;
 		let reply = { text: '', finishReason: null as string | null, reasonedOnly: false };
 		let proposals: unknown[] = [];
+		/** Every concept whose shape reached the model, so the run can stamp them. */
+		let looked: string[] = [];
+		/** Every concept whose description reached the model. */
+		let examined: string[] = [];
 
 		if (mode === 'harvest') {
 			const builtAt = Date.now();
 			const prompt = buildHarvestPrompt(userId, max, activity);
 			buildMs = Date.now() - builtAt;
 
-			const res = await ask(prompt, remaining);
+			const res = await ask(prompt, PROPOSAL_TOKENS, remaining);
 			reply = res;
 			promptChars = res.promptChars;
 			modelMs = res.modelMs;
 			retried = res.retried;
+			completionTokens = res.completionTokens;
 
 			// `.proposals`, not the parsed value itself: extractJson returns an
 			// object by construction, so a prompt asking for a bare array gets
@@ -1902,71 +2061,96 @@ export async function runCortexGroom(
 			const parsed = extractJson(res.text);
 			proposals = Array.isArray(parsed?.proposals) ? parsed.proposals : [];
 		} else {
-			const builtAt = Date.now();
-			const cursor = getSetting<string>(SURVEY_CURSOR_KEY, '', userId) || null;
-			const wide = buildSurvey(userId, shortlist, cursor);
-			buildMs = Date.now() - builtAt;
+			const links = adjacency(userId);
+			let candidates: Candidate[];
 
-			const first = await ask(wide.prompt, surveyLimit);
-			reply = first;
-			promptChars = first.promptChars;
-			modelMs = first.modelMs;
-			retried = first.retried;
-
-			// The window moves on whether or not the answer was any good: those
-			// concepts have been looked at, and a cursor that only advanced on a
-			// useful answer would sit on the same window for ever.
-			setSetting(SURVEY_CURSOR_KEY, wide.nextCursor ?? '', userId);
-
-			const parsed = extractJson(first.text);
-			const raw = Array.isArray(parsed?.candidates) ? (parsed.candidates as unknown[]) : null;
-			const read = raw ? readCandidates(userId, raw, shortlist) : { candidates: [], dropped: 0 };
 			/**
-			 * An empty list is an answer; anything else is the survey failing.
+			 * A survey earns its call only when it has something to choose from.
 			 *
-			 * The same distinction the retry gate draws, and for the same reason. A
-			 * model that looked at the shape and found nothing must be believed —
-			 * finding nothing is the commonest outcome the groomer has. But prose,
-			 * a missing `candidates` key, or a list where every id was invented is
-			 * a pass that did not answer, and the deep read is cheap enough to run
-			 * on a shortlist picked without it rather than throw the run away.
+			 * With no more concepts than the close read can hold, every one of them
+			 * goes forward anyway — so the wide pass is a whole model call spent
+			 * selecting all of them, and then a second call to do the work. Derived
+			 * rather than a threshold somebody picked: the survey exists to choose,
+			 * and with nothing to choose it is overhead.
 			 */
-			const answeredEmpty = Array.isArray(raw) && raw.length === 0;
-			const fellBack = !answeredEmpty && !read.candidates.length;
-			const candidates = fellBack
-				? shortlistFallback(userId, wide.links, shortlist)
-				: read.candidates;
+			if (nodes.length <= shortlist) {
+				candidates = everyConcept(userId, links);
+			} else {
+				stage = 'survey';
+				const builtAt = Date.now();
+				const wide = buildSurvey(userId, shortlist, links);
+				buildMs = Date.now() - builtAt;
 
-			survey = {
-				concepts: wide.covered,
-				total: wide.total,
-				more: wide.nextCursor !== null,
-				candidates: candidates.length,
-				dropped: read.dropped,
-				fellBack,
-				promptChars: first.promptChars,
-				modelMs: first.modelMs,
-				retried: first.retried
-			};
+				const first = await ask(wide.prompt, SURVEY_TOKENS, surveyLimit);
+				reply = first;
+				promptChars = first.promptChars;
+				modelMs = first.modelMs;
+				retried = first.retried;
+				completionTokens = first.completionTokens;
+				looked = wide.window.map((n) => n.id);
+
+				const parsed = extractJson(first.text);
+				const raw = Array.isArray(parsed?.candidates) ? (parsed.candidates as unknown[]) : null;
+				const read = raw ? readCandidates(userId, raw, shortlist) : { candidates: [], dropped: 0 };
+				/**
+				 * An empty list is an answer; anything else is the survey failing.
+				 *
+				 * The same distinction the retry gate draws, and for the same reason.
+				 * A model that looked at the shape and found nothing must be believed
+				 * — finding nothing is the commonest outcome the groomer has. But
+				 * prose, a missing `candidates` key, or a list where every id was
+				 * invented is a pass that did not answer, and the deep read is cheap
+				 * enough to run on a shortlist picked without it rather than throw
+				 * the run away.
+				 */
+				const answeredEmpty = Array.isArray(raw) && raw.length === 0;
+				const fellBack = !answeredEmpty && !read.candidates.length;
+				candidates = fellBack ? shortlistFallback(userId, links, shortlist) : read.candidates;
+
+				survey = {
+					concepts: wide.covered,
+					total: wide.total,
+					more: wide.covered < wide.total,
+					candidates: candidates.length,
+					dropped: read.dropped,
+					fellBack,
+					promptChars: first.promptChars,
+					modelMs: first.modelMs,
+					retried: first.retried,
+					completionTokens: first.completionTokens,
+					maxTokens: first.maxTokens,
+					allowedMs: first.allowedMs
+				};
+			}
 
 			if (candidates.length) {
 				stage = 'confirm';
 				const deepAt = Date.now();
-				const deepPrompt = buildConfirmPrompt(userId, max, candidates, wide.links);
+				const deepPrompt = buildConfirmPrompt(userId, max, candidates, links);
 				buildMs += Date.now() - deepAt;
 
-				const second = await ask(deepPrompt, remaining);
+				const second = await ask(deepPrompt, PROPOSAL_TOKENS, remaining);
 				reply = second;
 				promptChars += second.promptChars;
 				modelMs += second.modelMs;
 				retried = retried || second.retried;
-				confirm = {
-					concepts: new Set(
+				completionTokens += second.completionTokens;
+				examined = [
+					...new Set(
 						candidates.flatMap((c) => (c.target ? [c.node.id, c.target.id] : [c.node.id]))
-					).size,
+					)
+				];
+				// A close read over the whole lattice has also seen every shape.
+				if (!survey) looked = examined;
+				confirm = {
+					concepts: examined.length,
+					everything: !survey,
 					promptChars: second.promptChars,
 					modelMs: second.modelMs,
-					retried: second.retried
+					retried: second.retried,
+					completionTokens: second.completionTokens,
+					maxTokens: second.maxTokens,
+					allowedMs: second.allowedMs
 				};
 
 				const deep = extractJson(second.text);
@@ -1975,6 +2159,11 @@ export async function runCortexGroom(
 			// Otherwise the survey read the lattice's shape and found nothing worth
 			// a closer look. One call, and an honest nothing.
 		}
+
+		// Stamped only on a run that reached the model, the same condition the
+		// harvest watermark uses — and only on concepts this person may write to.
+		noteGroomed(looked, 'lastGroomedAt', userId);
+		noteGroomed(examined, 'lastExaminedAt', userId);
 
 		const { added, duplicates, dropped } = recordProposals(userId, proposals, max);
 		// Sizes, not content — the rule that no concept text reaches an event
@@ -1991,6 +2180,14 @@ export async function runCortexGroom(
 			// channel, no answer text, and indistinguishable from silence without
 			// this flag.
 			reasonedOnly: reply.reasonedOnly,
+			// What the model actually wrote, and which model wrote it. Neither was
+			// reported, and between them they are the whole diagnosis of a slow
+			// run: a completion-token count near the budget says the model was
+			// given permission to think for minutes, and a model name says whether
+			// the task is even using the one somebody configured — `pickModel`
+			// falls back to the first enabled model without saying so.
+			completionTokens,
+			modelKey: choice.model.modelKey,
 			// What the run cost, so "it grinds" is a number rather than a report.
 			// Totals across every call the run made, so the one line the panel has
 			// always shown stays true now that a review makes two.
@@ -2046,8 +2243,11 @@ export async function runCortexGroom(
 			stage === 'survey'
 				? 'the survey of the lattice’s shape'
 				: stage === 'confirm'
-					? 'the close read of what the survey found'
+					? 'the close read'
 					: 'the harvest';
+		// What that pass was actually allowed, which is not `cfg.timeoutSeconds`
+		// for a survey and is the number a person needs in order to act.
+		const appliedMs = stage === 'survey' ? surveyLimit() : remaining();
 		emitEvent({
 			task: 'cortex-groom',
 			userId,
@@ -2055,7 +2255,18 @@ export async function runCortexGroom(
 			name: 'cortex.groom',
 			status: 'error',
 			durationMs: Date.now() - startedAt,
-			detail: { trigger, mode, tidied, detected, stage, error: message, survey, confirm }
+			detail: {
+				trigger,
+				mode,
+				tidied,
+				detected,
+				stage,
+				modelKey: choice.model.modelKey,
+				appliedMs,
+				error: message,
+				survey,
+				confirm
+			}
 		});
 		// The provider's own words, not "model call failed".
 		//
@@ -2068,10 +2279,14 @@ export async function runCortexGroom(
 			ran: false,
 			mode,
 			reason: timedOut
-				? `${where} did not finish inside the ${cfg.timeoutSeconds}s this run is allowed — raise the time limit in Admin → Cortex, or use a faster model`
+				? // The limit **applied to the pass that failed**, not the setting. This
+					// quoted `cfg.timeoutSeconds` while handing the survey half of it,
+					// which is why a run that died at 150 seconds reported 300.
+					`${where} did not answer within the ${Math.round(appliedMs / 1000)}s it was given (of the ${cfg.timeoutSeconds}s this run is allowed) — raise the time limit in Admin → Cortex, or use a faster model`
 				: message,
 			tidied,
 			detected,
+			modelKey: choice.model.modelKey,
 			survey,
 			confirm
 		};

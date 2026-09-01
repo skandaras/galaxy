@@ -186,6 +186,13 @@ export function saveNode(opts: {
 		lastVerifiedAt: existing?.lastVerifiedAt ?? now,
 		lastActivatedAt: existing?.lastActivatedAt ?? null,
 		activationCount: existing?.activationCount ?? 0,
+		// Carried, not defaulted. This function builds a *whole* row and hands it
+		// to `.set()`, so a column left out here is silently wiped on every edit,
+		// rename and accepted proposal — and a grooming stamp that resets whenever
+		// somebody touches a concept would quietly send that concept to the front
+		// of every survey for ever.
+		lastGroomedAt: existing?.lastGroomedAt ?? null,
+		lastExaminedAt: existing?.lastExaminedAt ?? null,
 		createdAt: existing?.createdAt ?? now,
 		updatedAt: now
 	};
@@ -923,6 +930,45 @@ function recordActivation(ids: string[]): void {
 			activationCount: sql`${cortexNodes.activationCount} + 1`
 		})
 		.where(inArray(cortexNodes.id, ids))
+		.run();
+}
+
+/**
+ * Note that the groomer looked at these concepts, and how closely.
+ *
+ * `lastGroomedAt` for a concept whose shape went in front of a model,
+ * `lastExaminedAt` for one whose description did. Ordering a survey by the
+ * first is what turns "the groomer covers the whole lattice eventually" from a
+ * claim into something you can check by looking at a row.
+ *
+ * One statement for the whole set, like `recordActivation` above — a run
+ * touching seven hundred concepts is not seven hundred writes.
+ *
+ * Scoped through `canEdit`, because **the groomer never writes across an
+ * ownership boundary** and a timestamp is still a write. A concept somebody
+ * else shared is read as context and never stamped; its grooming schedule
+ * belongs to its owner, and it is deliberately kept out of the rotation rather
+ * than left unstamped inside it, which would park it at the front for ever.
+ */
+export function noteGroomed(
+	ids: string[],
+	field: 'lastGroomedAt' | 'lastExaminedAt',
+	userId: string
+): void {
+	if (!ids.length) return;
+	const mine = new Set(
+		db
+			.select({ id: cortexNodes.id, ownerId: cortexNodes.ownerId })
+			.from(cortexNodes)
+			.where(inArray(cortexNodes.id, ids))
+			.all()
+			.filter((n) => canEdit(n, userId))
+			.map((n) => n.id)
+	);
+	if (!mine.size) return;
+	db.update(cortexNodes)
+		.set({ [field]: new Date() })
+		.where(inArray(cortexNodes.id, [...mine]))
 		.run();
 }
 
