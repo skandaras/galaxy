@@ -582,13 +582,26 @@ export interface CortexGroomSettings {
 	 */
 	maxTokens: number;
 	/**
-	 * How long one groom call may take.
+	 * How long one groom **run** may take, across every call it makes.
 	 *
-	 * A full review of fifty concepts hit the old 180-second ceiling. Note that
-	 * a manual run is a synchronous request, so raising this past a reverse
-	 * proxy's own read timeout needs the proxy raised too — see docs/INSTALL.md.
+	 * A ceiling on the run rather than on a call, because a review is two passes
+	 * now — a wide survey of the lattice's shape, then a close read of what that
+	 * turned up. Given to each call separately it would silently mean twice this
+	 * number, and a manual run is one synchronous request: raising it past a
+	 * reverse proxy's own read timeout needs the proxy raised too, so the setting
+	 * has to mean what a person configuring the proxy thinks it means. See
+	 * docs/INSTALL.md.
 	 */
 	timeoutSeconds: number;
+	/**
+	 * How many concepts a review takes forward for a close read.
+	 *
+	 * The width of the deep pass, and the whole point is that it does not grow
+	 * with the lattice. The survey reads every concept's shape and picks this
+	 * many worth looking at properly; only those get their descriptions sent.
+	 * Raising it buys a broader second pass at a linear cost in that pass alone.
+	 */
+	shortlistSize: number;
 }
 
 export const DEFAULT_CORTEX_GROOM: CortexGroomSettings = {
@@ -599,7 +612,8 @@ export const DEFAULT_CORTEX_GROOM: CortexGroomSettings = {
 	intervalHours: 24,
 	maxProposalsPerRun: 10,
 	maxTokens: 16_384,
-	timeoutSeconds: 300
+	timeoutSeconds: 300,
+	shortlistSize: 20
 };
 
 export const DEFAULT_CORTEX: CortexSettings = {

@@ -58,6 +58,23 @@
 		buildMs?: number;
 		modelMs?: number;
 		retried?: boolean;
+		survey?: {
+			concepts: number;
+			total: number;
+			more: boolean;
+			candidates: number;
+			dropped: number;
+			fellBack: boolean;
+			promptChars: number;
+			modelMs: number;
+			retried: boolean;
+		};
+		confirm?: {
+			concepts: number;
+			promptChars: number;
+			modelMs: number;
+			retried: boolean;
+		};
 	}
 	interface Proposal {
 		id: string;
@@ -586,7 +603,7 @@
 					<p class="hint" role="status">
 						{running === 'harvest'
 							? 'Looking at what you have been talking about since the last pass.'
-							: 'Reading every concept and connection. This one is the slow pass.'}
+							: 'Reading the shape of every concept, then looking closely at whatever that turns up.'}
 					</p>
 				{/if}
 
@@ -610,11 +627,53 @@
 								</span>
 							{/if}
 
+							{#if lastRun.survey}
+								<!-- A review is two passes now: the wide one reads every
+								     concept's shape, the narrow one reads the handful it
+								     picks. Saying which concepts were looked at is what makes
+								     a rotating window honest rather than a silent truncation
+								     — the old ceiling just dropped the tail. -->
+								<span class="hint">
+									Looked at the shape of {lastRun.survey.concepts}
+									{lastRun.survey.concepts === lastRun.survey.total
+										? 'concepts'
+										: `of ${lastRun.survey.total} concepts`}{lastRun.confirm
+										? `, then read ${lastRun.confirm.concepts} of them closely`
+										: ''}.
+									{#if lastRun.survey.more}
+										Run it again to cover the rest.
+									{/if}
+								</span>
+								{#if lastRun.survey.fellBack}
+									<span class="hint">
+										The first pass did not answer usefully, so the concepts most worth
+										judging were picked without it: the unreachable, the unfiled and the
+										most connected.
+									</span>
+								{:else if !lastRun.survey.candidates}
+									<span class="hint">
+										It found nothing whose shape was worth a closer look, so it stopped
+										after one pass rather than paying for a second.
+									</span>
+								{/if}
+								{#if lastRun.survey.dropped}
+									<span class="hint">
+										{lastRun.survey.dropped} of its picks named a concept that is not in your
+										lattice.
+									</span>
+								{/if}
+							{/if}
+
 							{#if !lastRun.ran}
 								<span class="error">Did not reach the model: {lastRun.reason}</span>
 								{#if lastRun.reason === 'no model configured'}
 									<span class="hint">Set one for the cortex-groom task in Admin → Tasks.</span>
 								{/if}
+							{:else if lastRun.survey && !lastRun.survey.candidates}
+								<!-- Nothing to say about a reply that was a correct, empty
+								     answer to the only question asked. Without this branch the
+								     lines below would report the survey's reply as though it
+								     had been asked for suggestions and produced none. -->
 							{:else if !lastRun.proposed}
 								<!-- Sizes and flags, never content. Three different things used
 								     to look identical here: nothing to read, nothing said, and a

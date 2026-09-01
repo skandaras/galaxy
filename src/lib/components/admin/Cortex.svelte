@@ -11,7 +11,8 @@
 		intervalHours: 24,
 		maxProposalsPerRun: 10,
 		maxTokens: 16_384,
-		timeoutSeconds: 300
+		timeoutSeconds: 300,
+		shortlistSize: 20
 	});
 	let cortex = $state({
 		agentWrites: true,
@@ -99,6 +100,10 @@
 			<input type="number" min="1" max="25" bind:value={groom.maxProposalsPerRun} />
 		</label>
 		<label>
+			concepts read closely
+			<input type="number" min="5" max="60" bind:value={groom.shortlistSize} />
+		</label>
+		<label>
 			max tokens
 			<input type="number" min="1024" max="200000" step="1024" bind:value={groom.maxTokens} />
 		</label>
@@ -108,10 +113,17 @@
 		</label>
 	</div>
 	<p class="hint">
+		A review is two passes. The first reads every concept's shape — its name, its areas and what
+		it connects to, never its description — and picks out the ones worth looking at properly;
+		<strong>concepts read closely</strong> is how many it may pick. Only those get their
+		descriptions sent, so the expensive half of a review stops growing with the lattice.
+	</p>
+	<p class="hint">
 		A reasoning model spends part of its tokens thinking before it writes anything, and with too
 		few it can spend all of them and answer nothing at all. A run that comes back empty on the
 		token limit is asked again automatically with four times the room, so raising this is the
-		second thing to try rather than the first.
+		second thing to try rather than the first. The time limit covers the whole run rather than
+		one call, so a review's two passes share it.
 	</p>
 	<p class="hint">
 		A run started by hand is a single request held open for as long as it takes, so if you raise
