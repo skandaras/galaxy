@@ -737,6 +737,87 @@ below, which is what that number is the width of). `tidy` runs on every pass
 whether or not a model is configured for the `cortex-groom` task, because that
 half needs none.
 
+### `max_tokens` is permission to think, not a safety ceiling
+
+**Read this before changing any number in Admin → Cortex.** It is the fault
+that has cost this job three separate incidents, and each fix made the next one
+worse.
+
+`max_tokens` reaches the provider untouched (`openai-compatible.ts`). On a
+reasoning model it is not a ceiling the model rarely approaches — it is
+*permission to think*. Hand one a large number on an open-ended "find
+everything wrong with this" question and it will spend a large fraction of it
+before writing a word. At any real generation rate that alone is minutes,
+**whatever the prompt says**. A six-kilobyte prompt on a fifteen-concept lattice
+took longer than five minutes for this reason, and every diagnosis went looking
+at the prompt.
+
+What each job in this codebase asks for, which is the whole argument:
+
+| job | max tokens |
+| --- | --- |
+| research triage | 200 |
+| run summary, chat title | 256 |
+| compaction | 1,024 |
+| memory, all three calls | 2,048 |
+| alignment | 3,072 |
+| **the UX audit — reviews a whole app, returns structured findings** | **4,096** |
+| the groomer, before this | 16,384 |
+| the groomer's retry, before this | 65,536 |
+
+The UX audit is the same job as a review. It does it in four thousand tokens.
+The groomer was asking four times the largest budget here and sixteen times it
+on retry — allowed to write more than it reads, on a question whose answer is a
+short JSON list of about five hundred tokens.
+
+**How it got there, because the mistake is instructive.** An earlier commit
+diagnosed a reasoning model burning its budget and writing nothing, and
+responded by *raising the budget* (8,192 → 16,384), adding a **4× retry**, and
+raising the timeout 180s → 300s to fit. That treats the symptom. And the
+multiplier was taken from `research.ts` without its base — research multiplies a
+small number; multiplying 16,384 by four gives 65,536, which no model finishes
+inside any timeout this app offers. **The retry that existed to rescue a run was
+guaranteeing its failure.** Taking half of `research.ts` is precisely the
+critique that same commit levelled at the code before it.
+
+The result: two settings in direct opposition, tuned independently. **Every
+increase in `maxTokens` buys more thinking time, which is the exact quantity
+`timeoutSeconds` measures.**
+
+So each pass now asks for **the size of its answer** — `SURVEY_TOKENS` (2,048)
+and `PROPOSAL_TOKENS` (4,096) — and `cfg.maxTokens` is a *ceiling over* them
+rather than the number sent. Raising the setting cannot make a run slower;
+lowering it still bites. The retry is three times the pass's own ask, and is not
+fired at all below `RETRY_MIN_SHARE` of the run remaining: asking again with no
+time left returns an abort that reads as a timeout, which hides why the first
+call came back empty.
+
+The rule, stated once: **ask for the size of the answer.** A budget larger than
+the answer buys nothing except time, and time is what was running out.
+
+### The three numbers that would have found this in ten seconds
+
+None of them were reported, which is why a six-kilobyte prompt timing out looked
+like a mystery.
+
+- **What the model wrote.** A completion count sitting near the budget is the
+  entire diagnosis. `usage` was already coming back from the adapter and being
+  thrown away.
+- **Which model wrote it.** `pickModel` falls back to `listEnabledModels()[0]`
+  when a task has no primary model configured, silently — so a run could be
+  using a model nobody chose.
+- **The limit actually applied to the pass that failed.** The message quoted
+  `cfg.timeoutSeconds` while handing the survey half of it, so a run that died
+  at 150 seconds reported 300.
+
+`logUsage` also ran once *after* the retry, so a run that timed out wrote no
+usage row at all. It is per call now. Check a suspect run with:
+
+```sql
+select model_key, completion_tokens, status from usage_log
+where task='cortex-groom' order by ts desc limit 10;
+```
+
 ### The budget, and the retry that means you rarely touch it
 
 The groomer's token budget and time limit are settings, beside the cadence.
@@ -870,28 +951,53 @@ by reading:
 describing however much room there is — and its failure was output tokens, which
 the retry answers. `LATTICE_BUDGET_CHARS` is still its ceiling.
 
-### The survey window rotates rather than truncating
+### A survey only earns its call when it has something to choose from
+
+With no more concepts than the close read can hold (`shortlistSize`), every one
+of them goes forward anyway — so the survey is a whole model call spent
+selecting all of them, followed by a second call to do the work. A lattice at or
+under the shortlist goes straight to the close read, with the full deadline.
+Derived rather than a threshold somebody picked: *the survey exists to choose,
+and with nothing to choose it is overhead.*
+
+### The survey window rotates on what each concept remembers
 
 Structure-only lines are cheap but not free, and the per-user cap is two thousand
 concepts, so the survey has a budget too — `SURVEY_BUDGET_CHARS`, 60,000, around
-seven hundred concepts. Past that it covers a **window** and stores the id of the
-first concept it did not reach in `cortex.groom.surveyCursor`; the next run
-starts there and wraps. Every concept is surveyed eventually, and a run costs two
-calls whatever the lattice is doing. The old ceiling simply dropped the tail, so
-on a large lattice there were concepts no review ever looked at.
+seven hundred concepts. Past that it covers a **window**, longest-neglected
+first, and the concepts left over are simply next run's work.
 
-The cursor is an **id**, not an index: indices shift the moment a concept is
-deleted, and `listNodes` is name-ordered and therefore stable. A cursor pointing
-at a since-deleted concept starts from the top rather than stalling. It advances
-on any run that reached the model, good answer or not — those concepts have been
-looked at, and a cursor that only moved on success would sit on one window for
-ever.
+That order comes from two columns on `cortex_nodes`:
 
-Two consequences worth knowing. The panel says which span was covered and offers
-to run it again, because a rotating window has to be visible or it is just a
-quieter truncation. And `cortex.groom.latticeMark` is only written when the
-window reached the end, so a scheduled review cannot skip a lattice it has not
-finished surveying.
+- **`last_groomed_at`** — the groomer looked at this concept's *shape*: it was in
+  a survey window, or in a close read of a lattice small enough not to need one.
+- **`last_examined_at`** — a model read its *description*, in the pass that
+  actually judges it.
+
+Two, not one, because they are different amounts of attention and on a large
+lattice the gap between them is where a problem hides: the same well-connected
+twenty can be examined every run while everything else is only ever glanced at.
+Null means no model has ever read what that concept says, and that is the
+plainest claim on attention there is — `shortlistFallback` takes those first.
+
+`groomingOrder` sorts by `last_groomed_at`, nulls leading, tiebroken by
+`judgingOrder`. So a newly added concept goes to the front on its own, and on a
+small lattice — where every stamp is equal — the order falls back to what is most
+worth judging, which is the right behaviour for free.
+
+**This replaced a stored cursor** holding one concept id into name order. The
+cursor was disturbed by a deletion, said nothing about concepts added since, and
+could not answer the only question worth asking of it: *has the groomer been all
+the way round?* A column on the row answers it by being looked at.
+
+Three things to know. Stamps are written through **`canEdit`**, because the
+groomer never writes across an ownership boundary and a timestamp is still a
+write — so concepts somebody else shared are pinned into the listing as context
+and kept out of the rotation, rather than sitting in it unstamped and parked at
+the front for ever. `saveNode` builds a *whole* row and hands it to `.set()`, so
+both columns are carried explicitly or every edit and rename would wipe them —
+there is a test for exactly that. And the panel says which span was covered,
+because a rotating window has to be visible or it is just a quieter truncation.
 
 Near-duplicate names spanning two windows are not lost: `detect()` finds those
 deterministically over the whole lattice, uncapped, on every pass.
@@ -919,9 +1025,11 @@ synchronous request held open for its duration — so the number in that box is
 the number somebody set their reverse proxy's read timeout against, and it has
 to mean what they think it means.
 
-The survey may have half at most, so a slow wide pass cannot leave the close read
-with nothing; it hands its slack forward, so a survey that returns in ten seconds
-leaves the rest to the pass that needs it. The limit is recomputed per call
+The survey gets everything except a floor held back for the close read — not a
+flat half, which is what it was and what starved it. The close read's prompt is
+bounded by the shortlist rather than by the lattice, so it is the pass whose need
+can be predicted; the survey is the unbounded one and gets the larger share, and
+hands its slack forward if it returns quickly. The limit is recomputed per call
 rather than captured, so the token retry spends what is left of the run instead
 of starting the clock again. A timeout names which pass ran out — "the model did
 not answer" was already the least useful sentence in the system when there was
