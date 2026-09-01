@@ -28,6 +28,22 @@ import { getSetting } from '$lib/server/settings';
 
 let scripted: string[] = [];
 let calls: { system: string; user: string; maxTokens: number }[] = [];
+/**
+ * How long each call was given, in the order they were made.
+ *
+ * A real `AbortSignal` does not say what it was built with, so the split of the
+ * run's deadline across two passes is only assertable from here. Spied rather
+ * than timed: a wall-clock assertion passes whatever the split is, which is the
+ * same trap the prompt-cost test already names.
+ */
+let allowed: number[] = [];
+
+/** What a survey says when it wants these concepts read closely. */
+function pointsAt(...ids: string[]) {
+	return JSON.stringify({
+		candidates: ids.map((id) => ({ node: id, kind: 'circuit', hypothesis: 'looks unfiled' }))
+	});
+}
 
 vi.mock('./engine', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('./engine')>();
@@ -53,6 +69,10 @@ vi.mock('./engine', async (importOriginal) => {
 					// A provider that fails outright, which is a different thing from
 					// one that answers badly — and the case the watermark cares about.
 					if (reply === '__throw__') throw new Error('provider exploded');
+						// A call that ran out of time, which has to be named as one.
+						if (reply === '__throw_timeout__') {
+							throw new Error('The operation was aborted due to timeout');
+						}
 					// A reasoning model that spent its whole budget thinking: text is
 					// empty and reasonedOnly says why.
 					if (reply === '__reasoned__') {
@@ -113,6 +133,17 @@ beforeEach(() => {
 	db.run(`DELETE FROM cortex_fts`);
 	scripted = ['[]'];
 	calls = [];
+	allowed = [];
+	// The signal spy below wraps whatever is currently there, so without this the
+	// wrappers stack across tests and every call gets recorded twice.
+	vi.restoreAllMocks();
+	// Records what each call was allowed, and still returns a real signal so the
+	// production path is unchanged.
+	const timeout = AbortSignal.timeout.bind(AbortSignal);
+	vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+		allowed.push(ms);
+		return timeout(ms);
+	});
 
 	const a = saveNode({ name: 'Tide pools', description: 'rockpool surveying', ownerId: ANA });
 	const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
@@ -230,10 +261,13 @@ describe('the watermark', () => {
 });
 
 describe('what each mode sends', () => {
-	it('a review sends the whole lattice with connections', async () => {
+	it('a review sends the lattice’s shape first, and no descriptions with it', async () => {
+		scripted = [pointsAt('tide-pools'), '{"proposals":[]}'];
 		await runCortexGroom('manual', ANA);
-		expect(calls[0].user).toContain('A FULL REVIEW');
-		expect(calls[0].user).toContain('connects to:');
+		expect(calls[0].user).toContain('A SURVEY OF THE LATTICE');
+		expect(calls[0].user).toContain('coastal-ecology');
+		// The whole reason the wide pass is affordable.
+		expect(calls[0].user).not.toContain('rockpool surveying');
 	});
 
 	it('a harvest sends the activity window and only a slice', async () => {
@@ -246,6 +280,172 @@ describe('what each mode sends', () => {
 	it('carries the task’s own system prompt', async () => {
 		await runCortexGroom('manual', ANA);
 		expect(calls[0].system).toBe('you tend a lattice');
+	});
+});
+
+/**
+ * The failure this split exists for: a review of a 52-concept lattice timed out
+ * at 180 seconds. The prompt was around 25KB — well inside any model's window —
+ * so the cost was never the bytes. It was asking one model, in one shot, to hold
+ * every concept's name, description and connections in mind *and* produce ten
+ * justified structural changes.
+ *
+ * Two easy questions instead of one hard one: a wide shallow pass over shape,
+ * then a narrow deep pass over the handful it points at.
+ */
+describe('a review, in two passes', () => {
+	/** Enough concepts that sending them all in full is the thing being avoided. */
+	function wide(count: number, pad = '') {
+		return Array.from({ length: count }, (_, i) =>
+			saveNode({
+				name: `Concept ${String(i).padStart(3, '0')}${pad}`,
+				description: `The description of concept ${i}, about as long as a real one is.`,
+				ownerId: ANA
+			})
+		);
+	}
+
+	it('surveys the shape, then reads closely only what that turned up', async () => {
+		const made = wide(50);
+		scripted = [pointsAt(made[7].id), '{"proposals":[]}'];
+		const res = await runCortexGroom('manual', ANA);
+
+		expect(calls).toHaveLength(2);
+		expect(res.survey?.candidates).toBe(1);
+		// The close read sees the one description the survey asked for, and not
+		// the forty-nine it did not.
+		expect(calls[1].user).toContain('The description of concept 7,');
+		expect(calls[1].user).not.toContain('The description of concept 30,');
+		expect(calls[1].user).toContain('looks unfiled');
+		// And it is a fraction of the pass it replaces. The old review sent every
+		// description it could afford; this sends one.
+		expect(calls[1].user.length).toBeLessThan(calls[0].user.length);
+	});
+
+	it('believes a survey that says there is nothing worth reading', async () => {
+		wide(50);
+		scripted = ['{"candidates":[]}'];
+		const res = await runCortexGroom('manual', ANA);
+		// An empty list is an answer, and finding nothing is the commonest outcome
+		// the groomer has. Paying for a close read of nothing would double the
+		// cost of the ordinary case.
+		expect(calls).toHaveLength(1);
+		expect(res.ran).toBe(true);
+		expect(res.proposed).toBe(0);
+		expect(res.survey?.candidates).toBe(0);
+		expect(res.survey?.fellBack).toBe(false);
+		expect(res.confirm).toBeUndefined();
+	});
+
+	it('reads closely anyway when the survey answers with prose', async () => {
+		const made = wide(50);
+		scripted = [
+			'Honestly the shape of this lattice looks fine to me.',
+			JSON.stringify({
+				proposals: [
+					{ kind: 'rename', title: 'Rename it', node: made[0].id, payload: { name: 'Renamed' } }
+				]
+			})
+		];
+		const res = await runCortexGroom('manual', ANA);
+		// A wide pass that does not answer should not cost the whole run: the deep
+		// read is affordable by construction, and there is a defensible shortlist
+		// to be had without a model.
+		expect(calls).toHaveLength(2);
+		expect(res.survey?.fellBack).toBe(true);
+		expect(res.proposed).toBe(1);
+		// And it says so rather than passing the shortlist off as the survey's.
+		expect(calls[1].user).toContain('THE SURVEY DID NOT ANSWER');
+	});
+
+	it('drops an invented id rather than reading closely about nothing', async () => {
+		wide(50);
+		scripted = ['{"candidates":[{"node":"never-existed"}]}', '{"proposals":[]}'];
+		const res = await runCortexGroom('manual', ANA);
+		expect(res.survey?.dropped).toBe(1);
+		// Every candidate invented is a survey that did not answer, whatever it
+		// looked like — so the close read still happens, on a shortlist that
+		// exists.
+		expect(res.survey?.fellBack).toBe(true);
+		expect(calls).toHaveLength(2);
+	});
+
+	it('splits one deadline across the two passes rather than doubling it', async () => {
+		wide(50);
+		scripted = [pointsAt('concept-007'), '{"proposals":[]}'];
+		await runCortexGroom('manual', ANA);
+		const whole = 300_000;
+		// A manual run is one synchronous request, so the number in the box is the
+		// number somebody set their reverse proxy against. Two calls each given
+		// the full limit would quietly mean twice it: what each call is allowed is
+		// what is *left* of the run, never the setting again.
+		expect(allowed.every((ms) => ms <= whole)).toBe(true);
+		// The survey may have half at most, so a slow wide pass cannot leave the
+		// close read with nothing...
+		expect(allowed[0]).toBeLessThanOrEqual(whole / 2);
+		// ...and hands its slack forward rather than keeping it: this survey came
+		// back at once, so the close read gets nearly the whole run.
+		expect(allowed[1]).toBeGreaterThan(whole / 2);
+	});
+
+	it('says how much of the lattice it looked at', async () => {
+		wide(50);
+		scripted = [pointsAt('concept-007'), '{"proposals":[]}'];
+		const res = await runCortexGroom('manual', ANA);
+		expect(res.survey?.total).toBe(53);
+		expect(res.survey?.concepts).toBe(53);
+		expect(res.survey?.more).toBe(false);
+		expect(res.confirm?.concepts).toBe(1);
+	});
+
+	it('carries a lattice too wide for one survey over to the next run', async () => {
+		// Long names rather than a thousand concepts: the budget is on characters,
+		// and this makes the same point in a fiftieth of the inserts.
+		wide(250, ` — ${'padding '.repeat(40)}`);
+		scripted = ['{"candidates":[]}'];
+
+		const first = await runCortexGroom('manual', ANA);
+		expect(first.survey?.more).toBe(true);
+		expect(first.survey!.concepts).toBeLessThan(first.survey!.total);
+		const seenFirst = calls[0].user;
+
+		calls = [];
+		const second = await runCortexGroom('manual', ANA);
+		// The old ceiling simply dropped the tail, so on a large lattice there
+		// were concepts no review ever looked at. This one moves on.
+		expect(second.survey?.concepts).toBeGreaterThan(0);
+		expect(calls[0].user).not.toBe(seenFirst);
+	});
+
+	it('a harvest stays one call', async () => {
+		haveTalked('a conversation worth harvesting');
+		scripted = ['{"proposals":[]}'];
+		await runCortexGroom('schedule', ANA);
+		// The split is a review's answer to a review's problem. A harvest's prompt
+		// is small by construction and its failure was output tokens, which the
+		// retry already answers.
+		expect(calls).toHaveLength(1);
+	});
+
+	it('names the pass that ran out, not just that something did', async () => {
+		wide(50);
+		scripted = ['__throw_timeout__'];
+		const res = await runCortexGroom('manual', ANA);
+		expect(res.ran).toBe(false);
+		// "The model did not answer" was already the least useful sentence in the
+		// system when there was one call to blame.
+		expect(res.reason).toContain('survey');
+	});
+
+	it('reports what each pass cost, and the run’s total', async () => {
+		wide(50);
+		scripted = [pointsAt('concept-007'), '{"proposals":[]}'];
+		const res = await runCortexGroom('manual', ANA);
+		expect(res.survey!.promptChars).toBeGreaterThan(0);
+		expect(res.confirm!.promptChars).toBeGreaterThan(0);
+		// The panel has always shown one line for this. Keeping the top-level
+		// numbers as the sum is what lets that line stay true now there are two.
+		expect(res.promptChars).toBe(res.survey!.promptChars + res.confirm!.promptChars);
 	});
 });
 

@@ -70,6 +70,15 @@ const WATERMARK_KEY = 'cortex.groom.watermark';
 const FIRST_RUN_WINDOW_MS = 3 * 86_400_000;
 const LATTICE_MARK_KEY = 'cortex.groom.latticeMark';
 /**
+ * Where the next survey starts.
+ *
+ * The **id** of a concept, not an index into a list: indices shift the moment a
+ * concept is deleted, and `listNodes` is name-ordered and stable. Empty means
+ * "from the top", which is also what a lattice small enough to survey in one
+ * window leaves behind.
+ */
+const SURVEY_CURSOR_KEY = 'cortex.groom.surveyCursor';
+/**
  * Floor for the retry after a reasoning model burns its budget, so a small
  * configured cap still gets real room on the second attempt. Copied from
  * `research.ts`, which has had exactly this for exactly this reason.
@@ -98,12 +107,46 @@ export interface GroomResult {
 	finishReason?: string | null;
 	/** The model thought until its budget ran out and never began answering. */
 	reasonedOnly?: boolean;
-	/** How big the prompt was, and where the seconds actually went. */
+	/**
+	 * How big the prompts were, and where the seconds actually went.
+	 *
+	 * Totals across every call the run made. A review makes two, and the panel
+	 * has always shown one line for this — keeping these as the sum is what lets
+	 * that line stay true without knowing how many passes there were.
+	 */
 	promptChars?: number;
 	buildMs?: number;
 	modelMs?: number;
-	/** The first call came back empty on length, so it was asked again with room. */
+	/** A call came back empty on length, so it was asked again with room. */
 	retried?: boolean;
+	/**
+	 * The wide pass of a review: what it looked at, and what it came back with.
+	 *
+	 * Absent on a harvest, which is one call and has no survey.
+	 */
+	survey?: {
+		/** Concepts in this run's window, and in the whole lattice. */
+		concepts: number;
+		total: number;
+		/** The window did not reach the end; the next run picks up where it stopped. */
+		more: boolean;
+		/** How many concepts went forward for a close read. */
+		candidates: number;
+		/** Candidates naming a concept that does not exist. */
+		dropped: number;
+		/** The survey did not answer usefully, so the shortlist was picked without it. */
+		fellBack: boolean;
+		promptChars: number;
+		modelMs: number;
+		retried: boolean;
+	};
+	/** The narrow pass of a review. Absent when the survey found nothing to read. */
+	confirm?: {
+		concepts: number;
+		promptChars: number;
+		modelMs: number;
+		retried: boolean;
+	};
 }
 
 export function groomSettings(): CortexGroomSettings {
@@ -982,6 +1025,33 @@ function hasField(payload: Record<string, unknown>, key: string): boolean {
 
 // --- the prompt -------------------------------------------------------------
 
+/** Whatever a concept reaches, in the orientation-free way an edge is stored. */
+function neighbourIds(node: CortexNode, links: Map<string, CortexAssociation[]>): string[] {
+	return (links.get(node.id) ?? []).map((e) => (e.sourceId === node.id ? e.targetId : e.sourceId));
+}
+
+/**
+ * How many of one concept's connections either prompt spells out.
+ *
+ * A hub in a five-hundred-concept lattice reaches four hundred of them, and
+ * writing those ids out is four kilobytes on a single line. Past a few dozen the
+ * list has stopped being something a model reads and started being filler — what
+ * it needed to know, that this concept is a hub, was clear at ten. Without the
+ * cap one hub in the shortlist is enough to make the close read grow with the
+ * lattice, which is the one thing it exists not to do.
+ */
+const MAX_CONNECTIONS_SHOWN = 40;
+
+/** A concept's connections, spelled out to the cap and counted past it. */
+function connectionList(node: CortexNode, links: Map<string, CortexAssociation[]>): string {
+	const to = neighbourIds(node, links);
+	if (!to.length) return 'nothing';
+	const shown = to.slice(0, MAX_CONNECTIONS_SHOWN).join(', ');
+	return to.length > MAX_CONNECTIONS_SHOWN
+		? `${shown}, and ${to.length - MAX_CONNECTIONS_SHOWN} more`
+		: shown;
+}
+
 /**
  * One concept in full: what it is, and what it reaches.
  *
@@ -992,14 +1062,134 @@ function hasField(payload: Record<string, unknown>, key: string): boolean {
  * lattice.
  */
 function describeNode(node: CortexNode, links: Map<string, CortexAssociation[]>): string {
-	const to = (links.get(node.id) ?? [])
-		.map((e) => (e.sourceId === node.id ? e.targetId : e.sourceId))
-		.join(', ');
-	return `- ${node.id} "${node.name}"${node.isConvergence ? ' [bridge]' : ''} — ${node.description || '(no description)'}${to ? `\n    connects to: ${to}` : '\n    connects to: nothing'}`;
+	return `- ${node.id} "${node.name}"${node.isConvergence ? ' [bridge]' : ''} — ${node.description || '(no description)'}\n    connects to: ${connectionList(node, links)}`;
 }
 
 /** A concept the model only needs to know exists, so it does not propose it again. */
 const nameOnly = (n: CortexNode) => `- ${n.id} "${n.name}"`;
+
+/**
+ * The areas this reader may see named.
+ *
+ * The same rule `circuitIndex` applies, and for the same reason: a label written
+ * on a node somebody shared is *theirs*, and since the API accepts free strings
+ * the id is often the label. A concept filed only under someone else's area
+ * reads as unfiled from where this reader is standing, which is what it is.
+ */
+function visibleAreaIds(userId: string): Set<string> {
+	return new Set(listCircuits(userId).map((c) => c.id));
+}
+
+function filedUnder(node: CortexNode, userId: string, areas: Set<string>): string[] {
+	const mine = node.ownerId === userId || node.ownerId === null;
+	return (node.circuits ?? []).filter((id) => mine || areas.has(id));
+}
+
+/**
+ * One concept's *shape*, and not a word about what it means.
+ *
+ * Where it sits, whether it bridges, and what it reaches — everything a
+ * structural fault is visible in, and nothing else. This is the line the wide
+ * pass is built from, and leaving the description out is the point rather than
+ * a saving: a survey that could read descriptions would start judging from them,
+ * which is the expensive question the second pass exists to ask.
+ *
+ * It also carries what two whole sections of the old prompt used to say. A
+ * concept with `{unfiled}` is waiting to be filed and a concept reaching
+ * `nothing` cannot be found by any query — said in place, for every concept,
+ * rather than in capped lists that showed the first thirty of each.
+ */
+function surveyLine(
+	node: CortexNode,
+	links: Map<string, CortexAssociation[]>,
+	userId: string,
+	areas: Set<string>
+): string {
+	const filed = filedUnder(node, userId, areas);
+	return `- ${node.id} "${node.name}"${node.isConvergence ? ' [bridge]' : ''} {${filed.join(', ') || 'unfiled'}} → ${connectionList(node, links)}`;
+}
+
+/** The area index, which is what every agent navigates by. */
+function areasList(userId: string): string {
+	const { circuits } = circuitIndex(userId);
+	return circuits.map((c) => `- ${c.id} "${c.name}" (${c.count})`).join('\n') || '(none defined)';
+}
+
+/**
+ * What has already been settled, so nothing is raised twice.
+ *
+ * Every status, not just open ones: something accepted is done, and something
+ * turned down was considered and declined. Re-raising either is how a review
+ * queue teaches people to stop reading it.
+ *
+ * Two renderings, because the two passes recognise a repeat differently and one
+ * of them cannot afford the good version. A pass asking for *proposals* needs
+ * the titles — that is how it tells a rename it already suggested from one it
+ * has not. A pass asking for *concept ids* only needs to know which concepts
+ * have been argued over, and at two hundred rows the titles are ten to fifteen
+ * kilobytes: on a survey prompt they were the largest section by some way, and
+ * they were buying nothing that `merge tide-pools+rockpools` does not say.
+ */
+function decidedList(userId: string, by: 'title' | 'id' = 'title'): string {
+	const rows = db
+		.select({
+			title: cortexProposals.title,
+			status: cortexProposals.status,
+			kind: cortexProposals.kind,
+			nodeId: cortexProposals.nodeId,
+			targetId: cortexProposals.targetId
+		})
+		.from(cortexProposals)
+		.where(eq(cortexProposals.userId, userId))
+		// Newest first, and ordered at all. This had no ORDER BY and then took the
+		// first two hundred, so *which* two hundred was the database's choice —
+		// the same fault the activity trawl had, where `.slice(0, 30)` on an
+		// unordered query kept the oldest thirty of a conversation. What a model
+		// is most likely to repeat is what was suggested last.
+		.orderBy(desc(cortexProposals.createdAt), cortexProposals.id)
+		.all()
+		.slice(0, DECIDED_SHOWN);
+	if (by === 'title') {
+		return rows.map((p) => `- [${p.status}] ${p.title}`).join('\n') || '(nothing yet)';
+	}
+	return (
+		rows
+			// A `create` has no concept yet, so there is no id to recognise it by and
+			// nothing useful to say here. It is not a thing a survey proposes anyway.
+			.filter((p) => p.nodeId)
+			.map(
+				(p) => `- [${p.status}] ${p.kind} ${p.nodeId}${p.targetId ? `+${p.targetId}` : ''}`
+			)
+			.join('\n') || '(nothing yet)'
+	);
+}
+
+/**
+ * The exact shape each kind of suggestion has to arrive in.
+ *
+ * One copy, shared by both prompts that ask for proposals, because this block is
+ * where a misreading costs a whole run's output. Whole objects rather than a
+ * shorthand: the shorthand read `circuit — "node", payload {"areas":[…]}`, which
+ * compresses two nesting levels into one comma, and a model read it as "circuit
+ * takes a node and a payload" and put the node *inside* the payload. The
+ * suggestion was right and unusable, and there was no way to tell from the row.
+ */
+const PROPOSAL_SHAPES = [
+	'Reply with ONLY a JSON object: {"proposals":[…]}. Every item has "kind", "title" (one line) and "rationale" (why), plus whatever its kind needs below.',
+	'"node" and "target" are always top-level keys, beside "kind" and "title" — never inside "payload". Copy the shape of these exactly:',
+	[
+		'create — the concept does not exist yet, so it has no "node":\n{"kind":"create","title":"…","rationale":"…","payload":{"name":"…","description":"…","areas":["area-id or a new area name"],"connect":[{"node":"node-id","weight":0.7,"why":"…"}]}}\nConnections are part of the suggestion, not a follow-up: a concept nothing links to can never surface in a query.',
+		'merge — "node" is the one to keep, "target" the one folded into it:\n{"kind":"merge","title":"…","rationale":"…","node":"node-id","target":"node-id"}',
+		'connect:\n{"kind":"connect","title":"…","rationale":"…","node":"node-id","target":"node-id","payload":{"weight":0.7,"why":"…"}}',
+		'disconnect:\n{"kind":"disconnect","title":"…","rationale":"…","node":"node-id","target":"node-id"}',
+		'weight — the strength is required, or there is no change to make:\n{"kind":"weight","title":"…","rationale":"…","node":"node-id","target":"node-id","payload":{"weight":0.7}}',
+		'circuit — "areas" is the full set the concept should be in, and is required:\n{"kind":"circuit","title":"…","rationale":"…","node":"node-id","payload":{"areas":["area-id"]}}',
+		'convergence:\n{"kind":"convergence","title":"…","rationale":"…","node":"node-id","payload":{"isConvergence":true}}',
+		'rename — the new name is required:\n{"kind":"rename","title":"…","rationale":"…","node":"node-id","payload":{"name":"…"}}',
+		'delete:\n{"kind":"delete","title":"…","rationale":"…","node":"node-id"}'
+	].join('\n\n'),
+	'Use the exact ids given above; a node id you invent will be dropped, and so will a suggestion missing anything its kind requires. Propose nothing you cannot justify from what you were shown.'
+];
 
 /**
  * A handful of words that stand for the whole window.
@@ -1027,18 +1217,49 @@ export function activityGist(activity: string, stride = 400): string {
 }
 
 /**
- * How much of the prompt the concept descriptions may take.
+ * How much of a harvest prompt the concept descriptions may take.
  *
- * A review used to send every concept with its description and its connections,
- * on the argument that merges cannot be judged from a slice. True, and it stops
- * being affordable well before the lattice stops being useful — the prompt grows
- * with the lattice and the model's patience does not.
- *
- * So the budget buys full detail for the concepts most worth judging, and every
- * other concept still appears by name. Nothing is invisible; what is rationed is
- * description and connection lists.
+ * A harvest rations by *relevance* rather than by cost — only what the new
+ * conversation actually touches is worth describing, however much room there is
+ * — and this is the ceiling on top of that, for the case where a busy window
+ * touches most of a large lattice. Every concept still appears by name, so
+ * nothing is proposed twice.
  */
 const LATTICE_BUDGET_CHARS = 24_000;
+
+/**
+ * How much of the lattice one survey may cover.
+ *
+ * Structure-only lines are cheap — roughly a third of a described concept, and
+ * far less on anything with a long description — but cheap is not free, and the
+ * per-user cap is two thousand concepts. Past this the survey covers a window
+ * and the cursor carries the rest to the next run, so a run costs two calls
+ * whatever the lattice is doing.
+ */
+const SURVEY_BUDGET_CHARS = 60_000;
+
+/**
+ * How many one-hop neighbours the close read may name.
+ *
+ * Context for the shortlist, not a second lattice. Without a cap a single hub in
+ * the shortlist brings its whole spoke set along and the narrow pass is wide
+ * again — which is the one thing it must not be.
+ */
+const MAX_NEIGHBOURS = 60;
+
+/**
+ * How many settled suggestions either prompt lists.
+ *
+ * Was two hundred, which on a lattice with any history was the largest section
+ * in the prompt — bigger than the lattice itself on a fifty-concept review.
+ *
+ * It can be this small because it is not the guarantee. `recordProposals`
+ * fingerprints every suggestion against every row this person has ever had, at
+ * every status, and drops a repeat mechanically. This list exists so the model
+ * does not *spend a slot* on something already settled, which is a matter of
+ * the handful it just saw rather than of complete history.
+ */
+const DECIDED_SHOWN = 60;
 
 /**
  * Which concepts earn their full description first.
@@ -1059,34 +1280,19 @@ function judgingOrder(nodes: CortexNode[], links: Map<string, CortexAssociation[
 }
 
 /**
- * What the model is shown, and it depends on which job this is.
+ * The harvest prompt: what has been said, and enough of the lattice to not
+ * propose something already in it.
  *
- * **Harvest** — the scheduled pass, about *adding*. It sees what has been said
- * since the last run, plus enough of the lattice to avoid proposing something
- * already there: full detail for the concepts `seedNodes` says bear on the new
- * activity, and bare names for the rest. Reusing the retrieval machinery to
- * pick that slice beats inventing a second notion of relevance.
- *
- * **Review** — the manual pass, about *consolidating*. It sees everything, with
- * connections, because merges and structural problems cannot be judged from a
- * slice. That is the expensive prompt, and it only ever runs because a person
- * asked for it.
+ * The scheduled pass, and it is about *adding*. Full detail for the concepts
+ * `seedNodes` says bear on the new activity, bare names for the rest — reusing
+ * the retrieval machinery to pick that slice beats inventing a second notion of
+ * relevance. It stays one call: its prompt is small by construction, and the
+ * failure it actually had was output tokens, which the retry answers.
  */
-export function buildGroomPrompt(
-	userId: string,
-	max: number,
-	mode: GroomMode = 'review',
-	activity = ''
-): string {
+export function buildHarvestPrompt(userId: string, max: number, activity = ''): string {
 	const nodes = listNodes(userId);
-	const { circuits, unfiled } = circuitIndex(userId);
-	const decided = db
-		.select({ title: cortexProposals.title, status: cortexProposals.status })
-		.from(cortexProposals)
-		.where(eq(cortexProposals.userId, userId))
-		.all()
-		.map((p) => `- [${p.status}] ${p.title}`)
-		.slice(0, 200);
+	const { unfiled } = circuitIndex(userId);
+	const links = adjacency(userId);
 
 	// Capped: on a large lattice this is the one unbounded list in the prompt,
 	// and a hundred unfiled concepts would crowd out everything else.
@@ -1094,33 +1300,9 @@ export function buildGroomPrompt(
 	// Capped for the same reason: on a lattice that has never been connected this
 	// is every concept, and it would crowd out the activity the pass is here for.
 	const stranded = orphans(userId).slice(0, 30);
-	// Once, for every concept below, rather than once per concept.
-	const links = adjacency(userId);
 
-	/**
-	 * Which concepts get a full description, and which only a name.
-	 *
-	 * The two modes ration for different reasons, and both reasons are real.
-	 *
-	 * A **harvest** rations by *relevance*: only what the new conversation
-	 * actually touches is worth describing, however much room there is. That is
-	 * a judgement about usefulness, so it holds on a small lattice too.
-	 *
-	 * A **review** rations by *cost*: every concept deserves detail in principle
-	 * — merges and structure are judged from connections — but the prompt cannot
-	 * grow with the lattice for ever. Most connected first, since a merge, a
-	 * bridge and a cluster with no way out are all read off connections.
-	 *
-	 * The budget then applies to both as a ceiling. Either way every concept is
-	 * still named, so nothing is proposed twice.
-	 */
-	const candidates =
-		mode === 'harvest'
-			? (() => {
-					const relevant = new Set(seedNodes(activityGist(activity), userId, 25).map((n) => n.id));
-					return nodes.filter((n) => relevant.has(n.id));
-				})()
-			: judgingOrder(nodes, links);
+	const relevant = new Set(seedNodes(activityGist(activity), userId, 25).map((n) => n.id));
+	const candidates = nodes.filter((n) => relevant.has(n.id));
 	const rest = new Set(nodes.filter((n) => !candidates.includes(n)));
 
 	const inFull: CortexNode[] = [];
@@ -1150,29 +1332,12 @@ export function buildGroomPrompt(
 			].join('\n\n')
 		: named(inFull).map((n) => describeNode(n, links)).join('\n');
 
-	const task =
-		mode === 'harvest'
-			? [
-					`Propose at most ${max} concepts worth adding, based on what was said.`,
-					'A concept is a thing facts can be about, not a fact — "prefers dark themes" is an observation, "visual design" is a concept. Propose one only when it would help answer a later question about this person, and give each the connections that make it reachable.',
-					'Nothing worth adding is a fine answer. Reply with an empty list.',
-					'Also file anything under NOT YET FILED: nothing else can put a concept in an area, so those are waiting on you. Use an existing area wherever one fits — the index is what every agent navigates by, so it is worth keeping small — and only name a new one when nothing does.'
-				].join(' ')
-			: [
-					`Suggest at most ${max} changes that would make this lattice better at answering questions about its owner.`,
-					'Look for: near-duplicate concepts that should be merged; clusters with no connection leaving them, which add nothing plain search would not already find; obvious missing connections between concepts that clearly relate; concepts bridging several areas that are not marked as bridges.',
-					'Also file anything under NOT YET FILED: nothing else can put a concept in an area. Prefer an existing area — the index is what every agent navigates by, so it is worth keeping small.',
-					'Orphans and duplicate names are already found without you — do not spend suggestions on them unless you can say something the check could not.'
-				].join(' ');
-
 	return [
-		mode === 'harvest'
-			? `--- WHAT HAS HAPPENED SINCE THE LAST PASS ---\n${activity || '(nothing new)'}`
-			: '--- A FULL REVIEW OF THE LATTICE ---',
+		`--- WHAT HAS HAPPENED SINCE THE LAST PASS ---\n${activity || '(nothing new)'}`,
 		`--- THE LATTICE (${nodes.length} concepts) ---`,
 		lattice,
 		`--- AREAS ---`,
-		circuits.map((c) => `- ${c.id} "${c.name}" (${c.count})`).join('\n') || '(none defined)',
+		areasList(userId),
 		// Listed rather than counted. Nothing else can file a concept, so these
 		// are waiting on this pass — and a count tells a model there is work
 		// without telling it what the work is.
@@ -1197,29 +1362,340 @@ export function buildGroomPrompt(
 			.map((m) => `- (${m.kind}) ${m.content}`)
 			.join('\n') || '(none)',
 		`--- ALREADY DECIDED (do not raise again) ---`,
-		decided.join('\n') || '(nothing yet)',
+		decidedList(userId),
 		`--- YOUR TASK ---`,
-		task,
-		'Reply with ONLY a JSON object: {"proposals":[…]}. Every item has "kind", "title" (one line) and "rationale" (why), plus whatever its kind needs below.',
-		// Whole objects rather than a shorthand. The shorthand read
-		// `circuit — "node", payload {"areas":[…]}`, which compresses two nesting
-		// levels into one comma: a model read it as "circuit takes a node and a
-		// payload" and put the node *inside* the payload. The suggestion was
-		// right and unusable, and there was no way to tell from the row.
-		'"node" and "target" are always top-level keys, beside "kind" and "title" — never inside "payload". Copy the shape of these exactly:',
 		[
-			'create — the concept does not exist yet, so it has no "node":\n{"kind":"create","title":"…","rationale":"…","payload":{"name":"…","description":"…","areas":["area-id or a new area name"],"connect":[{"node":"node-id","weight":0.7,"why":"…"}]}}\nConnections are part of the suggestion, not a follow-up: a concept nothing links to can never surface in a query.',
-			'merge — "node" is the one to keep, "target" the one folded into it:\n{"kind":"merge","title":"…","rationale":"…","node":"node-id","target":"node-id"}',
-			'connect:\n{"kind":"connect","title":"…","rationale":"…","node":"node-id","target":"node-id","payload":{"weight":0.7,"why":"…"}}',
-			'disconnect:\n{"kind":"disconnect","title":"…","rationale":"…","node":"node-id","target":"node-id"}',
-			'weight — the strength is required, or there is no change to make:\n{"kind":"weight","title":"…","rationale":"…","node":"node-id","target":"node-id","payload":{"weight":0.7}}',
-			'circuit — "areas" is the full set the concept should be in, and is required:\n{"kind":"circuit","title":"…","rationale":"…","node":"node-id","payload":{"areas":["area-id"]}}',
-			'convergence:\n{"kind":"convergence","title":"…","rationale":"…","node":"node-id","payload":{"isConvergence":true}}',
-			'rename — the new name is required:\n{"kind":"rename","title":"…","rationale":"…","node":"node-id","payload":{"name":"…"}}',
-			'delete:\n{"kind":"delete","title":"…","rationale":"…","node":"node-id"}'
-		].join('\n\n'),
-		'Use the exact ids given above; a node id you invent will be dropped, and so will a suggestion missing anything its kind requires. Propose nothing you cannot justify from what you were shown.'
+			`Propose at most ${max} concepts worth adding, based on what was said.`,
+			'A concept is a thing facts can be about, not a fact — "prefers dark themes" is an observation, "visual design" is a concept. Propose one only when it would help answer a later question about this person, and give each the connections that make it reachable.',
+			'Nothing worth adding is a fine answer. Reply with an empty list.',
+			'Also file anything under NOT YET FILED: nothing else can put a concept in an area, so those are waiting on you. Use an existing area wherever one fits — the index is what every agent navigates by, so it is worth keeping small — and only name a new one when nothing does.'
+		].join(' '),
+		...PROPOSAL_SHAPES
 	].join('\n\n');
+}
+
+// --- a review, in two passes ------------------------------------------------
+
+/**
+ * A review used to be one call, and on any lattice worth reviewing it timed out.
+ *
+ * The prompt was not the whole story. At fifty-two concepts it was around 25KB,
+ * well inside any model's window, and it still burned three minutes. The cost
+ * was the *reasoning load*: one model, in one shot, holding every concept's
+ * name, description and connections in mind **and** producing ten justified
+ * structural changes. A hard question over a wide input, getting harder as the
+ * square of the lattice while the model's patience stays flat.
+ *
+ * So it asks two easy questions instead of one hard one.
+ *
+ * **The survey** is a wide input and a shallow question. Names, areas and
+ * connections; no descriptions. "Which of these look wrong from their shape
+ * alone?" It answers with a shortlist and a one-line hypothesis each, which is
+ * cheap to read and cheap to write.
+ *
+ * **The confirmation** is a narrow input and a deep question. Those concepts,
+ * now with their descriptions and their neighbours. "Do the descriptions bear
+ * this out? Adjust it, or drop it."
+ *
+ * Neither call asks the model to do the hard thing over the whole lattice. The
+ * bytes fall too — descriptions are most of a concept's line, and the unfiled
+ * list, the orphan list and the recorded observations all move to the narrow
+ * pass — but the split in reasoning is what actually buys the seconds back.
+ */
+
+/** What a survey may suspect: everything except adding a concept from nothing. */
+const SURVEY_KINDS = KINDS.filter((k) => k !== 'create');
+
+/** A concept the survey pointed at, and what it suspected about it. */
+export interface Candidate {
+	node: CortexNode;
+	target?: CortexNode;
+	kind?: string;
+	hypothesis?: string;
+}
+
+export interface SurveyWindow {
+	window: CortexNode[];
+	/** The first concept that did not fit, or null when the whole lattice did. */
+	nextCursor: string | null;
+	covered: number;
+	total: number;
+}
+
+/**
+ * As much of the lattice as one survey can carry, starting where the last one
+ * stopped.
+ *
+ * The cursor is an **id**, not an index: indices shift the moment a concept is
+ * deleted, and `listNodes` is name-ordered and therefore stable. It wraps, so a
+ * lattice three windows wide is covered in three runs and then covered again —
+ * every concept is surveyed eventually, and a run costs two calls whatever the
+ * lattice is doing. The old ceiling simply dropped the tail, so on a large
+ * lattice there were concepts no review ever looked at.
+ */
+export function surveyWindow(
+	nodes: CortexNode[],
+	line: (n: CortexNode) => string,
+	cursorId: string | null,
+	budget = SURVEY_BUDGET_CHARS
+): SurveyWindow {
+	const total = nodes.length;
+	if (!total) return { window: [], nextCursor: null, covered: 0, total: 0 };
+	// A cursor pointing at a concept since deleted starts from the top rather
+	// than stalling, which is the only sane reading of "start after that one".
+	const from = Math.max(
+		nodes.findIndex((n) => n.id === cursorId),
+		0
+	);
+	const window: CortexNode[] = [];
+	let spent = 0;
+	for (let i = 0; i < total; i++) {
+		const node = nodes[(from + i) % total];
+		const cost = line(node).length + 1;
+		// `window.length` guards the degenerate case: one concept whose line alone
+		// exceeds the budget still gets surveyed. Without it the window could come
+		// back empty and the cursor would never move off it.
+		if (spent + cost > budget && window.length) {
+			return { window, nextCursor: node.id, covered: window.length, total };
+		}
+		spent += cost;
+		window.push(node);
+	}
+	return { window, nextCursor: null, covered: total, total };
+}
+
+/** The wide, shallow pass: structure only, and a shortlist out. */
+export function buildSurveyPrompt(
+	userId: string,
+	shortlist: number,
+	window: CortexNode[],
+	total: number,
+	line: (n: CortexNode) => string
+): string {
+	return [
+		'--- A SURVEY OF THE LATTICE’S SHAPE ---',
+		'You are looking at structure only. Descriptions are deliberately withheld: this pass decides what is worth reading closely, and a second pass will read it. Do not judge what a concept *means* from its name — say what looks wrong about where it sits.',
+		`--- THE CONCEPTS (${window.length}${total > window.length ? ` of ${total}, the rest on a later pass` : ''}) ---`,
+		'Each line is: id, name, [bridge] if it joins areas, {areas it is filed under} and → what it connects to.',
+		window.map(line).join('\n') || '(none)',
+		`--- AREAS ---`,
+		areasList(userId),
+		`--- CONCEPTS ALREADY ARGUED OVER (do not point at these again) ---`,
+		decidedList(userId, 'id'),
+		`--- YOUR TASK ---`,
+		[
+			`Name at most ${shortlist} concepts worth a closer look, and say what you suspect about each in one line.`,
+			'What is visible from here: a concept marked {unfiled}, which nothing but this job can file; a concept reaching → nothing, which no query can find; two names that look like one concept; a concept connecting several areas that is not marked [bridge]; a cluster with no connection leaving it, which adds nothing plain search would not already find; two concepts that plainly relate and are not connected.',
+			'Near-duplicate names and connections that have faded are already found without you — do not spend a slot on them unless you can say something a string match could not.',
+			'Nothing worth a closer look is a fine answer. Reply with an empty list.'
+		].join(' '),
+		'Reply with ONLY a JSON object: {"candidates":[…]}. Every item has "node" (an id from above), "kind" (one of ' +
+			// `create` is deliberately not on offer. Every candidate is a concept id
+			// and a `create`'s concept does not exist yet, so there would be nothing
+			// to name it by — adding a concept is a harvest's job, from what was
+			// actually said, not something to infer from a gap in a shape.
+			SURVEY_KINDS.join(', ') +
+			'), and "hypothesis" (one line, what you suspect). Add "target" (another id) when the suspicion is about a pair — a merge, a connection, a weight.',
+		'{"candidates":[{"node":"node-id","target":"node-id","kind":"merge","hypothesis":"Both sit in the same area and reach the same three concepts."}]}',
+		'Use the exact ids given above. An id you invent is dropped, and costs you a slot.'
+	].join('\n\n');
+}
+
+/**
+ * The narrow, deep pass: these concepts in full, and the final suggestions out.
+ *
+ * The shortlist with descriptions and connections, one hop of neighbours by
+ * name so a merge or a new connection can be judged against what is already
+ * there, and — for the first time in the run — the recorded observations, which
+ * are text and belong with the pass that reads text.
+ */
+export function buildConfirmPrompt(
+	userId: string,
+	max: number,
+	candidates: Candidate[],
+	links: Map<string, CortexAssociation[]> = adjacency(userId)
+): string {
+	const nodes = listNodes(userId);
+	const byId = new Map(nodes.map((n) => [n.id, n]));
+
+	// The shortlisted concepts and whatever a paired suspicion names, in the
+	// lattice's own order rather than the survey's — the model is reading this
+	// to hold a shape in mind.
+	const wanted = new Set<string>();
+	for (const c of candidates) {
+		wanted.add(c.node.id);
+		if (c.target) wanted.add(c.target.id);
+	}
+	const inFull = nodes.filter((n) => wanted.has(n.id));
+
+	/**
+	 * One hop out, by name and capped.
+	 *
+	 * Judging a merge means knowing what the two already reach; judging a new
+	 * connection means knowing what is already connected. Names only, because
+	 * this is context rather than the thing being judged — and capped, because a
+	 * shortlist containing one hub drags its entire spoke set in here and the
+	 * narrow pass stops being narrow. Measured: uncapped, twenty concepts out of
+	 * fifty-two pulled in most of the lattice.
+	 *
+	 * The ones touching the most shortlisted concepts survive the cap, since a
+	 * concept two of the candidates both reach is the one a merge is most likely
+	 * to turn on.
+	 */
+	const around = new Map<string, number>();
+	for (const node of inFull) {
+		for (const id of neighbourIds(node, links)) {
+			if (!wanted.has(id)) around.set(id, (around.get(id) ?? 0) + 1);
+		}
+	}
+	const kept = new Set(
+		[...around.entries()]
+			.sort((a, b) => b[1] - a[1])
+			.slice(0, MAX_NEIGHBOURS)
+			.map(([id]) => id)
+	);
+	const neighbours = nodes.filter((n) => kept.has(n.id));
+	const unshown = around.size - kept.size;
+
+	const suspicions = candidates
+		.filter((c) => c.hypothesis || c.kind)
+		.map(
+			(c) =>
+				`- ${c.kind ?? 'look at'} ${c.node.id}${c.target ? ` + ${c.target.id}` : ''}: ${c.hypothesis ?? '(no reason given)'}`
+		);
+
+	return [
+		'--- A CLOSE READ OF WHAT THE SURVEY TURNED UP ---',
+		'A first pass looked at the whole lattice’s shape — names, areas and connections, no descriptions — and picked these out. Now you have the descriptions it could not see.',
+		`--- THE CONCEPTS TO JUDGE (${inFull.length}) ---`,
+		inFull.map((n) => describeNode(n, links)).join('\n') || '(none)',
+		neighbours.length
+			? `--- WHAT THEY ALREADY CONNECT TO (${neighbours.length}${unshown ? ` of ${around.size}` : ''}; names only) ---\n` +
+				neighbours.map(nameOnly).join('\n')
+			: 'they connect to nothing outside the list above',
+		`--- AREAS ---`,
+		areasList(userId),
+		suspicions.length
+			? `--- WHAT THE SURVEY SUSPECTED ---\n${suspicions.join('\n')}`
+			: '--- THE SURVEY DID NOT ANSWER ---\nThese are the concepts most worth judging, chosen without it: the unreachable, the unfiled, and the most connected. Say what you find.',
+		// Read-only, and one-directional: the groomer may notice that a recorded
+		// observation implies a concept, and never writes back to memory.
+		`--- RECORDED OBSERVATIONS (never edit these) ---`,
+		listMemoryItems(userId)
+			.filter((m) => m.status === 'active')
+			.slice(0, 60)
+			.map((m) => `- (${m.kind}) ${m.content}`)
+			.join('\n') || '(none)',
+		`--- ALREADY DECIDED (do not raise again) ---`,
+		decidedList(userId),
+		`--- YOUR TASK ---`,
+		[
+			`Suggest at most ${max} changes that would make this lattice better at answering questions about its owner.`,
+			'Confirm what the survey suspected where the descriptions bear it out, adjust it where they say something different, and drop it where they contradict it — two concepts whose names look alike and whose descriptions do not are two concepts.',
+			'Dropping everything is a fine answer. Do not invent a suggestion to fill the number; a suggestion nobody can justify costs somebody a decision.',
+			'Also file anything shown as unfiled: nothing else can put a concept in an area. Prefer an existing area — the index is what every agent navigates by, so it is worth keeping small.'
+		].join(' '),
+		...PROPOSAL_SHAPES
+	].join('\n\n');
+}
+
+/**
+ * The survey, ready to send, plus where the next one should start.
+ *
+ * The cursor comes in rather than being read here, so this stays a function of
+ * its arguments and a test can walk the window round the lattice by hand.
+ */
+export function buildSurvey(userId: string, shortlist: number, cursorId: string | null) {
+	const links = adjacency(userId);
+	const areas = visibleAreaIds(userId);
+	const nodes = listNodes(userId);
+	const line = (n: CortexNode) => surveyLine(n, links, userId, areas);
+	const { window, nextCursor, covered, total } = surveyWindow(nodes, line, cursorId);
+	return {
+		prompt: buildSurveyPrompt(userId, shortlist, window, total, line),
+		links,
+		nextCursor,
+		covered,
+		total
+	};
+}
+
+/**
+ * Turn what the survey said into concepts that exist.
+ *
+ * The same courtesy `recordProposals` extends to a proposal: ids are what the
+ * prompt asks for, names are what a model sometimes sends, and an id it invented
+ * is dropped here rather than being allowed to spend the deep pass's budget on a
+ * concept that is not there.
+ */
+export function readCandidates(
+	userId: string,
+	raw: unknown[],
+	max: number
+): { candidates: Candidate[]; dropped: number } {
+	const candidates: Candidate[] = [];
+	const seen = new Set<string>();
+	let dropped = 0;
+	const find = (ref: unknown): CortexNode | undefined => {
+		const wanted = typeof ref === 'string' ? ref.trim() : '';
+		if (!wanted) return undefined;
+		return getNode(wanted, userId) ?? findNodeByName(wanted, userId) ?? undefined;
+	};
+
+	for (const item of raw.slice(0, max)) {
+		const c = (item ?? {}) as Record<string, unknown>;
+		const node = find(c.node);
+		if (!node) {
+			dropped++;
+			continue;
+		}
+		const target = find(c.target);
+		// Keyed on the pair: a survey that names the same merge twice should not
+		// buy the same concept two slots in the deep pass.
+		const key = [node.id, target?.id ?? ''].sort().join('|');
+		if (seen.has(key)) continue;
+		seen.add(key);
+		const kind = String(c.kind ?? '').trim();
+		candidates.push({
+			node,
+			target: target && target.id !== node.id ? target : undefined,
+			kind: (SURVEY_KINDS as readonly string[]).includes(kind) ? kind : undefined,
+			hypothesis: String(c.hypothesis ?? '').trim().slice(0, 400) || undefined
+		});
+	}
+	return { candidates, dropped };
+}
+
+/**
+ * The shortlist a review falls back on when the survey does not answer.
+ *
+ * A wide pass that returns prose, or nothing, should not cost the whole run:
+ * the deep pass is affordable by construction, and there is a defensible
+ * shortlist to be had without a model. Unreachable first and unfiled next —
+ * the two faults only this job can fix — then whatever `judgingOrder` puts on
+ * top, which is where a merge or a bridge is read off.
+ */
+export function shortlistFallback(
+	userId: string,
+	links: Map<string, CortexAssociation[]>,
+	max: number
+): Candidate[] {
+	const mine = listNodes(userId).filter((n) => n.ownerId === userId || n.ownerId === null);
+	const stranded = new Set(orphans(userId).map((o) => o.id));
+	const ranked = [
+		...mine.filter((n) => stranded.has(n.id)),
+		...mine.filter((n) => !stranded.has(n.id) && !n.circuits?.length),
+		...judgingOrder(mine, links)
+	];
+	const seen = new Set<string>();
+	const out: Candidate[] = [];
+	for (const node of ranked) {
+		if (seen.has(node.id)) continue;
+		seen.add(node.id);
+		out.push({ node });
+		if (out.length >= max) break;
+	}
+	return out;
 }
 
 // --- the run ----------------------------------------------------------------
@@ -1237,6 +1713,10 @@ export async function runCortexGroom(
 	const cfg = groomSettings();
 	const runId = randomUUID();
 	const max = Math.max(1, Math.min(cfg.maxProposalsPerRun, 25));
+	const shortlist = Math.max(
+		1,
+		Math.min(cfg.shortlistSize ?? DEFAULT_CORTEX_GROOM.shortlistSize, 100)
+	);
 
 	// Free, and so unconditional: tidying and the detectors run on every pass
 	// whether or not a model is configured, and whichever job this is.
@@ -1245,6 +1725,10 @@ export async function runCortexGroom(
 	// opinions, they cost nothing to find, and capping them meant a lattice with
 	// thirty orphans filed the same first ten every run and never got to the
 	// rest. The per-run cap is there to stop a model burying the queue.
+	//
+	// It is also what makes the survey's rotating window safe: near-duplicate
+	// names are found here, over the whole lattice at once, so a pair split
+	// across two survey windows is not a pair anybody loses.
 	const detected = recordDetected(userId, detect(userId), Math.max(max, 50)).added;
 	setSetting(LAST_RUN_KEY, Date.now(), userId);
 
@@ -1319,84 +1803,213 @@ export async function runCortexGroom(
 	}
 
 	const startedAt = Date.now();
+	/**
+	 * One deadline for the **run**, not one per call.
+	 *
+	 * A review makes two calls now, and giving each the configured limit would
+	 * quietly mean twice it. A manual run is one synchronous request held open
+	 * for its duration, so the number a person put in this box is the number
+	 * their reverse proxy's read timeout was set against — it has to mean what
+	 * they think it means.
+	 */
+	const deadline = startedAt + cfg.timeoutSeconds * 1000;
+	// Never zero: a signal already past its deadline aborts before the request is
+	// made, which reports a timeout without having waited for one.
+	const remaining = () => Math.max(deadline - Date.now(), 1_000);
+	/**
+	 * The survey may have half the run at most, so a slow wide pass cannot leave
+	 * the close read with nothing. It hands its slack forward — a survey that
+	 * comes back in ten seconds leaves the rest to the pass that needs it.
+	 */
+	const surveyLimit = () =>
+		Math.min(remaining(), Math.max(Math.floor((cfg.timeoutSeconds * 1000) / 2), 1_000));
+
+	// Which pass a failure happened in. "The model did not answer" was already
+	// the least useful sentence in the system when there was one call to blame.
+	let stage: 'harvest' | 'survey' | 'confirm' = mode === 'harvest' ? 'harvest' : 'survey';
+	let survey: GroomResult['survey'];
+	let confirm: GroomResult['confirm'];
+
 	try {
-		const builtAt = Date.now();
-		const prompt = buildGroomPrompt(userId, max, mode, activity);
-		const buildMs = Date.now() - builtAt;
-
-		const ask = (maxTokens: number) =>
-			choice.adapter.complete(
-				{
-					modelKey: choice.model.modelKey,
-					messages: [
-						{ role: 'system', content: taskCfg?.systemPrompt ?? '' },
-						{ role: 'user', content: prompt }
-					],
-					maxTokens
-				},
-				AbortSignal.timeout(cfg.timeoutSeconds * 1000)
-			);
-
-		const askedAt = Date.now();
-		let { text, usage, finishReason, reasonedOnly } = await ask(cfg.maxTokens);
-
 		/**
+		 * One call, with the retry that keeps a reasoning model from wasting a run.
+		 *
 		 * A reasoning model can spend the whole budget thinking and return no
 		 * answer at all. That is what a 52-concept lattice did on 4,860 characters
 		 * of conversation: `finishReason: "length"`, `reasonedOnly: true`, nothing
-		 * written. The run detected it, reported it, and stopped — and told the
-		 * person to raise a Max tokens field that does not exist.
-		 *
-		 * So it retries once with real headroom, the same rule and the same gate
-		 * `research.ts` has used for this since it shipped: nothing came back
-		 * *and* it hit the wall. A model that simply had nothing to suggest
+		 * written. So it retries once with real headroom, the same rule and the
+		 * same gate `research.ts` has used for this since it shipped: nothing came
+		 * back *and* it hit the wall. A model that simply had nothing to suggest
 		 * returns an empty list and never triggers this, so the common path pays
 		 * nothing.
+		 *
+		 * The time limit is recomputed per call rather than captured, so a retry
+		 * spends what is left of the run rather than starting the clock again.
 		 */
-		let retried = false;
-		if (!text.trim() && (reasonedOnly === true || finishReason === 'length')) {
-			retried = true;
-			({ text, usage, finishReason, reasonedOnly } = await ask(
-				Math.max(cfg.maxTokens * 4, RETRY_TOKENS_FLOOR)
-			));
-		}
-		const modelMs = Date.now() - askedAt;
-		logUsage('cortex-groom', choice.model.modelKey, usage, 'ok', userId);
+		const ask = async (prompt: string, limit: () => number) => {
+			const call = (maxTokens: number) =>
+				choice.adapter.complete(
+					{
+						modelKey: choice.model.modelKey,
+						messages: [
+							{ role: 'system', content: taskCfg?.systemPrompt ?? '' },
+							{ role: 'user', content: prompt }
+						],
+						maxTokens
+					},
+					AbortSignal.timeout(limit())
+				);
 
-		// `.proposals`, not the parsed value itself: extractJson returns an object
-		// by construction, so a prompt asking for a bare array gets nothing back
-		// however well the model complied. See json.ts.
-		const parsed = extractJson(text);
-		const proposals = Array.isArray(parsed?.proposals) ? parsed.proposals : [];
+			const askedAt = Date.now();
+			let res = await call(cfg.maxTokens);
+			let retried = false;
+			if (!res.text.trim() && (res.reasonedOnly === true || res.finishReason === 'length')) {
+				retried = true;
+				res = await call(Math.max(cfg.maxTokens * 4, RETRY_TOKENS_FLOOR));
+			}
+			logUsage('cortex-groom', choice.model.modelKey, res.usage, 'ok', userId);
+			return {
+				text: res.text,
+				finishReason: res.finishReason ?? null,
+				reasonedOnly: res.reasonedOnly === true,
+				retried,
+				promptChars: prompt.length,
+				modelMs: Date.now() - askedAt
+			};
+		};
+
+		let buildMs = 0;
+		let promptChars = 0;
+		let modelMs = 0;
+		let retried = false;
+		let reply = { text: '', finishReason: null as string | null, reasonedOnly: false };
+		let proposals: unknown[] = [];
+
+		if (mode === 'harvest') {
+			const builtAt = Date.now();
+			const prompt = buildHarvestPrompt(userId, max, activity);
+			buildMs = Date.now() - builtAt;
+
+			const res = await ask(prompt, remaining);
+			reply = res;
+			promptChars = res.promptChars;
+			modelMs = res.modelMs;
+			retried = res.retried;
+
+			// `.proposals`, not the parsed value itself: extractJson returns an
+			// object by construction, so a prompt asking for a bare array gets
+			// nothing back however well the model complied. See json.ts.
+			const parsed = extractJson(res.text);
+			proposals = Array.isArray(parsed?.proposals) ? parsed.proposals : [];
+		} else {
+			const builtAt = Date.now();
+			const cursor = getSetting<string>(SURVEY_CURSOR_KEY, '', userId) || null;
+			const wide = buildSurvey(userId, shortlist, cursor);
+			buildMs = Date.now() - builtAt;
+
+			const first = await ask(wide.prompt, surveyLimit);
+			reply = first;
+			promptChars = first.promptChars;
+			modelMs = first.modelMs;
+			retried = first.retried;
+
+			// The window moves on whether or not the answer was any good: those
+			// concepts have been looked at, and a cursor that only advanced on a
+			// useful answer would sit on the same window for ever.
+			setSetting(SURVEY_CURSOR_KEY, wide.nextCursor ?? '', userId);
+
+			const parsed = extractJson(first.text);
+			const raw = Array.isArray(parsed?.candidates) ? (parsed.candidates as unknown[]) : null;
+			const read = raw ? readCandidates(userId, raw, shortlist) : { candidates: [], dropped: 0 };
+			/**
+			 * An empty list is an answer; anything else is the survey failing.
+			 *
+			 * The same distinction the retry gate draws, and for the same reason. A
+			 * model that looked at the shape and found nothing must be believed —
+			 * finding nothing is the commonest outcome the groomer has. But prose,
+			 * a missing `candidates` key, or a list where every id was invented is
+			 * a pass that did not answer, and the deep read is cheap enough to run
+			 * on a shortlist picked without it rather than throw the run away.
+			 */
+			const answeredEmpty = Array.isArray(raw) && raw.length === 0;
+			const fellBack = !answeredEmpty && !read.candidates.length;
+			const candidates = fellBack
+				? shortlistFallback(userId, wide.links, shortlist)
+				: read.candidates;
+
+			survey = {
+				concepts: wide.covered,
+				total: wide.total,
+				more: wide.nextCursor !== null,
+				candidates: candidates.length,
+				dropped: read.dropped,
+				fellBack,
+				promptChars: first.promptChars,
+				modelMs: first.modelMs,
+				retried: first.retried
+			};
+
+			if (candidates.length) {
+				stage = 'confirm';
+				const deepAt = Date.now();
+				const deepPrompt = buildConfirmPrompt(userId, max, candidates, wide.links);
+				buildMs += Date.now() - deepAt;
+
+				const second = await ask(deepPrompt, remaining);
+				reply = second;
+				promptChars += second.promptChars;
+				modelMs += second.modelMs;
+				retried = retried || second.retried;
+				confirm = {
+					concepts: new Set(
+						candidates.flatMap((c) => (c.target ? [c.node.id, c.target.id] : [c.node.id]))
+					).size,
+					promptChars: second.promptChars,
+					modelMs: second.modelMs,
+					retried: second.retried
+				};
+
+				const deep = extractJson(second.text);
+				proposals = Array.isArray(deep?.proposals) ? deep.proposals : [];
+			}
+			// Otherwise the survey read the lattice's shape and found nothing worth
+			// a closer look. One call, and an honest nothing.
+		}
+
 		const { added, duplicates, dropped } = recordProposals(userId, proposals, max);
 		// Sizes, not content — the rule that no concept text reaches an event
 		// detail still holds. Enough to tell a model that said nothing from one
 		// that said plenty and had none of it parsed, which is the ambiguity
 		// behind "it ran but there was no output".
 		const shape = {
-			replyChars: text.length,
+			replyChars: reply.text.length,
 			parsedItems: proposals.length,
 			activityChars: activity.length,
 			windowHours: Math.round((Date.now() - watermark) / 3_600_000),
-			finishReason: finishReason ?? null,
+			finishReason: reply.finishReason,
 			// The failure research.ts already names: chain-of-thought on its own
 			// channel, no answer text, and indistinguishable from silence without
 			// this flag.
-			reasonedOnly: reasonedOnly === true,
+			reasonedOnly: reply.reasonedOnly,
 			// What the run cost, so "it grinds" is a number rather than a report.
-			// Answering that question the first time meant reading the source to
-			// find out where the seconds could even go. Sizes and timings only; no
-			// concept text reaches an event detail.
-			promptChars: prompt.length,
+			// Totals across every call the run made, so the one line the panel has
+			// always shown stays true now that a review makes two.
+			promptChars,
 			buildMs,
 			modelMs,
-			retried
+			retried,
+			survey,
+			confirm
 		};
 
 		// Only advance the watermark on a pass that actually read the activity,
 		// or a failed run would silently skip a day's conversation.
 		if (mode === 'harvest') setSetting(WATERMARK_KEY, startedAt, userId);
-		setSetting(LATTICE_MARK_KEY, latticeMark, userId);
+		// And only claim the lattice has been reviewed once the survey has been
+		// all the way round it. With a window still to come there is lattice this
+		// run never looked at, and a signature saying otherwise would let a
+		// scheduled review skip it.
+		if (!survey?.more) setSetting(LATTICE_MARK_KEY, latticeMark, userId);
 
 		emitEvent({
 			task: 'cortex-groom',
@@ -1426,6 +2039,15 @@ export async function runCortexGroom(
 		// difference between "raise the limit" and "something is broken".
 		const timedOut =
 			(err instanceof Error && err.name === 'TimeoutError') || /timeout|aborted/i.test(message);
+		// Which pass ran out, because a review has two and they fail for
+		// different reasons: a slow survey is a lattice too wide for the model,
+		// a slow close read is a model that cannot finish a small job.
+		const where =
+			stage === 'survey'
+				? 'the survey of the lattice’s shape'
+				: stage === 'confirm'
+					? 'the close read of what the survey found'
+					: 'the harvest';
 		emitEvent({
 			task: 'cortex-groom',
 			userId,
@@ -1433,7 +2055,7 @@ export async function runCortexGroom(
 			name: 'cortex.groom',
 			status: 'error',
 			durationMs: Date.now() - startedAt,
-			detail: { trigger, mode, tidied, detected, error: message }
+			detail: { trigger, mode, tidied, detected, stage, error: message, survey, confirm }
 		});
 		// The provider's own words, not "model call failed".
 		//
@@ -1446,10 +2068,12 @@ export async function runCortexGroom(
 			ran: false,
 			mode,
 			reason: timedOut
-				? `the model did not answer within ${cfg.timeoutSeconds}s — raise the time limit in Admin → Cortex, or use a faster model`
+				? `${where} did not finish inside the ${cfg.timeoutSeconds}s this run is allowed — raise the time limit in Admin → Cortex, or use a faster model`
 				: message,
 			tidied,
-			detected
+			detected,
+			survey,
+			confirm
 		};
 	}
 }

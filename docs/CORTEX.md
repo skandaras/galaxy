@@ -731,15 +731,19 @@ opt-out, and the change-history window beside the other retention controls), and
 the file round trip: export what you have, draft a lattice in a file, import it.
 
 **The groomer's cadence** lives in Admin → Cortex: daily by default
-(`intervalHours: 24`), per user, off until switched on, ten suggestions a run.
-`tidy` runs on every pass whether or not a model is configured for the
-`cortex-groom` task, because that half needs none.
+(`intervalHours: 24`), per user, off until switched on, ten suggestions a run,
+and twenty concepts read closely (`shortlistSize` — see "A review is two passes"
+below, which is what that number is the width of). `tidy` runs on every pass
+whether or not a model is configured for the `cortex-groom` task, because that
+half needs none.
 
 ### The budget, and the retry that means you rarely touch it
 
-A groom call's token budget and time limit are settings, beside the cadence.
+The groomer's token budget and time limit are settings, beside the cadence.
 They were constants — 8,192 tokens and 180 seconds — and on a real 52-concept
-lattice both failed on the same day, in two different ways.
+lattice both failed on the same day, in two different ways. (The token budget is
+per call; the time limit is a ceiling on the whole run, which is a distinction a
+review made necessary — see "One deadline for the run" below.)
 
 The harvest was not a timeout at all. Its event said
 `finishReason: "length"`, `reasonedOnly: true`, `replyChars: 0`, on
@@ -768,7 +772,8 @@ raising the time limit past a reverse proxy's own read timeout needs the proxy
 raised too, or the browser gives up while the run carries on.
 
 **Every run reports what it cost** — prompt size, milliseconds building it,
-milliseconds waiting on the model, and whether the retry fired. Answering "it
+milliseconds waiting on the model, and whether the retry fired; on a review, per
+pass as well as in total. Answering "it
 grinds to a halt" the first time meant reading the source to work out where the
 seconds could even go, which is the same failure as "when a run finds nothing,
 say which nothing" one level up. Sizes and timings only; no concept text reaches
@@ -787,22 +792,140 @@ forty-two, and a build that takes single-digit milliseconds.
 assertion passes on a small fixture whatever shape the work is, which is exactly
 how this went unnoticed.
 
-### The lattice section has a budget
+### A review is two passes, not one
 
-A review used to send every concept with its description and connections, on the
-argument above that merges cannot be judged from a slice. True, and it stops
-being affordable well before the lattice stops being useful.
+A review of a fifty-two-concept lattice timed out at 180 seconds, and raising the
+limit only moved the wall. **The prompt was never the problem.** It was around
+25KB — well inside any model's window — and it still burned three minutes,
+because one model was being asked, in one shot, to hold every concept's name,
+description and connections in mind *and* produce ten justified structural
+changes. A hard question over a wide input, getting harder as the square of the
+lattice while the model's patience stays flat.
 
-So `LATTICE_BUDGET_CHARS` buys full detail for the concepts most worth judging —
-most connected first, since a merge, a bridge and a cluster with no way out are
-all read off connections, then unfiled, then most recently touched — and every
-other concept still appears by name, so nothing is proposed twice. At 200
-concepts the prompt stays around 25KB instead of growing without limit.
+So it asks two easy questions instead of one hard one.
 
-The two modes ration for different reasons and both are real: a **harvest**
-rations by *relevance* (only what the new conversation touched is worth
-describing, however much room there is), a **review** by *cost*. The budget is a
-ceiling on both.
+**The survey** (`buildSurveyPrompt`) is a *wide* input and a *shallow* question.
+One line per concept — id, name, `[bridge]`, `{areas}`, `→ what it connects to`
+— and not a word of any description. "Which of these look wrong from their shape
+alone?" It answers with a shortlist of about twenty and a one-line hypothesis
+each, which is cheap to read and cheap to write.
+
+**The close read** (`buildConfirmPrompt`) is a *narrow* input and a *deep*
+question. Those concepts, now with their descriptions, one hop of neighbours by
+name, and the recorded observations — which are text, and belong with the pass
+that reads text. "Do the descriptions bear this out? Adjust it, or drop it."
+
+Neither call asks the model to do the hard thing over the whole lattice.
+
+Two things follow that are easy to get wrong. Withholding descriptions from the
+survey is **the point, not a saving**: a wide pass that could read them would
+start judging from them, which is the expensive question the second pass exists
+to ask. And the survey's own output is short, which matters more than it looks —
+the failure that stopped this job the first time was a reasoning model burning
+its whole budget before writing anything.
+
+Measured, against the one-pass prompt it replaces, on a lattice with a
+sixty-row decision history:
+
+| concepts | one pass | survey | close read | largest single call |
+| --- | --- | --- | --- | --- |
+| 52 | 20.3KB | 7.5KB | 11.7KB | **58%** |
+| 200 | 45.5KB | 18.7KB | 15.0KB | **41%** |
+| 500 | 54.5KB | 38.1KB | 16.2KB | **70%** |
+
+The close read is the number to watch: **11.7KB → 16.2KB while the lattice goes
+up tenfold**, because it is bounded by the shortlist rather than the lattice.
+`cortex-groom.test.ts` asserts that directly — six times the concepts, under
+1.25× the prompt — since it is the claim the whole design rests on.
+
+The total across both calls is *not* always smaller, and at 500 concepts it is
+about the same. That is the honest trade and it is worth naming: the old prompt
+stayed under its ceiling by truncating, so on a large lattice it showed
+connections for the ninety concepts that fit and bare names for the other four
+hundred — it was cheap because it had stopped looking. The survey shows every
+concept's connections. Cost is roughly held; coverage goes from a slice to all
+of it; and the question each call has to answer gets much easier.
+
+**Three things got a ceiling on the way**, each found by measuring rather than
+by reading:
+
+- `MAX_CONNECTIONS_SHOWN` (40). A hub in a five-hundred-concept lattice reaches
+  four hundred of them, and one such concept in the shortlist was enough to make
+  the close read grow with the lattice again. What the list had to convey — that
+  this is a hub — was clear at ten.
+- `MAX_NEIGHBOURS` (60) on the close read's one-hop ring, for the same reason.
+- `DECIDED_SHOWN` (60), down from 200. On a lattice with any history the
+  already-decided section was the **largest block in the prompt**, bigger than
+  the lattice itself at fifty concepts. It can be small because it is not the
+  guarantee: `recordProposals` fingerprints every suggestion against every row
+  this person has ever had and drops a repeat mechanically. The list only stops
+  the model *spending a slot* on something settled. It also had no `ORDER BY`,
+  so which two hundred rows you got was the database's choice — the same fault
+  the activity trawl had. Newest first now. The survey gets it keyed by concept
+  id (`merge tide-pools+rockpools`) rather than by title, because ids are what it
+  answers in and the titles were ten kilobytes buying nothing.
+
+**A harvest stays one call.** Its prompt is small by construction, it rations by
+*relevance* rather than cost — what the new conversation touched is worth
+describing however much room there is — and its failure was output tokens, which
+the retry answers. `LATTICE_BUDGET_CHARS` is still its ceiling.
+
+### The survey window rotates rather than truncating
+
+Structure-only lines are cheap but not free, and the per-user cap is two thousand
+concepts, so the survey has a budget too — `SURVEY_BUDGET_CHARS`, 60,000, around
+seven hundred concepts. Past that it covers a **window** and stores the id of the
+first concept it did not reach in `cortex.groom.surveyCursor`; the next run
+starts there and wraps. Every concept is surveyed eventually, and a run costs two
+calls whatever the lattice is doing. The old ceiling simply dropped the tail, so
+on a large lattice there were concepts no review ever looked at.
+
+The cursor is an **id**, not an index: indices shift the moment a concept is
+deleted, and `listNodes` is name-ordered and therefore stable. A cursor pointing
+at a since-deleted concept starts from the top rather than stalling. It advances
+on any run that reached the model, good answer or not — those concepts have been
+looked at, and a cursor that only moved on success would sit on one window for
+ever.
+
+Two consequences worth knowing. The panel says which span was covered and offers
+to run it again, because a rotating window has to be visible or it is just a
+quieter truncation. And `cortex.groom.latticeMark` is only written when the
+window reached the end, so a scheduled review cannot skip a lattice it has not
+finished surveying.
+
+Near-duplicate names spanning two windows are not lost: `detect()` finds those
+deterministically over the whole lattice, uncapped, on every pass.
+
+### When the survey does not answer
+
+An empty `candidates` list is an **answer** — finding nothing is the commonest
+outcome the groomer has, and paying for a close read of nothing would double the
+cost of the ordinary case. So the run stops there, at one call, and says so.
+
+Prose, a missing `candidates` key, or a list where every id was invented is the
+survey **failing** rather than answering. There the shortlist is built without a
+model — unreachable first, then unfiled, then `judgingOrder` — and the close read
+runs anyway, since it is affordable by construction and a wide pass that shrugged
+should not cost the whole run. The prompt says `THE SURVEY DID NOT ANSWER` rather
+than passing that shortlist off as one a model chose, and `survey.fellBack`
+reaches the panel. It is the same distinction the token retry draws, for the same
+reason.
+
+### One deadline for the run, not one per call
+
+`timeoutSeconds` is a ceiling on the **run**. Two calls each given the
+configured limit would quietly mean twice it, and a manual run is one
+synchronous request held open for its duration — so the number in that box is
+the number somebody set their reverse proxy's read timeout against, and it has
+to mean what they think it means.
+
+The survey may have half at most, so a slow wide pass cannot leave the close read
+with nothing; it hands its slack forward, so a survey that returns in ten seconds
+leaves the rest to the pass that needs it. The limit is recomputed per call
+rather than captured, so the token retry spends what is left of the run instead
+of starting the clock again. A timeout names which pass ran out — "the model did
+not answer" was already the least useful sentence in the system when there was
+one call to blame.
 
 ### Reading the window, not the top of it
 

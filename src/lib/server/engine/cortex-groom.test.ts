@@ -11,6 +11,7 @@ import {
 	events
 } from '$lib/server/db/schema';
 import {
+	adjacency,
 	listNodes,
 	listAssociations,
 	listChanges,
@@ -27,7 +28,12 @@ import {
 	visibleEdges
 } from '$lib/server/cortex';
 import {
-	buildGroomPrompt,
+	buildConfirmPrompt,
+	buildHarvestPrompt,
+	buildSurvey,
+	surveyWindow,
+	shortlistFallback,
+	readCandidates,
 	decideProposal,
 	listProposals,
 	recordProposals,
@@ -170,7 +176,17 @@ describe('proposals', () => {
 	});
 });
 
-describe('what the prompt costs to build', () => {
+/**
+ * A review is two prompts now, and each one exists to *not* be the other.
+ *
+ * The wide pass must carry shape and no meaning — the moment a description
+ * leaks into it, it is the old prompt again and the old timeout with it. The
+ * narrow pass must carry meaning for a handful of concepts and nothing for the
+ * rest. Both halves of that are asserted here, because both are the kind of
+ * thing that decays quietly: a section added to the wrong builder still works,
+ * it just costs a run.
+ */
+describe('the survey — wide, and shallow', () => {
 	/** A lattice big enough that a per-concept query would show up as one. */
 	function wide(count: number) {
 		const made = Array.from({ length: count }, (_, i) =>
@@ -186,22 +202,366 @@ describe('what the prompt costs to build', () => {
 		return made;
 	}
 
-	it('reads the connections once, not once per concept', () => {
-		wide(40);
-		// `describeNode` used to call `listAssociations`, which costs a full node
-		// select *plus* a full edge select — per concept. Fifty concepts meant
-		// about a hundred and fifty full-table reads to produce one string, and
-		// it grew as the square of the lattice.
-		//
-		// Counted rather than timed: a wall-clock assertion passes on a small
-		// fixture whatever the shape of the work, which is exactly how this went
-		// unnoticed.
+	it('carries a concept’s shape and not a word of what it means', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		const a = saveNode({
+			name: 'Tide pools',
+			description: 'Rockpool surveying at low water',
+			circuits: [area.id],
+			ownerId: ANA
+		});
+		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		saveAssociation({ sourceId: a.id, targetId: b.id, userId: ANA });
+
+		const { prompt } = buildSurvey(ANA, 20, null);
+		expect(prompt).toContain(`- ${a.id} "Tide pools" {${area.id}} → ${b.id}`);
+		// The whole reason this pass is affordable. A survey that could read
+		// descriptions would start judging from them, which is the expensive
+		// question the second pass exists to ask.
+		expect(prompt).not.toContain('Rockpool surveying');
+	});
+
+	it('says in place what two capped lists used to say', () => {
+		saveNode({ name: 'Tide pools', ownerId: ANA });
+		saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		saveNode({ name: 'Storm logs', ownerId: ANA });
+		const { prompt } = buildSurvey(ANA, 20, null);
+		// Unfiled and unreachable were two sections showing the first thirty of
+		// each. On the line, for every concept, they cost nothing and cannot run
+		// out — which is what a lattice of any size needs them to do.
+		expect(prompt).toContain('{unfiled}');
+		expect(prompt).toContain('→ nothing');
+	});
+
+	it('marks a bridge, since that is a thing only the shape shows', () => {
+		const a = saveNode({ name: 'Tide pools', isConvergence: true, ownerId: ANA });
+		expect(buildSurvey(ANA, 20, null).prompt).toContain(`- ${a.id} "Tide pools" [bridge]`);
+	});
+
+	it('is a fraction of the old whole-lattice prompt, on the same lattice', () => {
+		wide(200);
+		const { prompt, covered, total, nextCursor } = buildSurvey(ANA, 20, null);
+		// Two hundred concepts fit in one window with room to spare, so nothing is
+		// deferred and the cursor goes back to the top.
+		expect(covered).toBe(200);
+		expect(total).toBe(200);
+		expect(nextCursor).toBeNull();
+		// The old review sent every description it could afford and ran to ~25KB
+		// on a quarter of this. Structure only is a different order of thing.
+		expect(prompt.length).toBeLessThan(25_000);
+		expect(prompt).not.toContain('A description of roughly');
+	});
+
+	it('never shows another person’s lattice', () => {
+		saveNode({ name: 'Tide pools', ownerId: ANA });
+		saveNode({ name: 'Ben private concept', ownerId: BEN });
+		expect(buildSurvey(ANA, 20, null).prompt).not.toContain('Ben private concept');
+	});
+
+	it('never shows another person’s areas as a filing', () => {
+		const theirs = saveCircuit({ name: 'Bens own area', ownerId: BEN });
+		// Shared, so Ana can see the concept — but the label on it is Ben's, and
+		// since the API accepts free strings the id is often the label. From where
+		// Ana is standing that concept is unfiled, which is what it is.
+		const shared = saveNode({
+			name: 'A shared concept',
+			circuits: [theirs.id],
+			ownerId: BEN,
+			visibility: 'shared'
+		});
+		const { prompt } = buildSurvey(ANA, 20, null);
+		expect(prompt).toContain(`- ${shared.id} "A shared concept" {unfiled}`);
+		expect(prompt).not.toContain(theirs.id);
+	});
+});
+
+describe('the survey window', () => {
+	function lattice(count: number) {
+		return Array.from({ length: count }, (_, i) =>
+			saveNode({ name: `Concept ${String(i).padStart(2, '0')}`, ownerId: ANA })
+		);
+	}
+
+	const line = (n: { id: string }) => `- ${n.id}`;
+
+	it('takes the whole lattice when it fits, and asks for nothing back', () => {
+		lattice(5);
+		const { window, nextCursor, covered, total } = surveyWindow(listNodes(ANA), line, null, 10_000);
+		expect(window).toHaveLength(5);
+		expect(covered).toBe(5);
+		expect(total).toBe(5);
+		expect(nextCursor).toBeNull();
+	});
+
+	it('stops at the budget and names where to start next time', () => {
+		lattice(10);
+		const nodes = listNodes(ANA);
+		const first = surveyWindow(nodes, line, null, 40);
+		expect(first.window.length).toBeGreaterThan(0);
+		expect(first.window.length).toBeLessThan(10);
+		expect(first.nextCursor).toBe(nodes[first.window.length].id);
+
+		// The point of the cursor: run it again and it looks at different
+		// concepts. The old ceiling simply dropped the tail, so on a large
+		// lattice there were concepts no review ever looked at.
+		const second = surveyWindow(nodes, line, first.nextCursor, 40);
+		expect(second.window[0].id).toBe(first.nextCursor);
+		expect(second.window.map((n) => n.id)).not.toContain(first.window[0].id);
+	});
+
+	it('wraps round rather than running off the end', () => {
+		lattice(6);
+		const nodes = listNodes(ANA);
+		const { window } = surveyWindow(nodes, line, nodes[4].id, 40);
+		expect(window[0].id).toBe(nodes[4].id);
+		// Past the end and back to the top, so a lattice three windows wide is
+		// covered in three runs and then covered again.
+		expect(window.map((n) => n.id)).toContain(nodes[0].id);
+	});
+
+	it('starts from the top when the cursor points at a deleted concept', () => {
+		lattice(4);
+		const nodes = listNodes(ANA);
+		const { window } = surveyWindow(nodes, line, 'a-concept-since-deleted', 10_000);
+		expect(window[0].id).toBe(nodes[0].id);
+	});
+
+	it('surveys a concept whose line alone exceeds the budget', () => {
+		lattice(3);
+		// Otherwise the window comes back empty and the cursor never moves off it,
+		// which is a lattice that is never reviewed again.
+		const { window, nextCursor } = surveyWindow(listNodes(ANA), line, null, 1);
+		expect(window).toHaveLength(1);
+		expect(nextCursor).toBe(listNodes(ANA)[1].id);
+	});
+});
+
+describe('the close read — narrow, and deep', () => {
+	function wide(count: number) {
+		const made = Array.from({ length: count }, (_, i) =>
+			saveNode({
+				name: `Concept ${i}`,
+				description: `The description of concept ${i}, about as long as a real one.`,
+				ownerId: ANA
+			})
+		);
+		for (let i = 1; i < made.length; i++) {
+			saveAssociation({ sourceId: made[0].id, targetId: made[i].id, weight: 0.6, userId: ANA });
+		}
+		return made;
+	}
+
+	it('describes what the survey pointed at, and nobody else', () => {
+		const made = wide(200);
+		const prompt = buildConfirmPrompt(ANA, 10, [
+			{ node: made[7], kind: 'circuit', hypothesis: 'Unfiled and reaches only the hub.' }
+		]);
+		expect(prompt).toContain('The description of concept 7,');
+		// The saving that makes the whole split work: 199 concepts' descriptions
+		// are not in this prompt, and the model is not asked to hold them.
+		expect(prompt).not.toContain('The description of concept 50,');
+		expect(prompt.length).toBeLessThan(20_000);
+	});
+
+	it('describes both ends of a pair, since a merge needs both', () => {
+		const made = wide(10);
+		const prompt = buildConfirmPrompt(ANA, 10, [
+			{ node: made[3], target: made[4], kind: 'merge', hypothesis: 'Two names for one thing.' }
+		]);
+		expect(prompt).toContain('The description of concept 3,');
+		expect(prompt).toContain('The description of concept 4,');
+	});
+
+	it('names what they already connect to, by name only', () => {
+		const made = wide(10);
+		const prompt = buildConfirmPrompt(ANA, 10, [{ node: made[3] }]);
+		// Judging a merge means knowing what the two already reach; judging a new
+		// connection means knowing what is already connected. Context, not the
+		// thing being judged — so names, not descriptions.
+		expect(prompt).toContain('names only');
+		expect(prompt).toContain(`- ${made[0].id} "Concept 0"`);
+		expect(prompt).not.toContain('The description of concept 0,');
+	});
+
+	it('carries what the survey suspected, so the model can disagree with it', () => {
+		const made = wide(5);
+		const prompt = buildConfirmPrompt(ANA, 10, [
+			{ node: made[1], target: made[2], kind: 'merge', hypothesis: 'Both reach only the hub.' }
+		]);
+		expect(prompt).toContain('WHAT THE SURVEY SUSPECTED');
+		expect(prompt).toContain('Both reach only the hub.');
+		// The instruction that makes the second pass worth running at all.
+		expect(prompt).toContain('drop it where they contradict it');
+	});
+
+	it('says plainly when the survey did not answer', () => {
+		const made = wide(5);
+		const prompt = buildConfirmPrompt(ANA, 10, [{ node: made[1] }]);
+		// A shortlist picked without a model should not arrive dressed as one a
+		// model chose — the second pass would defer to a suspicion nobody had.
+		expect(prompt).toContain('THE SURVEY DID NOT ANSWER');
+	});
+
+	it('does not grow with the lattice, which is the whole design', () => {
+		// The claim the two-pass split rests on. The old review sent the lattice
+		// and grew with it — 20KB at fifty concepts, 45KB at two hundred, and a
+		// timeout somewhere past that. The close read is bounded by the shortlist
+		// instead, so a lattice six times the size costs it a little context and
+		// not a byte more of concepts.
+		const small = buildConfirmPrompt(
+			ANA,
+			10,
+			wide(50).slice(0, 20).map((node) => ({ node }))
+		);
+		db.delete(cortexAssociations).run();
+		db.delete(cortexNodes).run();
+		db.run(`DELETE FROM cortex_fts`);
+		const large = buildConfirmPrompt(
+			ANA,
+			10,
+			wide(300).slice(0, 20).map((node) => ({ node }))
+		);
+		// Six times the lattice, and the close read barely moves: what grows is a
+		// slightly wider ring of neighbour names, not the concepts themselves.
+		expect(large.length).toBeLessThan(small.length * 1.25);
+	});
+
+	it('never shows another person’s lattice', () => {
+		const mine = saveNode({ name: 'Tide pools', ownerId: ANA });
+		saveNode({ name: 'Ben private concept', ownerId: BEN });
+		expect(buildConfirmPrompt(ANA, 10, [{ node: mine }])).not.toContain('Ben private concept');
+	});
+});
+
+describe('turning a survey’s answer into a shortlist', () => {
+	it('resolves ids and the names a model reaches for instead', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		const { candidates, dropped } = readCandidates(
+			ANA,
+			[{ node: a.id, target: 'Coastal ecology', kind: 'merge', hypothesis: 'looks like one' }],
+			20
+		);
+		expect(dropped).toBe(0);
+		expect(candidates[0].node.id).toBe(a.id);
+		expect(candidates[0].target?.id).toBe(b.id);
+		expect(candidates[0].kind).toBe('merge');
+	});
+
+	it('drops an invented id rather than spending the close read on it', () => {
+		const { candidates, dropped } = readCandidates(ANA, [{ node: 'never-existed' }], 20);
+		expect(candidates).toHaveLength(0);
+		expect(dropped).toBe(1);
+	});
+
+	it('will not buy the same pair two slots', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		const { candidates } = readCandidates(
+			ANA,
+			[
+				{ node: a.id, target: b.id, kind: 'merge' },
+				{ node: b.id, target: a.id, kind: 'merge' }
+			],
+			20
+		);
+		expect(candidates).toHaveLength(1);
+	});
+
+	it('ignores a kind it cannot apply, and keeps the concept', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const { candidates } = readCandidates(ANA, [{ node: a.id, kind: 'ponder' }], 20);
+		expect(candidates[0].kind).toBeUndefined();
+	});
+});
+
+describe('the shortlist a review falls back on', () => {
+	it('takes the unreachable and the unfiled first', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		const linkedAndFiled = saveNode({ name: 'Tide pools', circuits: [area.id], ownerId: ANA });
+		const other = saveNode({ name: 'Coastal ecology', circuits: [area.id], ownerId: ANA });
+		saveAssociation({ sourceId: linkedAndFiled.id, targetId: other.id, userId: ANA });
+		const stranded = saveNode({ name: 'Storm logs', ownerId: ANA });
+
+		const picked = shortlistFallback(ANA, adjacency(ANA), 1);
+		// A wide pass that returns prose should not cost the whole run: the deep
+		// read is affordable by construction, and there is a defensible shortlist
+		// to be had without a model.
+		expect(picked.map((c) => c.node.id)).toEqual([stranded.id]);
+	});
+
+	it('never reaches across an ownership boundary', () => {
+		saveNode({ name: 'Tide pools', ownerId: ANA });
+		saveNode({ name: 'Ben private concept', ownerId: BEN });
+		const picked = shortlistFallback(ANA, adjacency(ANA), 20);
+		expect(picked.map((c) => c.node.name)).not.toContain('Ben private concept');
+	});
+});
+
+describe('what has already been settled', () => {
+	it('is ordered and bounded, rather than whatever the database returned first', () => {
+		const nodes = Array.from({ length: 90 }, (_, i) =>
+			saveNode({ name: `Concept ${String(i).padStart(3, '0')}`, ownerId: ANA })
+		);
+		for (let i = 1; i < nodes.length; i++) {
+			recordProposals(
+				ANA,
+				[
+					{
+						kind: 'merge',
+						title: `An old idea about concept ${i}`,
+						node: nodes[0].id,
+						target: nodes[i].id
+					}
+				],
+				10
+			);
+		}
+		const prompt = buildHarvestPrompt(ANA, 10, 'concept');
+		// Newest first and capped at sixty. This section had no ORDER BY and then
+		// took the first two hundred, so *which* two hundred was the database's
+		// choice — and on a lattice with any history it was the largest block in
+		// the prompt, bigger than the lattice itself.
+		expect(prompt).toContain('An old idea about concept 89');
+		expect(prompt).not.toContain('An old idea about concept 1\n');
+	});
+
+	it('gives the survey ids rather than titles, since ids are what it answers in', () => {
+		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
+		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
+		saveNode({ name: 'Storm logs', ownerId: ANA });
+		recordProposals(ANA, [{ kind: 'merge', title: 'An old idea', node: a.id, target: b.id }], 10);
+		const prompt = buildSurvey(ANA, 20, null).prompt;
+		expect(prompt).toContain(`merge ${a.id}+${b.id}`);
+		// The titles bought nothing a pass answering in concept ids could use, and
+		// at two hundred rows they were ten kilobytes of it.
+		expect(prompt).not.toContain('An old idea');
+	});
+});
+
+describe('what the prompts cost to build', () => {
+	function wide(count: number) {
+		const made = Array.from({ length: count }, (_, i) =>
+			saveNode({
+				name: `Concept ${i}`,
+				description: 'A description of roughly the length a real one would have.',
+				ownerId: ANA
+			})
+		);
+		for (let i = 1; i < made.length; i++) {
+			saveAssociation({ sourceId: made[0].id, targetId: made[i].id, weight: 0.6, userId: ANA });
+		}
+		return made;
+	}
+
+	/** Counts edge reads while `build` runs. */
+	function edgeReadsDuring(build: () => void): number {
 		let edgeReads = 0;
 		const select = db.select.bind(db);
-		// Forwards the projection: `buildGroomPrompt` runs entirely under this
-		// spy, and one of its queries selects two named columns. Dropping the
-		// argument would quietly turn that into a select-*, which still happens
-		// to work and would be a trap for whoever changed it next.
+		// Forwards the projection: the builders run entirely under this spy, and
+		// one of their queries selects two named columns. Dropping the argument
+		// would quietly turn that into a select-*, which still happens to work and
+		// would be a trap for whoever changed it next.
 		const spy = vi.spyOn(db, 'select').mockImplementation(((fields?: never) => {
 			const builder = fields === undefined ? select() : select(fields);
 			const from = builder.from.bind(builder);
@@ -211,52 +571,64 @@ describe('what the prompt costs to build', () => {
 			};
 			return builder;
 		}) as never);
-
-		buildGroomPrompt(ANA, 10);
+		build();
 		spy.mockRestore();
-		// Two as it stands — the adjacency map and the orphan check — against
-		// roughly forty-two before. The headroom is for an unrelated check added
-		// later; what this catches is the read count scaling with the lattice.
-		expect(edgeReads).toBeLessThan(6);
-	});
+		return edgeReads;
+	}
 
-	it('keeps a big lattice inside its budget, and still names every concept', () => {
-		const made = wide(200);
-		const prompt = buildGroomPrompt(ANA, 10);
-		// Every concept is visible, so nothing is proposed twice...
-		for (const node of made.slice(0, 5)) expect(prompt).toContain(node.id);
-		// ...but the descriptions are rationed, so the prompt stops growing with
-		// the lattice. A review used to send all two hundred in full.
-		expect(prompt).toContain('names only');
-		expect(prompt.length).toBeLessThan(60_000);
-	});
-
-	it('gives the full description to the concepts a merge is judged from', () => {
-		const made = wide(200);
-		// The hub, which everything connects to. Merges, bridges and clusters
-		// with no way out are all read off connections, so a concept with many is
-		// exactly the one worth describing when there is not room for all.
-		expect(buildGroomPrompt(ANA, 10)).toContain(`connects to: ${made[1].id}`);
+	it('reads the connections once, not once per concept', () => {
+		const made = wide(40);
+		// `describeNode` used to call `listAssociations`, which costs a full node
+		// select *plus* a full edge select — per concept. Fifty concepts meant
+		// about a hundred and fifty full-table reads to produce one string, and
+		// it grew as the square of the lattice.
+		//
+		// Counted rather than timed: a wall-clock assertion passes on a small
+		// fixture whatever the shape of the work, which is exactly how this went
+		// unnoticed.
+		expect(edgeReadsDuring(() => buildSurvey(ANA, 20, null))).toBeLessThan(6);
+		expect(edgeReadsDuring(() => buildHarvestPrompt(ANA, 10, 'concept'))).toBeLessThan(6);
+		// And the close read costs nothing extra when it is handed the map the
+		// survey already built, which is how the run calls it.
+		const links = adjacency(ANA);
+		expect(edgeReadsDuring(() => buildConfirmPrompt(ANA, 10, [{ node: made[3] }], links))).toBe(0);
 	});
 });
 
-describe('the prompt', () => {
+describe('the harvest prompt', () => {
 	it('shows the concepts, their connections and what was already decided', () => {
 		const a = saveNode({ name: 'Tide pools', ownerId: ANA });
 		const b = saveNode({ name: 'Coastal ecology', ownerId: ANA });
 		saveAssociation({ sourceId: a.id, targetId: b.id, userId: ANA });
 		recordProposals(ANA, [{ kind: 'merge', title: 'An old idea', node: a.id, target: b.id }], 10);
 
-		const prompt = buildGroomPrompt(ANA, 10);
+		const prompt = buildHarvestPrompt(ANA, 10, 'tide pools and coastal ecology');
 		expect(prompt).toContain('Tide pools');
 		expect(prompt).toContain('connects to: coastal-ecology');
 		expect(prompt).toContain('An old idea');
 	});
 
+	it('keeps a big lattice inside its budget, and still names every concept', () => {
+		const made = Array.from({ length: 200 }, (_, i) =>
+			saveNode({
+				name: `Concept ${i}`,
+				description: 'A description of roughly the length a real one would have.',
+				ownerId: ANA
+			})
+		);
+		const prompt = buildHarvestPrompt(ANA, 10, 'a conversation about concept');
+		// Every concept is visible, so nothing is proposed twice...
+		for (const node of made.slice(0, 5)) expect(prompt).toContain(node.id);
+		// ...but the descriptions are rationed, so the prompt stops growing with
+		// the lattice.
+		expect(prompt).toContain('names only');
+		expect(prompt.length).toBeLessThan(60_000);
+	});
+
 	it('never shows another person’s lattice', () => {
 		saveNode({ name: 'Tide pools', ownerId: ANA });
 		saveNode({ name: 'Ben private concept', ownerId: BEN });
-		expect(buildGroomPrompt(ANA, 10)).not.toContain('Ben private concept');
+		expect(buildHarvestPrompt(ANA, 10, 'tide pools')).not.toContain('Ben private concept');
 	});
 });
 
@@ -646,7 +1018,10 @@ describe('the free half', () => {
 		// two descriptions and see what a string match cannot.
 		expect(detect(ANA).some((d) => d.kind === 'connect')).toBe(false);
 		expect(orphans(ANA).map((n) => n.name)).toEqual(['Bicycle repair']);
-		expect(buildGroomPrompt(ANA, 5)).toContain('CONNECTS TO NOTHING');
+		expect(buildHarvestPrompt(ANA, 5, 'bicycle repair')).toContain('CONNECTS TO NOTHING');
+		// A review says the same thing on the line rather than in a capped list,
+		// which is what lets it say it for every concept instead of thirty.
+		expect(buildSurvey(ANA, 20, null).prompt).toContain('→ nothing');
 	});
 
 	it('flags two names that look like one concept', () => {
@@ -709,15 +1084,19 @@ describe('the two modes', () => {
 		saveNode({ name: 'Seabird counts', ownerId: ANA });
 	});
 
-	it('a review reads the whole lattice, with its connections', () => {
-		const prompt = buildGroomPrompt(ANA, 10, 'review');
-		expect(prompt).toContain('A FULL REVIEW');
-		expect(prompt).toContain('connects to:');
+	it('a review reads the whole lattice’s shape, and every concept’s connections', () => {
+		const prompt = buildSurvey(ANA, 20, null).prompt;
+		expect(prompt).toContain('A SURVEY OF THE LATTICE');
 		expect(prompt).toContain('Seabird counts');
+		// Every concept, not the ones that fit in a description budget. That is
+		// the trade the wide pass makes: connections for all of them, meaning for
+		// none of them, and a second pass for the handful that earn it.
+		expect(prompt).toContain('Storm logs');
+		expect(prompt).not.toContain('rockpool surveying');
 	});
 
 	it('a harvest reads what was said, and only a slice of the lattice', () => {
-		const prompt = buildGroomPrompt(ANA, 10, 'harvest', 'we talked about rockpool surveying');
+		const prompt = buildHarvestPrompt(ANA, 10, 'we talked about rockpool surveying');
 		expect(prompt).toContain('SINCE THE LAST PASS');
 		expect(prompt).toContain('rockpool surveying');
 		// Names for the rest is all that is needed to avoid proposing a duplicate.
@@ -725,8 +1104,11 @@ describe('the two modes', () => {
 	});
 
 	it('asks for concepts on a harvest and consolidation on a review', () => {
-		expect(buildGroomPrompt(ANA, 10, 'harvest', 'x')).toContain('worth adding');
-		expect(buildGroomPrompt(ANA, 10, 'review')).toContain('near-duplicate concepts');
+		expect(buildHarvestPrompt(ANA, 10, 'x')).toContain('worth adding');
+		expect(buildSurvey(ANA, 20, null).prompt).toContain('worth a closer look');
+		expect(
+			buildConfirmPrompt(ANA, 10, [{ node: getNode('tide-pools', ANA)! }])
+		).toContain('better at answering questions');
 	});
 
 	it('a manual run is a review, a scheduled one is a harvest', async () => {
@@ -847,11 +1229,14 @@ describe('filing', () => {
 		saveNode({ name: 'Tide pools', description: 'rockpool surveying', ownerId: ANA });
 		saveNode({ name: 'Storm logs', ownerId: ANA });
 		saveNode({ name: 'Seabird counts', ownerId: ANA });
-		const prompt = buildGroomPrompt(ANA, 10, 'review');
 		// A count tells a model there is work without telling it what the work is.
-		expect(prompt).toContain('NOT YET FILED');
-		expect(prompt).toContain('Tide pools');
-		expect(prompt).toContain('rockpool surveying');
+		const harvest = buildHarvestPrompt(ANA, 10, 'rockpool surveying');
+		expect(harvest).toContain('NOT YET FILED');
+		expect(harvest).toContain('Tide pools');
+		expect(harvest).toContain('rockpool surveying');
+		// A review marks it on the concept's own line, so it cannot run out at
+		// thirty the way the list does.
+		expect(buildSurvey(ANA, 20, null).prompt).toContain('"Tide pools" {unfiled}');
 	});
 });
 

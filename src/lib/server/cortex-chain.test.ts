@@ -187,8 +187,8 @@ describe('conversation → concept → context', () => {
 		await runCortexGroom('schedule', ANA);
 		// If the activity window is wired up wrong the harvest still "works" —
 		// it just proposes from nothing, forever.
-		const { buildGroomPrompt } = await import('$lib/server/engine/cortex-groom');
-		const prompt = buildGroomPrompt(ANA, 5, 'harvest', 'a distinctive phrase about quadrat sampling');
+		const { buildHarvestPrompt } = await import('$lib/server/engine/cortex-groom');
+		const prompt = buildHarvestPrompt(ANA, 5, 'a distinctive phrase about quadrat sampling');
 		expect(prompt).toContain('quadrat sampling');
 	});
 });
