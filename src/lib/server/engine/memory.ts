@@ -21,6 +21,9 @@ const WATERMARK_KEY = 'memory.watermark';
 const LAST_RUN_KEY = 'memory.lastRun';
 const USER_ENABLED_KEY = 'memory.userEnabled';
 const MAX_ACTIVITY_CHARS = 40_000;
+/** Newest messages of one chat, and how much of the window one chat may spend. */
+const MESSAGES_PER_CHAT = 30;
+const MAX_CHARS_PER_CHAT = 6_000;
 
 export type MemoryItem = typeof memoryItems.$inferSelect;
 export type SkillCandidate = typeof skillCandidates.$inferSelect;
@@ -210,14 +213,28 @@ export function gatherActivity(userId: string, sinceMs: number): ActivityDigest 
 			.select()
 			.from(messages)
 			.where(and(eq(messages.chatId, chat.id), gt(messages.createdAt, since)))
+			// Explicitly ordered, and newest first.
+			//
+			// There was no order at all, so which thirty a busy chat contributed was
+			// the database's choice — and `.slice(0, 30)` then kept the *oldest*
+			// thirty, which is where a conversation started rather than where it got
+			// to. For a job whose whole question is "what has been said since last
+			// time", both halves of that were the wrong end.
+			.orderBy(desc(messages.seq))
 			.all();
 		if (!msgs.length) continue;
+		// Back into reading order once the newest are the ones kept: a transcript
+		// running backwards is materially harder to summarise.
+		const kept = msgs.slice(0, MESSAGES_PER_CHAT).reverse();
+		const body = kept.map((m) => `${m.role}: ${m.content.slice(0, 600)}`).join('\n');
 		parts.push(
 			`## ${chat.mode === 'code' ? 'Coding session' : 'Chat'}: ${chat.title}\n` +
-				msgs
-					.slice(0, 30)
-					.map((m) => `${m.role}: ${m.content.slice(0, 600)}`)
-					.join('\n')
+				// A per-chat ceiling, so one long conversation cannot spend the whole
+				// window. The single truncation at the end was positional, so a busy
+				// first chat could silently push every later one out of the digest.
+				(body.length > MAX_CHARS_PER_CHAT
+					? `${body.slice(0, MAX_CHARS_PER_CHAT)}\n[…truncated]`
+					: body)
 		);
 	}
 

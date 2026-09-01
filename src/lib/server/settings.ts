@@ -567,6 +567,28 @@ export interface CortexGroomSettings {
 	intervalHours: number;
 	/** Proposals one run may raise, so a first pass cannot bury the review list. */
 	maxProposalsPerRun: number;
+	/**
+	 * Tokens one groom call may spend.
+	 *
+	 * A setting rather than a constant because the old constant was 8192 and a
+	 * reasoning model spent all of it thinking about 4,860 characters of
+	 * conversation, returning nothing — and the panel's advice was to raise a
+	 * Max tokens field that does not exist anywhere in this app. A number you
+	 * cannot change is not a budget, it is a wall.
+	 *
+	 * Generous, because the failure it prevents costs a whole run and the
+	 * headroom costs nothing when it is not used: a model that has said its
+	 * piece stops, and is billed for what it wrote.
+	 */
+	maxTokens: number;
+	/**
+	 * How long one groom call may take.
+	 *
+	 * A full review of fifty concepts hit the old 180-second ceiling. Note that
+	 * a manual run is a synchronous request, so raising this past a reverse
+	 * proxy's own read timeout needs the proxy raised too — see docs/INSTALL.md.
+	 */
+	timeoutSeconds: number;
 }
 
 export const DEFAULT_CORTEX_GROOM: CortexGroomSettings = {
@@ -575,7 +597,9 @@ export const DEFAULT_CORTEX_GROOM: CortexGroomSettings = {
 	// skips the model entirely when nothing is, so a quiet day costs nothing —
 	// which is what makes a short cadence affordable at all.
 	intervalHours: 24,
-	maxProposalsPerRun: 10
+	maxProposalsPerRun: 10,
+	maxTokens: 16_384,
+	timeoutSeconds: 300
 };
 
 export const DEFAULT_CORTEX: CortexSettings = {

@@ -580,6 +580,31 @@ export function listAssociations(nodeId: string, userId: string): CortexAssociat
 	return visibleEdges(userId).filter((e) => e.sourceId === nodeId || e.targetId === nodeId);
 }
 
+/**
+ * Every concept's connections, in one pass.
+ *
+ * `listAssociations` costs a full node select plus a full edge select *per
+ * call*, which is fine for the handful a query returns and quadratic the moment
+ * something wants them for every concept. Assembling a groom prompt did exactly
+ * that: fifty concepts meant about a hundred and fifty full-table reads to
+ * produce one string.
+ *
+ * So anything looping over nodes takes the map instead. Same scoping — it is
+ * built from `visibleEdges`, which is bounded by what this reader may see — and
+ * the same answer, computed once.
+ */
+export function adjacency(userId: string): Map<string, CortexAssociation[]> {
+	const out = new Map<string, CortexAssociation[]>();
+	for (const edge of visibleEdges(userId)) {
+		for (const id of [edge.sourceId, edge.targetId]) {
+			const list = out.get(id);
+			if (list) list.push(edge);
+			else out.set(id, [edge]);
+		}
+	}
+	return out;
+}
+
 // --- retrieval --------------------------------------------------------------
 
 /**

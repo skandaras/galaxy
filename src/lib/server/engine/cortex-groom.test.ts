@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
 import { setSetting } from '$lib/server/settings';
@@ -167,6 +167,76 @@ describe('proposals', () => {
 			suggest({ title: `Suggestion ${i}`, node: 'tide-pools', target: `t-${i}` })
 		);
 		expect(recordProposals(ANA, many, 5).added).toBeLessThanOrEqual(5);
+	});
+});
+
+describe('what the prompt costs to build', () => {
+	/** A lattice big enough that a per-concept query would show up as one. */
+	function wide(count: number) {
+		const made = Array.from({ length: count }, (_, i) =>
+			saveNode({
+				name: `Concept ${i}`,
+				description: 'A description of roughly the length a real one would have.',
+				ownerId: ANA
+			})
+		);
+		for (let i = 1; i < made.length; i++) {
+			saveAssociation({ sourceId: made[0].id, targetId: made[i].id, weight: 0.6, userId: ANA });
+		}
+		return made;
+	}
+
+	it('reads the connections once, not once per concept', () => {
+		wide(40);
+		// `describeNode` used to call `listAssociations`, which costs a full node
+		// select *plus* a full edge select — per concept. Fifty concepts meant
+		// about a hundred and fifty full-table reads to produce one string, and
+		// it grew as the square of the lattice.
+		//
+		// Counted rather than timed: a wall-clock assertion passes on a small
+		// fixture whatever the shape of the work, which is exactly how this went
+		// unnoticed.
+		let edgeReads = 0;
+		const select = db.select.bind(db);
+		// Forwards the projection: `buildGroomPrompt` runs entirely under this
+		// spy, and one of its queries selects two named columns. Dropping the
+		// argument would quietly turn that into a select-*, which still happens
+		// to work and would be a trap for whoever changed it next.
+		const spy = vi.spyOn(db, 'select').mockImplementation(((fields?: never) => {
+			const builder = fields === undefined ? select() : select(fields);
+			const from = builder.from.bind(builder);
+			builder.from = (table: never) => {
+				if (table === cortexAssociations) edgeReads++;
+				return from(table);
+			};
+			return builder;
+		}) as never);
+
+		buildGroomPrompt(ANA, 10);
+		spy.mockRestore();
+		// Two as it stands — the adjacency map and the orphan check — against
+		// roughly forty-two before. The headroom is for an unrelated check added
+		// later; what this catches is the read count scaling with the lattice.
+		expect(edgeReads).toBeLessThan(6);
+	});
+
+	it('keeps a big lattice inside its budget, and still names every concept', () => {
+		const made = wide(200);
+		const prompt = buildGroomPrompt(ANA, 10);
+		// Every concept is visible, so nothing is proposed twice...
+		for (const node of made.slice(0, 5)) expect(prompt).toContain(node.id);
+		// ...but the descriptions are rationed, so the prompt stops growing with
+		// the lattice. A review used to send all two hundred in full.
+		expect(prompt).toContain('names only');
+		expect(prompt.length).toBeLessThan(60_000);
+	});
+
+	it('gives the full description to the concepts a merge is judged from', () => {
+		const made = wide(200);
+		// The hub, which everything connects to. Merges, bridges and clusters
+		// with no way out are all read off connections, so a concept with many is
+		// exactly the one worth describing when there is not room for all.
+		expect(buildGroomPrompt(ANA, 10)).toContain(`connects to: ${made[1].id}`);
 	});
 });
 
