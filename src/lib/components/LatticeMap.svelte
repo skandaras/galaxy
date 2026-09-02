@@ -26,6 +26,7 @@
 	 * interface for anyone not looking at pixels, and it is the same list a
 	 * sighted person clicks — not a hidden parallel that quietly rots.
 	 */
+	import { areaColourCss } from '$lib/cortex-colour';
 	import { isLight } from '$lib/theme';
 
 	interface MapNode {
@@ -66,6 +67,21 @@
 	} = $props();
 
 	const VIEW_KEY = 'galaxy:cortex-view';
+	const GLOW_KEY = 'galaxy:cortex-glow';
+
+	/**
+	 * How much ambience the glow carries, as a multiplier on the bloom's opacity.
+	 *
+	 * A control rather than a constant because there is no right answer to it:
+	 * how much haze reads as atmospheric rather than as fog depends on the
+	 * screen, the theme, how dense the lattice is and frankly on taste, and the
+	 * alternative to a slider is tuning a number in a source file and pushing it.
+	 * 1 is what the renderer ships with; 0 turns the bloom off and leaves the
+	 * gradient bodies, which is a legitimate way to read a crowded chart.
+	 */
+	const GLOW_MAX = 2;
+	let glow = $state(1);
+	let glowOpen = $state(false);
 
 	let canvas = $state<HTMLCanvasElement>();
 	let wrap = $state<HTMLDivElement>();
@@ -240,6 +256,24 @@
 		}
 	}
 
+	function saveGlow() {
+		try {
+			store()?.setItem(GLOW_KEY, String(glow));
+		} catch {
+			// Same bargain as the camera angle: not remembered, still applied.
+		}
+	}
+
+	function loadGlow() {
+		try {
+			const raw = store()?.getItem(GLOW_KEY);
+			const value = raw === null || raw === undefined ? NaN : Number(raw);
+			if (Number.isFinite(value)) glow = Math.max(0, Math.min(GLOW_MAX, value));
+		} catch {
+			// Nothing stored. The shipped level is the default for a reason.
+		}
+	}
+
 	function loadView() {
 		try {
 			const raw = store()?.getItem(VIEW_KEY);
@@ -267,48 +301,27 @@
 	}
 
 	/**
-	 * A hue per area, spread evenly around the wheel by the area's position in
-	 * the sorted set. Areas are what the agents' context index is grouped by, so
-	 * seeing them here is seeing what the agent sees.
-	 *
-	 * Deliberately not the theme accent: this is categorical data and one accent
-	 * cannot carry it. Lightness and saturation are fixed to stay legible on both
-	 * a near-black and a cream page.
-	 *
-	 * This used to claim a colour does not move when an unrelated area is added.
-	 * It does: sorted *position* is exactly what an insert disturbs, so filing
-	 * something under a new area that sorts first walks every hue along one slot.
-	 * Hashing the id instead would fix it and would also repaint every map that
-	 * exists today, which is a strange thing to do to somebody who asked for a
-	 * colour picker — and the picker is the better answer anyway, because it
-	 * fixes the case hashing does not: two areas landing on hues too close to
-	 * tell apart. So the wheel stays as it is, and a colour that matters is one
-	 * you set.
-	 *
-	 * Computed over the ids actually *on nodes* rather than over the areas still
-	 * without a colour, so choosing one area's colour cannot shift another's.
-	 */
-	const areaHues = $derived.by(() => {
-		const seen = [...new Set(nodes.flatMap((n) => n.circuits ?? []))].sort();
-		return new Map(seen.map((id, i) => [id, Math.round((i * 360) / Math.max(seen.length, 1))]));
-	});
-
-	/**
 	 * The one place an area becomes a colour: a colour somebody chose if there is
-	 * one, and the generated hue otherwise.
+	 * one, and the hue hashed from its id otherwise.
 	 *
 	 * One function because there are two call sites — the nodes and the cluster
 	 * labels — and they were separately-written copies of the same `hsl()`
 	 * string. Two copies of a colour rule is one map that disagrees with itself.
+	 *
+	 * The generated half moved out to `cortex-colour.ts`, where the panel reads
+	 * it too: the dots beside the concepts and the swatch on each group heading
+	 * have to be the colour the chart is drawing, and there is only one way to
+	 * guarantee that. It is hashed from the id rather than taken from a position
+	 * on a wheel, so it cannot shift when another area is added — see that file
+	 * for what hashing costs in exchange.
 	 */
-	function colourForArea(id: string): string | null {
-		const chosen = areaColours?.get(id);
-		if (chosen) return chosen;
-		const hue = areaHues.get(id);
-		return hue === undefined ? null : `hsl(${hue} 52% 62%)`;
+	function colourForArea(id: string): string {
+		return areaColours?.get(id) || areaColourCss(id);
 	}
 
 	function areaColour(node: MapNode): string | null {
+		// Null only for a concept filed under nothing, which is what leaves it
+		// drawn in `--fg-dim` — a generated colour always exists for a real area.
 		const first = node.circuits?.[0];
 		return first ? colourForArea(first) : null;
 	}
@@ -356,20 +369,39 @@
 	/**
 	 * How brightness falls away from the centre of a node.
 	 *
-	 * The old sprite held its colour flat to 35% of its radius and only then
+	 * The original sprite held its colour flat to 35% of its radius and only then
 	 * began to fade, which put a hard step somewhere between one and three node
 	 * radii out — and *that step* was the thing that read as the glow starting
-	 * outside the node instead of coming from inside it. This is a plain
-	 * inverse-square-ish falloff with no plateau: brightest exactly at the
-	 * centre, decaying the whole way out.
+	 * outside the node instead of coming from inside it. So there is no plateau
+	 * here and never will be: brightest exactly at the centre, decaying the whole
+	 * way out.
+	 *
+	 * What the plateau *was* carrying, though, was a lot of soft light in the
+	 * mid field, and the first curve that replaced it fell away far too quickly —
+	 * around a fifth of the old brightness at half the radius, which read as
+	 * bare. This one keeps the same two opening stops and fattens everything
+	 * after them, so the atmosphere comes back without the ring.
+	 *
+	 * Those opening stops are load-bearing rather than incidental. The bloom is
+	 * stamped *over* the body, and the body covers the sprite out to `t = 1 /
+	 * (2.6 + 6.5 · strength)` — about 0.38 for an orphan and 0.11 for the
+	 * brightest hub. Fattening the curve from t=0 would therefore have brightened
+	 * the inside of every node along with the air around it, and the inside was
+	 * already right.
+	 *
+	 * Ends at exactly 0. A profile that stops just above zero is a sprite with a
+	 * faint hard circular edge, and stamped a few hundred times under `lighter`
+	 * that edge is clearly visible.
 	 */
 	const BLOOM_PROFILE: [number, number][] = [
 		[0, 1],
 		[0.08, 0.72],
-		[0.18, 0.42],
-		[0.32, 0.2],
-		[0.5, 0.07],
-		[0.75, 0.015],
+		[0.18, 0.44],
+		[0.28, 0.32],
+		[0.4, 0.23],
+		[0.55, 0.15],
+		[0.72, 0.08],
+		[0.88, 0.03],
 		[1, 0]
 	];
 
@@ -587,12 +619,17 @@
 			// white almost at once and the glow stops carrying degree at all, so it
 			// multiplies instead: the same compounding, pointed the other way, which
 			// is also what a glow looks like printed on paper.
-			const halo = sprite('bloom', colour, light);
+			const halo = glow > 0 ? sprite('bloom', colour, light) : null;
 			if (halo && (strength > 0 || selected)) {
-				const size = r * (2.2 + strength * 6) * 2;
+				const size = r * (2.6 + strength * 6.5) * 2;
 				ctx.globalCompositeOperation = light ? 'multiply' : 'lighter';
+				// The light page pulls the other way. `multiply` over cream means a
+				// fatter tail lays down *more* ink rather than less light, so the
+				// same coefficients that restore atmosphere on black would smudge
+				// there — its alpha comes down as the dark one goes up.
 				ctx.globalAlpha =
-					(light ? 0.12 + strength * 0.4 : 0.1 + strength * 0.42) *
+					(light ? 0.11 + strength * 0.36 : 0.11 + strength * 0.44) *
+					glow *
 					(selected ? 1.35 : 1) *
 					Math.min(p.k, 1.2);
 				ctx.drawImage(halo, p.sx - size / 2, p.sy - size / 2, size, size);
@@ -632,7 +669,7 @@
 
 		// Zoomed far enough out that node labels are gone, the areas are what is
 		// left to navigate by — drawn at the centre of mass of each one's nodes.
-		if (scale <= 0.55 && areaHues.size) {
+		if (scale <= 0.55) {
 			const centres = new Map<string, { x: number; y: number; n: number }>();
 			for (const node of nodes) {
 				const id = node.circuits?.[0];
@@ -654,7 +691,7 @@
 				// was the one reader that still did.
 				const label = areaNames?.get(id);
 				if (!label) continue;
-				ctx.fillStyle = colourForArea(id) ?? dim;
+				ctx.fillStyle = colourForArea(id);
 				ctx.globalAlpha = 0.85;
 				ctx.fillText(label, c.x / c.n, c.y / c.n);
 			}
@@ -758,6 +795,7 @@
 		void edges.length;
 		if (!ready) {
 			loadView();
+			loadGlow();
 			fit();
 		} else {
 			schedule();
@@ -778,6 +816,7 @@
 		// next pan.
 		void areaColours;
 		void areaNames;
+		void glow;
 		schedule();
 	});
 
@@ -816,7 +855,36 @@
 			>
 			<button class="ctl" onclick={flatten}>Flat</button>
 			<button class="ctl" onclick={fit}>Fit</button>
+			<!-- Behind a toggle rather than always out: the other three are things
+			     you reach for while reading the chart, and this is one you set once
+			     and then leave alone for months. -->
+			<button
+				class="ctl"
+				class:on={glowOpen}
+				aria-expanded={glowOpen}
+				onclick={() => (glowOpen = !glowOpen)}>Glow</button
+			>
 		</div>
+		{#if glowOpen}
+			<div class="glow-tune">
+				<label>
+					<span class="sr-only">Glow strength</span>
+					<input
+						type="range"
+						min="0"
+						max={GLOW_MAX}
+						step="0.05"
+						value={glow}
+						oninput={(e) => (glow = Number(e.currentTarget.value))}
+						onchange={saveGlow}
+					/>
+				</label>
+				<!-- Live while dragging, because the number is meaningless next to
+				     the chart it is changing — but only written to storage on
+				     release, or a drag is fifty writes. -->
+				<span class="num">{Math.round(glow * 100)}%</span>
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -864,5 +932,33 @@
 	.ctl.on {
 		border-color: var(--accent);
 		color: var(--heading);
+	}
+	.glow-tune {
+		position: absolute;
+		right: 0.75rem;
+		top: 2.4rem;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.35rem 0.6rem;
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
+		background: var(--bg-pane);
+		border: 1px solid var(--control-border);
+	}
+	.glow-tune input {
+		width: 9rem;
+		accent-color: var(--accent);
+	}
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
 	}
 </style>

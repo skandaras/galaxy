@@ -1404,6 +1404,41 @@ export function normaliseColour(raw: unknown): string | null {
 	return /^#[0-9a-f]{6}$/.test(value) ? value : null;
 }
 
+/**
+ * The colour a new area gets, cycled so two areas are never handed the same one
+ * until the wheel runs out — the same trick, and the same reason, as
+ * `PROJECT_COLOURS` in `boards.ts`: a new one should be distinguishable without
+ * anybody opening a picker first.
+ *
+ * Ordered by maximum separation rather than around the wheel, so the first two
+ * areas somebody makes are opposites rather than neighbours, and the first six
+ * are the primary and secondary hexagon.
+ *
+ * Assigned and stored rather than derived from the id, and that is the whole
+ * point. A derived colour is stable but cannot be *spread*: hues from a hash
+ * are uniform, and uniform points on a circle clump — with five areas, two land
+ * within 25 degrees of each other about 84% of the time, which is two areas the
+ * same colour. Only something that knows what the other areas already are can
+ * avoid that, and storing the answer is what keeps it from moving afterwards.
+ *
+ * All at the saturation and lightness the map has always used, which were
+ * chosen to stay legible against both a near-black and a cream page.
+ */
+const AREA_COLOURS = [
+	'#d06c6c',
+	'#6cd0d0',
+	'#d0d06c',
+	'#6c6cd0',
+	'#6cd06c',
+	'#d06cd0',
+	'#d09e6c',
+	'#6c9ed0',
+	'#9ed06c',
+	'#9e6cd0',
+	'#6cd09e',
+	'#d06c9e'
+];
+
 export function saveCircuit(opts: {
 	id?: string;
 	name: string;
@@ -1430,7 +1465,14 @@ export function saveCircuit(opts: {
 		ownerId: existing ? existing.ownerId : opts.ownerId,
 		name,
 		description: opts.description ?? existing?.description ?? '',
-		colour: opts.colour ?? existing?.colour ?? '',
+		// A new area is handed the next colour in the cycle; an existing one keeps
+		// what it has unless this call is setting it. Assigning at creation is what
+		// makes the colours *spread*, and storing it is what makes them stay put
+		// when the next area arrives.
+		colour:
+			opts.colour ??
+			existing?.colour ??
+			AREA_COLOURS[listCircuits(opts.ownerId).length % AREA_COLOURS.length],
 		createdAt: existing?.createdAt ?? new Date()
 	};
 	if (existing) {

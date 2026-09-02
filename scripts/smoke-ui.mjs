@@ -915,6 +915,62 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 		'Printing',
 		2
 	]);
+	// The reason the generated hue is hashed from the id rather than taken from a
+	// slot on a wheel: adding an area must not repaint the ones already there.
+	const paintOf = (name) =>
+		page.evaluate((n) => {
+			const head = [...document.querySelectorAll('.group-name')].find((e) =>
+				e.textContent.includes(n)
+			);
+			return head?.querySelector('.dot')?.style.getPropertyValue('--dot') ?? '';
+		}, name);
+	const printingBefore = await paintOf('Printing');
+	check('a generated colour is there to compare', printingBefore.length > 0);
+	// Sorts before both existing areas, which under the old slot rule was exactly
+	// the insert that walked every other hue along one.
+	await as(ALICE, '/api/cortex/nodes', {
+		method: 'POST',
+		body: JSON.stringify({
+			name: 'Anchoring',
+			description: 'a new area that sorts first',
+			circuits: [
+				(
+					await as(ALICE, '/api/cortex/circuits', {
+						method: 'POST',
+						body: JSON.stringify({ name: 'Aardvark husbandry' })
+					})
+				).id
+			]
+		})
+	});
+	await page.goto(B + '/cortex');
+	await page.locator('.map canvas').waitFor();
+	await page.waitForTimeout(900);
+	check('adding an area leaves the others’ colours alone', await paintOf('Printing'), printingBefore);
+
+	// The glow is a matter of taste and of screen, so it is a control rather than
+	// a constant. Turning it right down has to visibly change the chart, or the
+	// slider is decoration.
+	await page.getByRole('button', { name: 'Glow' }).click();
+	const slider = page.locator('.glow-tune input[type=range]');
+	check('the glow slider opens', await slider.isVisible());
+	const litBefore = await inked();
+	await slider.fill('0');
+	await page.waitForTimeout(400);
+	const litOff = await inked();
+	check('turning the glow down dims the chart', litOff < litBefore);
+	check('but the concepts are still drawn', litOff > 200);
+	await slider.fill('2');
+	await page.waitForTimeout(400);
+	check('and turning it up brightens it', (await inked()) > litBefore);
+	check(
+		'the level is remembered',
+		await page.evaluate(() => localStorage.getItem('galaxy:cortex-glow')),
+		'2'
+	);
+	await slider.fill('1');
+	await page.waitForTimeout(300);
+
 	check('the map is still quiet after all that', problems, []);
 	await shot('cortex-map');
 }
