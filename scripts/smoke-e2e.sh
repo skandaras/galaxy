@@ -276,6 +276,18 @@ check "research runs a second, narrowed round" "$RSTREAM" '"name":"searching","d
 check "research shows each query it ran" "$RSTREAM" '"type":"search","query":"'
 check "research shows what each query found" "$RSTREAM" '"results":[{"title":"Mock result one"'
 check "research shows the triage funnel" "$RSTREAM" '"name":"triage","detail":"'
+# The one thing the fixed pipeline could not previously do: a source citing
+# where it got its numbers is a better lead than any query, and round two opens
+# it directly instead of searching for it.
+check "research follows a link cited by what it read" "$RSTREAM" 'Following 1 link cited by what round 1 read'
+check "and the followed page is opened" "$RSTREAM" 'followed)'
+# An address in the question is read, not searched for — the same rule the chat
+# prompt has always stated and research had no way to honour.
+UCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+UJOB=$(api -X POST $B/api/chats/$UCHAT/messages -d "{\"content\":\"what does http://127.0.0.1:$MOCK_PORT/page/spec say about nebulae?\",\"deepResearch\":true}" | jqn .jobId)
+USTREAM=$(curl -sN --max-time 60 $B/api/jobs/$UJOB/stream)
+check "an address in the question is read rather than searched for" "$USTREAM" 'from your message rather than searching'
+check "and it is opened as a followed page" "$USTREAM" 'followed)'
 
 # A consolidation that fails in round one used to end the whole run: round one
 # has no brief, so no gap queries, so the "a lost round is not a lost run"
