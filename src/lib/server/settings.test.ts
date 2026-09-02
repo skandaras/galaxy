@@ -47,6 +47,15 @@ describe('migrateWebSearchSettings', () => {
 		const out = migrateWebSearchSettings({ provider: 'brave', apiKeyEnc: 'enc', maxResults: 5 });
 		expect(out).toMatchObject({ provider: 'brave', apiKeyEnc: 'enc' });
 	});
+
+	it('gives every existing row the one-search-per-model-turn rule', () => {
+		// v2 added the field, so there is no stored value to protect: a row that
+		// predates it has not chosen anything, and the default is the only
+		// reading of "absent" that means something.
+		const out = migrateWebSearchSettings({ provider: 'brave', maxSearchesPerTurn: 6 });
+		expect(out?.searchesPerStep).toBe(1);
+		expect(out?.maxSearchesPerTurn).toBe(6);
+	});
 });
 
 describe('normaliseWebSearchSettings', () => {
@@ -55,6 +64,8 @@ describe('normaliseWebSearchSettings', () => {
 		expect(normaliseWebSearchSettings({ maxResults: 500 }).maxResults).toBe(20);
 		expect(normaliseWebSearchSettings({ maxResults: 0 }).maxResults).toBe(1);
 		expect(normaliseWebSearchSettings({ maxSearchesPerTurn: -3 }).maxSearchesPerTurn).toBe(1);
+		expect(normaliseWebSearchSettings({ searchesPerStep: 99 }).searchesPerStep).toBe(5);
+		expect(normaliseWebSearchSettings({ searchesPerStep: 0 }).searchesPerStep).toBe(1);
 		expect(normaliseWebSearchSettings({ timeoutMs: 10 }).timeoutMs).toBe(1_000);
 	});
 
@@ -108,5 +119,34 @@ describe('migrateResearchSettings', () => {
 		const out = migrateResearchSettings({ maxPages: 6, iterationCap: 2 });
 		expect(out?.maxRounds).toBe(3);
 		expect(out).not.toHaveProperty('iterationCap');
+	});
+
+	it('trades breadth for rounds on a row still holding the old defaults', () => {
+		// v2 — effort buys more chances to think rather than a wider sweep of the
+		// same blind guess, and a round narrow enough to answer one thing is what
+		// leaves the next round something to aim at.
+		const out = migrateResearchSettings({
+			maxQueries: 4,
+			maxRounds: 4,
+			maxSearchesPerRun: 16,
+			modelTriage: false
+		});
+		expect(out).toMatchObject({
+			maxQueries: 2,
+			maxRounds: 6,
+			maxSearchesPerRun: 20,
+			modelTriage: true
+		});
+	});
+
+	it('leaves a width someone chose for themselves', () => {
+		const out = migrateResearchSettings({ maxQueries: 6, maxRounds: 3 });
+		expect(out).toMatchObject({ maxQueries: 6, maxRounds: 3 });
+	});
+
+	it('runs once, so a later choice of the old width survives the next boot', () => {
+		const first = migrateResearchSettings({ maxQueries: 4, maxRounds: 4 });
+		expect(first).toMatchObject({ maxQueries: 2, maxRounds: 6 });
+		expect(migrateResearchSettings({ ...first!, maxQueries: 4 })).toBeNull();
 	});
 });

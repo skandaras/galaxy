@@ -64,6 +64,16 @@ export interface LoopTool {
 	 * despite being reads.
 	 */
 	parallelSafe?: boolean;
+	/**
+	 * Called once before each model round-trip's calls are executed, so a tool
+	 * can reset state scoped to one round-trip rather than to the whole turn.
+	 *
+	 * The per-turn closure a tool is built in (see `webSearchTool`) is the right
+	 * home for an allowance that refills per message. It is the wrong home for a
+	 * rule about what may happen *between* two model turns, because the closure
+	 * cannot see where one round-trip ends and the next begins. This is that seam.
+	 */
+	beginStep?: () => void;
 }
 
 /**
@@ -150,11 +160,21 @@ const WRAP_UP_AT = 2;
  * budget on a handful of pages and stopped with nothing to show. Saying it is
  * worth more than raising the cap.
  */
-export function turnBudgetNote(maxIterations: number): string {
+export function turnBudgetNote(maxIterations: number, hasSearch = false): string {
 	return [
 		'',
 		`[Turn budget: this reply may take up to ${maxIterations} model turns]`,
 		'One turn can call several tools at once, and they all run before you are asked again. Batch independent calls — every URL you need, every file you want to read — into a single turn rather than spending a turn on each.',
+		// Said only where there is a web_search to say it about, and said here
+		// because this note is what the model actually reads: the tool
+		// description and the task prompt both already asked for a deliberate
+		// search, and both lost to the batching line above. Two instructions
+		// that disagree are decided by the loudest, not the most correct.
+		...(hasSearch
+			? [
+					'Searching is the exception, and it is not an economy you are giving up. A search is a question you ask so that its answer can shape the next one, so run one query, read what it returns, and let that decide what you search for next. Two queries written before either has come back are two guesses.'
+				]
+			: []),
 		'If the work will not fit, answer with what you have and say plainly what you could not check.'
 	].join('\n');
 }
@@ -481,7 +501,12 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	if (toolDefs.length && messages[0]?.role === 'system' && typeof messages[0].content === 'string') {
 		messages[0] = {
 			...messages[0],
-			content: messages[0].content + turnBudgetNote(opts.maxIterations)
+			content:
+				messages[0].content +
+				turnBudgetNote(
+					opts.maxIterations,
+					opts.tools.some((t) => t.def.name === 'web_search')
+				)
 		};
 	}
 
@@ -632,6 +657,9 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		pushChunk(job, { type: 'step', id: stepId, label, status: 'running', consumedText, note });
 
 		messages.push({ role: 'assistant', content: iterationText, tool_calls: toolCalls });
+		// Round-trip boundary. A tool that limits what one round-trip may do —
+		// rather than what one turn may do — learns here that a new one has begun.
+		for (const tool of opts.tools) tool.beginStep?.();
 		// The prompt tells the model to batch independent calls into one turn,
 		// so honour it: consecutive parallel-safe calls run together, and anything
 		// else is a barrier that runs alone in the order asked for. Under the
@@ -784,7 +812,7 @@ export function batchToolCalls(
  * input order. `fn` is expected never to reject — executeToolCall reports a
  * failure as a value — so one bad call cannot strand the rest of a batch.
  */
-async function runBounded<T, R>(
+export async function runBounded<T, R>(
 	items: T[],
 	limit: number,
 	fn: (item: T) => Promise<R>

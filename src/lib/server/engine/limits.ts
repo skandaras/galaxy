@@ -93,6 +93,16 @@ export const chatMaxSteps = () => num('CHAT_MAX_STEPS', 12);
 export const searchConcurrency = () => num('SEARCH_CONCURRENCY', 3);
 
 /**
+ * Pages one research round may fetch at once.
+ *
+ * Same reasoning as `searchConcurrency`, one step further down the pipeline:
+ * a round that opens ten pages simultaneously is ten near-simultaneous requests
+ * from one address, and unlike the search engines these are the sites the answer
+ * will actually rest on — the ones it can least afford to be blocked by.
+ */
+export const pageReadConcurrency = () => num('PAGE_READ_CONCURRENCY', 3);
+
+/**
  * Gap between searches once a provider has said it is being asked too often.
  *
  * Deliberately slow: by the time this engages an engine has already refused,

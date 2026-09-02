@@ -12,6 +12,8 @@
 	interface Budget {
 		rounds: number;
 		queriesPerRound: number;
+		/** Always 1: the opening round is the only one planned before anything came back. */
+		openingQueries: number;
 		pagesPerRound: number;
 		searchBudget: number;
 	}
@@ -144,7 +146,10 @@
 					pages a round
 				</p>
 			{/if}
-			<p class="hint">Each round reads what it found, then searches the gaps.</p>
+			<p class="hint">
+				It opens with one search to see how the subject is covered, then each round reads what it
+				found and searches the gaps. More effort buys more rounds, not wider ones.
+			</p>
 			{#if collapsed && budget}
 				<p class="hint warn">
 					Admin caps research at {budget.rounds}

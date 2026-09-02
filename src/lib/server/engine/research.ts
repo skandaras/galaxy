@@ -30,7 +30,8 @@ import {
 	type LiveJob
 } from './jobs';
 import type { RunToolCall } from '$lib/run-timeline';
-import { streamWithIdleTimeout } from './loop';
+import { pageReadConcurrency } from './limits';
+import { runBounded, streamWithIdleTimeout } from './loop';
 import {
 	StreamTimeoutError,
 	type CompletionResult,
@@ -242,7 +243,7 @@ async function runResearch(
 		cfg,
 		track,
 		defaultLanguage,
-		{ maxQueries: budget.queriesPerRound, signal: job.controller.signal }
+		{ maxQueries: budget.openingQueries, signal: job.controller.signal }
 	);
 	const queries = plan.queries;
 	if (plan.fellBack) {
@@ -349,11 +350,14 @@ async function runResearch(
 					name: 'triage',
 					detail: `${candidates} found → ${pool} shortlisted → ${opened} opened`
 				}),
-			// Gated on open gaps as well as pool size: that means round two or
-			// later, where "which of these answers *this* hole" is a judgement
-			// grounded in something the run actually found.
+			// Deliberately not gated on open gaps any more. That gate meant round
+			// two or later — "which of these answers *this* hole" being a judgement
+			// grounded in something the run had found. But round one is now the
+			// orienting round: one query, twenty results, and the whole question of
+			// which of them show how the subject is actually covered. That is where
+			// choosing well matters most, and it was the round this excluded.
 			chooser:
-				cfg.modelTriage && brief.gaps.length
+				cfg.modelTriage
 					? (pool, max) =>
 							triagePages({
 								choice,
@@ -381,6 +385,34 @@ async function runResearch(
 					: ''
 			}`
 		});
+
+		// A lost opening round is not a lost run — the same rule the consolidation
+		// failures below observe. Widen once and carry on.
+		if (
+			shouldWidenAfterOpening({
+				round,
+				rounds: budget.rounds,
+				evidenceCount: evidence.length,
+				aborted: job.controller.signal.aborted
+			})
+		) {
+			const wider = dedupeQueries(
+				(await planQueries(choice, systemPrompt, question, cfg, track, defaultLanguage, {
+					maxQueries: budget.queriesPerRound,
+					signal: job.controller.signal
+				})).queries,
+				ranQueries
+			);
+			if (wider.length) {
+				pushChunk(job, {
+					type: 'notice',
+					text: `The opening search found nothing — widening to ${plural(wider.length, 'query', 'queries')} rather than giving up on the question.`
+				});
+				event('research.plan', 'ok', 0, { widened: true, queries: wider.length });
+				pending = wider;
+				continue;
+			}
+		}
 
 		const stop = shouldStopAfterRound({
 			round,
@@ -811,6 +843,16 @@ export interface RoundBudget {
 	/** The admin ceiling, so a collapsed range can name the knob that caps it. */
 	roundCeiling: number;
 	queriesPerRound: number;
+	/**
+	 * Queries the *first* round may make, before anything has come back.
+	 *
+	 * One. Round one is the only round planned blind — there is no brief, no
+	 * source register and nothing to aim at, so every query past the first is a
+	 * guess about a subject the run has not seen yet. Its job is to show how the
+	 * subject is actually covered so round two can be aimed; breadth here buys
+	 * four shallow readings of the same guess instead.
+	 */
+	openingQueries: number;
 	pagesPerRound: number;
 	/** Searches the whole run may make, across every round. */
 	searchBudget: number;
@@ -829,15 +871,21 @@ export function roundBudget(cfg: ResearchSettings, effort: ResearchEffort): Roun
 	const rounds = scale(roundCeiling, 1);
 	const queriesPerRound = scale(maxQueries, 2);
 	const pagesPerRound = scale(maxPages, 2);
+	const openingQueries = Math.min(1, queriesPerRound);
 	return {
 		effort,
 		rounds,
 		roundCeiling,
 		queriesPerRound,
+		openingQueries,
 		pagesPerRound,
 		// Two independent ceilings — what these rounds could actually spend, and
-		// the admin's absolute per-run cap. Whichever binds first wins.
-		searchBudget: Math.max(1, Math.min(rounds * queriesPerRound, scale(maxSearches, 1)))
+		// the admin's absolute per-run cap. Whichever binds first wins. The first
+		// round is counted separately because it is narrower than the rest.
+		searchBudget: Math.max(
+			1,
+			Math.min(openingQueries + (rounds - 1) * queriesPerRound, scale(maxSearches, 1))
+		)
 	};
 }
 
@@ -915,6 +963,29 @@ export function shouldStopAfterRound(s: {
 	if (!s.freshCount) return 'no-new-sources';
 	if (s.searchesLeft <= 0) return 'search-budget';
 	return null;
+}
+
+/**
+ * Whether an empty opening round should widen rather than end the run.
+ *
+ * The opening round is one query, so "found nothing" is now a thing one badly
+ * chosen guess can produce — where four queries made it near-proof that nothing
+ * was indexed. Pure and exported for the same reason `shouldStopAfterRound` is:
+ * this is a loop exit condition, and it should be testable without a job, a
+ * database or a network.
+ *
+ * Narrow on purpose. Only round one, only when there is a later round to widen
+ * into, and only on *no* evidence at all — a page that failed to fetch still
+ * leaves its search snippet behind, so this fires when the search itself came
+ * back empty, not when the reading went badly.
+ */
+export function shouldWidenAfterOpening(s: {
+	round: number;
+	rounds: number;
+	evidenceCount: number;
+	aborted: boolean;
+}): boolean {
+	return s.round === 1 && s.rounds > 1 && s.evidenceCount === 0 && !s.aborted;
 }
 
 /**
@@ -1376,6 +1447,13 @@ export async function planQueries(
 	opts: { maxQueries?: number; signal?: AbortSignal } = {}
 ): Promise<PlanOutcome> {
 	const maxQueries = Math.max(1, opts.maxQueries ?? cfg.maxQueries);
+	// The opening round asks for something different in kind, not just fewer of
+	// the same thing. Nothing has come back yet, so a query written here cannot
+	// be aimed — the useful thing it can do is show the run where to aim next.
+	const brief =
+		maxQueries === 1
+			? `RESEARCH-PLAN: Write the ONE web-search query this research should open with. Its job is not to answer the question — later rounds do that — but to show how the subject is actually covered: what it is called, who writes about it, and where the primary sources sit. Prefer the plain central wording over a clever narrow one, because a narrow opening query hides the coverage it was meant to reveal. ${languageBrief(cfg)}`
+			: `RESEARCH-PLAN: Produce up to ${maxQueries} focused web-search queries for researching this question. Cover its distinct angles rather than rephrasing it — later rounds will narrow onto whatever these leave open. ${languageBrief(cfg)}`;
 	const ask = (maxTokens: number) =>
 		completeIdleBounded(
 			choice,
@@ -1384,7 +1462,7 @@ export async function planQueries(
 					{ role: 'system', content: systemPrompt },
 					{
 						role: 'user',
-						content: `RESEARCH-PLAN: Produce up to ${maxQueries} focused web-search queries for researching this question. Cover its distinct angles rather than rephrasing it — later rounds will narrow onto whatever these leave open. ${languageBrief(cfg)} Reply ONLY with JSON: {"queries":[{"q":"…","language":"de"}]} — use "" for language when no constraint is wanted.\n\nQuestion: ${question}`
+						content: `${brief} Reply ONLY with JSON: {"queries":[{"q":"…","language":"de"}]} — use "" for language when no constraint is wanted.\n\nQuestion: ${question}`
 					}
 				],
 				maxTokens
@@ -1809,8 +1887,11 @@ export async function readPages(
 	});
 
 	let toRead = triage.picked;
-	// Only worth asking when there is a real choice to make.
-	if (deps.chooser && triage.pool.length >= limit * 3) {
+	// Only worth asking when there is a real choice to make — but a choice is any
+	// pool bigger than the number that can be opened. The old `limit * 3` was
+	// sized for wide rounds; narrow ones rarely clear it, so the judgement was
+	// gated out of exactly the rounds built around judgement.
+	if (deps.chooser && triage.pool.length > limit) {
 		const startedAt = Date.now();
 		const chosen = await deps.chooser(triage.pool, limit);
 		event('research.triage.model', chosen.length ? 'ok' : 'error', Date.now() - startedAt, {
@@ -1828,60 +1909,59 @@ export async function readPages(
 
 	const readPage = deps.readPage ?? fetchPageText;
 	let n = existing.length;
-	const settled = await Promise.allSettled(
-		toRead.map(async (r): Promise<Omit<Evidence, 'n'> | null> => {
-			const started = Date.now();
-			let retried = false;
-			const base = { title: r.title || r.url, url: r.url };
-			const attempt = async () => {
-				const excerpt = (await readPage(r.url, timeoutMs)).trim();
-				// A 200 that extracts to nothing is not a read page — it is a JS
-				// shell or a paywall — and passing it on as an empty excerpt gave
-				// synthesis a citable URL with nothing behind it.
-				if (!excerpt) throw new PageFetchError('no-text', 'No readable text on the page');
-				return excerpt;
-			};
+	// Bounded, for the same reason searches are (see searchConcurrency): a dozen
+	// simultaneous fetches from one address is a pattern no browser produces, and
+	// these are the sites the answer is going to rest on. `readOne` returns null
+	// rather than throwing, which is what runBounded's contract asks for.
+	const read = await runBounded(toRead, pageReadConcurrency(), readOne);
+	return read.filter((v): v is Omit<Evidence, 'n'> => v !== null).map((v) => ({ ...v, n: ++n }));
+
+	/** Never throws: a page that could not be read degrades to its snippet, or to nothing. */
+	async function readOne(r: SearchResult): Promise<Omit<Evidence, 'n'> | null> {
+		const started = Date.now();
+		let retried = false;
+		const base = { title: r.title || r.url, url: r.url };
+		const attempt = async () => {
+			const excerpt = (await readPage(r.url, timeoutMs)).trim();
+			// A 200 that extracts to nothing is not a read page — it is a JS
+			// shell or a paywall — and passing it on as an empty excerpt gave
+			// synthesis a citable URL with nothing behind it.
+			if (!excerpt) throw new PageFetchError('no-text', 'No readable text on the page');
+			return excerpt;
+		};
+		try {
+			let excerpt: string;
 			try {
-				let excerpt: string;
-				try {
-					excerpt = await attempt();
-				} catch (err) {
-					// One more go, and only for the classes worth it. Every other
-					// flaky dependency here already fails over; the one talking to
-					// the open web had nothing.
-					if (!isRetryableFetch(err)) throw err;
-					await new Promise((r2) => setTimeout(r2, RETRY_BACKOFF_MS));
-					excerpt = await attempt();
-					retried = true;
-				}
-				event('fetch_page', 'ok', Date.now() - started, {
-					url: r.url,
-					chars: excerpt.length,
-					...(retried ? { retried: true } : {})
-				});
-				return { ...base, excerpt, kind: 'page' as const };
+				excerpt = await attempt();
 			} catch (err) {
-				const { reason, detail } = classifyFetchError(err);
-				event('fetch_page', 'error', Date.now() - started, {
-					url: r.url,
-					reason,
-					error: detail,
-					...(err instanceof PageFetchError && err.status ? { status: err.status } : {}),
-					...(retried ? { retried: true } : {})
-				});
-				const snippet = (r.snippet ?? '').trim();
-				// Neither page nor snippet is a source in name only.
-				return snippet ? { ...base, excerpt: snippet, kind: 'snippet' as const, failure: reason } : null;
+				// One more go, and only for the classes worth it. Every other
+				// flaky dependency here already fails over; the one talking to
+				// the open web had nothing.
+				if (!isRetryableFetch(err)) throw err;
+				await new Promise((r2) => setTimeout(r2, RETRY_BACKOFF_MS));
+				excerpt = await attempt();
+				retried = true;
 			}
-		})
-	);
-	return settled
-		.filter(
-			(s): s is PromiseFulfilledResult<Omit<Evidence, 'n'> | null> => s.status === 'fulfilled'
-		)
-		.map((s) => s.value)
-		.filter((v): v is Omit<Evidence, 'n'> => v !== null)
-		.map((v) => ({ ...v, n: ++n }));
+			event('fetch_page', 'ok', Date.now() - started, {
+				url: r.url,
+				chars: excerpt.length,
+				...(retried ? { retried: true } : {})
+			});
+			return { ...base, excerpt, kind: 'page' as const };
+		} catch (err) {
+			const { reason, detail } = classifyFetchError(err);
+			event('fetch_page', 'error', Date.now() - started, {
+				url: r.url,
+				reason,
+				error: detail,
+				...(err instanceof PageFetchError && err.status ? { status: err.status } : {}),
+				...(retried ? { retried: true } : {})
+			});
+			const snippet = (r.snippet ?? '').trim();
+			// Neither page nor snippet is a source in name only.
+			return snippet ? { ...base, excerpt: snippet, kind: 'snippet' as const, failure: reason } : null;
+		}
+	}
 }
 
 /**
@@ -1962,7 +2042,8 @@ export async function consolidate(args: {
 			`gaps: what the question still needs and no source has answered. Write each one specifically enough that a web search can be made of it as it stands.`,
 			`conflicts: where sources disagree, naming both numbers.`,
 			`sufficient: true only when the remaining gaps could not change the answer.`,
-			`next_queries: up to ${args.maxQueries} searches that would close the biggest gaps. Do not repeat these, which have already been run: ${args.ranQueries.map((q) => `"${q}"`).join(', ')}. ${languageBrief(cfg)}`,
+			`Rounds continue while gaps remain, so this is not your last chance at the question: what you leave open here is what the next round searches. Establishing one thing properly beats touching every gap shallowly.`,
+			`next_queries: at most ${args.maxQueries}, and prefer one. Write the search that would most change this brief if it came back the other way — the gap the rest of the answer depends on — rather than one query per gap. Do not repeat these, which have already been run: ${args.ranQueries.map((q) => `"${q}"`).join(', ')}. ${languageBrief(cfg)}`,
 			`Reply ONLY with JSON: {"findings":[{"claim":"…","sources":[1,4]}],"gaps":["…"],"conflicts":["…"],"sufficient":false,"next_queries":[{"q":"…","language":"de"}]}`
 		].join(' ')
 	].join('\n\n');

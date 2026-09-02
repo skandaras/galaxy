@@ -41,6 +41,7 @@
 	interface ResearchBudget {
 		rounds: number;
 		queriesPerRound: number;
+		openingQueries: number;
 		pagesPerRound: number;
 		searchBudget: number;
 	}

@@ -38,6 +38,7 @@ import {
 	runSearches,
 	searchAllowance,
 	shouldStopAfterRound,
+	shouldWidenAfterOpening,
 	classifyFetchError,
 	countFailures,
 	decodeBody,
@@ -357,15 +358,41 @@ describe('roundBudget', () => {
 			const b = roundBudget(DEFAULT_RESEARCH, e);
 			return [b.rounds, b.queriesPerRound, b.pagesPerRound, b.searchBudget];
 		};
-		expect(at('quick')).toEqual([2, 2, 4, 4]);
-		expect(at('balanced')).toEqual([3, 3, 7, 9]);
-		expect(at('exhaustive')).toEqual([4, 4, 10, 16]);
+		expect(at('quick')).toEqual([2, 2, 4, 3]);
+		expect(at('balanced')).toEqual([4, 2, 7, 7]);
+		expect(at('exhaustive')).toEqual([6, 2, 10, 11]);
+	});
+
+	it('spends effort on rounds and reading, never on breadth', () => {
+		// The whole point of the shipped defaults: asking for more effort buys more
+		// chances to think, not a wider sweep of the same blind guess. It falls out
+		// of maxQueries meeting the floor rather than out of a rule, which is why
+		// it is worth pinning — the next person to raise maxQueries should see
+		// this fail and decide deliberately.
+		const widths = RESEARCH_EFFORTS.map((e) => roundBudget(DEFAULT_RESEARCH, e).queriesPerRound);
+		expect(new Set(widths).size).toBe(1);
+		const rounds = RESEARCH_EFFORTS.map((e) => roundBudget(DEFAULT_RESEARCH, e).rounds);
+		expect(new Set(rounds).size).toBe(RESEARCH_EFFORTS.length);
+	});
+
+	it('opens on one query however much effort it was given', () => {
+		// Round one is the only round planned blind. Nothing has come back, so
+		// there is nothing to aim at and every query past the first is a guess.
+		for (const level of RESEARCH_EFFORTS) {
+			expect(roundBudget(DEFAULT_RESEARCH, level).openingQueries).toBe(1);
+		}
+		// ...and its narrowness is counted, rather than the run being billed for a
+		// full round it never runs.
+		const b = roundBudget(DEFAULT_RESEARCH, 'exhaustive');
+		expect(b.searchBudget).toBe(b.openingQueries + (b.rounds - 1) * b.queriesPerRound);
 	});
 
 	it('spends exactly the admin ceiling at exhaustive', () => {
 		const cfg = { ...DEFAULT_RESEARCH, maxRounds: 7, maxQueries: 6, maxPages: 9 };
 		const b = roundBudget(cfg, 'exhaustive');
 		expect(b.rounds).toBe(researchRoundCeiling(cfg));
+		// Constant width at the shipped defaults is a consequence of those defaults,
+		// not a cap hiding the admin's knob: raise maxQueries and exhaustive spends it.
 		expect(b.queriesPerRound).toBe(cfg.maxQueries);
 		expect(b.pagesPerRound).toBe(cfg.maxPages);
 		expect(b.searchBudget).toBeLessThanOrEqual(cfg.maxSearchesPerRun);
@@ -394,7 +421,13 @@ describe('roundBudget', () => {
 		};
 		for (const level of RESEARCH_EFFORTS) {
 			const b = roundBudget(cfg, level);
-			expect(b).toMatchObject({ rounds: 1, queriesPerRound: 1, pagesPerRound: 1, searchBudget: 1 });
+			expect(b).toMatchObject({
+				rounds: 1,
+				queriesPerRound: 1,
+				openingQueries: 1,
+				pagesPerRound: 1,
+				searchBudget: 1
+			});
 		}
 	});
 
@@ -691,6 +724,36 @@ describe('shouldStopAfterRound', () => {
 	});
 });
 
+describe('shouldWidenAfterOpening', () => {
+	const empty = { round: 1, rounds: 4, evidenceCount: 0, aborted: false };
+
+	it('widens rather than giving up when the one opening query found nothing', () => {
+		// One query is one guess. Ending the run here would report "nothing is
+		// indexed about this" on the strength of a single badly chosen wording.
+		expect(shouldWidenAfterOpening(empty)).toBe(true);
+	});
+
+	it('does not widen a round that found something, however little', () => {
+		expect(shouldWidenAfterOpening({ ...empty, evidenceCount: 1 })).toBe(false);
+	});
+
+	it('leaves every later round to the normal stop rules', () => {
+		// By round two there is a brief, and an empty round means something real.
+		expect(shouldWidenAfterOpening({ ...empty, round: 2 })).toBe(false);
+		expect(shouldStopAfterRound({ ...empty, round: 2, freshCount: 0, searchesLeft: 5 })).toBe(
+			'no-sources'
+		);
+	});
+
+	it('does not widen when there is no round left to widen into', () => {
+		expect(shouldWidenAfterOpening({ ...empty, rounds: 1 })).toBe(false);
+	});
+
+	it('never widens a cancelled run', () => {
+		expect(shouldWidenAfterOpening({ ...empty, aborted: true })).toBe(false);
+	});
+});
+
 describe('consolidate', () => {
 	const base = {
 		systemPrompt: 'you are the research agent',
@@ -787,11 +850,19 @@ describe('consolidate', () => {
 	});
 
 	it('clips a long excerpt so the prompt stays bounded', async () => {
-		const choice = choiceOf(ok(valid));
-		const prompt = spyOn(choice);
-		await consolidate({ ...base, choice, fresh: [source(7, 'y'.repeat(5000))] });
-		expect(prompt()).toContain('…[clipped]');
-		expect(prompt().length).toBeLessThan(5000);
+		const lengthWith = async (excerptChars: number) => {
+			const choice = choiceOf(ok(valid));
+			const prompt = spyOn(choice);
+			await consolidate({ ...base, choice, fresh: [source(7, 'y'.repeat(excerptChars))] });
+			expect(prompt()).toContain('…[clipped]');
+			return prompt().length;
+		};
+		// The property, rather than a character count: the prompt must not grow
+		// with the source. A fixed ceiling measured the instructions as much as the
+		// clipping, so rewording them failed a test about excerpt length.
+		const [small, large] = [await lengthWith(5_000), await lengthWith(200_000)];
+		expect(large).toBe(small);
+		expect(small).toBeLessThan(6_000);
 	});
 
 	it('carries the system prompt, which the review step it replaces never did', async () => {
