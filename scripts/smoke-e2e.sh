@@ -265,6 +265,10 @@ check "research cites evidence" "$RSTREAM" 'FACT-42 confirmed'
 # The loop must actually iterate: consolidate what round one read, then search
 # the gap it named rather than the original breadth again.
 check "research consolidates between rounds" "$RSTREAM" '"name":"consolidating"'
+# Round one is one query: it is the only round planned blind, so its job is to
+# show how the subject is covered rather than to answer. Round two is the first
+# that can be aimed, and is where breadth becomes worth spending.
+check "research opens on a single orienting query" "$RSTREAM" '"name":"searching","detail":"round 1/4 · 1 query"'
 check "research runs a second, narrowed round" "$RSTREAM" '"name":"searching","detail":"round 2/'
 # A round used to be one opaque line naming how many queries it was about to
 # run. Each query now draws its own box, and the funnel that turns eighty
@@ -291,7 +295,10 @@ TJOB=$(api -X POST $B/api/chats/$TCHAT/messages -d '{"content":"How do nebulae f
 TSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$TJOB/stream)
 check "a brief cut off mid-JSON is asked for again with room" "$TSTREAM" '"name":"searching","detail":"round 2/'
 check_absent "and does not end the run" "$TSTREAM" 'no usable JSON'
-check "research stops early once evidence suffices" "$RSTREAM" 'Evidence judged sufficient after 2 of 3 rounds'
+# Deliberately not pinning the round ceiling here: what this guards is that the
+# run stopped at round two because the evidence was enough, and the ceiling is a
+# default that has already moved once.
+check "research stops early once evidence suffices" "$RSTREAM" 'Evidence judged sufficient after 2 of'
 check "research reports the brief it built" "$RSTREAM" 'Brief after 2 rounds: 2 findings'
 # The Observatory keeps the full record — the stream shows the queries and their
 # results, the events carry the provider, counts and pacing behind them.
@@ -355,7 +362,12 @@ api -X PUT $B/api/admin/task-configs -d "{\"task\":\"deep-research\",\"primaryMo
 PCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
 PJOB=$(api -X POST $B/api/chats/$PCHAT/messages -d '{"content":"How do nebulae form?","deepResearch":true}' | jqn .jobId)
 PSTREAM=$(curl -sN --max-time 90 $B/api/jobs/$PJOB/stream)
-check "reasoning model still gets a real plan" "$PSTREAM" '"name":"searching","detail":"round 1/3 · 2 queries"'
+# One query in round one is now the design rather than the symptom — the opening
+# round is the only one planned before anything has come back — so the count no
+# longer tells a real plan from the fallback. What does is the notice the
+# fallback path pushes, and that a round actually ran.
+check "reasoning model still reaches a real round" "$PSTREAM" '"name":"searching","detail":"round 1/'
+check_absent "and did not fall back to searching the question as written" "$PSTREAM" 'Planning fell back'
 check "reasoning model retries synthesis" "$PSTREAM" 'retrying with more room'
 check "reasoning model produces an answer" "$PSTREAM" 'Thought it through first'
 check "reasoning research is not left empty" "$(api $B/api/chats/$PCHAT | jqn '.messages.at(-1).content')" 'Nebulae form'
