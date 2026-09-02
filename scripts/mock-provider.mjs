@@ -132,7 +132,14 @@ async function scriptedReply(userText, maxTokens = 0) {
 						gaps: ['what proportion of a nebula is helium'],
 						conflicts: [],
 						sufficient: false,
-						next_queries: [{ q: 'nebula helium fraction', language: '' }]
+						next_queries: [{ q: 'nebula helium fraction', language: '' }],
+						// Only what the prompt actually listed, which is what a real
+						// model can do and what the parser will accept — an address
+						// composed here would be dropped and the check would pass for
+						// the wrong reason.
+						...(/Links on this page: [^\n]*<(http[^>]+)>/.test(userText)
+							? { follow: [userText.match(/Links on this page: [^\n]*<(http[^>]+)>/)[1]] }
+							: {})
 					})
 				: JSON.stringify({
 						findings: [
@@ -427,9 +434,16 @@ const server = createServer(async (req, res) => {
 	}
 
 	if (req.method === 'GET' && url.pathname.startsWith('/page/')) {
+		// One page cites another, on a different host so the extractor sees it as
+		// outbound rather than as this site's own navigation. This is what a round
+		// gets to follow — the thing a search cannot find for it.
+		const cites =
+			url.pathname === '/page/one'
+				? `<p>as reported in <a href="http://localhost:${port}/page/primary">the original paper</a></p>`
+				: '';
 		res.writeHead(200, { 'content-type': 'text/html' });
 		res.end(
-			`<html><head><title>Mock page</title><style>body{}</style></head><body><script>var x=1;</script><h1>Mock page ${url.pathname}</h1><p>Nebulae are born in collapsing clouds. The secret evidence number is FACT-42.</p></body></html>`
+			`<html><head><title>Mock page</title><style>body{}</style></head><body><script>var x=1;</script><h1>Mock page ${url.pathname}</h1><p>Nebulae are born in collapsing clouds. The secret evidence number is FACT-42.</p>${cites}</body></html>`
 		);
 		return;
 	}

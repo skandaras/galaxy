@@ -216,11 +216,14 @@ export const webSearchToolDef: ToolDef = {
 		'snippet. ' +
 		'Queries may be written in any language, and should be: to find German sources, search in ' +
 		'German. Set `language` as well to bias the engine towards that language\'s index. ' +
-		'Work in two stages: open with a broad query, read the titles and domains it returns to see ' +
+		'Work in stages: open with a broad query, read the titles and domains it returns to see ' +
 		'how the subject is actually covered, then search again aimed at what they revealed. A ' +
 		'second, better-aimed query is usually worth more than a first, longer one. ' +
+		'Searches are rationed per turn as well as per request — a query past that ration is not ' +
+		'run, and asking for one costs you the turn you could have spent reading. ' +
 		'Snippets are short by design — they are for choosing what to open, not for answering from. ' +
-		'Use fetch_url to read anything a claim will rest on. ' +
+		'Use fetch_url to read anything a claim will rest on; unlike searching, those can be ' +
+		'batched, so ask for every page you want in one turn. ' +
 		'Searches per request are limited, and repeating a query already run returns the same ' +
 		'results without helping.',
 	parameters: {
@@ -364,6 +367,12 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 	const search = deps.search ?? runWebSearch;
 	const scope = deps.scope ?? 'request';
 	const budget = Math.max(1, cfg.maxSearchesPerTurn ?? DEFAULT_MAX_SEARCHES);
+	// What one *round-trip* may spend, as opposed to what the turn may. The turn
+	// allowance was never the thing going wrong: six searches over six model
+	// turns is deliberate research, and six in one message is six guesses written
+	// before any of them came back.
+	const perStep = Math.max(1, cfg.searchesPerStep ?? DEFAULT_SEARCHES_PER_STEP);
+	let usedThisStep = 0;
 	const memo = new Map<string, MemoEntry>();
 	// Per turn, like the memo and the allowance: a turn that tripped a rate limit
 	// should not hand its throttle to the next message.
@@ -372,7 +381,18 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 	let used = 0;
 
 	return {
-		def: webSearchToolDef,
+		// The ration is configurable, so it is stated per instance rather than in
+		// the static definition — a description that says "one" under a setting of
+		// two is the same class of bug as the batching advice this rule exists to
+		// undo. `webSearchToolDef` stays canonical for the admin tool list, which
+		// has no settings to read.
+		def: {
+			...webSearchToolDef,
+			description: `${webSearchToolDef.description} You may run ${perStep === 1 ? 'one search' : `${perStep} searches`} per turn.`
+		},
+		beginStep: () => {
+			usedThisStep = 0;
+		},
 		describe: (args) => {
 			const lang = normaliseLanguage(args.language);
 			return `${String(args.query ?? '')}${lang ? ` [${lang}]` : ''}`;
@@ -399,6 +419,22 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 				return `(already searched "${query}" this ${scope} — unchanged results below)\n${cached.text}`;
 			}
 
+			// After the memo, before the budget. A repeat is free and worth replaying
+			// whenever it is asked for; a second *new* query in the same round-trip
+			// is the thing being stopped, and stopping it must cost nothing, or the
+			// model pays for the loop's rule out of its own allowance.
+			if (usedThisStep >= perStep) {
+				report?.({ deferred: true, searchesUsed: used, searchBudget: budget, scope, perStep });
+				// Deliberately does not promise a next turn: the tool cannot see how
+				// many round-trips are left, and on the last one this search is
+				// simply lost. "If it still matters" is true either way.
+				return (
+					`Not run: "${query}". You have already used ${perStep === 1 ? 'this turn\'s search' : `all ${perStep} of this turn's searches`} and the results are above — read them first, and open anything a claim will rest on with fetch_url. ` +
+					`A query written before the last one came back is a guess; the one you write after reading is usually a different and better query. ` +
+					`Nothing was spent (${budget - used} of ${budget} searches still available this ${scope}), so if it still matters once you have read these, search again.`
+				);
+			}
+
 			if (used >= budget) {
 				report?.({ budgetExhausted: true, searchesUsed: used, searchBudget: budget, scope });
 				// Names the scope and the way out: the old wording said "this
@@ -410,6 +446,7 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 			// Claim the allowance, then wait for the provider's gap. Claiming first
 			// is what stops two calls deciding they both have the last search.
 			used++;
+			usedThisStep++;
 			await gate();
 			let outcome: SearchOutcome;
 			try {
@@ -440,9 +477,16 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 				display: { results: rows }
 			});
 			const remaining = budget - used;
+			// The count alone reads as an invitation to spend it. What comes next is
+			// reading, and saying so is the last thing the model sees before it
+			// chooses — which is why it is worth the line.
+			const next = outcome.results.length
+				? ' Read the ones a claim will rest on with fetch_url before searching again.'
+				: '';
+			const ration = perStep === 1 ? ', one per turn' : `, ${perStep} per turn`;
 			const tally = remaining
-				? `\n(${remaining} more search${remaining === 1 ? '' : 'es'} available this ${scope})`
-				: `\n(that was the last search available this ${scope})`;
+				? `\n(${remaining} more search${remaining === 1 ? '' : 'es'} available this ${scope}${ration}.${next})`
+				: `\n(that was the last search available this ${scope}.${next})`;
 			const text = formatSearchResults(outcome.results, query, outcome);
 			// A query that genuinely found nothing is exactly the one worth not
 			// running twice — but a degraded search is not a finding about the
@@ -456,6 +500,9 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 }
 
 const DEFAULT_MAX_SEARCHES = 6;
+
+/** One, so that a search is always read before the next one is written. */
+const DEFAULT_SEARCHES_PER_STEP = 1;
 
 /**
  * Some browsers' UA. A bot-shaped UA is itself a reason to get blocked.

@@ -19,6 +19,8 @@ import {
 import { assertBudget } from './budget';
 import { withDocumentText } from './context';
 import { bootstrapContext } from './tools/knowledge';
+import { searchDocs } from '$lib/server/library';
+import { activate } from '$lib/server/cortex';
 import { EngineError, getTaskConfig, pickModel } from './engine';
 import { emitEvent } from './events';
 import {
@@ -30,7 +32,8 @@ import {
 	type LiveJob
 } from './jobs';
 import type { RunToolCall } from '$lib/run-timeline';
-import { streamWithIdleTimeout } from './loop';
+import { pageReadConcurrency } from './limits';
+import { runBounded, streamWithIdleTimeout } from './loop';
 import {
 	StreamTimeoutError,
 	type CompletionResult,
@@ -63,6 +66,12 @@ export interface Evidence {
 	kind: 'page' | 'snippet';
 	/** Why the page could not be read. Only set when `kind` is 'snippet'. */
 	failure?: FetchFailure;
+	/**
+	 * Outbound links this page carried, offered to the next consolidation as
+	 * places it could go. Never sent to synthesis — a link is a lead, not a
+	 * source, and nothing may be cited that was not read.
+	 */
+	links?: PageLink[];
 }
 
 /**
@@ -235,14 +244,34 @@ async function runResearch(
 			text: `Admin allows ${plural(budget.rounds, 'research round')}, so ${effort} and quick run the same. Raise "rounds per run" in Admin → Settings.`
 		});
 	}
+	// What the platform already holds on this, for aiming rather than for citing.
+	const local = localContext(opts.userId, question);
+	if (local) {
+		// Counts only. The Observatory is not the place for the contents of
+		// someone's library or lattice — the same rule cortex_query holds itself
+		// to, for the same reason.
+		event('research.local', 'ok', 0, { lines: local.split('\n').length });
+		pushChunk(job, {
+			type: 'notice',
+			text: 'Your library and knowledge lattice have something on this — aiming the opening search with it.'
+		});
+	}
 	const plan = await planQueries(
 		choice,
 		systemPrompt,
-		background ? `${question}\n\nAlready established, do not re-research: ${background}` : question,
+		[
+			question,
+			...(background ? [`Already established, do not re-research: ${background}`] : []),
+			...(local
+				? [
+						`This person's own notes and concepts on the subject, which are context for aiming the search and NOT sources — they cannot be cited and the research still has to establish everything from the open web:\n${local}`
+					]
+				: [])
+		].join('\n\n'),
 		cfg,
 		track,
 		defaultLanguage,
-		{ maxQueries: budget.queriesPerRound, signal: job.controller.signal }
+		{ maxQueries: budget.openingQueries, signal: job.controller.signal }
 	);
 	const queries = plan.queries;
 	if (plan.fellBack) {
@@ -280,6 +309,23 @@ async function runResearch(
 	 * is the shape `RunTimeline` already draws.
 	 */
 	const searchTrace: RunToolCall[] = [];
+	/**
+	 * Addresses the next round opens directly: in round one whatever the person
+	 * put in their message, afterwards whatever the last consolidation asked to
+	 * follow. Both are decisions already taken, so they are read rather than
+	 * searched for.
+	 */
+	let pinned: SearchResult[] = questionUrls(asked).map((url) => ({
+		url,
+		title: url,
+		snippet: 'Given in the question.'
+	}));
+	if (pinned.length) {
+		pushChunk(job, {
+			type: 'notice',
+			text: `Reading ${plural(pinned.length, 'address')} from your message rather than searching for ${pinned.length === 1 ? 'it' : 'them'}.`
+		});
+	}
 
 	for (let round = 1; round <= budget.rounds; round++) {
 		roundsUsed = round;
@@ -291,7 +337,8 @@ async function runResearch(
 			break;
 		}
 		pending = dedupeQueries(pending, ranQueries).slice(0, budget.queriesPerRound);
-		if (!pending.length) {
+		// A round with nothing to search but something to read is still a round.
+		if (!pending.length && !pinned.length) {
 			stopCause = 'no-gaps';
 			break;
 		}
@@ -299,7 +346,9 @@ async function runResearch(
 		pushChunk(job, {
 			type: 'stage',
 			name: 'searching',
-			detail: `round ${round}/${budget.rounds} · ${plural(pending.length, 'query', 'queries')}`
+			detail:
+				`round ${round}/${budget.rounds} · ${plural(pending.length, 'query', 'queries')}` +
+				(pinned.length ? ` · ${plural(pinned.length, 'link')} to follow` : '')
 		});
 		const results = await runSearches(
 			pending,
@@ -342,18 +391,26 @@ async function runResearch(
 		);
 		ranQueries.push(...pending.map((p) => p.q));
 
+		const roundPinned = pinned;
+		pinned = [];
 		const fresh = await readPages(results, evidence, budget.pagesPerRound, cfg.timeoutMs, event, {
-			onTriage: ({ candidates, pool, opened }) =>
+			pinned: roundPinned,
+			onTriage: ({ candidates, pool, opened, followed }) =>
 				pushChunk(job, {
 					type: 'stage',
 					name: 'triage',
-					detail: `${candidates} found → ${pool} shortlisted → ${opened} opened`
+					// The followed count is stated separately because it is the one
+					// part of the funnel that search did not decide.
+					detail: `${candidates} found → ${pool} shortlisted → ${opened} opened${followed ? ` (${followed} followed)` : ''}`
 				}),
-			// Gated on open gaps as well as pool size: that means round two or
-			// later, where "which of these answers *this* hole" is a judgement
-			// grounded in something the run actually found.
+			// Deliberately not gated on open gaps any more. That gate meant round
+			// two or later — "which of these answers *this* hole" being a judgement
+			// grounded in something the run had found. But round one is now the
+			// orienting round: one query, twenty results, and the whole question of
+			// which of them show how the subject is actually covered. That is where
+			// choosing well matters most, and it was the round this excluded.
 			chooser:
-				cfg.modelTriage && brief.gaps.length
+				cfg.modelTriage
 					? (pool, max) =>
 							triagePages({
 								choice,
@@ -381,6 +438,34 @@ async function runResearch(
 					: ''
 			}`
 		});
+
+		// A lost opening round is not a lost run — the same rule the consolidation
+		// failures below observe. Widen once and carry on.
+		if (
+			shouldWidenAfterOpening({
+				round,
+				rounds: budget.rounds,
+				evidenceCount: evidence.length,
+				aborted: job.controller.signal.aborted
+			})
+		) {
+			const wider = dedupeQueries(
+				(await planQueries(choice, systemPrompt, question, cfg, track, defaultLanguage, {
+					maxQueries: budget.queriesPerRound,
+					signal: job.controller.signal
+				})).queries,
+				ranQueries
+			);
+			if (wider.length) {
+				pushChunk(job, {
+					type: 'notice',
+					text: `The opening search found nothing — widening to ${plural(wider.length, 'query', 'queries')} rather than giving up on the question.`
+				});
+				event('research.plan', 'ok', 0, { widened: true, queries: wider.length });
+				pending = wider;
+				continue;
+			}
+		}
 
 		const stop = shouldStopAfterRound({
 			round,
@@ -467,6 +552,18 @@ async function runResearch(
 				break;
 			}
 			pending = outcome.queries;
+			pinned = outcome.follow.map((url) => ({
+				url,
+				title: url,
+				snippet: 'Followed from a source read in the previous round.'
+			}));
+			if (pinned.length) {
+				pushChunk(job, {
+					type: 'notice',
+					text: `Following ${plural(pinned.length, 'link')} cited by what round ${round} read.`
+				});
+				event('research.follow', 'ok', 0, { round, links: pinned.length });
+			}
 			if (!pending.length && brief.gaps.length) {
 				// Gaps named but no searches proposed: the model described the hole
 				// and forgot to dig. Searching the gap text as written beats ending
@@ -477,7 +574,7 @@ async function runResearch(
 					text: `Round ${round} named ${plural(brief.gaps.length, 'open gap')} but proposed no searches — searching the gaps as written.`
 				});
 			}
-			if (!pending.length) {
+			if (!pending.length && !pinned.length) {
 				stopCause = 'no-gaps';
 				break;
 			}
@@ -768,6 +865,12 @@ const SYNTHESIS_MAX_PER_SOURCE = PAGE_TEXT_CHARS;
 const MAX_FINDINGS = 16;
 const MAX_GAPS = 6;
 const MAX_CONFLICTS = 4;
+/**
+ * Links one round may ask the next to open. Three, because following is meant
+ * to be a decision rather than a second search: a round that names six leads
+ * has not chosen between them.
+ */
+const MAX_FOLLOW = 3;
 const CLAIM_CHARS = 400;
 const GAP_CHARS = 240;
 
@@ -811,6 +914,16 @@ export interface RoundBudget {
 	/** The admin ceiling, so a collapsed range can name the knob that caps it. */
 	roundCeiling: number;
 	queriesPerRound: number;
+	/**
+	 * Queries the *first* round may make, before anything has come back.
+	 *
+	 * One. Round one is the only round planned blind — there is no brief, no
+	 * source register and nothing to aim at, so every query past the first is a
+	 * guess about a subject the run has not seen yet. Its job is to show how the
+	 * subject is actually covered so round two can be aimed; breadth here buys
+	 * four shallow readings of the same guess instead.
+	 */
+	openingQueries: number;
 	pagesPerRound: number;
 	/** Searches the whole run may make, across every round. */
 	searchBudget: number;
@@ -829,15 +942,21 @@ export function roundBudget(cfg: ResearchSettings, effort: ResearchEffort): Roun
 	const rounds = scale(roundCeiling, 1);
 	const queriesPerRound = scale(maxQueries, 2);
 	const pagesPerRound = scale(maxPages, 2);
+	const openingQueries = Math.min(1, queriesPerRound);
 	return {
 		effort,
 		rounds,
 		roundCeiling,
 		queriesPerRound,
+		openingQueries,
 		pagesPerRound,
 		// Two independent ceilings — what these rounds could actually spend, and
-		// the admin's absolute per-run cap. Whichever binds first wins.
-		searchBudget: Math.max(1, Math.min(rounds * queriesPerRound, scale(maxSearches, 1)))
+		// the admin's absolute per-run cap. Whichever binds first wins. The first
+		// round is counted separately because it is narrower than the rest.
+		searchBudget: Math.max(
+			1,
+			Math.min(openingQueries + (rounds - 1) * queriesPerRound, scale(maxSearches, 1))
+		)
 	};
 }
 
@@ -915,6 +1034,29 @@ export function shouldStopAfterRound(s: {
 	if (!s.freshCount) return 'no-new-sources';
 	if (s.searchesLeft <= 0) return 'search-budget';
 	return null;
+}
+
+/**
+ * Whether an empty opening round should widen rather than end the run.
+ *
+ * The opening round is one query, so "found nothing" is now a thing one badly
+ * chosen guess can produce — where four queries made it near-proof that nothing
+ * was indexed. Pure and exported for the same reason `shouldStopAfterRound` is:
+ * this is a loop exit condition, and it should be testable without a job, a
+ * database or a network.
+ *
+ * Narrow on purpose. Only round one, only when there is a later round to widen
+ * into, and only on *no* evidence at all — a page that failed to fetch still
+ * leaves its search snippet behind, so this fires when the search itself came
+ * back empty, not when the reading went badly.
+ */
+export function shouldWidenAfterOpening(s: {
+	round: number;
+	rounds: number;
+	evidenceCount: number;
+	aborted: boolean;
+}): boolean {
+	return s.round === 1 && s.rounds > 1 && s.evidenceCount === 0 && !s.aborted;
 }
 
 /**
@@ -1016,11 +1158,24 @@ function snippetMark(e: Evidence): string {
 		: ` — SEARCH SNIPPET ONLY (${e.failure ? FETCH_FAILURE_TEXT[e.failure] : 'the page could not be read'})`;
 }
 
+/**
+ * Where a source points, listed under it so the round can ask to follow one.
+ *
+ * Only outbound links survive extraction, so this is the page's citations
+ * rather than its navigation — which is the whole reason it is worth the
+ * tokens. Rendered under the excerpt so it reads as an appendix to the source
+ * rather than as part of what the source says.
+ */
+function linksToPrompt(e: Evidence): string {
+	if (!e.links?.length) return '';
+	return `\nLinks on this page: ${e.links.map((l) => (l.text ? `${l.text} <${l.url}>` : `<${l.url}>`)).join(' · ')}`;
+}
+
 function evidenceToPrompt(evidence: Evidence[], perSource: number): string {
 	return evidence
 		.map(
 			(e) =>
-				`[${e.n}] ${e.title} (${e.url})${snippetMark(e)}\n${clipExcerpt(e.excerpt, perSource)}`
+				`[${e.n}] ${e.title} (${e.url})${snippetMark(e)}\n${clipExcerpt(e.excerpt, perSource)}${linksToPrompt(e)}`
 		)
 		.join('\n\n');
 }
@@ -1376,6 +1531,13 @@ export async function planQueries(
 	opts: { maxQueries?: number; signal?: AbortSignal } = {}
 ): Promise<PlanOutcome> {
 	const maxQueries = Math.max(1, opts.maxQueries ?? cfg.maxQueries);
+	// The opening round asks for something different in kind, not just fewer of
+	// the same thing. Nothing has come back yet, so a query written here cannot
+	// be aimed — the useful thing it can do is show the run where to aim next.
+	const brief =
+		maxQueries === 1
+			? `RESEARCH-PLAN: Write the ONE web-search query this research should open with. Its job is not to answer the question — later rounds do that — but to show how the subject is actually covered: what it is called, who writes about it, and where the primary sources sit. Prefer the plain central wording over a clever narrow one, because a narrow opening query hides the coverage it was meant to reveal. ${languageBrief(cfg)}`
+			: `RESEARCH-PLAN: Produce up to ${maxQueries} focused web-search queries for researching this question. Cover its distinct angles rather than rephrasing it — later rounds will narrow onto whatever these leave open. ${languageBrief(cfg)}`;
 	const ask = (maxTokens: number) =>
 		completeIdleBounded(
 			choice,
@@ -1384,7 +1546,7 @@ export async function planQueries(
 					{ role: 'system', content: systemPrompt },
 					{
 						role: 'user',
-						content: `RESEARCH-PLAN: Produce up to ${maxQueries} focused web-search queries for researching this question. Cover its distinct angles rather than rephrasing it — later rounds will narrow onto whatever these leave open. ${languageBrief(cfg)} Reply ONLY with JSON: {"queries":[{"q":"…","language":"de"}]} — use "" for language when no constraint is wanted.\n\nQuestion: ${question}`
+						content: `${brief} Reply ONLY with JSON: {"queries":[{"q":"…","language":"de"}]} — use "" for language when no constraint is wanted.\n\nQuestion: ${question}`
 					}
 				],
 				maxTokens
@@ -1779,7 +1941,16 @@ export interface ReadPagesDeps {
 	 */
 	chooser?: (pool: SearchResult[], limit: number) => Promise<SearchResult[]>;
 	/** Injected in tests so no suite depends on the network. */
-	readPage?: (url: string, timeoutMs: number) => Promise<string>;
+	readPage?: (url: string, timeoutMs: number) => Promise<string | PageContent>;
+	/**
+	 * Addresses to open whatever the triage would have chosen: a URL the person
+	 * put in their question, or a link the last consolidation asked to follow.
+	 *
+	 * They come off the top of the round's page budget rather than competing for
+	 * it, because both origins are a decision already taken — by the person, or
+	 * by the round that read the page doing the citing.
+	 */
+	pinned?: SearchResult[];
 	/**
 	 * The shape of the round's funnel, once it is settled.
 	 *
@@ -1787,7 +1958,13 @@ export interface ReadPagesDeps {
 	 * nowhere a reader would look. They are the answer to "why did it only read
 	 * six of the eighty things it found", which is otherwise invisible.
 	 */
-	onTriage?: (funnel: { candidates: number; pool: number; opened: number }) => void;
+	onTriage?: (funnel: {
+		candidates: number;
+		pool: number;
+		opened: number;
+		/** How many of `opened` were pinned rather than chosen from the search. */
+		followed?: number;
+	}) => void;
 }
 
 export async function readPages(
@@ -1798,8 +1975,24 @@ export async function readPages(
 	event: (name: string, status: 'ok' | 'error', d: number, detail?: Record<string, unknown>) => void,
 	deps: ReadPagesDeps = {}
 ): Promise<Evidence[]> {
-	const triage = triageResults(results, { limit, known: existing.map((e) => e.url) });
+	// Pinned addresses are decisions already taken, so they are not offered to
+	// the triage that ranks and caps what search turned up — they are taken off
+	// the top of the budget, and the search results compete for what is left.
+	const alreadyRead = new Set(existing.map((e) => canonicalUrlKey(e.url)));
+	const pinned: SearchResult[] = [];
+	for (const r of deps.pinned ?? []) {
+		const key = canonicalUrlKey(r.url);
+		if (!key || alreadyRead.has(key) || pinned.length >= limit) continue;
+		alreadyRead.add(key);
+		pinned.push(r);
+	}
+
+	const triage = triageResults(results, {
+		limit: Math.max(0, limit - pinned.length),
+		known: [...existing.map((e) => e.url), ...pinned.map((p) => p.url)]
+	});
 	event('research.triage', 'ok', 0, {
+		...(pinned.length ? { pinned: pinned.length } : {}),
 		candidates: results.length,
 		pool: triage.pool.length,
 		picked: triage.picked.length,
@@ -1808,80 +2001,93 @@ export async function readPages(
 		...triage.dropped
 	});
 
-	let toRead = triage.picked;
-	// Only worth asking when there is a real choice to make.
-	if (deps.chooser && triage.pool.length >= limit * 3) {
+	let chosen = triage.picked;
+	// Only worth asking when there is a real choice to make — but a choice is any
+	// pool bigger than the number that can be opened. The old `limit * 3` was
+	// sized for wide rounds; narrow ones rarely clear it, so the judgement was
+	// gated out of exactly the rounds built around judgement.
+	const room = Math.max(0, limit - pinned.length);
+	if (deps.chooser && room && triage.pool.length > room) {
 		const startedAt = Date.now();
-		const chosen = await deps.chooser(triage.pool, limit);
-		event('research.triage.model', chosen.length ? 'ok' : 'error', Date.now() - startedAt, {
+		const picked = await deps.chooser(triage.pool, room);
+		event('research.triage.model', picked.length ? 'ok' : 'error', Date.now() - startedAt, {
 			pool: triage.pool.length,
-			...(chosen.length ? { picked: chosen.map((r) => r.url) } : { fellBack: 'heuristic order' })
+			...(picked.length ? { picked: picked.map((r) => r.url) } : { fellBack: 'heuristic order' })
 		});
-		if (chosen.length) toRead = chosen;
+		if (picked.length) chosen = picked;
 	}
+	// Pinned first: they are the reason the round has a shape, and reading them
+	// before the search results means a budget spent early is spent on them.
+	const toRead = [...pinned, ...chosen];
 	// After the chooser, so `opened` is what is actually about to be read.
 	deps.onTriage?.({
 		candidates: results.length,
 		pool: triage.pool.length,
-		opened: toRead.length
+		opened: toRead.length,
+		...(pinned.length ? { followed: pinned.length } : {})
 	});
 
-	const readPage = deps.readPage ?? fetchPageText;
+	const readPage = deps.readPage ?? fetchPageContent;
 	let n = existing.length;
-	const settled = await Promise.allSettled(
-		toRead.map(async (r): Promise<Omit<Evidence, 'n'> | null> => {
-			const started = Date.now();
-			let retried = false;
-			const base = { title: r.title || r.url, url: r.url };
-			const attempt = async () => {
-				const excerpt = (await readPage(r.url, timeoutMs)).trim();
-				// A 200 that extracts to nothing is not a read page — it is a JS
-				// shell or a paywall — and passing it on as an empty excerpt gave
-				// synthesis a citable URL with nothing behind it.
-				if (!excerpt) throw new PageFetchError('no-text', 'No readable text on the page');
-				return excerpt;
-			};
+	// Bounded, for the same reason searches are (see searchConcurrency): a dozen
+	// simultaneous fetches from one address is a pattern no browser produces, and
+	// these are the sites the answer is going to rest on. `readOne` returns null
+	// rather than throwing, which is what runBounded's contract asks for.
+	const read = await runBounded(toRead, pageReadConcurrency(), readOne);
+	return read.filter((v): v is Omit<Evidence, 'n'> => v !== null).map((v) => ({ ...v, n: ++n }));
+
+	/** Never throws: a page that could not be read degrades to its snippet, or to nothing. */
+	async function readOne(r: SearchResult): Promise<Omit<Evidence, 'n'> | null> {
+		const started = Date.now();
+		let retried = false;
+		const base = { title: r.title || r.url, url: r.url };
+		let links: PageLink[] = [];
+		const attempt = async () => {
+			// A string is still accepted, so a test that stubs the old shape keeps
+			// working and simply offers no links.
+			const got = await readPage(r.url, timeoutMs);
+			const page = typeof got === 'string' ? { text: got, links: [] } : got;
+			const excerpt = page.text.trim();
+			// A 200 that extracts to nothing is not a read page — it is a JS
+			// shell or a paywall — and passing it on as an empty excerpt gave
+			// synthesis a citable URL with nothing behind it.
+			if (!excerpt) throw new PageFetchError('no-text', 'No readable text on the page');
+			links = page.links;
+			return excerpt;
+		};
+		try {
+			let excerpt: string;
 			try {
-				let excerpt: string;
-				try {
-					excerpt = await attempt();
-				} catch (err) {
-					// One more go, and only for the classes worth it. Every other
-					// flaky dependency here already fails over; the one talking to
-					// the open web had nothing.
-					if (!isRetryableFetch(err)) throw err;
-					await new Promise((r2) => setTimeout(r2, RETRY_BACKOFF_MS));
-					excerpt = await attempt();
-					retried = true;
-				}
-				event('fetch_page', 'ok', Date.now() - started, {
-					url: r.url,
-					chars: excerpt.length,
-					...(retried ? { retried: true } : {})
-				});
-				return { ...base, excerpt, kind: 'page' as const };
+				excerpt = await attempt();
 			} catch (err) {
-				const { reason, detail } = classifyFetchError(err);
-				event('fetch_page', 'error', Date.now() - started, {
-					url: r.url,
-					reason,
-					error: detail,
-					...(err instanceof PageFetchError && err.status ? { status: err.status } : {}),
-					...(retried ? { retried: true } : {})
-				});
-				const snippet = (r.snippet ?? '').trim();
-				// Neither page nor snippet is a source in name only.
-				return snippet ? { ...base, excerpt: snippet, kind: 'snippet' as const, failure: reason } : null;
+				// One more go, and only for the classes worth it. Every other
+				// flaky dependency here already fails over; the one talking to
+				// the open web had nothing.
+				if (!isRetryableFetch(err)) throw err;
+				await new Promise((r2) => setTimeout(r2, RETRY_BACKOFF_MS));
+				excerpt = await attempt();
+				retried = true;
 			}
-		})
-	);
-	return settled
-		.filter(
-			(s): s is PromiseFulfilledResult<Omit<Evidence, 'n'> | null> => s.status === 'fulfilled'
-		)
-		.map((s) => s.value)
-		.filter((v): v is Omit<Evidence, 'n'> => v !== null)
-		.map((v) => ({ ...v, n: ++n }));
+			event('fetch_page', 'ok', Date.now() - started, {
+				url: r.url,
+				chars: excerpt.length,
+				...(retried ? { retried: true } : {})
+			});
+			return { ...base, excerpt, kind: 'page' as const, ...(links.length ? { links } : {}) };
+		} catch (err) {
+			const { reason, detail } = classifyFetchError(err);
+			event('fetch_page', 'error', Date.now() - started, {
+				url: r.url,
+				reason,
+				error: detail,
+				...(err instanceof PageFetchError && err.status ? { status: err.status } : {}),
+				...(retried ? { retried: true } : {})
+			});
+			const snippet = (r.snippet ?? '').trim();
+			// Neither page nor snippet is a source in name only.
+			return snippet ? { ...base, excerpt: snippet, kind: 'snippet' as const, failure: reason } : null;
+		}
+	}
 }
 
 /**
@@ -1899,7 +2105,13 @@ interface Attempt {
 }
 
 export type ConsolidateOutcome =
-	| { status: 'ok'; brief: Omit<ResearchBrief, 'round'>; queries: PlannedQuery[] }
+	| {
+			status: 'ok';
+			brief: Omit<ResearchBrief, 'round'>;
+			queries: PlannedQuery[];
+			/** Addresses the round asked to open next, already checked against what it was offered. */
+			follow: string[];
+	  }
 	| { status: 'unparseable'; sample: string; chars: number; finishReason?: string }
 	| { status: 'empty'; reasonedOnly: boolean }
 	| { status: 'timeout' }
@@ -1936,6 +2148,10 @@ export async function consolidate(args: {
 		CONSOLIDATE_MIN_PER_SOURCE,
 		CONSOLIDATE_MAX_PER_SOURCE
 	);
+	// This round's links only: those are the ones the prompt lists below, and a
+	// link from three rounds ago that nothing followed then is not a lead now.
+	const offered = fresh.flatMap((e) => e.links?.map((l) => l.url) ?? []);
+	const offeredLinks = offered.length > 0;
 	const content = [
 		`RESEARCH-CONSOLIDATE — round ${args.round} of ${args.rounds}.`,
 		`--- WHAT WAS ASKED ---`,
@@ -1962,8 +2178,18 @@ export async function consolidate(args: {
 			`gaps: what the question still needs and no source has answered. Write each one specifically enough that a web search can be made of it as it stands.`,
 			`conflicts: where sources disagree, naming both numbers.`,
 			`sufficient: true only when the remaining gaps could not change the answer.`,
-			`next_queries: up to ${args.maxQueries} searches that would close the biggest gaps. Do not repeat these, which have already been run: ${args.ranQueries.map((q) => `"${q}"`).join(', ')}. ${languageBrief(cfg)}`,
-			`Reply ONLY with JSON: {"findings":[{"claim":"…","sources":[1,4]}],"gaps":["…"],"conflicts":["…"],"sufficient":false,"next_queries":[{"q":"…","language":"de"}]}`
+			`Rounds continue while gaps remain, so this is not your last chance at the question: what you leave open here is what the next round searches. Establishing one thing properly beats touching every gap shallowly.`,
+			`next_queries: at most ${args.maxQueries}, and prefer one. Write the search that would most change this brief if it came back the other way — the gap the rest of the answer depends on — rather than one query per gap. Do not repeat these, which have already been run: ${args.ranQueries.map((q) => `"${q}"`).join(', ')}. ${languageBrief(cfg)}`,
+			// Only where something was actually offered. Asking for a link when no
+			// source carried one is asking for an address the model can only invent
+			// — which parseBrief would drop, after the tokens had been spent
+			// inviting it.
+			...(offeredLinks
+				? [
+						`follow: up to ${MAX_FOLLOW} addresses copied exactly from the "Links on this page" lists above, for pages the next round should open directly rather than search for. This is what a search cannot do: a source citing the thing it got its numbers from is a better lead than any query. Use it for a primary source a page points at — the paper, the ruling, the dataset, the filing — not for more commentary. An address that is not in those lists is ignored, so do not compose one.`
+					]
+				: []),
+			`Reply ONLY with JSON: {"findings":[{"claim":"…","sources":[1,4]}],"gaps":["…"],"conflicts":["…"],"sufficient":false,"next_queries":[{"q":"…","language":"de"}]${offeredLinks ? ',"follow":["https://…"]' : ''}}`
 		].join(' ')
 	].join('\n\n');
 
@@ -1987,7 +2213,8 @@ export async function consolidate(args: {
 			knownSources: args.allEvidence.map((e) => e.n),
 			readSources: args.allEvidence.filter((e) => e.kind === 'page').map((e) => e.n),
 			maxQueries: args.maxQueries,
-			fallbackLanguage: args.defaultLanguage ?? ''
+			fallbackLanguage: args.defaultLanguage ?? '',
+			offeredLinks: offered
 		});
 
 	/**
@@ -2049,7 +2276,8 @@ export async function consolidate(args: {
 	}
 
 	const { res, brief } = out;
-	if (brief) return { status: 'ok', brief: brief.brief, queries: brief.queries };
+	if (brief)
+		return { status: 'ok', brief: brief.brief, queries: brief.queries, follow: brief.follow };
 	if (!res.text.trim()) return { status: 'empty', reasonedOnly: Boolean(res.reasonedOnly) };
 	return { status: 'unparseable', ...unusable(res) };
 }
@@ -2153,8 +2381,20 @@ export function parseBrief(
 		readSources?: Iterable<number>;
 		maxQueries: number;
 		fallbackLanguage?: string;
+		/**
+		 * Addresses the round was actually shown. A `follow` outside this set is
+		 * dropped for the same reason a citation to a source that does not exist
+		 * is: the model composed it. That it would also be fetched — a request
+		 * this process makes to an address a model invented — is the reason this
+		 * is a whitelist rather than a format check.
+		 */
+		offeredLinks?: Iterable<string>;
 	}
-): { brief: Omit<ResearchBrief, 'round'>; queries: PlannedQuery[] } | null {
+): {
+	brief: Omit<ResearchBrief, 'round'>;
+	queries: PlannedQuery[];
+	follow: string[];
+} | null {
 	const start = text.indexOf('{');
 	const end = text.lastIndexOf('}');
 	if (start === -1 || end <= start) return null;
@@ -2208,6 +2448,22 @@ export function parseBrief(
 	// brief, it is a model that answered a different question.
 	if (!findings.length && !gaps.length && !sufficient) return null;
 
+	// Matched on the canonical key rather than the literal string: a model that
+	// copies an address back with a trailing slash or a dropped `www.` has still
+	// named a page it was shown, and refusing that would make the whitelist
+	// pedantic rather than safe. The offered spelling is what gets fetched.
+	const offered = new Map<string, string>();
+	for (const url of opts.offeredLinks ?? []) {
+		const key = canonicalUrlKey(url);
+		if (key && !offered.has(key)) offered.set(key, url);
+	}
+	const follow: string[] = [];
+	for (const raw of Array.isArray(parsed.follow) ? parsed.follow : []) {
+		if (follow.length >= MAX_FOLLOW) break;
+		const hit = offered.get(canonicalUrlKey(String(raw ?? '')));
+		if (hit && !follow.includes(hit)) follow.push(hit);
+	}
+
 	return {
 		brief: { findings, gaps, conflicts: list(parsed.conflicts, GAP_CHARS, MAX_CONFLICTS), sufficient },
 		// Routed through parseQueries so follow-ups get the same shape tolerance
@@ -2216,7 +2472,8 @@ export function parseBrief(
 			JSON.stringify({ queries: parsed.next_queries ?? parsed.more_queries ?? [] }),
 			opts.maxQueries,
 			opts.fallbackLanguage ?? ''
-		)
+		),
+		follow
 	};
 }
 
@@ -2491,11 +2748,20 @@ export interface PageFetchDeps {
 	fetchImpl?: typeof fetch;
 }
 
+/** The prose alone, for callers that do not care where the page points. */
 export async function fetchPageText(
 	url: string,
 	timeoutMs: number,
 	deps: PageFetchDeps = {}
 ): Promise<string> {
+	return (await fetchPageContent(url, timeoutMs, deps)).text;
+}
+
+export async function fetchPageContent(
+	url: string,
+	timeoutMs: number,
+	deps: PageFetchDeps = {}
+): Promise<PageContent> {
 	// safeFetch asserts the guard on this URL and on every redirect hop.
 	const res = await safeFetch(
 		url,
@@ -2530,7 +2796,7 @@ export async function fetchPageText(
 	// attachments and a lot of primary material is only published this way.
 	if (bare === 'application/pdf') {
 		const { extractPdf } = await import('$lib/server/attachments');
-		return clipPage(await extractPdf(await readCappedBytes(res, MAX_PAGE_BYTES)));
+		return { text: clipPage(await extractPdf(await readCappedBytes(res, MAX_PAGE_BYTES))), links: [] };
 	}
 	if (bare && !READABLE_TYPE.test(bare)) {
 		throw new PageFetchError('unreadable-type', `Not readable as text: ${bare}`);
@@ -2547,7 +2813,13 @@ export async function fetchPageText(
 	// text/plain must not go through the HTML stripper, which mangles code and
 	// comparison operators.
 	const html = bare ? /html|xml/.test(bare) : /^\s*(<!doctype html|<html|<)/i.test(body);
-	return clipPage(html ? htmlToReadableText(body) : body.trim());
+	return {
+		text: clipPage(html ? htmlToReadableText(body) : body.trim()),
+		// `res.url` rather than the requested one: a redirect moves what a
+		// relative href resolves against, and resolving against the old address
+		// is how a followed link 404s.
+		links: html ? extractLinks(body, res.url || url) : []
+	};
 }
 
 const ENTITIES: Record<string, string> = {
@@ -2760,6 +3032,163 @@ export function htmlToReadableText(html: string): string {
 	if (structured.length > readable.length) return structured;
 	const plain = htmlToText(html);
 	return plain.length > readable.length * 3 ? plain : readable;
+}
+
+/** How much of the person's own material the opening plan is shown. */
+const LOCAL_CONTEXT_CHARS = 1_200;
+const LOCAL_DOCS = 4;
+const LOCAL_CONCEPTS = 5;
+
+export interface LocalContextDeps {
+	docs?: (query: string, userId: string, limit: number) => { title: string; match: string }[];
+	concepts?: (query: string, userId: string, limit: number) => { name: string; description: string }[];
+}
+
+/**
+ * What this person already holds on the question, for aiming the opening query.
+ *
+ * The opening round is planned blind against the open web, which is right as
+ * far as it goes and wrong about one thing: the platform is often already
+ * holding the answer to part of the question, or — more useful — the person's
+ * own vocabulary for it. A query written without that searches for the subject
+ * in the abstract rather than the subject as they talk about it.
+ *
+ * Aiming only. These are notes and concepts, not sources: they carry no `[n]`,
+ * they are never merged into the evidence, and the prompt says so, because a
+ * claim cited to somebody's own notes is exactly the sort of thing this
+ * pipeline spends a lot of effort making impossible.
+ *
+ * Never throws. A lattice or library that cannot be read is a reason to plan
+ * without them, not a reason to fail a research run.
+ */
+export function localContext(userId: string, question: string, deps: LocalContextDeps = {}): string {
+	const parts: string[] = [];
+	try {
+		const docs = (deps.docs ?? defaultLocalDocs)(question, userId, LOCAL_DOCS);
+		for (const d of docs) {
+			const match = d.match.replace(/\s+/g, ' ').trim();
+			parts.push(`- Library, "${d.title}": ${match}`);
+		}
+	} catch {
+		// A failed index read is not worth a word to the reader.
+	}
+	try {
+		const concepts = (deps.concepts ?? defaultLocalConcepts)(question, userId, LOCAL_CONCEPTS);
+		for (const c of concepts) {
+			parts.push(`- Concept, ${c.name}${c.description ? `: ${c.description}` : ''}`);
+		}
+	} catch {
+		/* as above */
+	}
+	if (!parts.length) return '';
+	return clipExcerpt(parts.join('\n'), LOCAL_CONTEXT_CHARS);
+}
+
+function defaultLocalDocs(query: string, userId: string, limit: number) {
+	return searchDocs(query, userId, limit).map((d) => ({ title: d.title, match: d.match }));
+}
+
+function defaultLocalConcepts(query: string, userId: string, limit: number) {
+	return activate({ userId, query, limit })
+		.nodes.slice(0, limit)
+		.map((a) => ({ name: a.node.name, description: a.node.description }));
+}
+
+/**
+ * Addresses the person put in their own message.
+ *
+ * Research had no way to use one: it searched for what it was handed an address
+ * for, which is the same mistake the chat prompt has always called out. These
+ * are read in round one alongside whatever the opening query turns up.
+ */
+export function questionUrls(text: string, cap = MAX_FOLLOW): string[] {
+	const out: string[] = [];
+	const seen = new Set<string>();
+	// Trailing punctuation is part of the sentence, not the address.
+	for (const m of String(text ?? '').matchAll(/https?:\/\/[^\s<>"')\]]+/gi)) {
+		if (out.length >= cap) break;
+		const url = m[0].replace(/[.,;:!?]+$/, '');
+		const key = canonicalUrlKey(url);
+		if (!key || seen.has(key)) continue;
+		seen.add(key);
+		out.push(url);
+	}
+	return out;
+}
+
+/** An outbound link found on a page, offered as somewhere the next round could go. */
+export interface PageLink {
+	url: string;
+	/** The anchor text, which is usually how the citing page describes the source. */
+	text: string;
+}
+
+/** A page as read: its prose, and where it points. */
+export interface PageContent {
+	text: string;
+	links: PageLink[];
+}
+
+/** Offered per source. Small: these are a shortlist to choose from, not an index. */
+const MAX_PAGE_LINKS = 6;
+const LINK_TEXT_CHARS = 60;
+
+/**
+ * Hosts that are share buttons rather than sources. Deliberately short — the
+ * outbound filter below does most of the work, and a list of "not real sources"
+ * is exactly the kind of thing that grows until it excludes a primary source
+ * somebody actually needed.
+ */
+const NON_SOURCE_HOST =
+	/(^|\.)(twitter\.com|x\.com|facebook\.com|linkedin\.com|reddit\.com|t\.co|instagram\.com|pinterest\.com|whatsapp\.com|telegram\.me)$/i;
+
+/**
+ * Where a page points, so a later round can follow a citation.
+ *
+ * The pipeline could previously only read what a search engine returned, which
+ * is the one thing an agentic loop does better: a good source citing a better
+ * one is the most reliable signal in research, and it was invisible here
+ * because `htmlToText` strips every tag including the anchors.
+ *
+ * Links to the same registrable domain are dropped, which is what makes this
+ * cheap enough to run over the whole page rather than the extracted article:
+ * navigation, pagination and "more from us" are all internal by construction,
+ * so the outbound filter removes the furniture without a second parse.
+ */
+export function extractLinks(html: string, baseUrl: string, cap = MAX_PAGE_LINKS): PageLink[] {
+	let base: URL;
+	try {
+		base = new URL(baseUrl);
+	} catch {
+		return [];
+	}
+	const home = registrableDomain(base.hostname);
+	// The page itself is never worth offering back.
+	const seen = new Set<string>([canonicalUrlKey(baseUrl)]);
+	const out: PageLink[] = [];
+	const anchor = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))[^>]*>([\s\S]*?)<\/a>/gi;
+	for (const m of html.matchAll(anchor)) {
+		if (out.length >= cap) break;
+		let url: URL;
+		try {
+			url = new URL(decodeEntities(m[1] ?? m[2] ?? m[3] ?? ''), base);
+		} catch {
+			continue;
+		}
+		if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+		// A fragment is the same document, and two of them are not two sources.
+		url.hash = '';
+		const key = canonicalUrlKey(url.href);
+		if (!key || seen.has(key)) continue;
+		const host = url.hostname.toLowerCase();
+		if (registrableDomain(host) === home || NON_SOURCE_HOST.test(host)) continue;
+		seen.add(key);
+		const text = htmlToText(m[4] ?? '')
+			.replace(/\s+/g, ' ')
+			.trim();
+		out.push({ url: url.href, text: text.slice(0, LINK_TEXT_CHARS) });
+	}
+	return out;
 }
 
 /** Clip to the budget, preferring a paragraph boundary near the end of it. */

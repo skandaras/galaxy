@@ -61,6 +61,17 @@ export interface WebSearchSettings {
 	 */
 	maxSearchesPerTurn: number;
 	/**
+	 * Live searches one *model round-trip* may make, as opposed to one turn.
+	 *
+	 * One, because a search is a question asked so that its answer can shape the
+	 * next one. A model that writes four queries in a single message has written
+	 * three of them blind, and the loop runs them all before it is asked again —
+	 * so the refinement the turn allowance was meant to buy never happens. A
+	 * second query in the same round-trip is refused without spending anything;
+	 * raise this only if you would rather have the breadth than the narrowing.
+	 */
+	searchesPerStep: number;
+	/**
 	 * BCP-47 code the search provider is biased towards when a call doesn't name
 	 * one, e.g. 'de' or 'pt-br'. Empty means no constraint, which is the right
 	 * default: the engines infer language from the query, and pinning one
@@ -86,7 +97,7 @@ export interface WebSearchSettings {
  * Bump when a default here changes in a way existing installs should inherit,
  * and add the corresponding step to `migrateWebSearchSettings`.
  */
-export const WEB_SEARCH_SETTINGS_VERSION = 1;
+export const WEB_SEARCH_SETTINGS_VERSION = 2;
 
 export const DEFAULT_WEB_SEARCH: WebSearchSettings = {
 	provider: 'none',
@@ -94,6 +105,7 @@ export const DEFAULT_WEB_SEARCH: WebSearchSettings = {
 	maxResults: 20,
 	timeoutMs: 10_000,
 	maxSearchesPerTurn: 6,
+	searchesPerStep: 1,
 	defaultLanguage: '',
 	settingsVersion: WEB_SEARCH_SETTINGS_VERSION
 };
@@ -135,6 +147,12 @@ export function migrateWebSearchSettings(
 		if (stored.maxResults === 5) next.maxResults = 20;
 		if (stored.maxSearchesPerTurn === 4) next.maxSearchesPerTurn = 6;
 	}
+	if (from < 2) {
+		// v2 — searches became one per model round-trip. The field is new, so
+		// there is no stored value to protect: every pre-v2 row simply gains the
+		// default, which is the only reading of "not set" that means anything.
+		next.searchesPerStep = DEFAULT_WEB_SEARCH.searchesPerStep;
+	}
 	next.settingsVersion = WEB_SEARCH_SETTINGS_VERSION;
 	return next;
 }
@@ -154,6 +172,7 @@ export function normaliseWebSearchSettings(raw: Record<string, unknown>): WebSea
 		...merged,
 		maxResults: num(raw.maxResults, DEFAULT_WEB_SEARCH.maxResults, 1, 20),
 		maxSearchesPerTurn: num(raw.maxSearchesPerTurn, DEFAULT_WEB_SEARCH.maxSearchesPerTurn, 1, 20),
+		searchesPerStep: num(raw.searchesPerStep, DEFAULT_WEB_SEARCH.searchesPerStep, 1, 5),
 		timeoutMs: num(raw.timeoutMs, DEFAULT_WEB_SEARCH.timeoutMs, 1_000, 120_000),
 		// An admin who has been through the form has seen the current defaults,
 		// so a save is itself the migration for anything still outstanding.
@@ -247,19 +266,30 @@ export interface ResearchSettings {
  * Bump when a default here changes in a way existing installs should inherit,
  * and add the corresponding step to `migrateResearchSettings`.
  */
-export const RESEARCH_SETTINGS_VERSION = 1;
+export const RESEARCH_SETTINGS_VERSION = 2;
 
 export const DEFAULT_RESEARCH: ResearchSettings = {
 	provider: 'inherit',
-	maxQueries: 4,
+	// Two, and this is the number that makes a round narrow. A round's job is to
+	// answer one thing properly and hand the next round a sharper question, which
+	// four queries actively prevent: they arrive together, get consolidated
+	// together, and leave nothing for the following round to aim at. Effort still
+	// spends the admin's ceiling in full at exhaustive — raise this and it will.
+	maxQueries: 2,
 	maxPages: 10,
 	maxTokens: 2048,
 	timeoutMs: 20_000,
-	maxRounds: 4,
-	// 4 rounds × 4 queries, so exhaustive effort is bounded by the round count
-	// rather than tripping the run cap halfway through.
-	maxSearchesPerRun: 16,
-	modelTriage: false,
+	// Six rather than four, because effort now buys rounds rather than breadth,
+	// and rounds are where the narrowing happens. RESEARCH_ROUNDS_MAX is 8.
+	maxRounds: 6,
+	// 1 opening query + 5 rounds × 2, with headroom for an admin who raises
+	// maxQueries — whichever binds first still wins.
+	maxSearchesPerRun: 20,
+	// On by default: this is the step that reads what came back and decides what
+	// is worth opening, which is the same judgement the round loop is built
+	// around. Off, the pipeline searches deliberately and then opens whatever
+	// the heuristic ordering happened to put first.
+	modelTriage: true,
 	extraLanguages: '',
 	settingsVersion: RESEARCH_SETTINGS_VERSION
 };
@@ -288,6 +318,23 @@ export function migrateResearchSettings(
 		// pages a round the narrow part of the pipeline rather than a sensible
 		// ceiling on it.
 		if (stored.maxPages === 6) next.maxPages = 10;
+	}
+	if (from < 2) {
+		// v2 — rounds became the unit of thought, so the run got more of them and
+		// each got narrower.
+		if (stored.maxQueries === 4) next.maxQueries = 2;
+		if (stored.maxRounds === 4) next.maxRounds = 6;
+		if (stored.maxSearchesPerRun === 16) next.maxSearchesPerRun = 20;
+		// A boolean cannot distinguish "never touched" from "deliberately off",
+		// which is normally a reason not to migrate one. It is safe here only
+		// because this shipped as false and has never been anything else: nobody
+		// can have turned it off without having first turned it on.
+		//
+		// `!== true` rather than `=== false`, because a row written before the key
+		// existed has it as undefined, and `normaliseResearchSettings` reads that
+		// as false on the way through — so the two cases this must move are
+		// spelt differently and only one of them looks like the old default.
+		if (stored.modelTriage !== true) next.modelTriage = true;
 	}
 	next.settingsVersion = RESEARCH_SETTINGS_VERSION;
 	return next;

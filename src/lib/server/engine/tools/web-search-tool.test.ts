@@ -21,8 +21,27 @@ const cfg = (over: Partial<WebSearchSettings> = {}): WebSearchSettings => ({
 	maxResults: 5,
 	timeoutMs: 1000,
 	maxSearchesPerTurn: 3,
+	searchesPerStep: 1,
 	...over
 });
+
+/**
+ * One search, run the way the loop runs it: a new model round-trip, then the call.
+ *
+ * The tool allows one search per round-trip, so two distinct queries are two
+ * round-trips — `beginStep` is what the loop calls between them. A test that
+ * means "and then the model searched again" has to say so; calling `execute`
+ * twice in a row means "both queries were in the same message", which is the
+ * thing the gate exists to refuse.
+ */
+const searchTurn = (
+	tool: ReturnType<typeof webSearchTool>,
+	args: Record<string, unknown>,
+	report?: (meta: Record<string, unknown>) => void
+) => {
+	tool.beginStep?.();
+	return tool.execute(args, report);
+};
 
 const result = (n: number): SearchResult => ({
 	title: `Title ${n}`,
@@ -115,7 +134,7 @@ describe('webSearchTool', () => {
 		await tool.execute({ query: 'a' });
 		await tool.execute({ query: 'a' });
 		await tool.execute({ query: 'a' });
-		const fresh = await tool.execute({ query: 'b' });
+		const fresh = await searchTurn(tool, { query: 'b' });
 		expect(search).toHaveBeenCalledTimes(2);
 		expect(fresh).not.toContain('budget');
 	});
@@ -123,9 +142,9 @@ describe('webSearchTool', () => {
 	it('stops searching once the budget is spent, and says so', async () => {
 		const { search } = stubSearch();
 		const tool = webSearchTool(cfg({ maxSearchesPerTurn: 2 }), { search });
-		await tool.execute({ query: 'a' });
-		await tool.execute({ query: 'b' });
-		const third = await tool.execute({ query: 'c' });
+		await searchTurn(tool, { query: 'a' });
+		await searchTurn(tool, { query: 'b' });
+		const third = await searchTurn(tool, { query: 'c' });
 		expect(search).toHaveBeenCalledTimes(2);
 		expect(third).toContain('budget');
 		expect(third).toMatch(/answer with what you have/i);
@@ -144,11 +163,87 @@ describe('webSearchTool', () => {
 	it('keeps state per turn, so a new tool starts with a full budget', async () => {
 		const { search } = stubSearch();
 		const first = webSearchTool(cfg({ maxSearchesPerTurn: 1 }), { search });
-		await first.execute({ query: 'a' });
-		expect(await first.execute({ query: 'b' })).toContain('budget');
+		await searchTurn(first, { query: 'a' });
+		expect(await searchTurn(first, { query: 'b' })).toContain('budget');
 
 		const next = webSearchTool(cfg({ maxSearchesPerTurn: 1 }), { search });
 		expect(await next.execute({ query: 'b' })).toContain('1. Title 1');
+	});
+
+	it('refuses a second search in the same model turn, and charges nothing for it', async () => {
+		// The turn allowance was never what went wrong: six searches over six model
+		// turns is research, and six in one message is six queries written before
+		// any of them came back.
+		const { search } = stubSearch();
+		const tool = webSearchTool(cfg({ maxSearchesPerTurn: 3 }), { search });
+		tool.beginStep?.();
+		await tool.execute({ query: 'a' });
+		const refused = await tool.execute({ query: 'b' });
+		expect(search).toHaveBeenCalledTimes(1);
+		expect(refused).toContain('Not run');
+		expect(refused).toMatch(/read them first/i);
+		// The model must not read this as the allowance being gone, or it stops
+		// offering to look again — the failure the budget wording already fixed once.
+		expect(refused).toContain('Nothing was spent');
+		expect(refused).toContain('2 of 3 searches still available');
+
+		// And the refused query runs on the next round-trip, unchanged.
+		expect(await searchTurn(tool, { query: 'b' })).toContain('1. Title 1');
+		expect(search).toHaveBeenCalledTimes(2);
+	});
+
+	it('still replays a repeat from memory inside the same turn', async () => {
+		// The memo is checked before the gate, deliberately: a repeat costs nothing
+		// and telling the model it already ran that query is the useful answer.
+		// Refusing it as "a second search" would teach it the opposite.
+		const { search } = stubSearch();
+		const tool = webSearchTool(cfg(), { search });
+		tool.beginStep?.();
+		await tool.execute({ query: 'galaxy news' });
+		const repeat = await tool.execute({ query: 'Galaxy News' });
+		expect(search).toHaveBeenCalledTimes(1);
+		expect(repeat).toContain('already searched');
+		expect(repeat).not.toContain('Not run');
+	});
+
+	it('reports a refusal to the Observatory without moving the count', async () => {
+		const { search } = stubSearch();
+		const tool = webSearchTool(cfg(), { search });
+		const meta: Record<string, unknown>[] = [];
+		tool.beginStep?.();
+		await tool.execute({ query: 'a' }, (m) => meta.push(m));
+		await tool.execute({ query: 'b' }, (m) => meta.push(m));
+		expect(meta[1]).toMatchObject({ deferred: true, searchesUsed: 1, perStep: 1 });
+	});
+
+	it('lets an admin buy the breadth back, and says so everywhere it says anything', async () => {
+		// The bug this whole rule exists to undo was two instructions disagreeing,
+		// so a description promising "one per turn" under a setting of two would
+		// be the same mistake in a new place.
+		const { search } = stubSearch();
+		const tool = webSearchTool(cfg({ searchesPerStep: 2 }), { search });
+		expect(tool.def.description).toContain('2 searches per turn');
+		tool.beginStep?.();
+		await tool.execute({ query: 'a' });
+		expect(await tool.execute({ query: 'b' })).toContain('2 per turn');
+		const refused = await tool.execute({ query: 'c' });
+		expect(refused).toContain('Not run');
+		expect(refused).toContain("all 2 of this turn's searches");
+		expect(search).toHaveBeenCalledTimes(2);
+	});
+
+	it('states the ration in its own description, so the model knows before it tries', () => {
+		expect(webSearchTool(cfg(), {}).def.description).toContain('one search per turn');
+	});
+
+	it('points at reading, not at the number of searches left', async () => {
+		// The tally alone reads as an invitation to spend it, and it is the last
+		// thing the model sees before it chooses what to do next.
+		const { search } = stubSearch();
+		const tool = webSearchTool(cfg(), { search });
+		const out = await searchTurn(tool, { query: 'a' });
+		expect(out).toContain('fetch_url');
+		expect(out).toContain('one per turn');
 	});
 
 	it('reports search count and cache hits for the Observatory', async () => {
@@ -187,8 +282,8 @@ describe('webSearchTool', () => {
 		// to look again even on the next message, which does have an allowance.
 		const { search } = stubSearch();
 		const tool = webSearchTool(cfg({ maxSearchesPerTurn: 1 }), { search });
-		await tool.execute({ query: 'a' });
-		const spent = await tool.execute({ query: 'b' });
+		await searchTurn(tool, { query: 'a' });
+		const spent = await searchTurn(tool, { query: 'b' });
 		expect(spent).toContain('this request');
 		expect(spent).toMatch(/new message starts a fresh allowance/i);
 	});
@@ -196,9 +291,9 @@ describe('webSearchTool', () => {
 	it('tells the model how much allowance is left, so it can pace itself', async () => {
 		const { search } = stubSearch();
 		const tool = webSearchTool(cfg({ maxSearchesPerTurn: 3 }), { search });
-		expect(await tool.execute({ query: 'a' })).toContain('2 more searches available');
-		expect(await tool.execute({ query: 'b' })).toContain('1 more search available');
-		expect(await tool.execute({ query: 'c' })).toContain('last search available');
+		expect(await searchTurn(tool, { query: 'a' })).toContain('2 more searches available');
+		expect(await searchTurn(tool, { query: 'b' })).toContain('1 more search available');
+		expect(await searchTurn(tool, { query: 'c' })).toContain('last search available');
 	});
 
 	it('passes a requested language through to the provider', async () => {
@@ -211,8 +306,8 @@ describe('webSearchTool', () => {
 	it('falls back to the configured default language, and lets a call override it', async () => {
 		const { search, langs } = stubSearch();
 		const tool = webSearchTool(cfg({ defaultLanguage: 'de' }), { search });
-		await tool.execute({ query: 'a' });
-		await tool.execute({ query: 'b', language: 'ja' });
+		await searchTurn(tool, { query: 'a' });
+		await searchTurn(tool, { query: 'b', language: 'ja' });
 		expect(langs).toEqual(['de', 'ja']);
 	});
 
@@ -229,8 +324,8 @@ describe('webSearchTool', () => {
 		// results — the wrong language, reported as a cache hit.
 		const { search } = stubSearch();
 		const tool = webSearchTool(cfg(), { search });
-		await tool.execute({ query: 'parliament', language: 'de' });
-		const second = await tool.execute({ query: 'parliament', language: 'fr' });
+		await searchTurn(tool, { query: 'parliament', language: 'de' });
+		const second = await searchTurn(tool, { query: 'parliament', language: 'fr' });
 		expect(search).toHaveBeenCalledTimes(2);
 		expect(second).not.toContain('already searched');
 	});

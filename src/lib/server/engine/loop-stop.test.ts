@@ -261,6 +261,42 @@ describe('the turn budget the model is told about', () => {
 		expect(await systemSent(12, [])).not.toContain('Turn budget');
 	});
 
+	it('carves searching out of the batching advice, but only where there is a web_search', async () => {
+		// "Batch every independent call into one turn" is right for reads and
+		// exactly wrong for search, and being the operational line in the system
+		// prompt it beat both the task prompt and the tool description. A model
+		// with no web_search should not have to read the exception.
+		const searchTool: LoopTool = {
+			def: { name: 'web_search', description: 'search', parameters: {} },
+			execute: async () => 'results'
+		};
+		const withSearch = await systemSent(12, [readTool, searchTool]);
+		expect(withSearch).toContain('Searching is the exception');
+		expect(withSearch).toMatch(/one query, read what it returns/i);
+		// The batching economy itself survives — it is still right for reads.
+		expect(withSearch).toContain('Batch independent calls');
+
+		expect(await systemSent(12, [readTool])).not.toContain('Searching is the exception');
+	});
+
+	it('tells a tool when a new model round-trip has begun', async () => {
+		// A per-turn closure cannot see where one round-trip ends and the next
+		// starts, which is the seam web_search needs to allow one search per turn.
+		const steps: number[] = [];
+		let calls = 0;
+		const counted: LoopTool = {
+			def: { name: 'read_file', description: 'read', parameters: {} },
+			beginStep: () => steps.push(calls),
+			execute: async () => {
+				calls++;
+				return 'file contents';
+			}
+		};
+		await run({ choice: scriptedChoice({ toolRounds: 3 }), maxIterations: 8, tools: [counted] });
+		// Once per round-trip that made calls, and always before them.
+		expect(steps).toEqual([0, 1, 2]);
+	});
+
 	it('asks the model to land the turn as the cap approaches', async () => {
 		// Without this the budget simply runs out mid-chain and the turn ends
 		// holding an unfinished answer.

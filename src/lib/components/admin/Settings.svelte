@@ -7,6 +7,7 @@
 		maxResults: 20,
 		timeoutMs: 10000,
 		maxSearchesPerTurn: 6,
+		searchesPerStep: 1,
 		defaultLanguage: ''
 	});
 	let compaction = $state({ ratio: 0.7, keepRecent: 8 });
@@ -16,13 +17,13 @@
 	let research = $state({
 		provider: 'inherit',
 		baseUrl: '',
-		maxQueries: 4,
+		maxQueries: 2,
 		maxPages: 6,
 		maxTokens: 2048,
 		timeoutMs: 20000,
-		maxRounds: 4,
-		maxSearchesPerRun: 16,
-		modelTriage: false,
+		maxRounds: 6,
+		maxSearchesPerRun: 20,
+		modelTriage: true,
 		extraLanguages: ''
 	});
 	let coding = $state({ autoCheckpoint: true, autoContinue: true, maxLegs: 3 });
@@ -230,6 +231,14 @@
 				<input type="number" min="1" max="20" bind:value={websearch.maxSearchesPerTurn} />
 			</label>
 			<label>
+				searches per model turn
+				<input type="number" min="1" max="5" bind:value={websearch.searchesPerStep} />
+				<small>
+					One means a search is always read before the next is written; a second query in the
+					same model turn is refused without spending the allowance.
+				</small>
+			</label>
+			<label>
 				default language
 				<input bind:value={websearch.defaultLanguage} placeholder="auto" />
 			</label>
@@ -287,8 +296,13 @@
 				</label>
 			{/if}
 			<label>
-				max queries
+				queries a round
 				<input type="number" min="1" max="10" bind:value={research.maxQueries} />
+				<small>
+					Kept low on purpose: a round answers one thing and hands the next round a sharper
+					question. Effort buys more rounds, not wider ones. The first round always runs a
+					single orienting query.
+				</small>
 			</label>
 			<label>
 				max pages per round
@@ -578,6 +592,12 @@
 	label.row {
 		flex-direction: row;
 		align-items: center;
+	}
+	/* A knob whose right value is not obvious from its name. */
+	label small {
+		max-width: 34ch;
+		color: var(--fg-dim);
+		font-size: var(--text-sm);
 	}
 	.hint {
 		font-size: var(--text-sm);

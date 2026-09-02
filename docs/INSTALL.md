@@ -325,12 +325,21 @@ hosted assistants query licensed commercial indexes or their own crawlers, and
 bill for the feature. The realistic choice is a small paid index or scrapers
 that flap.
 
-**How much would you actually use?** One deep-research run makes at most
-`rounds × queries per round` searches: 16 at Exhaustive effort, about 9 at
-Balanced, with the ceiling set in Admin → Settings → Deep research. An ordinary
-chat turn makes at most `searches per turn`, default 6. Divide whatever
-allowance a provider currently offers by those numbers before assuming you need
-a paid tier — a personal instance often does not.
+**How much would you actually use?** One deep-research run opens with a single
+query and then makes at most `queries per round` per later round: 11 searches at
+Exhaustive effort on the shipped defaults, 7 at Balanced, with the ceilings set
+in Admin → Settings → Deep research. An ordinary chat turn makes at most
+`searches per turn`, default 6, and at most `searches per model turn` — default
+1 — in any one of them. Divide whatever allowance a provider currently offers by
+those numbers before assuming you need a paid tier: a personal instance often
+does not, and searching one query at a time tends to spend fewer of them, not
+more, because the second query is written after reading the first one's results
+rather than alongside it.
+
+Rounds and queries a round moved together: research went from 4 wide rounds to 6
+narrow ones, because a round's job is to answer one thing properly and hand the
+next round a sharper question. Raise `queries a round` if you would rather have
+the breadth — Exhaustive effort will spend whatever you set.
 
 Pages read per round is stored the same way and migrated the same way — it moved
 from six to ten once the search net widened, since six had become the narrow part

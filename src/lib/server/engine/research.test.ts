@@ -38,6 +38,10 @@ import {
 	runSearches,
 	searchAllowance,
 	shouldStopAfterRound,
+	shouldWidenAfterOpening,
+	extractLinks,
+	questionUrls,
+	localContext,
 	classifyFetchError,
 	countFailures,
 	decodeBody,
@@ -357,15 +361,41 @@ describe('roundBudget', () => {
 			const b = roundBudget(DEFAULT_RESEARCH, e);
 			return [b.rounds, b.queriesPerRound, b.pagesPerRound, b.searchBudget];
 		};
-		expect(at('quick')).toEqual([2, 2, 4, 4]);
-		expect(at('balanced')).toEqual([3, 3, 7, 9]);
-		expect(at('exhaustive')).toEqual([4, 4, 10, 16]);
+		expect(at('quick')).toEqual([2, 2, 4, 3]);
+		expect(at('balanced')).toEqual([4, 2, 7, 7]);
+		expect(at('exhaustive')).toEqual([6, 2, 10, 11]);
+	});
+
+	it('spends effort on rounds and reading, never on breadth', () => {
+		// The whole point of the shipped defaults: asking for more effort buys more
+		// chances to think, not a wider sweep of the same blind guess. It falls out
+		// of maxQueries meeting the floor rather than out of a rule, which is why
+		// it is worth pinning — the next person to raise maxQueries should see
+		// this fail and decide deliberately.
+		const widths = RESEARCH_EFFORTS.map((e) => roundBudget(DEFAULT_RESEARCH, e).queriesPerRound);
+		expect(new Set(widths).size).toBe(1);
+		const rounds = RESEARCH_EFFORTS.map((e) => roundBudget(DEFAULT_RESEARCH, e).rounds);
+		expect(new Set(rounds).size).toBe(RESEARCH_EFFORTS.length);
+	});
+
+	it('opens on one query however much effort it was given', () => {
+		// Round one is the only round planned blind. Nothing has come back, so
+		// there is nothing to aim at and every query past the first is a guess.
+		for (const level of RESEARCH_EFFORTS) {
+			expect(roundBudget(DEFAULT_RESEARCH, level).openingQueries).toBe(1);
+		}
+		// ...and its narrowness is counted, rather than the run being billed for a
+		// full round it never runs.
+		const b = roundBudget(DEFAULT_RESEARCH, 'exhaustive');
+		expect(b.searchBudget).toBe(b.openingQueries + (b.rounds - 1) * b.queriesPerRound);
 	});
 
 	it('spends exactly the admin ceiling at exhaustive', () => {
 		const cfg = { ...DEFAULT_RESEARCH, maxRounds: 7, maxQueries: 6, maxPages: 9 };
 		const b = roundBudget(cfg, 'exhaustive');
 		expect(b.rounds).toBe(researchRoundCeiling(cfg));
+		// Constant width at the shipped defaults is a consequence of those defaults,
+		// not a cap hiding the admin's knob: raise maxQueries and exhaustive spends it.
 		expect(b.queriesPerRound).toBe(cfg.maxQueries);
 		expect(b.pagesPerRound).toBe(cfg.maxPages);
 		expect(b.searchBudget).toBeLessThanOrEqual(cfg.maxSearchesPerRun);
@@ -394,7 +424,13 @@ describe('roundBudget', () => {
 		};
 		for (const level of RESEARCH_EFFORTS) {
 			const b = roundBudget(cfg, level);
-			expect(b).toMatchObject({ rounds: 1, queriesPerRound: 1, pagesPerRound: 1, searchBudget: 1 });
+			expect(b).toMatchObject({
+				rounds: 1,
+				queriesPerRound: 1,
+				openingQueries: 1,
+				pagesPerRound: 1,
+				searchBudget: 1
+			});
 		}
 	});
 
@@ -473,6 +509,58 @@ describe('parseBrief', () => {
 			sufficient: false
 		});
 		expect(out?.queries).toEqual([{ q: 'B details', language: 'de' }]);
+	});
+
+	it('carries links it was actually offered', () => {
+		const out = parseBrief(
+			`{"findings":[{"claim":"A holds","sources":[1]}],"gaps":[],"sufficient":true,
+			  "follow":["https://arxiv.org/abs/1234"]}`,
+			{ ...opts, offeredLinks: ['https://arxiv.org/abs/1234', 'https://ons.gov.uk/x'] }
+		);
+		expect(out?.follow).toEqual(['https://arxiv.org/abs/1234']);
+	});
+
+	it('drops an address it was never shown, because following one would fetch it', () => {
+		// The same rule as a citation to a source that does not exist, with more
+		// riding on it: a citation that survives is merely wrong, whereas a
+		// composed address is a request this process then makes to it.
+		const out = parseBrief(
+			`{"findings":[{"claim":"A","sources":[1]}],"gaps":[],"sufficient":true,
+			  "follow":["https://arxiv.org/abs/1234","http://169.254.169.254/latest/meta-data"]}`,
+			{ ...opts, offeredLinks: ['https://arxiv.org/abs/1234'] }
+		);
+		expect(out?.follow).toEqual(['https://arxiv.org/abs/1234']);
+	});
+
+	it('follows nothing when nothing was offered', () => {
+		const out = parseBrief(
+			`{"findings":[{"claim":"A","sources":[1]}],"gaps":[],"sufficient":true,
+			  "follow":["https://arxiv.org/abs/1234"]}`,
+			opts
+		);
+		expect(out?.follow).toEqual([]);
+	});
+
+	it('accepts an address copied back in a different but equivalent spelling', () => {
+		// A whitelist that insists on the byte-for-byte string is pedantic rather
+		// than safe: a trailing slash is the same page. What gets fetched is the
+		// spelling that was offered, not the one that came back.
+		const out = parseBrief(
+			`{"findings":[{"claim":"A","sources":[1]}],"gaps":[],"sufficient":true,
+			  "follow":["https://www.ons.gov.uk/data/"]}`,
+			{ ...opts, offeredLinks: ['https://ons.gov.uk/data'] }
+		);
+		expect(out?.follow).toEqual(['https://ons.gov.uk/data']);
+	});
+
+	it('bounds how many links one round may hand the next', () => {
+		const offered = Array.from({ length: 8 }, (_, i) => `https://s${i}.org/x`);
+		const out = parseBrief(
+			`{"findings":[{"claim":"A","sources":[1]}],"gaps":[],"sufficient":true,
+			  "follow":${JSON.stringify(offered)}}`,
+			{ ...opts, offeredLinks: offered }
+		);
+		expect(out?.follow).toHaveLength(3);
 	});
 
 	it('still accepts a bare-string finding, so a model that ignores the shape works', () => {
@@ -691,6 +779,36 @@ describe('shouldStopAfterRound', () => {
 	});
 });
 
+describe('shouldWidenAfterOpening', () => {
+	const empty = { round: 1, rounds: 4, evidenceCount: 0, aborted: false };
+
+	it('widens rather than giving up when the one opening query found nothing', () => {
+		// One query is one guess. Ending the run here would report "nothing is
+		// indexed about this" on the strength of a single badly chosen wording.
+		expect(shouldWidenAfterOpening(empty)).toBe(true);
+	});
+
+	it('does not widen a round that found something, however little', () => {
+		expect(shouldWidenAfterOpening({ ...empty, evidenceCount: 1 })).toBe(false);
+	});
+
+	it('leaves every later round to the normal stop rules', () => {
+		// By round two there is a brief, and an empty round means something real.
+		expect(shouldWidenAfterOpening({ ...empty, round: 2 })).toBe(false);
+		expect(shouldStopAfterRound({ ...empty, round: 2, freshCount: 0, searchesLeft: 5 })).toBe(
+			'no-sources'
+		);
+	});
+
+	it('does not widen when there is no round left to widen into', () => {
+		expect(shouldWidenAfterOpening({ ...empty, rounds: 1 })).toBe(false);
+	});
+
+	it('never widens a cancelled run', () => {
+		expect(shouldWidenAfterOpening({ ...empty, aborted: true })).toBe(false);
+	});
+});
+
 describe('consolidate', () => {
 	const base = {
 		systemPrompt: 'you are the research agent',
@@ -786,12 +904,50 @@ describe('consolidate', () => {
 		expect(prompt()).toContain('"next_queries"');
 	});
 
-	it('clips a long excerpt so the prompt stays bounded', async () => {
+	it('offers where each new source points, and asks which to open next', async () => {
 		const choice = choiceOf(ok(valid));
 		const prompt = spyOn(choice);
-		await consolidate({ ...base, choice, fresh: [source(7, 'y'.repeat(5000))] });
-		expect(prompt()).toContain('…[clipped]');
-		expect(prompt().length).toBeLessThan(5000);
+		await consolidate({
+			...base,
+			choice,
+			fresh: [
+				{
+					...source(7, 'the page said something specific'),
+					links: [{ url: 'https://arxiv.org/abs/1234', text: 'the original paper' }]
+				}
+			]
+		});
+		expect(prompt()).toContain('Links on this page');
+		expect(prompt()).toContain('the original paper <https://arxiv.org/abs/1234>');
+		expect(prompt()).toContain('"follow"');
+		// The one thing a search cannot do, said as such.
+		expect(prompt()).toMatch(/primary source/i);
+	});
+
+	it('does not ask for a link when no source offered one', async () => {
+		// Asking anyway invites an address the model can only invent — which
+		// parseBrief drops, after the tokens were spent inviting it.
+		const choice = choiceOf(ok(valid));
+		const prompt = spyOn(choice);
+		await consolidate({ ...base, choice, fresh: [source(7, 'plain text')] });
+		expect(prompt()).not.toContain('Links on this page');
+		expect(prompt()).not.toContain('"follow"');
+	});
+
+	it('clips a long excerpt so the prompt stays bounded', async () => {
+		const lengthWith = async (excerptChars: number) => {
+			const choice = choiceOf(ok(valid));
+			const prompt = spyOn(choice);
+			await consolidate({ ...base, choice, fresh: [source(7, 'y'.repeat(excerptChars))] });
+			expect(prompt()).toContain('…[clipped]');
+			return prompt().length;
+		};
+		// The property, rather than a character count: the prompt must not grow
+		// with the source. A fixed ceiling measured the instructions as much as the
+		// clipping, so rewording them failed a test about excerpt length.
+		const [small, large] = [await lengthWith(5_000), await lengthWith(200_000)];
+		expect(large).toBe(small);
+		expect(small).toBeLessThan(6_000);
 	});
 
 	it('carries the system prompt, which the review step it replaces never did', async () => {
@@ -1168,6 +1324,67 @@ describe('readPages', () => {
 		);
 		// Domain round-robin, not simply the first two results.
 		expect(out.map((e) => e.url)).toEqual(['https://a.com/1', 'https://b.com/1']);
+	});
+
+	it('opens a pinned address whatever the triage would have chosen', async () => {
+		const out = await readPages(
+			[hit('https://a.com/1'), hit('https://a.com/2'), hit('https://b.com/1')],
+			[],
+			2,
+			100,
+			noop,
+			{ readPage: async (url) => `body of ${url}`, pinned: [hit('https://given.org/spec')] }
+		);
+		// Pinned first, and it takes one of the two places rather than being added
+		// on top of them — a followed link costs a page like any other.
+		expect(out.map((e) => e.url)).toEqual(['https://given.org/spec', 'https://a.com/1']);
+	});
+
+	it('does not re-open something already read', async () => {
+		const existing = [
+			{ n: 1, title: 'T', url: 'https://given.org/spec', excerpt: 'x', kind: 'page' as const }
+		];
+		const out = await readPages([hit('https://a.com/1')], existing, 2, 100, noop, {
+			readPage: async (url) => `body of ${url}`,
+			// Same page, spelt differently.
+			pinned: [hit('https://www.given.org/spec/')]
+		});
+		expect(out.map((e) => e.url)).toEqual(['https://a.com/1']);
+	});
+
+	it('spends the whole budget on pinned addresses when there are that many', async () => {
+		// Leaves the triage a limit of zero, which it has to treat as "pick
+		// nothing" rather than as "no cap".
+		const out = await readPages([hit('https://a.com/1')], [], 2, 100, noop, {
+			readPage: async (url) => `body of ${url}`,
+			pinned: [hit('https://given.org/1'), hit('https://given.org/2'), hit('https://given.org/3')]
+		});
+		expect(out.map((e) => e.url)).toEqual(['https://given.org/1', 'https://given.org/2']);
+	});
+
+	it('numbers a pinned source like any other, so it can be cited', async () => {
+		const out = await readPages([], [], 2, 100, noop, {
+			readPage: async (url) => `body of ${url}`,
+			pinned: [hit('https://given.org/spec')]
+		});
+		expect(out).toEqual([
+			expect.objectContaining({ n: 1, url: 'https://given.org/spec', kind: 'page' })
+		]);
+	});
+
+	it('keeps the links off a page it read, and still accepts a plain string', async () => {
+		const rich = await readPages([hit('https://a.com/1')], [], 1, 100, noop, {
+			readPage: async () => ({
+				text: 'body',
+				links: [{ url: 'https://arxiv.org/abs/1', text: 'the paper' }]
+			})
+		});
+		expect(rich[0].links).toEqual([{ url: 'https://arxiv.org/abs/1', text: 'the paper' }]);
+
+		const plain = await readPages([hit('https://a.com/1')], [], 1, 100, noop, {
+			readPage: async () => 'body'
+		});
+		expect(plain[0].links).toBeUndefined();
 	});
 
 	it('marks a source as snippet-only when the fetch fails', async () => {
@@ -2163,5 +2380,127 @@ describe('a consolidation that ran out of room', () => {
 	it('still retries an empty reasoned-out reply, as it always did', async () => {
 		const out = await consolidate({ ...base, choice: choiceOf(reasonedOut, ok(whole)) });
 		expect(out.status).toBe('ok');
+	});
+});
+
+describe('extractLinks', () => {
+	const page = (body: string) => `<html><body>${body}</body></html>`;
+	const at = (body: string, base = 'https://blog.example.com/post') =>
+		extractLinks(page(body), base);
+
+	it('keeps outbound links with the words the citing page used for them', () => {
+		// The most reliable signal in research is a good source citing a better
+		// one, and it was invisible here: htmlToText strips every anchor.
+		expect(
+			at('<p>as shown in <a href="https://arxiv.org/abs/1234">the original paper</a></p>')
+		).toEqual([{ url: 'https://arxiv.org/abs/1234', text: 'the original paper' }]);
+	});
+
+	it('drops the page\'s own site, which is navigation rather than citation', () => {
+		// This is what makes running over the whole page affordable: nav,
+		// pagination and "more from us" are internal by construction.
+		expect(at('<a href="/archive">Archive</a><a href="https://blog.example.com/x">Next</a>')).toEqual(
+			[]
+		);
+		// Including across subdomains of the same registrable domain.
+		expect(at('<a href="https://www.example.com/about">About</a>')).toEqual([]);
+	});
+
+	it('resolves a relative address against the page it was found on', () => {
+		expect(at('<a href="//cdn.other.org/a.pdf">PDF</a>')[0].url).toBe('https://cdn.other.org/a.pdf');
+	});
+
+	it('drops share buttons, mailto and javascript', () => {
+		const out = at(
+			'<a href="https://twitter.com/intent/tweet">Tweet</a>' +
+				'<a href="mailto:x@y.com">Mail</a>' +
+				'<a href="javascript:void(0)">More</a>' +
+				'<a href="https://ons.gov.uk/data">the figures</a>'
+		);
+		expect(out.map((l) => l.url)).toEqual(['https://ons.gov.uk/data']);
+	});
+
+	it('counts one destination once, however many times it is linked', () => {
+		const out = at(
+			'<a href="https://ons.gov.uk/data">figures</a>' +
+				'<a href="https://ons.gov.uk/data#tab2">the same, deep-linked</a>' +
+				'<a href="https://ons.gov.uk/data/">and again</a>'
+		);
+		expect(out).toHaveLength(1);
+	});
+
+	it('caps what one page may offer', () => {
+		const many = Array.from(
+			{ length: 20 },
+			(_, i) => `<a href="https://other${i}.org/x">source ${i}</a>`
+		).join('');
+		expect(at(many).length).toBeLessThanOrEqual(6);
+	});
+
+	it('survives markup it cannot parse rather than throwing', () => {
+		expect(at('<a href=>x</a><a>y</a><a href="not a url">z</a>')).toEqual([]);
+		expect(extractLinks('<a href="https://a.org/">x</a>', 'not-a-url')).toEqual([]);
+	});
+});
+
+describe('questionUrls', () => {
+	it('reads an address out of what the person actually typed', () => {
+		// Research used to search for a page it had been handed the address of,
+		// which is the same mistake the chat prompt has always called out.
+		expect(questionUrls('what does https://example.org/spec say about retries?')).toEqual([
+			'https://example.org/spec'
+		]);
+	});
+
+	it('does not swallow the punctuation of the sentence around it', () => {
+		expect(questionUrls('see https://example.org/a, and https://example.org/b.')).toEqual([
+			'https://example.org/a',
+			'https://example.org/b'
+		]);
+	});
+
+	it('finds nothing in a question that names no address', () => {
+		expect(questionUrls('how do nebulae form?')).toEqual([]);
+	});
+
+	it('is bounded, so a wall of links cannot become the whole round', () => {
+		const many = Array.from({ length: 9 }, (_, i) => `https://example.org/${i}`).join(' ');
+		expect(questionUrls(many)).toHaveLength(3);
+	});
+});
+
+describe('localContext', () => {
+	const deps = {
+		docs: () => [{ title: 'Nebula notes', match: 'the «helium» fraction I measured' }],
+		concepts: () => [{ name: 'Amateur spectroscopy', description: 'their telescope work' }]
+	};
+
+	it('offers the library and the lattice for aiming the opening query', () => {
+		const out = localContext('u1', 'how do nebulae form?', deps);
+		expect(out).toContain('Nebula notes');
+		expect(out).toContain('helium');
+		expect(out).toContain('Amateur spectroscopy');
+	});
+
+	it('is empty when the person has nothing on the subject', () => {
+		expect(localContext('u1', 'q', { docs: () => [], concepts: () => [] })).toBe('');
+	});
+
+	it('plans without them rather than failing the run when a store cannot be read', () => {
+		const boom = () => {
+			throw new Error('index locked');
+		};
+		expect(localContext('u1', 'q', { docs: boom, concepts: deps.concepts })).toContain(
+			'Amateur spectroscopy'
+		);
+		expect(localContext('u1', 'q', { docs: boom, concepts: boom })).toBe('');
+	});
+
+	it('stays small enough to be a hint rather than an input', () => {
+		const out = localContext('u1', 'q', {
+			docs: () => Array.from({ length: 4 }, () => ({ title: 'T', match: 'x'.repeat(2_000) })),
+			concepts: () => []
+		});
+		expect(out.length).toBeLessThan(1_400);
 	});
 });
