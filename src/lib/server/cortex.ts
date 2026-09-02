@@ -1383,10 +1383,32 @@ export function listCircuits(userId: string): CortexCircuit[] {
 		.all();
 }
 
+/**
+ * A stored area colour, or null for anything that is not one.
+ *
+ * The empty string is valid and means unset — the map falls back to its
+ * generated hue. Everything else has to be a six-digit hex, which is what the
+ * colour input emits; the endpoint is reachable without it, and this value ends
+ * up inside a `fillStyle` and a CSS custom property, so a free string here is a
+ * free string in two rendering contexts.
+ *
+ * Returned rather than thrown so the two callers can differ: the API refuses a
+ * bad colour, and an import — where ids and fields are hints rather than claims
+ * — drops it and carries on with the rest of the file.
+ */
+export function normaliseColour(raw: unknown): string | null {
+	if (raw === undefined || raw === null) return '';
+	if (typeof raw !== 'string') return null;
+	const value = raw.trim().toLowerCase();
+	if (!value) return '';
+	return /^#[0-9a-f]{6}$/.test(value) ? value : null;
+}
+
 export function saveCircuit(opts: {
 	id?: string;
 	name: string;
 	description?: string;
+	colour?: string;
 	ownerId: string;
 }): CortexCircuit {
 	const name = opts.name.trim();
@@ -1398,11 +1420,17 @@ export function saveCircuit(opts: {
 		throw new Error('That area belongs to someone else');
 	}
 
+	// Every field falls back to what is already stored, because the row below is
+	// written whole. A rename that sent only a name would otherwise blank the
+	// description and the colour — the same shape of bug as the editor's
+	// visibility-only PATCH, which silently dropped every other field until it
+	// was found (see the note in `src/routes/api/cortex/nodes/[id]/+server.ts`).
 	const row: CortexCircuit = {
 		id: existing?.id ?? uniqueCircuitId(slugify(name)),
 		ownerId: existing ? existing.ownerId : opts.ownerId,
 		name,
 		description: opts.description ?? existing?.description ?? '',
+		colour: opts.colour ?? existing?.colour ?? '',
 		createdAt: existing?.createdAt ?? new Date()
 	};
 	if (existing) {
@@ -1591,7 +1619,12 @@ export function importLattice(userId: string, payload: unknown): ImportResult {
 		const name = String(raw?.name ?? '').trim();
 		if (!name) continue;
 		try {
-			const saved = saveCircuit({ name, description: String(raw?.description ?? ''), ownerId: userId });
+			const saved = saveCircuit({
+				name,
+				description: String(raw?.description ?? ''),
+				colour: normaliseColour(raw?.colour) ?? '',
+				ownerId: userId
+			});
 			if (raw?.id) areaIds.set(String(raw.id), saved.id);
 			areaIds.set(name, saved.id);
 			out.circuits++;

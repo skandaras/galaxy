@@ -26,6 +26,8 @@
 	 * interface for anyone not looking at pixels, and it is the same list a
 	 * sighted person clicks — not a hidden parallel that quietly rots.
 	 */
+	import { isLight } from '$lib/theme';
+
 	interface MapNode {
 		id: string;
 		name: string;
@@ -48,6 +50,7 @@
 		selectedId = null,
 		onselect,
 		areaNames,
+		areaColours,
 		/** Injected in tests; at runtime there is always a localStorage. */
 		storage = undefined
 	}: {
@@ -57,6 +60,8 @@
 		onselect?: (id: string | null) => void;
 		/** Area id → display name, so the chart can label a cluster. */
 		areaNames?: Map<string, string>;
+		/** Area id → chosen colour. Absent or empty means use the generated hue. */
+		areaColours?: Map<string, string>;
 		storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
 	} = $props();
 
@@ -86,6 +91,8 @@
 	let lastX = 0;
 	let lastY = 0;
 	let frame = 0;
+	/** The page colour the cached sprites were built for. See `draw()`. */
+	let spriteTheme = '';
 
 	const store = () => {
 		if (storage !== undefined) return storage;
@@ -260,25 +267,50 @@
 	}
 
 	/**
-	 * A hue per area, spread evenly around the wheel and keyed by the area's
-	 * position in the sorted set so a colour does not change when an unrelated
-	 * one is added. Areas are what the agents' context index is grouped by, so
+	 * A hue per area, spread evenly around the wheel by the area's position in
+	 * the sorted set. Areas are what the agents' context index is grouped by, so
 	 * seeing them here is seeing what the agent sees.
 	 *
 	 * Deliberately not the theme accent: this is categorical data and one accent
 	 * cannot carry it. Lightness and saturation are fixed to stay legible on both
 	 * a near-black and a cream page.
+	 *
+	 * This used to claim a colour does not move when an unrelated area is added.
+	 * It does: sorted *position* is exactly what an insert disturbs, so filing
+	 * something under a new area that sorts first walks every hue along one slot.
+	 * Hashing the id instead would fix it and would also repaint every map that
+	 * exists today, which is a strange thing to do to somebody who asked for a
+	 * colour picker — and the picker is the better answer anyway, because it
+	 * fixes the case hashing does not: two areas landing on hues too close to
+	 * tell apart. So the wheel stays as it is, and a colour that matters is one
+	 * you set.
+	 *
+	 * Computed over the ids actually *on nodes* rather than over the areas still
+	 * without a colour, so choosing one area's colour cannot shift another's.
 	 */
 	const areaHues = $derived.by(() => {
 		const seen = [...new Set(nodes.flatMap((n) => n.circuits ?? []))].sort();
 		return new Map(seen.map((id, i) => [id, Math.round((i * 360) / Math.max(seen.length, 1))]));
 	});
 
+	/**
+	 * The one place an area becomes a colour: a colour somebody chose if there is
+	 * one, and the generated hue otherwise.
+	 *
+	 * One function because there are two call sites — the nodes and the cluster
+	 * labels — and they were separately-written copies of the same `hsl()`
+	 * string. Two copies of a colour rule is one map that disagrees with itself.
+	 */
+	function colourForArea(id: string): string | null {
+		const chosen = areaColours?.get(id);
+		if (chosen) return chosen;
+		const hue = areaHues.get(id);
+		return hue === undefined ? null : `hsl(${hue} 52% 62%)`;
+	}
+
 	function areaColour(node: MapNode): string | null {
 		const first = node.circuits?.[0];
-		if (!first) return null;
-		const hue = areaHues.get(first);
-		return hue === undefined ? null : `hsl(${hue} 52% 62%)`;
+		return first ? colourForArea(first) : null;
 	}
 
 	function nodeRadius(node: MapNode): number {
@@ -302,19 +334,92 @@
 	}
 
 	/**
-	 * One radial-gradient sprite per colour, drawn once and stamped thereafter.
+	 * Two sprites per colour — the bloom and the node body — drawn once and
+	 * stamped thereafter.
 	 *
 	 * A gradient built per node per frame is the obvious way to write this and
 	 * makes a rotation drag stutter on a phone at a few hundred concepts; a
 	 * sprite is a `drawImage`. `shadowBlur` was the other candidate and is
-	 * slower still with this many draws.
+	 * slower still with this many draws. That still holds with two sprites: the
+	 * cache is keyed by what varies, and what varies is a handful of area
+	 * colours, not the node count.
 	 */
 	const sprites = new Map<string, HTMLCanvasElement>();
-	const SPRITE_PX = 64;
+	/**
+	 * Generous, because the body sprite is now a disc rather than a soft blob and
+	 * its edge is the node's edge. Downscaling 128px to the 2–30 CSS px a node
+	 * actually occupies is smoother than `arc()`'s own antialiasing, so nothing
+	 * is given up by drawing the body as an image.
+	 */
+	const SPRITE_PX = 128;
 
-	function sprite(colour: string): HTMLCanvasElement | null {
-		const cached = sprites.get(colour);
-		if (cached) return cached;
+	/**
+	 * How brightness falls away from the centre of a node.
+	 *
+	 * The old sprite held its colour flat to 35% of its radius and only then
+	 * began to fade, which put a hard step somewhere between one and three node
+	 * radii out — and *that step* was the thing that read as the glow starting
+	 * outside the node instead of coming from inside it. This is a plain
+	 * inverse-square-ish falloff with no plateau: brightest exactly at the
+	 * centre, decaying the whole way out.
+	 */
+	const BLOOM_PROFILE: [number, number][] = [
+		[0, 1],
+		[0.08, 0.72],
+		[0.18, 0.42],
+		[0.32, 0.2],
+		[0.5, 0.07],
+		[0.75, 0.015],
+		[1, 0]
+	];
+
+	/**
+	 * Paint a falloff in alpha, then tint it by compositing.
+	 *
+	 * The colour arrives as an `hsl()` string, a hex somebody picked for an area,
+	 * or whatever a theme variable holds, so nothing here may parse it. Painting
+	 * the profile in white and pulling the colour through it with `source-in`
+	 * works for any of them — and it fixes a second bug for free: the old
+	 * gradient ended at `transparent`, which is `rgba(0, 0, 0, 0)`, so every halo
+	 * faded through black on its way out and came back muddier than the colour it
+	 * started from.
+	 */
+	function tinted(
+		colour: string,
+		paint: (ctx: CanvasRenderingContext2D, mid: number) => void
+	): HTMLCanvasElement | null {
+		if (typeof document === 'undefined') return null;
+		const c = document.createElement('canvas');
+		c.width = SPRITE_PX;
+		c.height = SPRITE_PX;
+		const ctx = c.getContext('2d');
+		if (!ctx) return null;
+		paint(ctx, SPRITE_PX / 2);
+		ctx.globalCompositeOperation = 'source-in';
+		ctx.fillStyle = colour;
+		ctx.fillRect(0, 0, SPRITE_PX, SPRITE_PX);
+		return c;
+	}
+
+	function bloomSprite(colour: string): HTMLCanvasElement | null {
+		return tinted(colour, (ctx, mid) => {
+			const g = ctx.createRadialGradient(mid, mid, 0, mid, mid, mid);
+			for (const [at, a] of BLOOM_PROFILE) g.addColorStop(at, `rgba(255,255,255,${a})`);
+			ctx.fillStyle = g;
+			ctx.fillRect(0, 0, SPRITE_PX, SPRITE_PX);
+		});
+	}
+
+	/**
+	 * The node itself: a hot core easing out to the flat area colour at the rim.
+	 *
+	 * A node used to be one `fillStyle` and one `arc`, so however good the halo
+	 * around it looked, the node was a flat sticker sitting in it. Making the
+	 * body a gradient is half of "the glow comes from inside"; the other half is
+	 * that its rim lands on exactly the colour the bloom is carrying at that
+	 * radius, so the two meet with nothing to see between them.
+	 */
+	function bodySprite(colour: string, light: boolean): HTMLCanvasElement | null {
 		if (typeof document === 'undefined') return null;
 		const c = document.createElement('canvas');
 		c.width = SPRITE_PX;
@@ -322,15 +427,56 @@
 		const ctx = c.getContext('2d');
 		if (!ctx) return null;
 		const mid = SPRITE_PX / 2;
-		const g = ctx.createRadialGradient(mid, mid, 0, mid, mid, mid);
-		g.addColorStop(0, colour);
-		g.addColorStop(0.35, colour);
-		g.addColorStop(1, 'transparent');
-		ctx.globalAlpha = 1;
-		ctx.fillStyle = g;
+
+		ctx.fillStyle = colour;
+		ctx.beginPath();
+		ctx.arc(mid, mid, mid, 0, Math.PI * 2);
+		ctx.fill();
+
+		// The core. Light added on a dark page and ink deepened on a light one:
+		// adding light to cream reaches white in one step, so on Paper the same
+		// gradient drawn the same way would turn every node into the same pale
+		// disc. Either way the centre is the extreme and the rim is the area
+		// colour, which is the direction that reads as burning.
+		//
+		// Restrained, because the bloom lands on top of this and carries most of
+		// the centre's heat on a well-connected node. What this is for is the
+		// other end of the range: an orphan draws almost no bloom, and without
+		// its own gradient it would go back to being the flat disc this change
+		// exists to get rid of.
+		const core = light ? '0,0,0' : '255,255,255';
+		const heat = ctx.createRadialGradient(mid, mid, 0, mid, mid, mid);
+		heat.addColorStop(0, `rgba(${core},${light ? 0.24 : 0.42})`);
+		heat.addColorStop(0.45, `rgba(${core},${light ? 0.09 : 0.16})`);
+		heat.addColorStop(1, `rgba(${core},0)`);
+		ctx.globalCompositeOperation = light ? 'source-over' : 'lighter';
+		ctx.fillStyle = heat;
 		ctx.fillRect(0, 0, SPRITE_PX, SPRITE_PX);
-		sprites.set(colour, c);
+
+		// Two jobs at once. It cuts the rectangle above back to a circle, and it
+		// eases the last fifth of the radius off rather than ending on a hard
+		// edge, so the bloom underneath shows through the rim and the body stops
+		// looking like a sticker laid on top of its own halo. Not all the way to
+		// zero: a node is a click target and has to stay findable.
+		const edge = ctx.createRadialGradient(mid, mid, 0, mid, mid, mid);
+		edge.addColorStop(0, 'rgba(255,255,255,1)');
+		edge.addColorStop(0.8, 'rgba(255,255,255,1)');
+		edge.addColorStop(1, 'rgba(255,255,255,0.72)');
+		ctx.globalCompositeOperation = 'destination-in';
+		ctx.fillStyle = edge;
+		ctx.beginPath();
+		ctx.arc(mid, mid, mid, 0, Math.PI * 2);
+		ctx.fill();
 		return c;
+	}
+
+	function sprite(kind: 'bloom' | 'body', colour: string, light: boolean): HTMLCanvasElement | null {
+		const key = `${kind}|${colour}|${light ? 'l' : 'd'}`;
+		const cached = sprites.get(key);
+		if (cached) return cached;
+		const made = kind === 'bloom' ? bloomSprite(colour) : bodySprite(colour, light);
+		if (made) sprites.set(key, made);
+		return made;
 	}
 
 	function draw() {
@@ -355,6 +501,16 @@
 		const dim = css('--fg-dim', '#888');
 		const accent = css('--accent', '#7aa2f7');
 		const fg = css('--fg', '#ddd');
+
+		// Which way a glow goes on this theme, decided once a frame. The sprites
+		// bake it in, so a theme change has to throw them away — cheap, since the
+		// cache is a handful of area colours and refilling it is a few gradients.
+		const page = css('--bg', '#05060f');
+		if (page !== spriteTheme) {
+			sprites.clear();
+			spriteTheme = page;
+		}
+		const light = isLight(page);
 
 		const at = (id: string) => projected.get(id) ?? null;
 
@@ -395,25 +551,56 @@
 			const selected = node.id === selectedId;
 			const colour = selected ? accent : node.isConvergence ? accent : (areaColour(node) ?? dim);
 
-			// The glow, and the thing it says: the more a concept connects, the
-			// brighter it burns. Additive, so where two well-connected concepts sit
-			// near each other the space between them lights up — which is what a
-			// dense region of the lattice actually is.
 			const strength = glowStrength(node);
-			const halo = sprite(colour);
-			if (halo && (strength > 0 || selected)) {
-				const size = r * (2.6 + strength * 5.5) * 2;
-				ctx.globalCompositeOperation = 'lighter';
-				ctx.globalAlpha = (0.09 + strength * 0.38) * (selected ? 1.6 : 1) * Math.min(p.k, 1.2);
-				ctx.drawImage(halo, p.sx - size / 2, p.sy - size / 2, size, size);
-				ctx.globalCompositeOperation = 'source-over';
+			const depth = selected ? 1 : Math.max(0.5, Math.min(1, p.k));
+
+			// The body first, and it is a gradient now rather than one flat fill —
+			// hot in the middle, easing to the area's colour at the rim, and easing
+			// its last fifth off so it does not end on a sticker edge.
+			ctx.globalAlpha = depth;
+			const body = sprite('body', colour, light);
+			if (body) {
+				ctx.drawImage(body, p.sx - r, p.sy - r, r * 2, r * 2);
+			} else {
+				// No document to build a sprite against. Better a flat node than none.
+				ctx.fillStyle = colour;
+				ctx.beginPath();
+				ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
+				ctx.fill();
 			}
 
-			ctx.globalAlpha = selected ? 1 : Math.max(0.5, Math.min(1, p.k));
-			ctx.fillStyle = colour;
-			ctx.beginPath();
-			ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
-			ctx.fill();
+			// Then the glow, over the node rather than under it — which is the
+			// whole fix. Underneath, every part of the bloom that fell inside the
+			// node was hidden by the node, so the only glow you could ever see
+			// began at the rim and it read as a ring the node was sitting in. Over
+			// it, one falloff runs from the middle of the node out to nothing, and
+			// the light you see inside the node is the same light that leaves it.
+			//
+			// The old sprite could not do this either way round: it held its colour
+			// flat to 35% of its radius before fading, so brightness peaked across a
+			// disc a couple of node radii wide rather than at the node, and that
+			// plateau's edge was itself a ring you could point at.
+			//
+			// Additive on a dark page, so where two well-connected concepts sit near
+			// each other the space between them lights up — which is what a dense
+			// region of the lattice actually is. On a light one adding light reaches
+			// white almost at once and the glow stops carrying degree at all, so it
+			// multiplies instead: the same compounding, pointed the other way, which
+			// is also what a glow looks like printed on paper.
+			const halo = sprite('bloom', colour, light);
+			if (halo && (strength > 0 || selected)) {
+				const size = r * (2.2 + strength * 6) * 2;
+				ctx.globalCompositeOperation = light ? 'multiply' : 'lighter';
+				ctx.globalAlpha =
+					(light ? 0.12 + strength * 0.4 : 0.1 + strength * 0.42) *
+					(selected ? 1.35 : 1) *
+					Math.min(p.k, 1.2);
+				ctx.drawImage(halo, p.sx - size / 2, p.sy - size / 2, size, size);
+			}
+			// Unconditionally, not inside the branch above: everything after this —
+			// the rings, the labels, the next node's body — assumes the default.
+			ctx.globalCompositeOperation = 'source-over';
+			ctx.globalAlpha = depth;
 
 			if (node.isConvergence) {
 				// A bridge gets a ring rather than a different colour, so it still
@@ -458,9 +645,18 @@
 			ctx.font = '600 13px var(--font-ui, system-ui)';
 			for (const [id, c] of centres) {
 				if (c.n < 2) continue;
-				ctx.fillStyle = `hsl(${areaHues.get(id)} 52% 62%)`;
+				// Only an area this viewer actually keeps. This used to fall back to
+				// drawing the raw id, and a node someone shared arrives with *their*
+				// circuit ids on it — which, since the API takes free strings, are
+				// usually their label. `circuitIndex` refuses to render those into
+				// the digest for exactly that reason (cortex-privacy.test.ts, "will
+				// not render someone else's label for their shared node"); the canvas
+				// was the one reader that still did.
+				const label = areaNames?.get(id);
+				if (!label) continue;
+				ctx.fillStyle = colourForArea(id) ?? dim;
 				ctx.globalAlpha = 0.85;
-				ctx.fillText(areaNames?.get(id) ?? id, c.x / c.n, c.y / c.n);
+				ctx.fillText(label, c.x / c.n, c.y / c.n);
 			}
 			ctx.globalAlpha = 1;
 		}
@@ -573,6 +769,15 @@
 		void scale;
 		void yaw;
 		void pitch;
+		// Named explicitly, like everything above, and for a reason that is easy
+		// to miss: `schedule()` defers the actual drawing into a rAF callback, so
+		// nothing `draw()` reads is read *inside* this effect and none of it is
+		// tracked. Anything the chart looks at has to be listed here or the frame
+		// it should have triggered never happens — which is how setting an area's
+		// colour recoloured the panel and left the chart on the old one until the
+		// next pan.
+		void areaColours;
+		void areaNames;
 		schedule();
 	});
 

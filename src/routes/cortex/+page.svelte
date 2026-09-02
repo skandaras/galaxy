@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
+	import { autoHueHex, groupByArea } from '$lib/cortex-grouping';
 	import LatticeMap from '$lib/components/LatticeMap.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 
@@ -139,7 +140,21 @@
 	let connectWeight = $state(0.5);
 	/** Comma-separated while editing; the API takes an array. */
 	let areas = $state('');
-	let circuits = $state<{ id: string; name: string; count: number }[]>([]);
+	let circuits = $state<{ id: string; name: string; count: number; colour: string }[]>([]);
+	/**
+	 * Which reading of the concept list is showing. Degree answers "what is this
+	 * lattice built around"; domain answers "what have I not filed yet", which
+	 * is the question that quietly accumulates an answer.
+	 */
+	let listMode = $state<'degree' | 'domain'>('degree');
+	/**
+	 * Collapsed groups, on top of a default of open. Deliberately not remembered
+	 * between visits: the point of this view is seeing the whole partition at
+	 * once, and a persisted collapse would undo that silently the next time.
+	 */
+	let shut = $state<Record<string, boolean>>({});
+	/** The area whose name is being edited, if any. */
+	let renaming = $state<string | null>(null);
 	let proposals = $state<Proposal[]>([]);
 	let changes = $state<Change[]>([]);
 	let tab = $state<'edit' | 'review' | 'history' | 'data' | 'effect'>('edit');
@@ -154,6 +169,24 @@
 
 	const selected = $derived(nodes.find((n) => n.id === selectedId) ?? null);
 	const areaNames = $derived(new Map(circuits.map((c) => [c.id, c.name])));
+	/**
+	 * Only the colours somebody actually chose, so a lookup missing means "no
+	 * choice" and the chart falls back to its generated hue. An empty string is
+	 * not a choice — that is how clearing one gets the automatic colour back
+	 * rather than getting black.
+	 */
+	const areaColours = $derived(
+		new Map(circuits.filter((c) => c.colour).map((c) => [c.id, c.colour]))
+	);
+	/**
+	 * The picker has no empty state, so an area with no colour set has to open on
+	 * the colour it is currently drawn in. That hue comes from the id's position
+	 * in the sorted set of ids *on nodes*, which is the chart's own rule.
+	 */
+	const autoHex = $derived.by(() => {
+		const seen = [...new Set(nodes.flatMap((n) => n.circuits ?? []))].sort();
+		return new Map(seen.map((id, i) => [id, autoHueHex(i, seen.length)]));
+	});
 
 	/**
 	 * Width of the side panel, draggable by the divider and remembered per
@@ -192,6 +225,22 @@
 			.sort((a, b) => b.degree - a.degree || a.name.localeCompare(b.name))
 	);
 
+	/**
+	 * The same list, partitioned. Fed from `listed` rather than from `nodes`, so
+	 * the search and the ordering inside each group are the *same code* as the
+	 * other view — there is no second sort to drift out of step with the first.
+	 */
+	const byArea = $derived(groupByArea(listed, circuits, { dropEmpty: !!filter.trim() }));
+
+	/** Where a row's dot gets its colour: the first area of yours it is filed under. */
+	function dotColour(node: MapNode): string | null {
+		for (const id of node.circuits ?? []) {
+			if (!areaNames.has(id)) continue;
+			return areaColours.get(id) || autoHex.get(id) || null;
+		}
+		return null;
+	}
+
 	async function load() {
 		const [mapRes, circuitRes] = await Promise.all([
 			fetch('/api/cortex/map'),
@@ -204,6 +253,88 @@
 		}
 		if (circuitRes.ok) circuits = await circuitRes.json();
 		await Promise.all([loadProposals(), loadChanges()]);
+	}
+
+	/**
+	 * Just the areas. Renaming or recolouring one touches no concept and moves
+	 * nothing on the chart, so the full `load()` — which also refetches the map,
+	 * and so makes the server re-check the layout — is four requests to update
+	 * one string.
+	 */
+	async function loadCircuits() {
+		const res = await fetch('/api/cortex/circuits');
+		if (res.ok) circuits = await res.json();
+	}
+
+	const MODE_KEY = 'galaxy:cortex-list-mode';
+
+	function setMode(next: typeof listMode) {
+		listMode = next;
+		// Storage can be blocked or full, and neither is a reason for the panel to
+		// stop working — the same bargain LatticeMap makes with the camera angle.
+		try {
+			localStorage.setItem(MODE_KEY, next);
+		} catch {
+			// Not remembered, still switched.
+		}
+	}
+
+	/**
+	 * A colour, applied here first and sent afterwards.
+	 *
+	 * `areaColours` is derived from this array, so the chart recolours in the
+	 * frame the picker closes rather than after a round trip. Safe to do
+	 * optimistically in a way the concept edits are not: nothing about the
+	 * lattice depends on this value, so being wrong for 200ms is a wrong colour
+	 * and not wrong data.
+	 */
+	async function setColour(id: string, colour: string) {
+		const before = circuits;
+		const area = circuits.find((c) => c.id === id);
+		if (!area) return;
+		circuits = circuits.map((c) => (c.id === id ? { ...c, colour } : c));
+		// The name goes too because the endpoint requires one; sending the current
+		// one is what makes this an update of this row rather than a new area.
+		const saved = await send('/api/cortex/circuits', 'POST', { id, name: area.name, colour });
+		if (!saved) circuits = before;
+	}
+
+	/**
+	 * Rename an area everywhere at once.
+	 *
+	 * One row is updated and every concept follows, because a concept stores
+	 * circuit *ids* and the name is resolved at read time — by the chart's
+	 * cluster labels, by the group headers here, and by the digest the agents
+	 * read. So this is one UPDATE and no writes to any node.
+	 *
+	 * The id is what makes that true. Without one, `saveCircuit` falls back to
+	 * matching an existing area case-insensitively *by name*, so a rename sent as
+	 * a bare name would create a second area under the new one and leave every
+	 * concept pointing at the old.
+	 */
+	async function rename(id: string, next: string) {
+		renaming = null;
+		const area = circuits.find((c) => c.id === id);
+		if (!area) return;
+		const name = next.trim();
+		if (!name || name === area.name) return;
+		// Passing the id skips the name lookup, which is also what stops the
+		// server noticing a clash — so it is caught here instead. Merging the two
+		// areas is the other answer and is a data migration behind a rename box.
+		if (circuits.some((c) => c.id !== id && c.name.toLowerCase() === name.toLowerCase())) {
+			error = `There is already an area called ${name}.`;
+			return;
+		}
+		const before = circuits;
+		circuits = circuits.map((c) => (c.id === id ? { ...c, name } : c));
+		const saved = await send('/api/cortex/circuits', 'POST', { id, name });
+		if (!saved) {
+			circuits = before;
+			return;
+		}
+		// The editor's Areas field holds names resolved when the concept was
+		// selected, so it is the one thing left showing the old one.
+		if (selectedId) await select(selectedId);
 	}
 
 	async function loadProposals() {
@@ -428,12 +559,30 @@
 		startNew();
 	}
 
-	onMount(load);
+	onMount(() => {
+		// In `onMount` rather than in the initialiser: this page renders on the
+		// client (`ssr = false`), but reading storage while building state is a
+		// habit that breaks the moment a page stops doing that.
+		try {
+			const stored = localStorage.getItem(MODE_KEY);
+			if (stored === 'degree' || stored === 'domain') listMode = stored;
+		} catch {
+			// No storage, so the default reading it is.
+		}
+		load();
+	});
 </script>
 
 <div class="cortex">
 	<section class="chart">
-		<LatticeMap {nodes} {edges} {selectedId} onselect={select} areaNames={areaNames} />
+		<LatticeMap
+			{nodes}
+			{edges}
+			{selectedId}
+			onselect={select}
+			areaNames={areaNames}
+			areaColours={areaColours}
+		/>
 	</section>
 
 	<PaneResizer pane={panel} label="Resize the Cortex panel" />
@@ -461,28 +610,117 @@
 			<input placeholder="Search concepts…" bind:value={filter} />
 		</label>
 
+		<!-- Two readings of one list. Degree is what the chart shows and answers
+		     what the lattice is built around; domain answers what has not been
+		     filed, which is the only question the sorted list cannot. Buttons
+		     rather than a second tablist: the panel below already has one, and two
+		     tablists an inch apart make "which tabs am I in" a real question. -->
+		<div class="modes" role="group" aria-label="Arrange concepts">
+			<button
+				class="chip"
+				class:on={listMode === 'degree'}
+				aria-pressed={listMode === 'degree'}
+				onclick={() => setMode('degree')}>By connections</button
+			>
+			<button
+				class="chip"
+				class:on={listMode === 'domain'}
+				aria-pressed={listMode === 'domain'}
+				onclick={() => setMode('domain')}>By domain</button
+			>
+		</div>
+
 		<!-- The accessible representation and the click target are the same list.
 		     A canvas is opaque to a screen reader, and a hidden parallel view is a
 		     thing that rots; this one cannot, because everyone uses it. -->
-		<ul class="nodes" aria-label="Concepts in the lattice">
-			{#each listed as node (node.id)}
-				<li>
-					<button
-						class="node"
-						class:on={node.id === selectedId}
-						aria-current={node.id === selectedId ? 'true' : undefined}
-						onclick={() => select(node.id)}
-					>
-						<span class="name">{node.name}</span>
-						<span class="tags">
-							{#if node.isConvergence}<span class="badge">bridge</span>{/if}
-							{#if node.visibility === 'shared'}<span class="badge">shared</span>{/if}
-							<span class="deg">{node.degree}</span>
-						</span>
-					</button>
-				</li>
-			{/each}
-		</ul>
+		{#snippet row(node: MapNode)}
+			<li>
+				<button
+					class="node"
+					class:on={node.id === selectedId}
+					aria-current={node.id === selectedId ? 'true' : undefined}
+					onclick={() => select(node.id)}
+				>
+					{#if dotColour(node)}
+						<span class="dot" style={`--dot:${dotColour(node)}`}></span>
+					{/if}
+					<span class="name">{node.name}</span>
+					<span class="tags">
+						{#if node.isConvergence}<span class="badge">bridge</span>{/if}
+						{#if node.visibility === 'shared'}<span class="badge">shared</span>{/if}
+						<span class="deg">{node.degree}</span>
+					</span>
+				</button>
+			</li>
+		{/snippet}
+
+		{#if listMode === 'degree'}
+			<ul class="nodes" aria-label="Concepts in the lattice">
+				{#each listed as node (node.id)}{@render row(node)}{/each}
+			</ul>
+		{:else}
+			<!-- A list of lists, which is what a grouped list is: a nested `ul`
+			     inside an `li` is valid and announces as one. -->
+			<ul class="nodes groups" aria-label="Concepts by domain">
+				{#each byArea as group (group.key)}
+					<li class="group">
+						<div class="group-head">
+							<button
+								class="group-name"
+								aria-expanded={!shut[group.key]}
+								onclick={() => (shut = { ...shut, [group.key]: !shut[group.key] })}
+							>
+								<span class="caret" aria-hidden="true">{shut[group.key] ? '▸' : '▾'}</span>
+								{#if group.id}
+									<span
+										class="dot"
+										style={`--dot:${group.colour || autoHex.get(group.id) || 'transparent'}`}
+									></span>
+								{/if}
+								<span class="name">{group.name}</span>
+								<span class="deg">{group.nodes.length}</span>
+							</button>
+							{#if group.id && renaming !== group.id}
+								<!-- Behind a button rather than a live field: this is a list you
+								     scroll and click through, and an always-editable heading is
+								     one stray keystroke from renaming a domain. -->
+								<button
+									class="icon"
+									aria-label={`Rename ${group.name}`}
+									onclick={() => (renaming = group.id)}>✎</button
+								>
+								<input
+									class="colour"
+									type="color"
+									aria-label={`Colour for ${group.name}`}
+									value={group.colour || autoHex.get(group.id) || '#8a8f98'}
+									onchange={(e) => setColour(group.id!, e.currentTarget.value)}
+								/>
+							{/if}
+						</div>
+						{#if group.id && renaming === group.id}
+							<!-- svelte-ignore a11y_autofocus -->
+							<input
+								class="rename"
+								autofocus
+								value={group.name}
+								aria-label={`New name for ${group.name}`}
+								onblur={(e) => rename(group.id!, e.currentTarget.value)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter') e.currentTarget.blur();
+									if (e.key === 'Escape') renaming = null;
+								}}
+							/>
+						{/if}
+						{#if !shut[group.key]}
+							<ul aria-label={group.name}>
+								{#each group.nodes as node (node.id)}{@render row(node)}{/each}
+							</ul>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+		{/if}
 
 
 		<div class="body">
@@ -1041,6 +1279,109 @@
 		max-height: 34vh;
 		overflow-y: auto;
 	}
+	.modes {
+		display: flex;
+		gap: 0.3rem;
+		margin-bottom: 0.4rem;
+	}
+	.chip {
+		background: transparent;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		color: var(--fg-dim);
+		font-family: inherit;
+		font-size: var(--text-sm);
+		padding: 0.18rem 0.6rem;
+		cursor: pointer;
+	}
+	.chip.on {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+	/* The nested lists are bare `ul`s, which `.nodes` does not match. Indented
+	   so a concept reads as sitting under its heading rather than beside it. */
+	.groups ul {
+		list-style: none;
+		margin: 0;
+		padding: 0 0 0 0.75rem;
+	}
+	.group + .group {
+		margin-top: 0.35rem;
+	}
+	.group-head {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
+		/* The container is capped and scrolls, and a heading that scrolls away
+		   leaves you reading an unlabelled list. */
+		position: sticky;
+		top: 0;
+		z-index: 1;
+		background: var(--bg-pane);
+	}
+	.group-name {
+		display: flex;
+		flex: 1;
+		min-width: 0;
+		gap: 0.4rem;
+		align-items: center;
+		padding: 0.3rem 0.2rem;
+		background: none;
+		border: 0;
+		color: var(--label);
+		font-family: inherit;
+		font-size: var(--text-sm);
+		text-align: left;
+		cursor: pointer;
+	}
+	.group-name .name {
+		font-weight: 600;
+	}
+	.caret {
+		color: var(--fg-dim);
+	}
+	.icon {
+		background: none;
+		border: 1px solid transparent;
+		color: var(--fg-dim);
+		font-family: inherit;
+		font-size: var(--text-sm);
+		padding: 0.1rem 0.3rem;
+		cursor: pointer;
+	}
+	.icon:hover {
+		border-color: var(--border);
+		color: var(--fg);
+	}
+	.colour {
+		flex: 0 0 1.9rem;
+		width: 1.9rem;
+		height: 1.5rem;
+		padding: 0.1rem;
+		background: var(--bg);
+		border: 1px solid var(--control-border);
+		cursor: pointer;
+	}
+	.rename {
+		width: 100%;
+		box-sizing: border-box;
+		margin-bottom: 0.2rem;
+		padding: 0.25rem 0.4rem;
+		background: var(--bg);
+		color: var(--fg);
+		border: 1px solid var(--control-border);
+		font-family: inherit;
+		font-size: var(--text-sm);
+	}
+	/* A concept's area, as colour. Flex-shrink 0 so a long name cannot squash it
+	   into an ellipse. */
+	.dot {
+		flex: 0 0 auto;
+		width: 0.5rem;
+		height: 0.5rem;
+		border-radius: 50%;
+		background: var(--dot);
+	}
 	.node {
 		display: flex;
 		width: 100%;
@@ -1065,6 +1406,11 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		/* Takes the slack, so the row's `space-between` cannot spread a dot, a
+		   name and a badge evenly across the width and leave the name floating in
+		   the middle of it. The name goes left, the badges go right. */
+		flex: 1;
+		min-width: 0;
 	}
 	.tags {
 		display: flex;

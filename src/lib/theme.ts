@@ -349,6 +349,31 @@ export function contrastGrade(ratio: number): 'AAA' | 'AA' | 'AA-large' | 'fail'
 }
 
 /**
+ * Whether a background is light enough that adding light to it does nothing.
+ *
+ * The Cortex map draws its glow additively, which is right on the four dark
+ * presets and useless on Paper: adding light to cream reaches white almost
+ * immediately, so a hub and a leaf both render as the same pale smudge. The map
+ * asks this and inverts — on a light page a glow is ink bleeding outward from a
+ * saturated core, not light being added.
+ *
+ * A threshold rather than a preset list, because themes are hand-editable and a
+ * light theme somebody wrote themselves has the same problem. Relative
+ * luminance is not perceived lightness — 50% sRGB grey measures 0.216, not 0.5
+ * — so the line sits at 0.35, comfortably above mid grey and nowhere near
+ * either side of what ships: Paper measures 0.87 and the four dark presets are
+ * all under 0.005. Below it there is enough headroom for adding light to still
+ * mean something.
+ *
+ * Unparseable colours read as dark, which is the majority case and the one that
+ * behaves exactly as it did before this existed.
+ */
+export function isLight(colour: string): boolean {
+	const rgb = parseHex(colour);
+	return rgb ? luminance(rgb) > 0.35 : false;
+}
+
+/**
  * A border colour for form controls that is actually visible.
  *
  * `--border` does two jobs: it separates cards, where 1.2:1 is a deliberate

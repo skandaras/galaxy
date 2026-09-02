@@ -1,7 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
-import { circuitIndex, listCircuits, saveCircuit } from '$lib/server/cortex';
+import { circuitIndex, listCircuits, normaliseColour, saveCircuit } from '$lib/server/cortex';
 
 export const GET: RequestHandler = ({ locals }) => {
 	const user = requireUser(locals);
@@ -16,12 +16,17 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	const body = await request.json().catch(() => ({}));
 	const name = typeof body.name === 'string' ? body.name.trim() : '';
 	if (!name) error(400, 'name is required');
+	// Undefined stays undefined so `saveCircuit` keeps what is stored: this one
+	// endpoint both creates an area and renames one, and a rename sends no colour.
+	const colour = 'colour' in body ? normaliseColour(body.colour) : undefined;
+	if (colour === null) error(400, 'colour must be a hex like #7f9cff, or empty');
 	try {
 		return json(
 			saveCircuit({
 				id: typeof body.id === 'string' ? body.id : undefined,
 				name,
 				description: typeof body.description === 'string' ? body.description : undefined,
+				colour,
 				ownerId: user.id
 			}),
 			{ status: 201 }

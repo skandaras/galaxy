@@ -677,13 +677,75 @@ seventeen concepts and at seventeen hundred.
 **Nodes glow by degree**, which is the diagnostic this section already wanted
 made continuous rather than categorical: brightness is the square root of a
 node's share of the most-connected node in view, so one hub cannot wash the rest
-out and every lattice has a brightest thing. Drawn additively from one cached
-sprite per colour — a gradient built per node per frame makes a rotation drag
-stutter on a phone, and `shadowBlur` is slower still. A dense region genuinely
-lights up, and an orphan reads at a glance as the faint dot it is.
+out and every lattice has a brightest thing. Drawn from cached sprites — two per
+colour, one for the body and one for the bloom — because a gradient built per
+node per frame makes a rotation drag stutter on a phone, and `shadowBlur` is
+slower still. A dense region genuinely lights up, and an orphan reads at a
+glance as the faint dot it is.
+
+**The glow starts inside the node.** The first version got this wrong twice
+over, and both were visible rather than theoretical. Its sprite held the colour
+flat to 35% of its radius before fading, so brightness peaked across a disc a
+couple of node radii wide instead of at the node, and that plateau's edge was a
+ring you could point at. And it was stamped *under* the body, which was one
+opaque flat fill — so every part of the glow that fell inside the node was
+hidden by the node, and the only glow left to see began at the rim. Together
+they read as a halo the node was sitting in rather than light coming out of it.
+
+Now the falloff is monotonic from the centre out, the body is itself a gradient
+from a hot core to the area's colour at its rim, and the bloom is drawn over the
+body rather than under it, so one continuous profile runs from the middle of a
+concept out to nothing. Both sprites are built by painting the profile in white
+*alpha* and pulling the colour through it with `source-in`: the colour is never
+parsed, so it can equally be a generated `hsl()`, a hex somebody picked for an
+area, or whatever a theme put in `--accent` — and there is no fade to
+`transparent`, which is `rgba(0, 0, 0, 0)` and dragged the old halo's outer ring
+toward black.
+
+**And it knows which way light goes.** Additive blending is right on the four
+dark presets and useless on Paper, where adding light to cream reaches white
+almost at once and the glow stops carrying degree at exactly the point it
+matters. So the renderer measures the relative luminance of `--bg` (`isLight` in
+`src/lib/theme.ts`) and multiplies instead of adding on a light page, with the
+body's core deepening rather than brightening. Same compounding where two hubs
+overlap, pointed the other way — which is also what a glow looks like printed.
+A measurement rather than a list of preset names, because themes are
+hand-editable and a light one somebody wrote themselves has the same problem.
 
 Still nothing animates on its own: the camera moves while a pointer is down and
 at no other time, so `prefers-reduced-motion` stays a non-question.
+
+### Areas have colours, and two ways to read the list
+
+An area's colour is generated — a hue per area, spread around the wheel by its
+position in the sorted set — and **can be overridden**, stored on
+`cortex_circuits.colour` with empty meaning "generated", the same way boards
+treat a status or project colour. The generated wheel is not stable against
+insertion: sorted *position* is exactly what a new area disturbs, so filing
+something under an area that sorts first walks every hue along one slot. Hashing
+the id would fix that and would also repaint every map that exists today, which
+is a strange thing to do to somebody who asked for a colour picker — and the
+picker is the better answer anyway, because it also fixes the case hashing does
+not, two areas landing on hues too close to tell apart. So a colour that matters
+is one you set, and it reaches the nodes, the cluster labels, the group headers
+and the dots in the list through a single resolver.
+
+**Renaming an area is one UPDATE.** A concept stores circuit *ids*, and every
+reader resolves the name at read time — the cluster labels, the panel, the
+digest the agents read — so one row changes and everything follows with no write
+to any node. (Deleting is the opposite and has to walk every node stripping the
+id, which is why that one is not cheap.)
+
+**The concept list reads two ways.** Sorted by connections it says what the
+lattice is built around, which is the order the chart shows too. Grouped by
+area it says what has *not* been filed, which the sorted list cannot say at all
+and which is the thing a lattice quietly accumulates — so the unfiled group
+leads. A concept filed under two areas is listed under both, matching how
+`circuitIndex` counts, so the group sizes are the numbers the agent sees in its
+context index. A circuit id that does not resolve to one of your own areas
+counts as unfiled, which is the same rule the digest applies: a shared node
+arrives carrying its owner's ids, and since the API takes free strings that id
+is usually their label.
 
 ### Two requirements that are not optional
 
@@ -692,6 +754,9 @@ at no other time, so `prefers-reduced-motion` stays a non-question.
   searchable list beside it is the real interface for anyone not looking at
   pixels — and the same list a sighted person clicks. Not a hidden parallel
   view, which is a thing that rots; this one cannot, because everyone uses it.
+  Grouped by area it becomes a list of lists, which is what it is, and the
+  cluster labels on the canvas apply the same privacy rule the grouping does —
+  an area you do not keep is not drawn and not named.
 - **Scoping.** The map is a view over the lattice and inherits the rules above
   in full. A visualisation is the easiest place in the world to accidentally
   render the whole table, so its endpoint belongs in the privacy test's case
