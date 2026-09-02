@@ -712,23 +712,45 @@ overlap, pointed the other way — which is also what a glow looks like printed.
 A measurement rather than a list of preset names, because themes are
 hand-editable and a light one somebody wrote themselves has the same problem.
 
+**And how much of it there is, is a control.** The bloom's opacity is multiplied
+by a slider behind the **Glow** button on the chart, remembered per browser
+under `galaxy:cortex-glow`, running from nothing to twice the shipped level.
+There is no right answer to that number — how much haze reads as atmospheric
+rather than as fog depends on the screen, the theme, how dense the lattice is
+and on taste — and the alternative to a slider is editing a constant and pushing
+it. At zero the bloom is not stamped at all, which leaves the gradient bodies on
+their own and is a legitimate way to read a crowded chart.
+
 Still nothing animates on its own: the camera moves while a pointer is down and
 at no other time, so `prefers-reduced-motion` stays a non-question.
 
 ### Areas have colours, and two ways to read the list
 
-An area's colour is generated — a hue per area, spread around the wheel by its
-position in the sorted set — and **can be overridden**, stored on
-`cortex_circuits.colour` with empty meaning "generated", the same way boards
-treat a status or project colour. The generated wheel is not stable against
-insertion: sorted *position* is exactly what a new area disturbs, so filing
-something under an area that sorts first walks every hue along one slot. Hashing
-the id would fix that and would also repaint every map that exists today, which
-is a strange thing to do to somebody who asked for a colour picker — and the
-picker is the better answer anyway, because it also fixes the case hashing does
-not, two areas landing on hues too close to tell apart. So a colour that matters
-is one you set, and it reaches the nodes, the cluster labels, the group headers
-and the dots in the list through a single resolver.
+An area is **handed a colour when it is created**, cycled through a palette of
+twelve ordered by maximum separation, so the first two areas somebody makes are
+opposites and the first six are the primary and secondary hexagon. It is stored
+on `cortex_circuits.colour` and **can be overridden** from the group heading in
+the panel — the same shape boards use for a status or project colour, and the
+same `PROJECT_COLOURS` trick for the same reason: a new one should be
+distinguishable without anybody opening a picker first.
+
+Assigned, rather than derived from the area's id — and that is worth explaining,
+because deriving it is the obvious design and it was tried. The requirement is
+that an area's colour never moves once you have arranged the rest of the map
+around it, which the first rule (a hue from the area's slot in the sorted set of
+ids) failed outright: filing something under a new area that sorted early walked
+every other hue along one. Hashing the id fixes *that* completely — a hash is
+stable against anything — but it cannot **spread**. Hashed hues are uniform, and
+uniform points on a circle clump: with five areas, two land within 25° of each
+other about 84% of the time, which is two areas the same colour. Varying
+saturation and lightness alongside the hue helps and does not rescue it. Only
+something that knows what the other areas already are can guarantee separation,
+so the colour is chosen once, at creation, and written down — and writing it
+down is exactly what stops it moving afterwards.
+
+A hue hashed from the id survives as the fallback for an area whose colour has
+been cleared, in `src/lib/cortex-colour.ts`. It is stable and it may collide,
+which is a fine trade for a case somebody has opted into.
 
 **Renaming an area is one UPDATE.** A concept stores circuit *ids*, and every
 reader resolves the name at read time — the cluster labels, the panel, the

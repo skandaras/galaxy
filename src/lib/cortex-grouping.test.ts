@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { autoHueHex, groupByArea, UNFILED_KEY } from './cortex-grouping';
+import { groupByArea, UNFILED_KEY } from './cortex-grouping';
 
 const area = (id: string, name = id, colour = '') => ({ id, name, colour });
 const node = (name: string, circuits: string[] | null = null) => ({ name, circuits });
@@ -84,28 +84,5 @@ describe('groupByArea', () => {
 	it('carries the chosen colour through to the header', () => {
 		const groups = groupByArea([node('a', ['x'])], [area('x', 'X', '#00ff00')]);
 		expect(groups[0].colour).toBe('#00ff00');
-	});
-});
-
-describe('autoHueHex', () => {
-	it('is a six-digit hex, which is all a colour input accepts', () => {
-		for (let i = 0; i < 6; i++) expect(autoHueHex(i, 6)).toMatch(/^#[0-9a-f]{6}$/);
-	});
-
-	it('matches the hue the chart generates for the same slot', () => {
-		// hsl(0 52% 62%) — the chart's fixed saturation and lightness at hue 0.
-		// Checkable by hand from the result: lightness is (0xd0 + 0x6c) / 2 / 255
-		// = 0.62, and with green and blue equal the hue is 0. If this drifts, a
-		// picker opens on a colour the node is not actually drawn in.
-		expect(autoHueHex(0, 4)).toBe('#d06c6c');
-	});
-
-	it('walks the wheel, so neighbouring slots are not the same colour', () => {
-		expect(new Set([0, 1, 2, 3].map((i) => autoHueHex(i, 4))).size).toBe(4);
-	});
-
-	it('survives a single area, where the spacing divides by one', () => {
-		expect(autoHueHex(0, 1)).toMatch(/^#[0-9a-f]{6}$/);
-		expect(autoHueHex(0, 0)).toMatch(/^#[0-9a-f]{6}$/);
 	});
 });

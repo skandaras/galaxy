@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
-	import { autoHueHex, groupByArea } from '$lib/cortex-grouping';
+	import { areaHueHex } from '$lib/cortex-colour';
+	import { groupByArea } from '$lib/cortex-grouping';
 	import LatticeMap from '$lib/components/LatticeMap.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 
@@ -179,16 +180,6 @@
 		new Map(circuits.filter((c) => c.colour).map((c) => [c.id, c.colour]))
 	);
 	/**
-	 * The picker has no empty state, so an area with no colour set has to open on
-	 * the colour it is currently drawn in. That hue comes from the id's position
-	 * in the sorted set of ids *on nodes*, which is the chart's own rule.
-	 */
-	const autoHex = $derived.by(() => {
-		const seen = [...new Set(nodes.flatMap((n) => n.circuits ?? []))].sort();
-		return new Map(seen.map((id, i) => [id, autoHueHex(i, seen.length)]));
-	});
-
-	/**
 	 * Width of the side panel, draggable by the divider and remembered per
 	 * browser. It was a fixed 340px, which is too narrow for a concept editor,
 	 * a review queue and a two-answer comparison to share.
@@ -236,7 +227,7 @@
 	function dotColour(node: MapNode): string | null {
 		for (const id of node.circuits ?? []) {
 			if (!areaNames.has(id)) continue;
-			return areaColours.get(id) || autoHex.get(id) || null;
+			return areaColours.get(id) || areaHueHex(id);
 		}
 		return null;
 	}
@@ -674,7 +665,7 @@
 								{#if group.id}
 									<span
 										class="dot"
-										style={`--dot:${group.colour || autoHex.get(group.id) || 'transparent'}`}
+										style={`--dot:${group.colour || areaHueHex(group.id)}`}
 									></span>
 								{/if}
 								<span class="name">{group.name}</span>
@@ -693,7 +684,7 @@
 									class="colour"
 									type="color"
 									aria-label={`Colour for ${group.name}`}
-									value={group.colour || autoHex.get(group.id) || '#8a8f98'}
+									value={group.colour || areaHueHex(group.id)}
 									onchange={(e) => setColour(group.id!, e.currentTarget.value)}
 								/>
 							{/if}

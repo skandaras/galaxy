@@ -555,8 +555,29 @@ describe('areas', () => {
 		expect(cortexDigest(ANA)).toContain('Coastal fieldwork (2)');
 	});
 
-	it('starts with no colour, which means the chart picks one', () => {
-		expect(saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA }).colour).toBe('');
+	it('is handed a colour at creation, so it is distinguishable straight away', () => {
+		expect(saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA }).colour).toMatch(
+			/^#[0-9a-f]{6}$/
+		);
+	});
+
+	it('cycles the palette, so the first areas are not the same colour', () => {
+		// The reason these are assigned rather than derived from the id. A hue
+		// hashed from an id is stable but cannot be spread — uniform points on a
+		// circle clump, and with five areas two land within 25 degrees of each
+		// other about 84% of the time, which is two areas the same colour.
+		const made = ['Coastal fieldwork', 'Letterpress', 'Tax', 'House move', 'Reading'].map(
+			(name) => saveCircuit({ name, ownerId: ANA }).colour
+		);
+		expect(new Set(made).size).toBe(made.length);
+	});
+
+	it('does not move an existing area’s colour when a new one is added', () => {
+		// The whole complaint: work spent getting the map the colour you want
+		// should survive filing something under something new.
+		const first = saveCircuit({ name: 'Letterpress', ownerId: ANA });
+		saveCircuit({ name: 'Aardvark husbandry', ownerId: ANA });
+		expect(listCircuits(ANA).find((c) => c.id === first.id)?.colour).toBe(first.colour);
 	});
 
 	it('keeps the colour through a rename', () => {
