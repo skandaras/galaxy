@@ -787,6 +787,12 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 			})
 		).id;
 	}
+	// Filed under nothing, so the domain view has an Unfiled group to show. That
+	// group is the whole reason the second view exists.
+	await as(ALICE, '/api/cortex/nodes', {
+		method: 'POST',
+		body: JSON.stringify({ name: 'Loose thought', description: 'filed under nothing yet' })
+	});
 	for (const [a, b] of [
 		['Coastal ecology', 'Tide pools'],
 		['Coastal ecology', 'Seabird counts'],
@@ -839,8 +845,78 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 	await page.getByRole('button', { name: 'Flat' }).click();
 	await page.waitForTimeout(400);
 	check('Flat is one click away', await page.getByRole('button', { name: 'Flat' }).isVisible());
+
+	// The panel's second reading of the same list. Sorted by connections it can
+	// say what the lattice is built around and cannot say what has not been
+	// filed, which is the thing that quietly accumulates.
+	await page.getByRole('button', { name: 'By domain' }).click();
+	await page.waitForTimeout(200);
+	// `.group-name` rather than a role and a name: the rename button beside each
+	// header carries the area's name too, so a name match finds both.
+	const heads = () => page.locator('.group-name').allInnerTexts();
+	check(
+		'domains become groups',
+		(await heads()).some((t) => t.includes('Coastal fieldwork'))
+	);
+	check(
+		'the unclassified are visible',
+		(await heads()).some((t) => t.includes('Unfiled'))
+	);
+	// Unfiled leads, because seeing it is the reason to be in this view.
+	check('and lead the list', (await heads())[0].includes('Unfiled'));
+	check(
+		'the chosen view is remembered',
+		await page.evaluate(() => localStorage.getItem('galaxy:cortex-list-mode')),
+		'domain'
+	);
+
+	/**
+	 * Pixels where green clearly dominates. Nothing in the default theme or in
+	 * the generated hues for two areas is green-dominant, so this counts only
+	 * what the picked colour put there.
+	 */
+	const greenish = () =>
+		page.evaluate(() => {
+			const canvas = document.querySelector('.map canvas');
+			const ctx = canvas?.getContext('2d');
+			if (!ctx || !canvas.width) return -1;
+			const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+			let n = 0;
+			for (let i = 0; i < data.length; i += 4) {
+				if (data[i + 1] - Math.max(data[i], data[i + 2]) > 60) n++;
+			}
+			return n;
+		});
+	check('nothing is green to begin with', (await greenish()) < 5);
+
+	// Dispatched rather than filled: the handler listens for `change`, and this
+	// keeps the test independent of how Playwright drives a colour input.
+	await page.locator('.group-head input[type=color]').first().evaluate((el) => {
+		el.value = '#00ff00';
+		el.dispatchEvent(new Event('change', { bubbles: true }));
+	});
+	await page.waitForTimeout(500);
+	check('a domain colour reaches the chart', (await greenish()) > 20);
+
+	// Renaming touches one row, and every concept in the group follows because a
+	// concept stores the area's id rather than its name.
+	const before = (await as(ALICE, '/api/cortex/circuits')).find((c) => c.name === 'Letterpress');
+	await page.getByRole('button', { name: /^Rename Letterpress/ }).click();
+	const field = page.locator('.rename').first();
+	await field.fill('Printing');
+	await field.press('Enter');
+	await page.waitForTimeout(400);
+	check(
+		'the rename shows',
+		(await heads()).some((t) => t.includes('Printing'))
+	);
+	const after = (await as(ALICE, '/api/cortex/circuits')).find((c) => c.id === before.id);
+	check('the rename stored, and took its concepts with it', [after.name, after.count], [
+		'Printing',
+		2
+	]);
 	check('the map is still quiet after all that', problems, []);
-	if (fail.length) await shot('cortex-map');
+	await shot('cortex-map');
 }
 
 if (fail.length) await shot('final-state');

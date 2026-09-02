@@ -1220,6 +1220,15 @@ export const cortexCircuits = sqliteTable(
 		ownerId: text('owner_id'),
 		name: text('name').notNull(),
 		description: text('description').notNull().default(''),
+		/**
+		 * What this area's concepts are drawn in on the map. Empty means unset,
+		 * and unset is the normal state: the chart generates a hue per area from
+		 * its position in the sorted set, which is enough to tell two clusters
+		 * apart without anyone choosing anything. This column is for when the
+		 * generated hue is *wrong* — when an area has a colour in your head
+		 * already, and the map disagreeing with it is a small tax on every read.
+		 */
+		colour: text('colour').notNull().default(''),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 	},
 	(t) => [index('cortex_circuits_owner_idx').on(t.ownerId)]

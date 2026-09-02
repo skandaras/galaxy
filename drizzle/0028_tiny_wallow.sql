@@ -1,0 +1,1 @@
+ALTER TABLE `cortex_circuits` ADD `colour` text DEFAULT '' NOT NULL;

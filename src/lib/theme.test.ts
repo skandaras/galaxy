@@ -5,6 +5,7 @@ import {
 	contrastGrade,
 	contrastRatio,
 	controlBorder,
+	isLight,
 	normalizeTheme,
 	themeCss
 } from './theme';
@@ -106,6 +107,31 @@ describe('contrastRatio', () => {
 		expect(contrastGrade(4.5)).toBe('AA');
 		expect(contrastGrade(3)).toBe('AA-large');
 		expect(contrastGrade(2.9)).toBe('fail');
+	});
+});
+
+describe('isLight', () => {
+	it('picks out the one light preset', () => {
+		// Which way the Cortex map's glow points depends on this, and the answer
+		// is only ever "Paper" among what ships. Solar reads light from its name
+		// and is not: its background is #0d0a04.
+		expect(isLight(PRESETS.Paper.bg)).toBe(true);
+		for (const name of ['Galaxy', 'Nebula', 'Solar', 'Void']) {
+			expect(isLight(PRESETS[name].bg), name).toBe(false);
+		}
+	});
+
+	it('puts the line above mid grey, where adding light still means something', () => {
+		// Relative luminance is not perceived lightness: #808080 measures 0.216,
+		// so a line drawn at "half" would call mid grey light and flip the glow on
+		// a page that has plenty of headroom left.
+		expect(isLight('#808080')).toBe(false);
+		expect(isLight('#cccccc')).toBe(true);
+	});
+
+	it('calls anything it cannot read dark, which is what the map assumed before', () => {
+		expect(isLight('rgb(255,255,255)')).toBe(false);
+		expect(isLight('')).toBe(false);
 	});
 });
 

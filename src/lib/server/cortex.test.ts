@@ -19,6 +19,7 @@ import {
 	deleteNode,
 	refreshLayout,
 	circuitIndex,
+	normaliseColour,
 	listCircuits,
 	saveCircuit,
 	deleteCircuit,
@@ -552,6 +553,62 @@ describe('areas', () => {
 		saveNode({ name: 'Tide pools', ownerId: ANA, circuits: [area.id] });
 		saveNode({ name: 'Storm logs', ownerId: ANA, circuits: [area.id] });
 		expect(cortexDigest(ANA)).toContain('Coastal fieldwork (2)');
+	});
+
+	it('starts with no colour, which means the chart picks one', () => {
+		expect(saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA }).colour).toBe('');
+	});
+
+	it('keeps the colour through a rename', () => {
+		// The row is written whole, so a rename that sent only a name would blank
+		// every other field. That has already happened once in this codebase, to
+		// the concept editor, and it is why every field falls back to what is
+		// stored.
+		const area = saveCircuit({
+			name: 'Coastal fieldwork',
+			description: 'The shoreline work',
+			colour: '#00ff00',
+			ownerId: ANA
+		});
+		const renamed = saveCircuit({ id: area.id, name: 'Shoreline', ownerId: ANA });
+		expect(renamed.id).toBe(area.id);
+		expect(renamed.name).toBe('Shoreline');
+		expect(renamed.colour).toBe('#00ff00');
+		expect(renamed.description).toBe('The shoreline work');
+	});
+
+	it('renames for every concept at once, because concepts hold ids', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', ownerId: ANA });
+		saveNode({ name: 'Tide pools', ownerId: ANA, circuits: [area.id] });
+		saveNode({ name: 'Storm logs', ownerId: ANA, circuits: [area.id] });
+		saveCircuit({ id: area.id, name: 'Shoreline', ownerId: ANA });
+		// No node was written, and both of them followed anyway.
+		expect(cortexDigest(ANA)).toContain('Shoreline (2)');
+		expect(cortexDigest(ANA)).not.toContain('Coastal fieldwork');
+	});
+
+	it('clears a colour back to automatic when given an empty one', () => {
+		const area = saveCircuit({ name: 'Coastal fieldwork', colour: '#00ff00', ownerId: ANA });
+		expect(saveCircuit({ id: area.id, name: area.name, colour: '', ownerId: ANA }).colour).toBe('');
+	});
+});
+
+describe('normaliseColour', () => {
+	it('takes a six-digit hex, in any case', () => {
+		expect(normaliseColour('#00FF00')).toBe('#00ff00');
+		expect(normaliseColour('  #7f9cff  ')).toBe('#7f9cff');
+	});
+
+	it('treats empty and absent as unset rather than invalid', () => {
+		expect(normaliseColour('')).toBe('');
+		expect(normaliseColour(undefined)).toBe('');
+		expect(normaliseColour(null)).toBe('');
+	});
+
+	it('refuses anything else, because this string lands in CSS and in a fillStyle', () => {
+		for (const bad of ['red', '#fff', '#0f0', 'rgb(0,0,0)', 'url(x)', '#00ff00; content:', 42, {}]) {
+			expect(normaliseColour(bad), String(bad)).toBeNull();
+		}
 	});
 });
 
