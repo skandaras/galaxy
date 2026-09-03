@@ -91,7 +91,7 @@ export function imageTools(chatId: string, userId: string): LoopTool[] {
 					},
 					AbortSignal.timeout(IMAGE_TIMEOUT_MS)
 				);
-				logUsage('visual', choice.model.modelKey, res.usage, 'ok', userId);
+				logUsage({ task: 'visual', choice, usage: res.usage, status: 'ok', userId });
 
 				const images = res.images ?? [];
 				if (!images.length) {

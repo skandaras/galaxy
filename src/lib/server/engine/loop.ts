@@ -1,7 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import type { RunStep, RunToolCall, SearchResultRow } from '$lib/run-timeline';
-import { db } from '$lib/server/db';
-import { usageLog } from '$lib/server/db/schema';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import type {
 	ChatRequest,
@@ -14,12 +12,14 @@ import type {
 } from '$lib/server/providers/types';
 import { isRetryable, StreamTimeoutError } from '$lib/server/providers/types';
 import { emitEvent } from './events';
+import { logUsage } from './usage';
 import { completeJob, failJob, isCancellation, pushChunk, type LiveJob } from './jobs';
 import {
 	streamIdleTimeoutMs,
 	streamTotalTimeoutMs,
 	toolConcurrency,
-	toolOutputBudgetChars
+	toolOutputBudgetChars,
+	toolResultMaxChars
 } from './limits';
 
 const ELIDED = '[earlier tool output dropped to stay within the context budget]';
@@ -372,7 +372,6 @@ export async function runAgentLoop(opts: LoopOptions): Promise<void> {
 		}
 	}
 
-	logUsage(opts, opts.primary.model.modelKey, null, 'error');
 	// This event is why a dead turn is diagnosable at all. Without it the run
 	// emitted `${task}.turn` as `running` on the way in and nothing on the way
 	// out, leaving a row in the Observatory that never resolved and no record of
@@ -603,6 +602,20 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 				},
 				{ persist }
 			);
+			// The tokens this attempt burned before it died are real money, and
+			// they used to vanish: `usage` is a local, the failover ladder above
+			// catches and moves on, and only the *successful* attempt ever wrote a
+			// row. A turn that streamed 40k prompt tokens and then timed out was
+			// therefore free as far as the spend cap was concerned — three times
+			// over, once per rung of the ladder.
+			logUsage({
+				task: opts.task,
+				choice,
+				usage,
+				status: 'error',
+				userId: opts.userId,
+				chatId: persist ? opts.chatId : null
+			});
 			throw err;
 		}
 
@@ -765,7 +778,14 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	// when assistantText is empty, so the client's buffer is empty too.
 	if (usedFallback) pushChunk(job, { type: 'delta', text: finalText });
 	const messageId = opts.onDone(finalText, usage, choice, summary);
-	logUsage(opts, choice.model.modelKey, usage, 'ok', choice);
+	logUsage({
+		task: opts.task,
+		choice,
+		usage,
+		status: 'ok',
+		userId: opts.userId,
+		chatId: persist ? opts.chatId : null
+	});
 	emitEvent(
 		{
 			userId: opts.userId,
@@ -831,6 +851,25 @@ export async function runBounded<T, R>(
 	return out;
 }
 
+/**
+ * The backstop every tool result passes through.
+ *
+ * Tools cap themselves, and most of them do — but each with its own limit, and
+ * several with none at all: MCP results, board_read, run_history and skill_load
+ * could each return a document of any size straight into the message array. The
+ * only thing catching that was elideOldToolOutput, which drops whole results
+ * *retroactively*, once the damage to the budget is already done.
+ *
+ * A ceiling here rather than a replacement for the per-tool limits: a tool that
+ * knows a tighter bound should still apply it, and this only ever fires for the
+ * ones that do not.
+ */
+function capResult(name: string, result: string): string {
+	const cap = toolResultMaxChars();
+	if (result.length <= cap) return result;
+	return `${result.slice(0, cap)}\n\n[${name} returned ${result.length.toLocaleString('en-US')} characters; truncated at ${cap.toLocaleString('en-US')}. Ask for a narrower slice of it.]`;
+}
+
 /** `ok` is false for a failed call, so its step can be marked failed too. */
 async function executeToolCall(
 	opts: LoopOptions,
@@ -891,7 +930,7 @@ async function executeToolCall(
 			{ persist }
 		);
 		emit('ok', summary, display?.results);
-		return { output: result, ok: true, display };
+		return { output: capResult(call.name, result), ok: true, display };
 	} catch (err) {
 		emitEvent(
 			{
@@ -936,45 +975,4 @@ function addUsage(a: Usage | null, b: Usage): Usage {
 function sumReported(a: number | undefined, b: number | undefined): number | undefined {
 	if (a === undefined && b === undefined) return undefined;
 	return (a ?? 0) + (b ?? 0);
-}
-
-function logUsage(
-	opts: LoopOptions,
-	modelKey: string,
-	usage: Usage | null,
-	status: 'ok' | 'error',
-	choice?: ModelChoice
-): void {
-	const listPrice =
-		usage && choice?.model.promptCostPerMTok != null && choice.model.completionCostPerMTok != null
-			? (usage.promptTokens * choice.model.promptCostPerMTok +
-					usage.completionTokens * choice.model.completionCostPerMTok) /
-				1_000_000
-			: null;
-	// A gateway that prices caching for us knows better than list price does.
-	// The discount is signed: negative on the turn that *writes* the cache,
-	// because a write costs more than plain input, and positive on later reads.
-	const cost =
-		listPrice === null
-			? null
-			: Math.max(0, listPrice - (usage?.cacheDiscountUsd ?? 0));
-	db.insert(usageLog)
-		.values({
-			id: randomUUID(),
-			ts: new Date(),
-			userId: opts.userId,
-			// Spend has to be counted whatever the chat was — the budget cap is
-			// platform-wide — but a hidden chat's id must not survive here. It was
-			// being written unconditionally, which left hidden conversations
-			// reconstructable from usage_log by id, timing and cost.
-			chatId: opts.persist ? opts.chatId : null,
-			task: opts.task,
-			modelKey,
-			promptTokens: usage?.promptTokens ?? 0,
-			completionTokens: usage?.completionTokens ?? 0,
-			cachedPromptTokens: usage?.cachedPromptTokens ?? 0,
-			costUsd: cost,
-			status
-		})
-		.run();
 }

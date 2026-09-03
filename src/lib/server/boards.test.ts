@@ -76,7 +76,6 @@ beforeEach(() => {
 });
 
 const board = (owner = ALICE) => createBoard({ ownerId: owner, name: 'Home' });
-const firstLane = (boardId: string) => listLanes(boardId)[0];
 const doneStatus = (boardId: string) => listStatuses(boardId).find((s) => s.isDone)!;
 
 describe('creating a board', () => {

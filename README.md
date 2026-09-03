@@ -5,6 +5,8 @@ search and deep research, plus a coding agent that works directly in GitHub repo
 including this one, which it maintains itself (build on dev, promote to prod).
 
 See [PLAN.md](./PLAN.md) for the full architecture, feature map, and milestones.
+See [AGENTS.md](./AGENTS.md) for the conventions this repo is worked to — the coding
+agent reads it on every session, and so should you.
 See [docs/ACCESSIBILITY.md](./docs/ACCESSIBILITY.md) for the contrast and labelling
 guarantees the themes are held to, and what is still open.
 See [docs/INSTALL.md](./docs/INSTALL.md) for the Ubuntu server installation guide

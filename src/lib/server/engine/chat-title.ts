@@ -161,7 +161,7 @@ export async function maybeTitleChat(chatId: string, userId: string): Promise<st
 
 		const title = cleanTitle(text);
 		if (!title) {
-			logUsage('chat-title', choice.model.modelKey, usage, 'ok', userId);
+			logUsage({ task: 'chat-title', choice, usage: usage, status: 'ok', userId });
 			return skip(`model returned nothing usable: ${JSON.stringify(text.slice(0, 120))}`);
 		}
 
@@ -171,7 +171,7 @@ export async function maybeTitleChat(chatId: string, userId: string): Promise<st
 		if (!fresh || fresh.titleCustom) return skip('renamed while the title was in flight');
 
 		updateChat(chatId, { title });
-		logUsage('chat-title', choice.model.modelKey, usage, 'ok', userId);
+		logUsage({ task: 'chat-title', choice, usage: usage, status: 'ok', userId });
 		emitEvent(
 			{
 				userId,
@@ -187,7 +187,7 @@ export async function maybeTitleChat(chatId: string, userId: string): Promise<st
 		);
 		return title;
 	} catch (err) {
-		logUsage('chat-title', choice.model.modelKey, null, 'error', userId);
+		logUsage({ task: 'chat-title', choice, usage: null, status: 'error', userId });
 		emitEvent(
 			{
 				userId,

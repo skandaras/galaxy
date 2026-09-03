@@ -260,13 +260,33 @@ function uniqueSlug(base: string): string {
  * matching fragments.
  */
 export function libraryDigest(userId: string, maxDocs = 40): string {
-	const docs = listDocs(userId);
+	// Three columns of the newest `maxDocs` rows, plus a count — rather than
+	// every column of every visible document so that the first forty could be
+	// sliced off. A doc row carries its cached snippet, so the discarded
+	// remainder was not small.
+	const docs = db
+		.select({
+			title: libraryDocs.title,
+			folder: libraryDocs.folder,
+			author: libraryDocs.author
+		})
+		.from(libraryDocs)
+		.where(visibleTo(userId))
+		.orderBy(desc(libraryDocs.updatedAt))
+		.limit(maxDocs)
+		.all();
 	if (!docs.length) return '(library is empty)';
+	const total =
+		docs.length < maxDocs
+			? docs.length
+			: (db.get<{ n: number }>(
+					sql`SELECT COUNT(*) AS n FROM library_docs WHERE ${visibleTo(userId)}`
+				)?.n ?? docs.length);
 
 	// Grouped, because a folder is a strong hint about what a doc is for and
 	// costs a line per group rather than a line per doc.
 	const byFolder = new Map<string, string[]>();
-	for (const d of docs.slice(0, maxDocs)) {
+	for (const d of docs) {
 		const key = d.folder || '';
 		const label = `${d.title}${d.author === 'agent' ? ' [agent]' : ''}`;
 		byFolder.set(key, [...(byFolder.get(key) ?? []), label]);
@@ -276,7 +296,7 @@ export function libraryDigest(userId: string, maxDocs = 40): string {
 		.sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
 		.map(([folder, titles]) => `- ${folder || 'Unfiled'}: ${titles.join(' · ')}`);
 
-	if (docs.length > maxDocs) lines.push(`…and ${docs.length - maxDocs} more.`);
+	if (total > docs.length) lines.push(`…and ${total - docs.length} more.`);
 	lines.push('Use library_search to search their contents, library_read to open one.');
 	return lines.join('\n');
 }

@@ -2,7 +2,7 @@ import { reasoningFor } from '$lib/server/providers/registry';
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { cortexAssociations, cortexNodes, cortexProposals } from '$lib/server/db/schema';
+import { cortexNodes, cortexProposals } from '$lib/server/db/schema';
 import {
 	adjacency,
 	canEdit,
@@ -1629,7 +1629,6 @@ export function buildConfirmPrompt(
 	links: Map<string, CortexAssociation[]> = adjacency(userId)
 ): string {
 	const nodes = listNodes(userId);
-	const byId = new Map(nodes.map((n) => [n.id, n]));
 
 	// The shortlisted concepts and whatever a paired suspicion names, in the
 	// lattice's own order rather than the survey's — the model is reading this
@@ -2047,7 +2046,7 @@ export async function runCortexGroom(
 				// Per call, not per ask. This used to run once after the retry, so a
 				// run that timed out wrote no usage row at all — and completion
 				// tokens were the one number that would have explained the timeout.
-				logUsage('cortex-groom', choice.model.modelKey, res.usage, 'ok', userId);
+				logUsage({ task: 'cortex-groom', choice, usage: res.usage, status: 'ok', userId });
 				return { ...res, allowedMs };
 			};
 

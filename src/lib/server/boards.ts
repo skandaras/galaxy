@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { and, asc, desc, eq, inArray, isNull, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNull, isNotNull, sql } from 'drizzle-orm';
 import { db, dataDir } from '$lib/server/db';
 import {
 	boardLanes,
@@ -471,6 +471,25 @@ export function listCards(boardId: string): Card[] {
 		.where(and(eq(cards.boardId, boardId), isNull(cards.archivedAt)))
 		.orderBy(asc(cards.position), asc(cards.createdAt))
 		.all();
+}
+
+/**
+ * Live card counts for several boards at once, as `boardId -> count`.
+ *
+ * The context digest needs a number per board and nothing else. Asking
+ * `listCards(b.id).length` per board fetched every column of every card to
+ * arrive at it, once per board, on every turn — the same N+1 that
+ * `memoryStatusByUser` already avoids with a grouped count.
+ */
+export function openCardCounts(boardIds: string[]): Map<string, number> {
+	if (!boardIds.length) return new Map();
+	const rows = db
+		.select({ boardId: cards.boardId, n: count() })
+		.from(cards)
+		.where(and(inArray(cards.boardId, boardIds), isNull(cards.archivedAt)))
+		.groupBy(cards.boardId)
+		.all();
+	return new Map(rows.map((r) => [r.boardId, r.n]));
 }
 
 export function listArchivedCards(boardId: string, limit = 200): Card[] {

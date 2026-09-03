@@ -999,7 +999,15 @@ export interface CircuitSummary {
  * entry with no matching row is shown as itself rather than dropped — a label
  * someone typed is still a label.
  */
-export function circuitIndex(userId: string): { circuits: CircuitSummary[]; unfiled: number } {
+export function circuitIndex(
+	userId: string,
+	/**
+	 * The nodes to count, when the caller has already read them. `cortexDigest`
+	 * has — passing them here is what stops one digest costing two full scans of
+	 * the lattice.
+	 */
+	nodes?: CortexNode[]
+): { circuits: CircuitSummary[]; unfiled: number } {
 	// Only this reader's own circuit rows. The first version read the whole
 	// table, which meant a node someone else shared could render *their* label
 	// in *this* person's prompt — and since the API accepts free strings, the id
@@ -1014,7 +1022,7 @@ export function circuitIndex(userId: string): { circuits: CircuitSummary[]; unfi
 	);
 	const counts = new Map<string, number>();
 	let unfiled = 0;
-	for (const node of listNodes(userId)) {
+	for (const node of nodes ?? listNodes(userId)) {
 		// A label written on your own node is yours to see. A label on a node
 		// somebody shared with you is theirs, and only surfaces if it resolves to
 		// a circuit you also keep — otherwise the node counts as unfiled here,
@@ -1068,7 +1076,7 @@ export function cortexDigest(userId: string): string {
 	if (!nodes.length) return '';
 
 	const bridges = nodes.filter((n) => n.isConvergence);
-	const { circuits, unfiled } = circuitIndex(userId);
+	const { circuits, unfiled } = circuitIndex(userId, nodes);
 	const lines = [
 		'',
 		'[Cortex — the working map of this person: ' +
@@ -1342,13 +1350,26 @@ const LAYOUT_SIGNATURE_KEY = 'cortex.layoutSignature';
  * find nothing has changed.
  */
 export function refreshLayout(): { recomputed: boolean; nodes: number; edges: number } {
-	const nodes = db.select().from(cortexNodes).all();
-	const edges = db.select().from(cortexAssociations).all();
-	const latest = nodes.reduce((m, n) => Math.max(m, n.updatedAt?.getTime() ?? 0), 0);
-	const signature = layoutSignature(nodes.length, edges.length, latest);
+	// The signature answers "has the graph moved since last time?", and that is
+	// the only question almost every tick asks. It used to be answered by reading
+	// the entire lattice — every node row and every edge row, unscoped across all
+	// users — to arrive at three numbers, synchronously, on a five-minute timer.
+	// Three aggregates give the same answer without materialising a row.
+	const stat = db.get<{ nodes: number; edges: number; latest: number | null }>(
+		sql`SELECT (SELECT COUNT(*) FROM cortex_nodes) AS nodes,
+		           (SELECT COUNT(*) FROM cortex_associations) AS edges,
+		           (SELECT COALESCE(MAX(updated_at), 0) FROM cortex_nodes) AS latest`
+	);
+	const nodeCount = stat?.nodes ?? 0;
+	const edgeCount = stat?.edges ?? 0;
+	const signature = layoutSignature(nodeCount, edgeCount, stat?.latest ?? 0);
 	if (getSetting<string>(LAYOUT_SIGNATURE_KEY, '') === signature) {
-		return { recomputed: false, nodes: nodes.length, edges: edges.length };
+		return { recomputed: false, nodes: nodeCount, edges: edgeCount };
 	}
+
+	// Past here the graph really has moved, so the full read is worth paying for.
+	const nodes = db.select({ id: cortexNodes.id }).from(cortexNodes).all();
+	const edges = db.select().from(cortexAssociations).all();
 
 	const points = layout(
 		nodes.map((n) => ({ id: n.id })),
@@ -1356,12 +1377,17 @@ export function refreshLayout(): { recomputed: boolean; nodes: number; edges: nu
 		// lattice has learned to trust should pull its ends together on the map.
 		edges.map((e) => ({ source: e.sourceId, target: e.targetId, weight: effectiveWeight(e) }))
 	);
-	for (const [id, p] of points) {
-		// Deliberately not touching updatedAt. It feeds the signature above, so
-		// stamping it here would make every sweep look like a change and the
-		// layout would recompute forever.
-		db.update(cortexNodes).set({ x: p.x, y: p.y, z: p.z }).where(eq(cortexNodes.id, id)).run();
-	}
+	// One transaction, not one per node. Each of these was its own implicit
+	// commit — at the 2,000-node ceiling, two thousand fsyncs while the event
+	// loop was held.
+	db.transaction((tx) => {
+		for (const [id, p] of points) {
+			// Deliberately not touching updatedAt. It feeds the signature above, so
+			// stamping it here would make every sweep look like a change and the
+			// layout would recompute forever.
+			tx.update(cortexNodes).set({ x: p.x, y: p.y, z: p.z }).where(eq(cortexNodes.id, id)).run();
+		}
+	});
 	setSetting(LAYOUT_SIGNATURE_KEY, signature);
 	return { recomputed: true, nodes: nodes.length, edges: edges.length };
 }

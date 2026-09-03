@@ -860,6 +860,7 @@ describe('consolidate', () => {
 
 	it('reports a failed call instead of throwing', async () => {
 		const choice = choiceOf();
+		// eslint-disable-next-line require-yield
 		choice.adapter.stream = (async function* () {
 			throw new Error('provider down');
 		}) as typeof choice.adapter.stream;

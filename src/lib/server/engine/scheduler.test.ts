@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { db, runMigrations } from '$lib/server/db';
-import { events, usageLog, uxIdeas } from '$lib/server/db/schema';
+import { events, jobs, usageLog, uxIdeas } from '$lib/server/db/schema';
 import { setSetting } from '$lib/server/settings';
 import { prune } from './scheduler';
 
@@ -16,6 +16,7 @@ beforeEach(() => {
 	db.delete(events).run();
 	db.delete(usageLog).run();
 	db.delete(uxIdeas).run();
+	db.delete(jobs).run();
 	setSetting('retention', { eventDays: 60, usageDays: 400, uxIdeaDays: 14 });
 	delete process.env.GALAXY_ENV;
 });
@@ -33,6 +34,18 @@ const event = (ts: Date) =>
 			type: 'model.call',
 			name: 'chat',
 			status: 'ok'
+		})
+		.run();
+
+const job = (ts: Date) =>
+	db
+		.insert(jobs)
+		.values({
+			id: randomUUID(),
+			userId: 'u1',
+			task: 'chat',
+			status: 'done',
+			createdAt: ts
 		})
 		.run();
 
@@ -93,14 +106,27 @@ describe('prune', () => {
 		expect(counts()).toMatchObject({ events: 0, usage: 1 });
 	});
 
+	it('trims jobs on the event window — they had no ceiling at all', () => {
+		// One row per turn, kept forever: the only unbounded table the pruner
+		// never touched. A job rides the event window because once its events are
+		// gone there is nothing left to open.
+		job(daysAgo(90));
+		job(daysAgo(5));
+
+		expect(prune(NOW, true).jobs).toBe(1);
+		expect(db.select().from(jobs).all()).toHaveLength(1);
+	});
+
 	it('keeps everything when a window is set to 0', () => {
 		setSetting('retention', { eventDays: 0, usageDays: 0, uxIdeaDays: 0 });
 		event(daysAgo(5000));
 		usage(daysAgo(5000));
 		idea(daysAgo(5000));
+		job(daysAgo(5000));
 
-		expect(prune(NOW, true)).toEqual({ events: 0, usage: 0, uxIdeas: 0, cortexChanges: 0 });
+		expect(prune(NOW, true)).toEqual({ events: 0, jobs: 0, usage: 0, uxIdeas: 0, cortexChanges: 0 });
 		expect(counts()).toEqual({ events: 1, usage: 1, ideas: 1 });
+		expect(db.select().from(jobs).all()).toHaveLength(1);
 	});
 
 	it('drops stale UX ideas on a dev instance', () => {
@@ -129,7 +155,7 @@ describe('prune', () => {
 		prune(NOW, true);
 		event(daysAgo(400));
 		// Same tick window, so this one is skipped and the stale row survives.
-		expect(prune(NOW + 60_000)).toEqual({ events: 0, usage: 0, uxIdeas: 0, cortexChanges: 0 });
+		expect(prune(NOW + 60_000)).toEqual({ events: 0, jobs: 0, usage: 0, uxIdeas: 0, cortexChanges: 0 });
 		expect(counts().events).toBe(1);
 		// Past the interval it runs again.
 		expect(prune(NOW + 7 * 3_600_000).events).toBe(1);

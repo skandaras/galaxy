@@ -1,4 +1,5 @@
-import { reasoningFor } from '$lib/server/providers/registry';
+import { reasoningFor, type ModelChoice } from '$lib/server/providers/registry';
+import type { Usage } from '$lib/server/providers/types';
 import { randomUUID } from 'node:crypto';
 import { desc, eq, gt, and, count } from 'drizzle-orm';
 import { db } from '$lib/server/db';
@@ -118,9 +119,18 @@ export function decideCandidate(id: string, approve: boolean): SkillCandidate | 
 export const MEMORY_DIGEST_MAX_ITEMS = 20;
 
 export function memoryDigest(userId: string, maxItems = MEMORY_DIGEST_MAX_ITEMS): string {
-	const items = listMemoryItems(userId).filter((m) => m.status === 'active');
+	// Bounded in SQL rather than by fetching every memory this person has ever
+	// accumulated, filtering it in JS and keeping the first twenty. This runs
+	// once per turn, and the digest never wanted more than twenty.
+	const items = db
+		.select()
+		.from(memoryItems)
+		.where(and(eq(memoryItems.userId, userId), eq(memoryItems.status, 'active')))
+		.orderBy(desc(memoryItems.createdAt), memoryItems.id)
+		.limit(maxItems)
+		.all();
 	if (!items.length) return '';
-	const lines = items.slice(0, maxItems).map((m) => `- (${m.kind}) ${m.content}`);
+	const lines = items.map((m) => `- (${m.kind}) ${m.content}`);
 	return [
 		'',
 		'[Memory — durable observations from past activity]',
@@ -423,7 +433,7 @@ export async function runMemory(
 		// Only advance the watermark on a successful run, so a failure re-reads
 		// the same window next time instead of silently losing activity.
 		setSetting(WATERMARK_KEY, startedAt, userId);
-		logMemoryUsage(choice.model.modelKey, usage, 'ok', userId);
+		logMemoryUsage(choice, usage, 'ok', userId);
 		emitEvent({
 			userId,
 			task: 'memory',
@@ -435,7 +445,7 @@ export async function runMemory(
 		});
 		return { ran: true, memories: memories.length, candidates: added };
 	} catch (err) {
-		logMemoryUsage(choice.model.modelKey, null, 'error', userId);
+		logMemoryUsage(choice, null, 'error', userId);
 		emitEvent({
 			userId,
 			task: 'memory',
@@ -575,7 +585,7 @@ export async function consolidateMemory(
 			after: active.length - claimed.size + merged.length
 		};
 
-		logMemoryUsage(choice.model.modelKey, usage, 'ok', userId);
+		logMemoryUsage(choice, usage, 'ok', userId);
 		emitEvent({
 			userId,
 			task: 'memory',
@@ -587,7 +597,7 @@ export async function consolidateMemory(
 		});
 		return { ran: true, proposal };
 	} catch (err) {
-		logMemoryUsage(choice.model.modelKey, null, 'error', userId);
+		logMemoryUsage(choice, null, 'error', userId);
 		emitEvent({
 			userId,
 			task: 'memory',
@@ -747,7 +757,7 @@ export async function runSkillOptimiser(
 				.run();
 			added++;
 		}
-		logOptimiserUsage(choice.model.modelKey, usage, 'ok', adminUserId);
+		logOptimiserUsage(choice, usage, 'ok', adminUserId);
 		emitEvent({
 			task: 'skill-optimiser',
 			type: 'job',
@@ -771,15 +781,15 @@ export async function runSkillOptimiser(
 }
 
 const logMemoryUsage = (
-	modelKey: string,
-	usage: { promptTokens: number; completionTokens: number } | null,
+	choice: ModelChoice,
+	usage: Usage | null,
 	status: 'ok' | 'error',
 	userId?: string
-) => logUsage('memory', modelKey, usage, status, userId);
+) => logUsage({ task: 'memory', choice, usage, status, userId });
 
 const logOptimiserUsage = (
-	modelKey: string,
-	usage: { promptTokens: number; completionTokens: number } | null,
+	choice: ModelChoice,
+	usage: Usage | null,
 	status: 'ok' | 'error',
 	userId?: string
-) => logUsage('skill-optimiser', modelKey, usage, status, userId);
+) => logUsage({ task: 'skill-optimiser', choice, usage, status, userId });

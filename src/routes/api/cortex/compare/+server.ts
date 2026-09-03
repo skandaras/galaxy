@@ -49,7 +49,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			},
 			AbortSignal.timeout(120_000)
 		);
-		logUsage('chat', choice.model.modelKey, usage, 'ok', user.id);
+		logUsage({ task: 'chat', choice, usage, status: 'ok', userId: user.id });
 		return {
 			answer: text,
 			promptChars: system.length + prompt.length,

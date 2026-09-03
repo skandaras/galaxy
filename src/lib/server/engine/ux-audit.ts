@@ -433,7 +433,7 @@ export async function runUxAudit(trigger: 'schedule' | 'manual'): Promise<UxAudi
 		// Only advance on a run that completed, so a failure re-reads the same
 		// window next time instead of losing a week of activity.
 		setSetting(LAST_RUN_KEY, startedAt);
-		logUsage('ux-audit', choice.model.modelKey, usage, 'ok');
+		logUsage({ task: 'ux-audit', choice, usage: usage, status: 'ok' });
 		emitEvent({
 			task: 'ux-audit',
 			type: 'job',
@@ -444,7 +444,7 @@ export async function runUxAudit(trigger: 'schedule' | 'manual'): Promise<UxAudi
 		});
 		return { ran: true, ideas: added, duplicates };
 	} catch (err) {
-		logUsage('ux-audit', choice.model.modelKey, null, 'error');
+		logUsage({ task: 'ux-audit', choice, usage: null, status: 'error' });
 		emitEvent({
 			task: 'ux-audit',
 			type: 'job',

@@ -12,8 +12,7 @@ import {
 	DEFAULT_FETCH,
 	webSearchSettings,
 	getSetting,
-	type FetchSettings,
-	type WebSearchSettings
+	type FetchSettings
 } from '$lib/server/settings';
 import { typstReady } from '$lib/server/pdf';
 import { assertBudget } from './budget';
@@ -209,7 +208,13 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 						settings: compactionCfg
 					});
 				}
-			})();
+			})().catch((err) => {
+				// Nothing here can fail the turn — the reply is already saved and
+				// streamed. But an unhandled rejection takes the whole process down
+				// with it, and maybeCompact reads the chat and the settings before
+				// its own try block, so it has a way to throw that nothing caught.
+				console.error('[chat] post-reply work failed:', err);
+			});
 			return saved.id;
 		}
 	}).catch((err) => {

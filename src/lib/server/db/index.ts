@@ -31,6 +31,16 @@ try {
 	}
 }
 sqlite.pragma('foreign_keys = ON');
+// A lock we lose must wait, not fail. Nothing here retries a SQLITE_BUSY, and
+// the app is not the only writer: the end-to-end smoke suite opens its own
+// connection against the live database while the server is serving it.
+sqlite.pragma('busy_timeout = 5000');
+// FULL is SQLite's default and it fsyncs on every commit. In WAL, NORMAL is
+// still durable across a process crash — only an OS or power failure can lose
+// the tail — and this database commits constantly: emitEvent writes a row for
+// every model call, every tool call, every failover, so one ten-tool turn was
+// ten-plus fsyncs on the thread serving the request.
+sqlite.pragma('synchronous = NORMAL');
 
 export const db = drizzle(sqlite, { schema });
 

@@ -6,7 +6,7 @@
 	import Notifications from '$lib/components/settings/Notifications.svelte';
 	import Alignment from '$lib/components/settings/Alignment.svelte';
 
-	const tabs = ['Theme', 'Boards', 'Notifications', 'Memory', 'Alignment'] as const;
+	const tabs = ['Theme', 'Boards', 'Cortex', 'Notifications', 'Memory', 'Alignment'] as const;
 	let active = $state<(typeof tabs)[number]>('Theme');
 </script>
 
@@ -22,7 +22,8 @@
 			<Theme />
 		{:else if active === 'Boards'}
 			<Boards />
-	<Cortex />
+		{:else if active === 'Cortex'}
+			<Cortex />
 		{:else if active === 'Notifications'}
 			<Notifications />
 		{:else if active === 'Memory'}
