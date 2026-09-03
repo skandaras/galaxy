@@ -18,7 +18,8 @@ import {
 	streamIdleTimeoutMs,
 	streamTotalTimeoutMs,
 	toolConcurrency,
-	toolOutputBudgetChars
+	toolOutputBudgetChars,
+	toolResultMaxChars
 } from './limits';
 
 const ELIDED = '[earlier tool output dropped to stay within the context budget]';
@@ -850,6 +851,25 @@ export async function runBounded<T, R>(
 	return out;
 }
 
+/**
+ * The backstop every tool result passes through.
+ *
+ * Tools cap themselves, and most of them do — but each with its own limit, and
+ * several with none at all: MCP results, board_read, run_history and skill_load
+ * could each return a document of any size straight into the message array. The
+ * only thing catching that was elideOldToolOutput, which drops whole results
+ * *retroactively*, once the damage to the budget is already done.
+ *
+ * A ceiling here rather than a replacement for the per-tool limits: a tool that
+ * knows a tighter bound should still apply it, and this only ever fires for the
+ * ones that do not.
+ */
+function capResult(name: string, result: string): string {
+	const cap = toolResultMaxChars();
+	if (result.length <= cap) return result;
+	return `${result.slice(0, cap)}\n\n[${name} returned ${result.length.toLocaleString('en-US')} characters; truncated at ${cap.toLocaleString('en-US')}. Ask for a narrower slice of it.]`;
+}
+
 /** `ok` is false for a failed call, so its step can be marked failed too. */
 async function executeToolCall(
 	opts: LoopOptions,
@@ -910,7 +930,7 @@ async function executeToolCall(
 			{ persist }
 		);
 		emit('ok', summary, display?.results);
-		return { output: result, ok: true, display };
+		return { output: capResult(call.name, result), ok: true, display };
 	} catch (err) {
 		emitEvent(
 			{
