@@ -428,7 +428,7 @@ export async function assessEntry(userId: string, entryId: string): Promise<Asse
 		};
 		db.insert(alignmentAssessments).values(row).run();
 
-		logUsage('alignment', choice.model.modelKey, usage, 'ok', userId);
+		logUsage({ task: 'alignment', choice, usage: usage, status: 'ok', userId });
 		// Counts and flags only. The Observatory is shared with admins and this is
 		// the most private data in the platform — no entry text, no standing line,
 		// no quoted evidence ever reaches an event detail.
@@ -450,7 +450,7 @@ export async function assessEntry(userId: string, entryId: string): Promise<Asse
 		});
 		return { ran: true, assessment: row };
 	} catch (err) {
-		logUsage('alignment', choice.model.modelKey, null, 'error', userId);
+		logUsage({ task: 'alignment', choice, usage: null, status: 'error', userId });
 		emitEvent({
 			userId,
 			task: 'alignment',
@@ -626,7 +626,7 @@ export async function runAlignmentSynthesis(
 		};
 		db.insert(alignmentSyntheses).values(row).run();
 
-		logUsage('alignment-synthesis', choice.model.modelKey, usage, 'ok', userId);
+		logUsage({ task: 'alignment-synthesis', choice, usage: usage, status: 'ok', userId });
 		emitEvent({
 			userId,
 			task: 'alignment-synthesis',
@@ -638,7 +638,7 @@ export async function runAlignmentSynthesis(
 		});
 		return { ran: true, synthesis: row };
 	} catch (err) {
-		logUsage('alignment-synthesis', choice.model.modelKey, null, 'error', userId);
+		logUsage({ task: 'alignment-synthesis', choice, usage: null, status: 'error', userId });
 		emitEvent({
 			userId,
 			task: 'alignment-synthesis',

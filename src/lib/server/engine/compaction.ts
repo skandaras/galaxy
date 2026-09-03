@@ -3,8 +3,10 @@ import type { ChatMeta, StoredMessage } from '$lib/server/chats';
 import { getMessages, updateChat } from '$lib/server/chats';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import type { CompactionSettings } from '$lib/server/settings';
+import type { Usage } from '$lib/server/providers/types';
 
 import { emitEvent } from './events';
+import { logUsage } from './usage';
 
 // Cheap deterministic token estimate (~4 chars/token). Good enough to decide
 // when to compact; a real tokenizer is not worth the dependency yet.
@@ -45,8 +47,19 @@ export async function maybeCompact(opts: {
 
 	const started = Date.now();
 	try {
-		const summary = await summarise(toFold, chat.compactSummary, choice);
+		const { summary, usage } = await summarise(toFold, chat.compactSummary, choice);
 		updateChat(chat.id, { compactSummary: summary, compactedUpTo: cutoff });
+		// Compaction is a model call like any other and was the one that never
+		// wrote a usage row, so its spend was invisible to the cap and to the
+		// dashboard. A hidden chat's id stays out, as everywhere else.
+		logUsage({
+			task: 'chat',
+			choice,
+			usage,
+			status: 'ok',
+			userId: chat.userId,
+			chatId: chat.hidden ? null : chat.id
+		});
 		emitEvent(
 			{
 				userId: chat.userId,
@@ -83,12 +96,12 @@ async function summarise(
 	msgs: StoredMessage[],
 	previousSummary: string | null,
 	choice: ModelChoice
-): Promise<string> {
+): Promise<{ summary: string; usage: Usage | null }> {
 	const transcript = msgs
 		.map((m) => `${m.role.toUpperCase()}: ${m.content}`)
 		.join('\n')
 		.slice(0, 60_000);
-	const { text } = await choice.adapter.complete(
+	const { text, usage } = await choice.adapter.complete(
 		{
 			modelKey: choice.model.modelKey,
 			messages: [
@@ -112,5 +125,5 @@ async function summarise(
 		},
 		AbortSignal.timeout(60_000)
 	);
-	return text.trim();
+	return { summary: text.trim(), usage };
 }

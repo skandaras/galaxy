@@ -102,7 +102,7 @@ export async function summariseLeg(opts: {
 			},
 			AbortSignal.timeout(SUMMARY_TIMEOUT_MS)
 		);
-		logUsage('run-summary', choice.model.modelKey, usage, 'ok', opts.userId);
+		logUsage({ task: 'run-summary', choice, usage: usage, status: 'ok', userId: opts.userId });
 
 		const line = cleanSummary(text);
 		if (!line) return skip(`model returned nothing usable: ${JSON.stringify(text.slice(0, 120))}`);
@@ -122,7 +122,7 @@ export async function summariseLeg(opts: {
 		);
 		return line;
 	} catch (err) {
-		logUsage('run-summary', choice.model.modelKey, null, 'error', opts.userId);
+		logUsage({ task: 'run-summary', choice, usage: null, status: 'error', userId: opts.userId });
 		emitEvent(
 			{
 				userId: opts.userId,

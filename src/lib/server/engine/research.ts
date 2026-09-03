@@ -2,7 +2,7 @@ import { reasoningFor } from '$lib/server/providers/registry';
 import { randomUUID } from 'node:crypto';
 import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db';
-import { usageLog, type AttachmentRef } from '$lib/server/db/schema';
+import type { AttachmentRef } from '$lib/server/db/schema';
 import { appendMessage, getChat, getMessages, updateChat, type StoredMessage } from '$lib/server/chats';
 import { EFFORT_FRACTION, type ResearchEffort } from '$lib/research-effort';
 import type { ModelChoice } from '$lib/server/providers/registry';
@@ -19,6 +19,7 @@ import {
 import { assertBudget } from './budget';
 import { withDocumentText } from './context';
 import { bootstrapContext } from './tools/knowledge';
+import { logUsage } from './usage';
 import { searchDocs } from '$lib/server/library';
 import { activate } from '$lib/server/cortex';
 import { EngineError, getTaskConfig, pickModel } from './engine';
@@ -740,7 +741,14 @@ async function runResearch(
 				},
 				{ persist }
 			);
-			logUsage({ ...opts, persist }, choice, totalUsage, 'error');
+			logUsage({
+				task: 'deep-research',
+				choice,
+				usage: totalUsage,
+				status: 'error',
+				userId: opts.userId,
+				chatId: persist ? opts.chatId : null
+			});
 			failJob(job, `Synthesis failed: ${String(err)}`);
 			return;
 		}
@@ -768,7 +776,14 @@ async function runResearch(
 			},
 			{ persist }
 		);
-		logUsage({ ...opts, persist }, choice, totalUsage, 'error');
+		logUsage({
+			task: 'deep-research',
+			choice,
+			usage: totalUsage,
+			status: 'error',
+			userId: opts.userId,
+			chatId: persist ? opts.chatId : null
+		});
 		failJob(job, `Deep research produced no answer. ${why}`);
 		return;
 	}
@@ -797,7 +812,14 @@ async function runResearch(
 				}
 			: null
 	});
-	logUsage({ ...opts, persist }, choice, totalUsage, 'ok');
+	logUsage({
+		task: 'deep-research',
+		choice,
+		usage: totalUsage,
+		status: 'ok',
+		userId: opts.userId,
+		chatId: persist ? opts.chatId : null
+	});
 	emitEvent(
 		{
 			userId: opts.userId,
@@ -3200,32 +3222,3 @@ export function clipPage(text: string): string {
 	return (cut > PAGE_TEXT_CHARS * 0.6 ? head.slice(0, cut) : head).trimEnd();
 }
 
-function logUsage(
-	opts: { userId: string; chatId: string; persist: boolean },
-	choice: ModelChoice,
-	usage: Usage,
-	status: 'ok' | 'error'
-) {
-	const cost =
-		choice.model.promptCostPerMTok != null && choice.model.completionCostPerMTok != null
-			? (usage.promptTokens * choice.model.promptCostPerMTok +
-					usage.completionTokens * choice.model.completionCostPerMTok) /
-				1_000_000
-			: null;
-	db.insert(usageLog)
-		.values({
-			id: randomUUID(),
-			ts: new Date(),
-			userId: opts.userId,
-			// Same rule as the agent loop: the spend counts, the hidden chat's id
-			// does not get to survive here.
-			chatId: opts.persist ? opts.chatId : null,
-			task: 'deep-research',
-			modelKey: choice.model.modelKey,
-			promptTokens: usage.promptTokens,
-			completionTokens: usage.completionTokens,
-			costUsd: cost,
-			status
-		})
-		.run();
-}

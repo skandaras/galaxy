@@ -2047,7 +2047,7 @@ export async function runCortexGroom(
 				// Per call, not per ask. This used to run once after the retry, so a
 				// run that timed out wrote no usage row at all — and completion
 				// tokens were the one number that would have explained the timeout.
-				logUsage('cortex-groom', choice.model.modelKey, res.usage, 'ok', userId);
+				logUsage({ task: 'cortex-groom', choice, usage: res.usage, status: 'ok', userId });
 				return { ...res, allowedMs };
 			};
 
