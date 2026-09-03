@@ -383,7 +383,12 @@ export function startCodingTurn(opts: {
 							settings: getSetting('compaction', DEFAULT_COMPACTION)
 						});
 					}
-				})();
+				})().catch((err) => {
+					// Same reason as the chat turn: a rejection with nobody holding
+					// the promise ends the process, and the leg it belongs to has
+					// already finished successfully.
+					console.error('[coding] post-leg compaction failed:', err);
+				});
 				return saved.id;
 			}
 		});

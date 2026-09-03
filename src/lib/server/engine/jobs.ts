@@ -163,7 +163,22 @@ export function createJob(opts: {
 export function pushChunk(job: LiveJob, chunk: JobChunk): void {
 	// What the watchdog reads: evidence that this run is still working.
 	job.lastChunkAt = Date.now();
-	job.chunks.push(chunk);
+	// Deltas are folded into the one before them rather than appended.
+	//
+	// This array is the replay buffer for a reconnecting client, and it kept one
+	// object per streamed fragment — thousands of them for a long answer, held
+	// for the ten minutes a finished job lingers, and walked synchronously on
+	// every reconnect. The text is the same either way; only the bookkeeping was
+	// per-token. A new object rather than a mutation, because the chunk already
+	// handed to subscribers must not change under them.
+	const last = job.chunks.at(-1);
+	if (chunk.type === 'delta' && last?.type === 'delta') {
+		job.chunks[job.chunks.length - 1] = { type: 'delta', text: last.text + chunk.text };
+	} else {
+		job.chunks.push(chunk);
+	}
+	// Subscribers still see each fragment as it arrives — coalescing is about
+	// what is kept, never about what is streamed.
 	for (const sub of job.subscribers) sub(chunk);
 }
 

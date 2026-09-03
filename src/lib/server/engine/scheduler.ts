@@ -1,7 +1,7 @@
 import { lt } from 'drizzle-orm';
 import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db';
-import { cortexChangeLog, events, usageLog, users, uxIdeas } from '$lib/server/db/schema';
+import { cortexChangeLog, events, jobs, usageLog, users, uxIdeas } from '$lib/server/db/schema';
 import {
 	ALIGNMENT_ENABLED_KEY,
 	DEFAULT_ALIGNMENT,
@@ -39,7 +39,10 @@ export function startScheduler(): void {
 	if (started) return;
 	started = true;
 	const timer = setInterval(() => {
-		void tick();
+		// `tick` has a finally but no catch, and prune() deletes outside any
+		// guard — so a throw here used to be an unhandled rejection on a timer,
+		// which is the process. A failed sweep must cost one tick, not the server.
+		tick().catch((err) => console.error('[scheduler] tick failed:', err));
 	}, TICK_MS);
 	timer.unref?.();
 }
@@ -233,8 +236,8 @@ export function isProd(): boolean {
 export function prune(
 	now = Date.now(),
 	force = false
-): { events: number; usage: number; uxIdeas: number; cortexChanges: number } {
-	const nothing = { events: 0, usage: 0, uxIdeas: 0, cortexChanges: 0 };
+): { events: number; jobs: number; usage: number; uxIdeas: number; cortexChanges: number } {
+	const nothing = { events: 0, jobs: 0, usage: 0, uxIdeas: 0, cortexChanges: 0 };
 	if (!force && now < lastPrune + PRUNE_INTERVAL_MS) return nothing;
 	lastPrune = now;
 	const cfg = getSetting<RetentionSettings>('retention', DEFAULT_RETENTION);
@@ -244,6 +247,18 @@ export function prune(
 		prunedEvents = db
 			.delete(events)
 			.where(lt(events.ts, new Date(now - cfg.eventDays * 86_400_000)))
+			.run().changes;
+	}
+
+	// Jobs ride the event window rather than carrying one of their own: a job row
+	// is the header of an Observatory run, and once its events are gone there is
+	// nothing left to open. This table had no ceiling at all — one row per turn,
+	// kept forever — and was the only unbounded thing the pruner never touched.
+	let prunedJobs = 0;
+	if (cfg.eventDays > 0) {
+		prunedJobs = db
+			.delete(jobs)
+			.where(lt(jobs.createdAt, new Date(now - cfg.eventDays * 86_400_000)))
 			.run().changes;
 	}
 
@@ -284,6 +299,7 @@ export function prune(
 	// and a full VACUUM takes an exclusive lock this process cannot afford.
 	return {
 		events: prunedEvents,
+		jobs: prunedJobs,
 		usage: prunedUsage,
 		uxIdeas: prunedIdeas,
 		cortexChanges: prunedCortex
