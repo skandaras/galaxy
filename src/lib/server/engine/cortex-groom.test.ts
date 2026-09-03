@@ -34,7 +34,6 @@ import {
 	buildSurvey,
 	surveyWindow,
 	groomingOrder,
-	everyConcept,
 	shortlistFallback,
 	readCandidates,
 	decideProposal,

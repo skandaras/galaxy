@@ -12,8 +12,7 @@ import {
 	DEFAULT_FETCH,
 	webSearchSettings,
 	getSetting,
-	type FetchSettings,
-	type WebSearchSettings
+	type FetchSettings
 } from '$lib/server/settings';
 import { typstReady } from '$lib/server/pdf';
 import { assertBudget } from './budget';

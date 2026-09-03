@@ -1,5 +1,4 @@
 import { json } from '@sveltejs/kit';
-import { eq } from 'drizzle-orm';
 import type { RequestHandler } from './$types';
 import { requireAdmin } from '$lib/server/api';
 import { db } from '$lib/server/db';

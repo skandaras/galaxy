@@ -26,7 +26,6 @@
 	let title = $state('');
 	let body = $state('');
 	let folder = $state('');
-	let author = $state<'user' | 'agent'>('user');
 	let visibility = $state<'personal' | 'shared'>('personal');
 	/**
 	 * Per-folder overrides on top of the default, which is shut for everything
@@ -99,7 +98,6 @@
 		const doc = await res.json();
 		currentId = doc.meta.id;
 		title = doc.meta.title;
-		author = doc.meta.author;
 		visibility = doc.meta.visibility;
 		folder = doc.meta.folder ?? '';
 		editable = doc.canEdit !== false;
@@ -114,7 +112,6 @@
 		title = '';
 		body = '';
 		folder = into;
-		author = 'user';
 		// New docs start personal; sharing is a deliberate act.
 		visibility = 'personal';
 		editable = true;

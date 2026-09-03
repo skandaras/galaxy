@@ -21,8 +21,7 @@ import {
 	webSearchSettings,
 	getSetting,
 	type CodingSettings,
-	type FetchSettings,
-	type WebSearchSettings
+	type FetchSettings
 } from '$lib/server/settings';
 import { completeJob, createJob, failJob, pushChunk, type LiveJob } from '../jobs';
 import { maybeCompact } from '../compaction';

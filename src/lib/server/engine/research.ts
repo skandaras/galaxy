@@ -1,17 +1,13 @@
 import { reasoningFor } from '$lib/server/providers/registry';
-import { randomUUID } from 'node:crypto';
 import { env } from '$env/dynamic/private';
-import { db } from '$lib/server/db';
 import type { AttachmentRef } from '$lib/server/db/schema';
 import { appendMessage, getChat, getMessages, updateChat, type StoredMessage } from '$lib/server/chats';
 import { EFFORT_FRACTION, type ResearchEffort } from '$lib/research-effort';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import { isRetryable, type Usage } from '$lib/server/providers/types';
 import {
-	DEFAULT_RESEARCH,
 	researchSettings,
 	webSearchSettings,
-	getSetting,
 	researchRoundCeiling,
 	type ResearchSettings,
 	type WebSearchSettings

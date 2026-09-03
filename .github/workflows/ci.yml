@@ -38,6 +38,10 @@ jobs:
           sudo install -m 0755 /tmp/typst-x86_64-unknown-linux-musl/typst /usr/local/bin/typst
           typst --version
 
+      # Before the type check, because it is the faster of the two and catches
+      # a different class of thing: a floating promise, a dead import, an
+      # accessibility attribute. Neither subsumes the other.
+      - run: npm run lint
       - run: npm run check
       - run: npm test
       - run: npm run build

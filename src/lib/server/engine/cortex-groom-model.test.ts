@@ -1,5 +1,4 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
 import {
 	chats,
@@ -13,7 +12,7 @@ import {
 	settings as settingsTable,
 	usageLog
 } from '$lib/server/db/schema';
-import { listNodes, saveAssociation, saveNode } from '$lib/server/cortex';
+import { saveAssociation, saveNode } from '$lib/server/cortex';
 import { getSetting, setSetting } from '$lib/server/settings';
 
 /**

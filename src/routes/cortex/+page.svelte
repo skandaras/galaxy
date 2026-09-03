@@ -246,17 +246,6 @@
 		await Promise.all([loadProposals(), loadChanges()]);
 	}
 
-	/**
-	 * Just the areas. Renaming or recolouring one touches no concept and moves
-	 * nothing on the chart, so the full `load()` — which also refetches the map,
-	 * and so makes the server re-check the layout — is four requests to update
-	 * one string.
-	 */
-	async function loadCircuits() {
-		const res = await fetch('/api/cortex/circuits');
-		if (res.ok) circuits = await res.json();
-	}
-
 	const MODE_KEY = 'galaxy:cortex-list-mode';
 
 	function setMode(next: typeof listMode) {
