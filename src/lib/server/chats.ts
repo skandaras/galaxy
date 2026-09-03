@@ -255,9 +255,19 @@ export function updateMessage(
 		.run();
 }
 
+/**
+ * How many messages a chat holds — which is where the next one's `seq` comes
+ * from, so this runs on every append.
+ *
+ * `COUNT(*)` rather than fetching a row per message and taking `.length`: the
+ * old shape materialised the whole conversation to arrive at a number, and it
+ * grew with the chat it was appending to.
+ */
 function countMessages(chatId: string): number {
-	return db.select({ id: messages.id }).from(messages).where(eq(messages.chatId, chatId)).all()
-		.length;
+	const row = db.get<{ n: number }>(
+		sql`SELECT COUNT(*) AS n FROM messages WHERE chat_id = ${chatId}`
+	);
+	return row?.n ?? 0;
 }
 
 export function updateChat(

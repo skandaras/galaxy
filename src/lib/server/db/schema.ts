@@ -422,19 +422,25 @@ export const mcpServers = sqliteTable('mcp_servers', {
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 });
 
-export const mcpTools = sqliteTable('mcp_tools', {
-	/** `<serverId>:<remoteName>` */
-	id: text('id').primaryKey(),
-	serverId: text('server_id').notNull(),
-	/** Qualified name the model sees. */
-	name: text('name').notNull(),
-	/** Name on the server, which is what gets called. */
-	remoteName: text('remote_name').notNull(),
-	description: text('description').notNull().default(''),
-	parameters: text('parameters', { mode: 'json' }).$type<Record<string, unknown>>()
-	// Enable/disable lives in tool_settings, so builtin and MCP tools are
-	// governed by exactly one mechanism.
-});
+export const mcpTools = sqliteTable(
+	'mcp_tools',
+	{
+		/** `<serverId>:<remoteName>` */
+		id: text('id').primaryKey(),
+		serverId: text('server_id').notNull(),
+		/** Qualified name the model sees. */
+		name: text('name').notNull(),
+		/** Name on the server, which is what gets called. */
+		remoteName: text('remote_name').notNull(),
+		description: text('description').notNull().default(''),
+		parameters: text('parameters', { mode: 'json' }).$type<Record<string, unknown>>()
+		// Enable/disable lives in tool_settings, so builtin and MCP tools are
+		// governed by exactly one mechanism.
+	},
+	// Tools are always looked up a server at a time — listing one server's tools,
+	// and replacing them wholesale on a sync.
+	(t) => [index('mcp_tools_server_idx').on(t.serverId)]
+);
 
 // Indexed on ts because getBudgetStatus() sums this period's rows before every
 // single turn, and the usage dashboard groups over the same window.
@@ -616,7 +622,14 @@ export const cards = sqliteTable(
 	// reads the same board's archived ones newest first.
 	(t) => [
 		index('cards_board_lane_idx').on(t.boardId, t.laneId, t.position),
-		index('cards_board_archived_idx').on(t.boardId, t.archivedAt)
+		index('cards_board_archived_idx').on(t.boardId, t.archivedAt),
+		// Positioning reads and writes a lane without knowing its board —
+		// nextPosition, reposition and renumber all filter on lane_id alone, and
+		// the composite above cannot serve them because board_id leads it.
+		index('cards_lane_idx').on(t.laneId),
+		// Deleting a status or a project unsets it across every card that used it.
+		index('cards_status_idx').on(t.statusId),
+		index('cards_project_idx').on(t.projectId)
 	]
 );
 
@@ -775,7 +788,9 @@ export const uxIdeas = sqliteTable(
 	},
 	(t) => [
 		index('ux_ideas_status_created_idx').on(t.status, t.createdAt),
-		index('ux_ideas_fingerprint_idx').on(t.fingerprint)
+		index('ux_ideas_fingerprint_idx').on(t.fingerprint),
+		// Same reason as the change log: the prune filters on age with no status.
+		index('ux_ideas_created_idx').on(t.createdAt)
 	]
 );
 
@@ -1273,7 +1288,11 @@ export const cortexChangeLog = sqliteTable(
 	(t) => [
 		index('cortex_change_log_node_created_idx').on(t.nodeId, t.createdAt),
 		index('cortex_change_log_user_created_idx').on(t.userId, t.createdAt),
-		index('cortex_change_log_run_idx').on(t.runId)
+		index('cortex_change_log_run_idx').on(t.runId),
+		// Retention deletes by age alone. Both composites above lead with
+		// something else, so the prune was a full scan of the fastest-growing
+		// thing Cortex owns.
+		index('cortex_change_log_created_idx').on(t.createdAt)
 	]
 );
 
