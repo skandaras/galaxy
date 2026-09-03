@@ -272,6 +272,43 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 	check(`${path} draws something`, (body?.height ?? 0) > 100);
 }
 
+// 1b. Every settings tab has a pane, and shows only its own.
+//
+//     The Cortex pane shipped with no tab at all: it was written one level of
+//     indentation shallow, which put it inside the Boards branch, and 'Cortex'
+//     was never added to the tabs list. Valid Svelte, so svelte-check passed and
+//     the render check above passed — nobody could reach the groomer controls
+//     except by clicking Boards. Loading the page was never going to catch that;
+//     clicking through it is.
+{
+	await page.goto(`${B}/settings`);
+	await page.locator('nav.tabs button').first().waitFor();
+	const tabs = await page.locator('nav.tabs button').allTextContents();
+	check('settings offers every pane a tab', tabs, [
+		'Theme',
+		'Boards',
+		'Cortex',
+		'Notifications',
+		'Memory',
+		'Alignment'
+	]);
+
+	for (const tab of tabs) {
+		problems = [];
+		await page.locator('nav.tabs button', { hasText: tab }).click();
+		await page.waitForTimeout(200);
+		const body = await page.locator('.body').boundingBox();
+		check(`the ${tab} tab shows something`, (body?.height ?? 0) > 40);
+		check(`the ${tab} tab renders quietly`, problems, []);
+	}
+
+	// The specific regression: Boards must not be carrying the Cortex pane.
+	await page.locator('nav.tabs button', { hasText: 'Boards' }).click();
+	await page.waitForTimeout(200);
+	const boardsPane = await page.locator('.body').innerText();
+	check('the Boards tab does not also render Cortex', /cortex/i.test(boardsPane), false);
+}
+
 // 2. Nothing covers the brand. This is the general form of a control escaping
 //    its container onto the sidebar — the shape of every layout bug so far.
 {
