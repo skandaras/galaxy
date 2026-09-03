@@ -15,6 +15,7 @@ import {
 	listProjects,
 	listStatuses,
 	logCard,
+	openCardCounts,
 	renameLane,
 	updateCard,
 	type Board,
@@ -42,10 +43,13 @@ const boardsById = (userId: string) => new Map(listBoards(userId).map((b) => [b.
 export function boardsDigest(userId: string): string {
 	const boards = listBoards(userId);
 	if (!boards.length) return '(no boards)';
+	// One grouped count for every board, rather than every card of every board
+	// fetched in full so that `.length` could be taken of it.
+	const open = openCardCounts(boards.map((b) => b.id));
 	return boards
 		.map((b) => {
-			const open = listCards(b.id).length;
-			return `- ${b.name}${b.role === 'collaborator' ? ' [shared with you]' : ''}: ${open} open card${open === 1 ? '' : 's'}`;
+			const n = open.get(b.id) ?? 0;
+			return `- ${b.name}${b.role === 'collaborator' ? ' [shared with you]' : ''}: ${n} open card${n === 1 ? '' : 's'}`;
 		})
 		.join('\n');
 }

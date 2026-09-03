@@ -119,9 +119,18 @@ export function decideCandidate(id: string, approve: boolean): SkillCandidate | 
 export const MEMORY_DIGEST_MAX_ITEMS = 20;
 
 export function memoryDigest(userId: string, maxItems = MEMORY_DIGEST_MAX_ITEMS): string {
-	const items = listMemoryItems(userId).filter((m) => m.status === 'active');
+	// Bounded in SQL rather than by fetching every memory this person has ever
+	// accumulated, filtering it in JS and keeping the first twenty. This runs
+	// once per turn, and the digest never wanted more than twenty.
+	const items = db
+		.select()
+		.from(memoryItems)
+		.where(and(eq(memoryItems.userId, userId), eq(memoryItems.status, 'active')))
+		.orderBy(desc(memoryItems.createdAt), memoryItems.id)
+		.limit(maxItems)
+		.all();
 	if (!items.length) return '';
-	const lines = items.slice(0, maxItems).map((m) => `- (${m.kind}) ${m.content}`);
+	const lines = items.map((m) => `- (${m.kind}) ${m.content}`);
 	return [
 		'',
 		'[Memory — durable observations from past activity]',

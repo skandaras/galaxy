@@ -999,7 +999,15 @@ export interface CircuitSummary {
  * entry with no matching row is shown as itself rather than dropped — a label
  * someone typed is still a label.
  */
-export function circuitIndex(userId: string): { circuits: CircuitSummary[]; unfiled: number } {
+export function circuitIndex(
+	userId: string,
+	/**
+	 * The nodes to count, when the caller has already read them. `cortexDigest`
+	 * has — passing them here is what stops one digest costing two full scans of
+	 * the lattice.
+	 */
+	nodes?: CortexNode[]
+): { circuits: CircuitSummary[]; unfiled: number } {
 	// Only this reader's own circuit rows. The first version read the whole
 	// table, which meant a node someone else shared could render *their* label
 	// in *this* person's prompt — and since the API accepts free strings, the id
@@ -1014,7 +1022,7 @@ export function circuitIndex(userId: string): { circuits: CircuitSummary[]; unfi
 	);
 	const counts = new Map<string, number>();
 	let unfiled = 0;
-	for (const node of listNodes(userId)) {
+	for (const node of nodes ?? listNodes(userId)) {
 		// A label written on your own node is yours to see. A label on a node
 		// somebody shared with you is theirs, and only surfaces if it resolves to
 		// a circuit you also keep — otherwise the node counts as unfiled here,
@@ -1068,7 +1076,7 @@ export function cortexDigest(userId: string): string {
 	if (!nodes.length) return '';
 
 	const bridges = nodes.filter((n) => n.isConvergence);
-	const { circuits, unfiled } = circuitIndex(userId);
+	const { circuits, unfiled } = circuitIndex(userId, nodes);
 	const lines = [
 		'',
 		'[Cortex — the working map of this person: ' +
