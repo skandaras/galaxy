@@ -7,3 +7,4 @@ data/
 !.env.example
 vite.config.ts.timestamp-*
 test-results/
+twa/

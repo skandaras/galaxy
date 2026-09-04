@@ -100,7 +100,7 @@ Internet ─► Proxy ──┤
 
 15. **Alignment** — a private place to state what you actually hold (values, principles, beliefs, roles, known failure modes, aspirations, each with examples of keeping and breaking it, a weight for collisions and a conviction for how settled it is), a reflection journal, and an agent that reads an entry back against it. Off by default and switched on per user in Settings. Judgment is against *your* constitution and nothing else, every score must quote your own words verbatim or it is dropped, and "not enough here to say" is a first-class answer. The rubric is a versioned, fully readable code module drawn from Frankfurt, Aristotle, the Stoics, Sartre, MacIntyre, Confucian role ethics, Deci & Ryan, Schwartz, Bandura, Festinger, Fonagy and Neff. Assessments anchor to the constitution version live at the time, so revising a value never re-judges the past; a bounded re-assessment shows old and new side by side when you want the difference. Rumination and distress divert to a care path that drops the rubric entirely. Nothing here reaches the memory agent, the context bootstrap, the Library or the Observatory's stored detail — asserted in tests, not just intended.
 
-16. **Mobile** — responsive layout from day one + **PWA** (manifest + service worker) so it installs to a phone home screen immediately; APK wrapper (Capacitor/TWA) is a backlog item, not v1.
+16. **Mobile** — responsive layout from day one + **PWA** (manifest + service worker) so it installs to a phone home screen immediately; **TWA APK** via `scripts/build-twa.sh` for de-Googled Android, where a WebAPK cannot be minted at all. Capacitor stays out — a native project to maintain buys nothing the TWA does not already give.
 
 ---
 
@@ -134,7 +134,7 @@ Internet ─► Proxy ──┤
 
 ## Backlog (future considerations, roughly ordered)
 
-- **PWA push notifications** (job finished, research complete) → then the APK wrapper (Capacitor/TWA).
+- **Notifications with no Google dependency** — web push reaches Android over FCM, so a fully de-Googled phone cannot receive it in any browser, Firefox included. UnifiedPush/ntfy as a second transport is the way out.
 - **E2E promotion gate** — a Playwright smoke suite the dev instance must pass before the Promote button unlocks (self-hosting safety net).
 - ~~**SearXNG self-hosted search** as default provider~~ — **shipped**: runs in compose on an internal network, with primary/fallback providers and an admin "Test search" probe.
 - **Local model endpoints** (Ollama / llama.cpp) via the OpenAI-compatible adapter.
