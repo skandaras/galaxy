@@ -30,7 +30,9 @@ startScheduler();
 // synchronous — can just read the answer.
 void typstAvailable();
 
-const PUBLIC_PATHS = new Set(['/healthz']);
+// Digital Asset Links has to answer a browser that has no session — it is what
+// tells Android the TWA owns this origin, and it is fetched signed out.
+const PUBLIC_PATHS = new Set(['/healthz', '/.well-known/assetlinks.json']);
 
 export const handle: Handle = async ({ event, resolve }) => {
 	event.locals.user = null;

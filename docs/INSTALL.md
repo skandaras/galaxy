@@ -75,6 +75,7 @@ Optional per-instance env you may add in `docker-compose.yml`:
 | `SECRET_KEY` | 64 hex chars; master key for encrypting API keys. If unset, a key file is generated in the data volume (back it up!). `openssl rand -hex 32` |
 | `ADMIN_GROUP` | Authelia group granting admin (default `galaxy-admins`) |
 | `GITHUB_REPO` | `owner/repo` used by the Promote button (default `skandaras/galaxy`) |
+| `TWA_PACKAGE_ID`, `TWA_FINGERPRINTS` | Android app identity. Only needed if you build the APK — see [MOBILE.md](./MOBILE.md). Served at `/.well-known/assetlinks.json`, which needs the proxy bypass in §3 |
 | `DEV_HEALTH_URL` | e.g. `http://galaxy-dev:3000/healthz` — promotion gate: Promote refuses if dev is unhealthy |
 | `RUNNER_IMAGE`, `DATA_VOLUME`, `RUNNER_NETWORK`, `DOCKER_API_URL`, `CODING_EXECUTOR` | Coding sandbox wiring — defaults are already in the compose file; `DATA_VOLUME` must match the compose project's real volume name (`docker volume ls`) |
 | `STREAM_IDLE_TIMEOUT_MS` | How long a model call may send *nothing* before it's treated as stalled (default 90000). This is an idle timeout, not a total one — a long coding turn is fine as long as output keeps arriving |
@@ -106,6 +107,31 @@ dev-ai.example.com {
     reverse_proxy galaxy-dev:3000
 }
 ```
+
+If you build the Android app (see [MOBILE.md](./MOBILE.md)), one path has to
+skip Authelia. `/.well-known/assetlinks.json` is what tells Android the app owns
+this domain, and the phone fetches it with no session — so behind a blanket
+`forward_auth` it gets a login page, verification fails, and the app draws a
+browser address bar over itself with nothing explaining why. Galaxy already
+serves that route without auth; the proxy has to agree:
+
+```caddy
+ai.example.com {
+    handle /.well-known/assetlinks.json {
+        reverse_proxy galaxy-prod:3000
+    }
+    handle {
+        forward_auth authelia:9091 {
+            uri /api/verify?rd=https://auth.example.com
+            copy_headers Remote-User Remote-Groups Remote-Email Remote-Name
+        }
+        reverse_proxy galaxy-prod:3000
+    }
+}
+```
+
+It exposes a package name and a certificate fingerprint, both of which are
+public facts about an APK you hand out.
 
 In Authelia, create a `galaxy-admins` group and add yourself. Users are
 auto-provisioned on first visit; group members get the Admin nav.
@@ -482,6 +508,7 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | `searxng` container won't start | `searxng/settings.yml` missing next to `docker-compose.yml` (§2) — the service bind-mounts it |
 | `No such file or directory` writing `.env` | You're not in the project directory. `docker compose ls` shows where the compose file actually is (§2); `/opt/galaxy` in this guide is only an example |
 | MCP server won't connect | See [MCP.md](MCP.md#troubleshooting); the common cases are a wrong header and a server that requires OAuth |
+| Installed Android app shows a browser address bar | Digital Asset Links did not verify. `curl` `/.well-known/assetlinks.json` signed out from outside — a login page means the proxy bypass above is missing; JSON means the fingerprint does not match the installed APK. See [MOBILE.md](./MOBILE.md) |
 | Attachment upload fails / 403 on form posts | `ORIGIN` not set to this instance's public URL (SvelteKit CSRF check) |
 | Small attachments upload but larger ones fail with `413` / `exceeds the server's request limit` | `BODY_SIZE_LIMIT` too low (or missing, so adapter-node's 512K default applies). Set it to `32M`. A reverse proxy can impose its own cap too — nginx's `client_max_body_size` defaults to 1 MB |
 | Memory never runs | Admin → Memory: enabled? interval? It also skips when there's no new activity |

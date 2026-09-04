@@ -55,8 +55,10 @@ self.addEventListener('push', (event) => {
 			payload.title || 'Galaxy',
 			{
 				body: payload.body ?? '',
-				icon: '/icon.svg',
-				badge: '/icon.svg',
+				// PNG, not the SVG: Android renders neither the notification icon nor
+				// the badge from a vector.
+				icon: '/icon-192.png',
+				badge: '/icon-192.png',
 				// Collapses repeats of the same question rather than stacking them.
 				tag: payload.id ?? 'galaxy',
 				data: { link: payload.link || '/chat' },
