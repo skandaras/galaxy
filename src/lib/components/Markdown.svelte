@@ -14,8 +14,32 @@
 	 * thoughts with a single newline, which plain CommonMark folds into one
 	 * paragraph — the wall of prose every reply arrived as.
 	 */
-	const render = (md: string) =>
+	const parse = (md: string) =>
 		DOMPurify.sanitize(marked.parse(md, { async: false, gfm: true, breaks: true }) as string);
+
+	/**
+	 * Rendered segments, keyed by their own text.
+	 *
+	 * `render` is called from the template, so every streamed delta re-parsed and
+	 * re-sanitised *every* segment of the message rather than the one that grew —
+	 * quadratic in the length of a reply, and the whole cost paid again on each of
+	 * the hundreds of deltas a long answer arrives in. Only the tail segment
+	 * changes between deltas, so keying on content means only the tail is parsed.
+	 *
+	 * Bounded because a long thread would otherwise keep every intermediate state
+	 * of every streaming reply alive. Oldest out first; a miss only costs the
+	 * parse that used to happen unconditionally.
+	 */
+	const cache = new Map<string, string>();
+	const CACHE_MAX = 400;
+	const render = (md: string) => {
+		const hit = cache.get(md);
+		if (hit !== undefined) return hit;
+		const html = parse(md);
+		if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value!);
+		cache.set(md, html);
+		return html;
+	};
 </script>
 
 <div class="md">
