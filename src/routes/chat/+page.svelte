@@ -835,11 +835,26 @@
 
 	async function toggleHidden(chat: ChatMeta, evOrNull?: Event) {
 		evOrNull?.stopPropagation();
-		await fetch(`/api/chats/${chat.id}`, {
+		const res = await fetch(`/api/chats/${chat.id}`, {
 			method: 'PATCH',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ hidden: !chat.hidden })
-		});
+		}).catch(() => null);
+		// The server refuses while a run is recording — say which run and offer to
+		// stop it, rather than leaving a toggle that silently did nothing.
+		if (!res?.ok) {
+			const err = await res?.json().catch(() => null);
+			errorBanner = err?.message ?? 'Could not change the visibility of this chat.';
+			blockingJobId = res?.status === 409 && err?.jobId ? err.jobId : null;
+			return;
+		}
+		// Drafts are kept in sessionStorage and skipped for hidden chats, but one
+		// typed while the chat was visible is already written — and `currentChat`
+		// still says visible here, so the next keystroke would write it again.
+		if (!chat.hidden) {
+			clearDraft(draftKey('chat', chat.id));
+			if (currentChat?.id === chat.id) currentChat = { ...currentChat, hidden: true };
+		}
 		await refreshChats();
 	}
 
