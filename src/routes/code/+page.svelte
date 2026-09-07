@@ -8,6 +8,13 @@
 	import { hasFinePointer } from '$lib/pointer';
 	import { copyText } from '$lib/clipboard';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
+	import {
+		beginAttach,
+		cancelFailureBanner,
+		newReplayCounter,
+		noteChunk,
+		planRecovery
+	} from '$lib/stream-recovery';
 	import AskSheet from '$lib/components/AskSheet.svelte';
 	import GalaxySpinner from '$lib/components/GalaxySpinner.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
@@ -168,19 +175,13 @@
 	let diff = $state<SessionDiff | null>(null);
 	let source: EventSource | null = null;
 	/**
-	 * Consecutive failed reattaches. Any chunk arriving resets it, so a run that
-	 * reconnects cleanly and then streams for ten minutes starts from a full
-	 * allowance if it drops again.
-	 *
-	 * It used to be a lifetime count carried across every reattach and never
-	 * reset, so three drops spread over a long run exhausted it however healthy
-	 * the stream had been in between — and reattaching was immediate, so an
-	 * endpoint failing instantly burned all three inside a second.
+	 * Consecutive failed reattaches since the stream last made real progress.
+	 * See stream-recovery.ts for why "progress" is not "a chunk arrived".
 	 */
 	let recoveries = 0;
-	const MAX_RECOVERIES = 6;
-	/** Backoff between reattaches, capped so a long run keeps trying. */
-	const recoveryDelayMs = (attempt: number) => Math.min(15_000, 500 * 2 ** attempt);
+	const replay = newReplayCounter();
+	/** Bumped whenever the pane changes session — see the chat page's copy. */
+	let viewGeneration = 0;
 
 	onMount(async () => {
 		const [chatsRes, modelsRes, reposRes] = await Promise.all([
@@ -271,6 +272,8 @@
 
 	async function select(chatId: string) {
 		stashDraft();
+		// Anything recovering the previous session is now stale.
+		viewGeneration++;
 		closeStream();
 		errorBanner = null;
 		diff = null;
@@ -392,7 +395,17 @@
 	async function stopRun() {
 		if (!activeJobId || stopping) return;
 		stopping = true;
-		await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST' }).catch(() => {});
+		const res = await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST' }).catch(
+			() => null
+		);
+		// The answer used to be discarded, and `stopping` is only ever cleared by a
+		// chunk — so a failed cancel left the button disabled showing an ellipsis
+		// over a run that was still going, with no way to try again.
+		const failure = cancelFailureBanner(res);
+		if (failure) {
+			stopping = false;
+			errorBanner = failure;
+		}
 	}
 
 	/**
@@ -402,6 +415,7 @@
 	 */
 	function attach(jobId: string, carriedRecoveries = 0, startedAt?: number | null) {
 		closeStream();
+		beginAttach(replay);
 		// Clears the reconnecting notice; a real failure sets its own.
 		errorBanner = null;
 		recoveries = carriedRecoveries;
@@ -422,8 +436,9 @@
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
 			const chunk = JSON.parse(ev.data);
-			// Proof the stream works: whatever it cost to get here, it is spent.
-			recoveries = 0;
+			// Only chunks past the replayed prefix count as the stream working — a
+			// reattach replays the whole buffer before a single live chunk.
+			if (noteChunk(replay)) recoveries = 0;
 			if (chunk.type === 'meta') {
 				// New (re)attempt: drop partial text from a failed attempt. The
 				// timeline is left alone — "tried, failed over, retried" is exactly
@@ -492,35 +507,55 @@
 		const partialModel = streamModel;
 		finalize(false);
 		if (!chatId) return;
+		// Captured after finalize, which closes the stream but does not change
+		// session. Everything below rechecks it after each await.
+		const generation = viewGeneration;
+		const stale = () => viewGeneration !== generation;
 
-		const res = await fetch(`/api/code/sessions/${chatId}`).catch(() => null);
-		if (!res?.ok) {
-			if (partial) appendLocalAssistant(partial, partialModel);
-			errorBanner = 'Lost the connection to this run — reopen the session to see how it ended.';
-			return;
-		}
+		for (;;) {
+			const res = await fetch(`/api/code/sessions/${chatId}`).catch(() => null);
+			if (stale()) return;
+			const data = res?.ok ? await res.json().catch(() => null) : null;
+			if (stale()) return;
+			// Only once we know whose messages these are — this used to be
+			// unguarded, so switching sessions mid-fetch replaced the newly opened
+			// one with the session being recovered.
+			const restored: Msg[] = data
+				? data.messages.filter((m: Msg) => m.role !== 'tool')
+				: [];
+			if (data) messages = restored;
 
-		const data = await res.json();
-		messages = data.messages.filter((m: Msg) => m.role !== 'tool');
-		if (data.runningJobId && recoveries < MAX_RECOVERIES) {
-			// Still going: reattach rather than stranding the user on a dead view.
-			const wait = recoveryDelayMs(recoveries);
+			const plan = planRecovery({
+				attempt: recoveries,
+				fetchOk: !!data,
+				runningJobId: data?.runningJobId ?? null,
+				hasPartial: !!partial,
+				answered: restored.at(-1)?.role === 'assistant',
+				noun: 'session'
+			});
+			if (plan.kind === 'settled') return;
+			if (plan.kind === 'incomplete') {
+				appendLocalAssistant(partial, partialModel);
+				errorBanner = plan.banner;
+				return;
+			}
+			if (plan.kind === 'no-reply' || plan.kind === 'exhausted') {
+				if (plan.kind === 'exhausted' && !data && partial) {
+					appendLocalAssistant(partial, partialModel);
+				}
+				errorBanner = plan.banner;
+				return;
+			}
 			recoveries++;
-			errorBanner = `Reconnecting to this run…`;
-			await new Promise((resolve) => setTimeout(resolve, wait));
-			attach(data.runningJobId, recoveries, data.runningSince);
-			return;
-		}
-		if (data.runningJobId) {
-			errorBanner = 'Kept losing the connection to this run — reopen the session to catch up.';
-			return;
-		}
-		const answered = messages.at(-1)?.role === 'assistant';
-		if (!answered && partial) {
-			appendLocalAssistant(partial, partialModel);
-			errorBanner = 'The connection dropped mid-run — this reply is incomplete.';
-		} else if (!answered) {
-			errorBanner = 'That run ended without a reply. Check the Observatory for the reason.';
+			errorBanner = plan.banner;
+			await new Promise((resolve) => setTimeout(resolve, plan.waitMs));
+			// The window that mattered most: up to fifteen seconds in which the
+			// person can open something else entirely.
+			if (stale()) return;
+			if (plan.kind === 'reattach') {
+				attach(plan.jobId, recoveries, data?.runningSince);
+				return;
+			}
 		}
 	}
 

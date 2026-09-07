@@ -568,8 +568,11 @@ export function erodedEdges(userId: string, staleDays: number, now = Date.now())
  * ever isn't, the change is to walk it a hop at a time against the same id set,
  * not to relax the bound.
  */
-export function visibleEdges(userId: string): CortexAssociation[] {
-	const ids = listNodes(userId).map((n) => n.id);
+export function visibleEdges(userId: string, visible?: CortexNode[]): CortexAssociation[] {
+	// `visible` lets a caller that has already read the nodes say so. `activate`
+	// reads them for its own lookup map and then called this, which read them all
+	// over again — two full node selects per query, for one query's worth of work.
+	const ids = (visible ?? listNodes(userId)).map((n) => n.id);
 	if (!ids.length) return [];
 	return db
 		.select()
@@ -799,8 +802,9 @@ export function activate(opts: {
 	if (!seeded.length) return { seeds: [], nodes: [], traversed: [], pathTo: new Map() };
 	const seeds = seeded.map((s) => s.node);
 
-	const byId = new Map(listNodes(opts.userId).map((n) => [n.id, n]));
-	const edges = visibleEdges(opts.userId);
+	const visible = listNodes(opts.userId);
+	const byId = new Map(visible.map((n) => [n.id, n]));
+	const edges = visibleEdges(opts.userId, visible);
 
 	// Adjacency built once per query. An asymmetric edge only carries activation
 	// the way it points: one concept can strongly imply another while the reverse
@@ -808,21 +812,25 @@ export function activate(opts: {
 	// general one it feeds.
 	type Hop = { to: string; weight: number; tags: string[] | null; edge: EdgeRef };
 	const out = new Map<string, Hop[]>();
+	// Appended, not rebuilt. Spreading the existing list copied every neighbour
+	// already found each time another arrived, so assembling the adjacency of a
+	// hub cost the square of its degree — see `adjacency` above, which has always
+	// pushed.
 	const push = (from: string, to: string, e: CortexAssociation) => {
-		out.set(from, [
-			...(out.get(from) ?? []),
-			{
-				to,
-				// What a traversal spends is the authored weight plus what use has
-				// taught, never one without the other — see effectiveWeight.
-				weight: effectiveWeight(e),
-				tags: e.contextTags,
-				// The row as stored, not as walked: a symmetric edge is traversed in
-				// both directions and stored once, so a learner handed the walked
-				// orientation would look for a row that is not there.
-				edge: { sourceId: e.sourceId, targetId: e.targetId }
-			}
-		]);
+		const hop: Hop = {
+			to,
+			// What a traversal spends is the authored weight plus what use has
+			// taught, never one without the other — see effectiveWeight.
+			weight: effectiveWeight(e),
+			tags: e.contextTags,
+			// The row as stored, not as walked: a symmetric edge is traversed in
+			// both directions and stored once, so a learner handed the walked
+			// orientation would look for a row that is not there.
+			edge: { sourceId: e.sourceId, targetId: e.targetId }
+		};
+		const list = out.get(from);
+		if (list) list.push(hop);
+		else out.set(from, [hop]);
 	};
 	for (const e of edges) {
 		push(e.sourceId, e.targetId, e);

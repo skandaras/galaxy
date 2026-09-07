@@ -3,6 +3,13 @@
 	import Markdown from '$lib/components/Markdown.svelte';
 	import { ATTACHMENT_ACCEPT, attachmentIcon, screenFiles } from '$lib/attachment-types';
 	import { clearDraft, draftKey, getDraft, renameDraft, setDraft } from '$lib/composer-drafts.svelte';
+	import {
+		beginAttach,
+		cancelFailureBanner,
+		newReplayCounter,
+		noteChunk,
+		planRecovery
+	} from '$lib/stream-recovery';
 	import { createAutoscroll } from '$lib/autoscroll.svelte';
 	import { autoresize } from '$lib/autoresize';
 	import { hasFinePointer } from '$lib/pointer';
@@ -161,19 +168,22 @@
 	let savedDocId = $state<string | null>(null);
 	let source: EventSource | null = null;
 	/**
-	 * Consecutive failed reattaches. Any chunk arriving resets it, so a run that
-	 * reconnects cleanly and then streams for ten minutes starts from a full
-	 * allowance if it drops again.
+	 * Consecutive failed reattaches since the stream last made real progress.
 	 *
 	 * It used to be a lifetime count carried across every reattach and never
 	 * reset, so three drops spread over a long run exhausted it however healthy
-	 * the stream had been in between — and reattaching was immediate, so an
-	 * endpoint failing instantly burned all three inside a second.
+	 * the stream had been in between. Then it reset on any chunk at all, which
+	 * replay made just as wrong in the other direction — see stream-recovery.ts.
 	 */
 	let recoveries = 0;
-	const MAX_RECOVERIES = 6;
-	/** Backoff between reattaches, capped so a long run keeps trying. */
-	const recoveryDelayMs = (attempt: number) => Math.min(15_000, 500 * 2 ** attempt);
+	const replay = newReplayCounter();
+	/**
+	 * Bumped whenever the pane changes conversation. `recoverStream` captures it
+	 * and rechecks after every await: it holds its own `chatId` and re-reads
+	 * nothing, so `closeStream` cannot stop it, and it was free to write the old
+	 * chat's messages and attach the old chat's run to whatever is now open.
+	 */
+	let viewGeneration = 0;
 
 	/**
 	 * Width of the chat list, draggable by the divider. Clamped so it can never
@@ -271,6 +281,8 @@
 	 */
 	async function loadChat(id: string) {
 		stashDraft();
+		// Anything recovering the previous conversation is now stale.
+		viewGeneration++;
 		closeStream();
 		errorBanner = null;
 		blockingJobId = null;
@@ -441,15 +453,34 @@
 	async function stopRun() {
 		if (!activeJobId || stopping) return;
 		stopping = true;
-		await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST' }).catch(() => {});
+		const res = await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST' }).catch(
+			() => null
+		);
+		// The answer used to be discarded. `stopping` is only ever cleared by a
+		// chunk, and a cancel that failed means no chunk is coming — so the button
+		// stayed disabled showing an ellipsis, with the early return above blocking
+		// any retry, over a run that was still going.
+		const failure = cancelFailureBanner(res);
+		if (failure) {
+			stopping = false;
+			errorBanner = failure;
+		}
 	}
 
 	/** Stop the run that refused this send, so the chat is usable again. */
 	async function stopBlockingRun() {
 		const jobId = blockingJobId;
 		if (!jobId) return;
+		const res = await fetch(`/api/jobs/${jobId}/cancel`, { method: 'POST' }).catch(() => null);
+		const failure = cancelFailureBanner(res);
+		// The id is cleared only on success: dropping it first meant a failed
+		// cancel lost the one thing that could retry it, and still claimed the run
+		// was stopping.
+		if (failure) {
+			errorBanner = failure;
+			return;
+		}
 		blockingJobId = null;
-		await fetch(`/api/jobs/${jobId}/cancel`, { method: 'POST' }).catch(() => {});
 		errorBanner = 'Stopping that run — try sending again in a moment.';
 	}
 
@@ -465,6 +496,7 @@
 	/** `carriedRecoveries` keeps the reconnect budget across a reattach. */
 	function attachStream(jobId: string, carriedRecoveries = 0) {
 		closeStream();
+		beginAttach(replay);
 		// Clears the reconnecting notice; a real failure sets its own.
 		errorBanner = null;
 		recoveries = carriedRecoveries;
@@ -482,8 +514,10 @@
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
 			const chunk = JSON.parse(ev.data);
-			// Proof the stream works: whatever it cost to get here, it is spent.
-			recoveries = 0;
+			// Only chunks past the replayed prefix count as the stream working. A
+			// reattach replays the whole buffer before a single live chunk, so
+			// resetting on any chunk reset the budget one tick after connecting.
+			if (noteChunk(replay)) recoveries = 0;
 			if (chunk.type === 'meta') {
 				// A meta chunk marks the start of a (re)attempt — discard any
 				// partial text from a failed attempt so it isn't duplicated.
@@ -565,37 +599,56 @@
 		// usually complete. It is only worth keeping if the server has nothing.
 		finalizeStream(false);
 		if (!chatId) return;
+		// Captured after finalizeStream, which closes the stream but does not
+		// change conversation. Everything below rechecks it after each await.
+		const generation = viewGeneration;
+		const stale = () => viewGeneration !== generation;
 
-		const res = await fetch(`/api/chats/${chatId}`).catch(() => null);
-		if (!res?.ok) {
-			if (partial) appendLocalAssistant(partial, partialModel);
-			errorBanner = 'Lost the connection to this run — reopen the chat to see how it ended.';
-			return;
-		}
+		// A loop rather than a single pass, because a failed reconcile is now
+		// retried on the same budget instead of ending recovery outright.
+		for (;;) {
+			const res = await fetch(`/api/chats/${chatId}`).catch(() => null);
+			if (stale()) return;
+			const data = res?.ok ? await res.json().catch(() => null) : null;
+			if (stale()) return;
+			// Only once we know whose messages these are. This assignment used to
+			// happen unguarded, so switching chats mid-fetch replaced the newly
+			// opened conversation with the one being recovered.
+			if (data) messages = data.messages;
 
-		const data = await res.json();
-		messages = data.messages;
-		if (data.runningJobId && recoveries < MAX_RECOVERIES) {
-			// Still going: reattach rather than stranding the user on a dead view.
-			const wait = recoveryDelayMs(recoveries);
+			const plan = planRecovery({
+				attempt: recoveries,
+				fetchOk: !!data,
+				runningJobId: data?.runningJobId ?? null,
+				hasPartial: !!partial,
+				answered: !!data && data.messages.at(-1)?.role === 'assistant',
+				noun: 'chat'
+			});
+			if (plan.kind === 'settled') return;
+			if (plan.kind === 'incomplete') {
+				// The turn died before the reply was saved. Show what did arrive
+				// rather than throwing it away, but say that it is unfinished.
+				appendLocalAssistant(partial, partialModel);
+				errorBanner = plan.banner;
+				return;
+			}
+			if (plan.kind === 'no-reply' || plan.kind === 'exhausted') {
+				if (plan.kind === 'exhausted' && !data && partial) {
+					appendLocalAssistant(partial, partialModel);
+				}
+				errorBanner = plan.banner;
+				return;
+			}
 			recoveries++;
-			errorBanner = `Reconnecting to this run…`;
-			await new Promise((resolve) => setTimeout(resolve, wait));
-			attachStream(data.runningJobId, recoveries);
-			return;
-		}
-		if (data.runningJobId) {
-			errorBanner = 'Kept losing the connection to this run — reopen the chat to catch up.';
-			return;
-		}
-		const answered = messages.at(-1)?.role === 'assistant';
-		if (!answered && partial) {
-			// The turn died before the reply was saved. Show what did arrive rather
-			// than throwing it away, but say that it is unfinished.
-			appendLocalAssistant(partial, partialModel);
-			errorBanner = 'The connection dropped mid-reply — this answer is incomplete.';
-		} else if (!answered) {
-			errorBanner = 'That run ended without a reply. Check the Observatory for the reason.';
+			errorBanner = plan.banner;
+			await new Promise((resolve) => setTimeout(resolve, plan.waitMs));
+			// The window that mattered most: up to fifteen seconds in which the
+			// person can open something else entirely.
+			if (stale()) return;
+			if (plan.kind === 'reattach') {
+				attachStream(plan.jobId, recoveries);
+				return;
+			}
 		}
 	}
 
@@ -835,11 +888,26 @@
 
 	async function toggleHidden(chat: ChatMeta, evOrNull?: Event) {
 		evOrNull?.stopPropagation();
-		await fetch(`/api/chats/${chat.id}`, {
+		const res = await fetch(`/api/chats/${chat.id}`, {
 			method: 'PATCH',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ hidden: !chat.hidden })
-		});
+		}).catch(() => null);
+		// The server refuses while a run is recording — say which run and offer to
+		// stop it, rather than leaving a toggle that silently did nothing.
+		if (!res?.ok) {
+			const err = await res?.json().catch(() => null);
+			errorBanner = err?.message ?? 'Could not change the visibility of this chat.';
+			blockingJobId = res?.status === 409 && err?.jobId ? err.jobId : null;
+			return;
+		}
+		// Drafts are kept in sessionStorage and skipped for hidden chats, but one
+		// typed while the chat was visible is already written — and `currentChat`
+		// still says visible here, so the next keystroke would write it again.
+		if (!chat.hidden) {
+			clearDraft(draftKey('chat', chat.id));
+			if (currentChat?.id === chat.id) currentChat = { ...currentChat, hidden: true };
+		}
 		await refreshChats();
 	}
 

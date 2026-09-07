@@ -234,7 +234,12 @@ export function failJob(job: LiveJob, error: string): void {
 	// Only tell someone about a failure they did not see happen. A turn that
 	// broke while they were watching it already showed them the error, and a
 	// bell that repeats what is on screen is noise.
-	if (unwatched) {
+	//
+	// `job.persist` guards it because `notify` writes a durable row whose `link`
+	// carries the chat id. A hidden chat that failed while the tab was closed left
+	// one behind permanently — the only channel in the whole failure path that was
+	// not checking, and the one that survives a restart.
+	if (unwatched && job.persist) {
 		notify({
 			userId: job.userId,
 			kind: 'turn-failed',

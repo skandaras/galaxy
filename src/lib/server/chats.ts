@@ -1,9 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { and, asc, desc, eq, isNotNull, isNull, notExists, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, notExists, sql } from 'drizzle-orm';
 import { db, dataDir } from '$lib/server/db';
-import { chats, messages, attachments, type AttachmentRef } from '$lib/server/db/schema';
+import {
+	chats,
+	messages,
+	attachments,
+	events,
+	jobs,
+	notifications,
+	usageLog,
+	type AttachmentRef
+} from '$lib/server/db/schema';
 import type { MessageTrace } from '$lib/run-timeline';
 
 export interface ChatMeta {
@@ -287,6 +296,59 @@ export function updateChat(
 		.run();
 }
 
+/** The handle drizzle hands a transaction callback — same surface as `db`. */
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Everything outside the chat's own three tables that carries its id.
+ *
+ * Hiding a chat used to delete messages, attachments and the chat row and stop
+ * there, which left the conversation reconstructable from the trail it had
+ * already written while visible. `run_history` is the sharpest example: it reads
+ * `events` and `jobs` straight back by chat id, and it is registered as a tool on
+ * every chat turn — so the agent could recite the tool calls and run summaries of
+ * a conversation the person had just hidden. AGENTS.md and usage.ts both say that
+ * id must not survive; it did.
+ *
+ * Usage rows are anonymised rather than deleted. A hidden chat spends real money
+ * and `getBudgetStatus` sums `cost_usd`, so dropping the rows would hand back
+ * budget that was actually spent — the identifier goes, the spending stays.
+ */
+function purgeChatTrail(tx: Tx, chatId: string): void {
+	// Before the job rows go: the notification a failed run leaves behind points
+	// at its job, not at the chat.
+	const jobIds = tx
+		.select({ id: jobs.id })
+		.from(jobs)
+		.where(eq(jobs.chatId, chatId))
+		.all()
+		.map((r) => r.id);
+	if (jobIds.length) tx.delete(notifications).where(inArray(notifications.entityId, jobIds)).run();
+	// The link column is the other place the id lands, and it outlives the job row.
+	tx.delete(notifications).where(like(notifications.link, `%chat=${chatId}%`)).run();
+	tx.delete(jobs).where(eq(jobs.chatId, chatId)).run();
+	tx.delete(events).where(eq(events.chatId, chatId)).run();
+	tx.update(usageLog).set({ chatId: null }).where(eq(usageLog.chatId, chatId)).run();
+}
+
+/**
+ * Erase a chat from the database, trail included.
+ *
+ * One transaction because the halves are worthless apart: a crash between the
+ * message delete and the chat delete used to leave a chat whose messages were
+ * gone, and a crash before the trail purge left the trail. Uploads are removed by
+ * the caller *after* the commit — a filesystem delete cannot join a transaction,
+ * and doing it first means a rollback leaves rows pointing at files that are gone.
+ */
+function eraseChatRows(chatId: string): void {
+	db.transaction((tx) => {
+		tx.delete(messages).where(eq(messages.chatId, chatId)).run();
+		tx.delete(attachments).where(eq(attachments.chatId, chatId)).run();
+		tx.delete(chats).where(eq(chats.id, chatId)).run();
+		purgeChatTrail(tx, chatId);
+	});
+}
+
 /**
  * Flip a chat's Hidden state. visible→hidden pulls every trace out of the DB
  * (rows and uploaded files) into memory; hidden→visible persists it.
@@ -312,9 +374,7 @@ export function setHidden(chatId: string, userId: string, hidden: boolean): Chat
 		}
 		const newMeta: ChatMeta = { ...meta, hidden: true, updatedAt: Date.now() };
 		hiddenChats.set(chatId, { meta: newMeta, messages: msgs, attachments: files });
-		db.delete(messages).where(eq(messages.chatId, chatId)).run();
-		db.delete(attachments).where(eq(attachments.chatId, chatId)).run();
-		db.delete(chats).where(eq(chats.id, chatId)).run();
+		eraseChatRows(chatId);
 		rmSync(uploadsDir(chatId), { recursive: true, force: true });
 		return newMeta;
 	}
@@ -363,9 +423,7 @@ export function deleteChat(chatId: string, userId: string): boolean {
 		hiddenChats.delete(chatId);
 		return true;
 	}
-	db.delete(messages).where(eq(messages.chatId, chatId)).run();
-	db.delete(attachments).where(eq(attachments.chatId, chatId)).run();
-	db.delete(chats).where(eq(chats.id, chatId)).run();
+	eraseChatRows(chatId);
 	rmSync(uploadsDir(chatId), { recursive: true, force: true });
 	return true;
 }
@@ -398,9 +456,7 @@ export function deleteEmptyChats(): number {
 	for (const row of empty) {
 		// Through the same path a person's delete takes, so uploads and
 		// attachment rows go with it rather than being orphaned.
-		db.delete(messages).where(eq(messages.chatId, row.id)).run();
-		db.delete(attachments).where(eq(attachments.chatId, row.id)).run();
-		db.delete(chats).where(eq(chats.id, row.id)).run();
+		eraseChatRows(row.id);
 		rmSync(uploadsDir(row.id), { recursive: true, force: true });
 	}
 	return empty.length;

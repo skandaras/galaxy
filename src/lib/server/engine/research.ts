@@ -12,7 +12,7 @@ import {
 	type ResearchSettings,
 	type WebSearchSettings
 } from '$lib/server/settings';
-import { assertBudget } from './budget';
+import { assertBudget, getBudgetStatus } from './budget';
 import { withDocumentText } from './context';
 import { bootstrapContext } from './tools/knowledge';
 import { logUsage } from './usage';
@@ -165,7 +165,31 @@ async function runResearch(
 ): Promise<void> {
 	const cfg = researchSettings();
 	const totalUsage: Usage = { promptTokens: 0, completionTokens: 0 };
+	/**
+	 * One row per provider call, written as the call returns.
+	 *
+	 * This used to only add to `totalUsage`, which reached the database once, at
+	 * the very end. A research run makes a planner call, several calls per round
+	 * and a synthesis call, over many minutes — and for all of that time
+	 * `getBudgetStatus` could see none of it, because the cap sums rows that had
+	 * not been written. Worse, a throw anywhere in the round loop lands on the
+	 * outer handler, which fails the job without logging: the entire run's spend,
+	 * gone.
+	 *
+	 * `u` goes to the row whole rather than as two summed fields, so the cache
+	 * discount survives — research was being billed at list price against the cap
+	 * because `costOf` had no discount to subtract — and so do the reasoning
+	 * tokens, which is the number that explains where a slow round went.
+	 */
 	const track = (u: Usage | null) => {
+		logUsage({
+			task: 'deep-research',
+			choice,
+			usage: u,
+			status: 'ok',
+			userId: opts.userId,
+			chatId: persist ? opts.chatId : null
+		});
 		if (u) {
 			totalUsage.promptTokens += u.promptTokens;
 			totalUsage.completionTokens += u.completionTokens;
@@ -331,6 +355,16 @@ async function runResearch(
 		// and page fetching, which is exactly what a user wants to cut short.
 		if (job.controller.signal.aborted) {
 			stopCause = 'cancelled';
+			break;
+		}
+		// And for the cap, which until now was consulted once before the run and
+		// never again. A research run is the longest and most expensive thing this
+		// app does; checking only at the start meant it could cross the cap in
+		// round one and keep going to round six. Worth checking here rather than
+		// mid-round because a round is the unit that produces something usable —
+		// stopping between them still leaves an answer to synthesise from.
+		if (round > 1 && getBudgetStatus().blocked) {
+			stopCause = 'budget';
 			break;
 		}
 		pending = dedupeQueries(pending, ranQueries).slice(0, budget.queriesPerRound);
@@ -692,17 +726,28 @@ async function runResearch(
 			},
 			job.controller.signal
 		);
-		for await (const ev of stream) {
-			if (ev.type === 'text') {
-				answer += ev.delta;
-				pushChunk(job, { type: 'delta', text: ev.delta });
-			} else if (ev.type === 'reasoning') {
-				reasoningChars += ev.delta.length;
-			} else if (ev.type === 'usage') {
-				track(ev.usage);
-			} else if (ev.type === 'done') {
-				finishReason = ev.finishReason;
+		// Accumulated rather than logged per event, so one call is one row even if
+		// the provider reports its usage in pieces — and in a `finally`, because
+		// synthesis is the call most likely to be cut off mid-stream and its tokens
+		// are spent either way.
+		let synthUsage: Usage | null = null;
+		try {
+			for await (const ev of stream) {
+				if (ev.type === 'text') {
+					answer += ev.delta;
+					pushChunk(job, { type: 'delta', text: ev.delta });
+				} else if (ev.type === 'reasoning') {
+					reasoningChars += ev.delta.length;
+				} else if (ev.type === 'usage') {
+					synthUsage = synthUsage
+						? { ...ev.usage, promptTokens: synthUsage.promptTokens + ev.usage.promptTokens, completionTokens: synthUsage.completionTokens + ev.usage.completionTokens }
+						: ev.usage;
+				} else if (ev.type === 'done') {
+					finishReason = ev.finishReason;
+				}
 			}
+		} finally {
+			if (synthUsage) track(synthUsage);
 		}
 	};
 
@@ -737,14 +782,8 @@ async function runResearch(
 				},
 				{ persist }
 			);
-			logUsage({
-				task: 'deep-research',
-				choice,
-				usage: totalUsage,
-				status: 'error',
-				userId: opts.userId,
-				chatId: persist ? opts.chatId : null
-			});
+			// No write here: every call logged its own row as it returned, and the
+			// synthesis call's went out in the `finally` above.
 			failJob(job, `Synthesis failed: ${String(err)}`);
 			return;
 		}
@@ -772,14 +811,6 @@ async function runResearch(
 			},
 			{ persist }
 		);
-		logUsage({
-			task: 'deep-research',
-			choice,
-			usage: totalUsage,
-			status: 'error',
-			userId: opts.userId,
-			chatId: persist ? opts.chatId : null
-		});
 		failJob(job, `Deep research produced no answer. ${why}`);
 		return;
 	}
@@ -807,14 +838,6 @@ async function runResearch(
 					]
 				}
 			: null
-	});
-	logUsage({
-		task: 'deep-research',
-		choice,
-		usage: totalUsage,
-		status: 'ok',
-		userId: opts.userId,
-		chatId: persist ? opts.chatId : null
 	});
 	emitEvent(
 		{
@@ -1028,6 +1051,7 @@ export type StopCause =
 	| 'search-budget'
 	| 'sufficient'
 	| 'no-gaps'
+	| 'budget'
 	| 'consolidation-failed';
 
 /**
@@ -1092,7 +1116,9 @@ const STOP_NOTICE: Partial<
 	'search-budget': (s) =>
 		`Used all ${plural(s.searches, 'search', 'searches')} allowed for this run before the round budget ran out. Raise "searches per run" in Admin → Settings.`,
 	sufficient: (s) => `Evidence judged sufficient after ${s.round} of ${s.rounds} rounds.`,
-	'no-gaps': (s) => `No open gaps left to search after ${plural(s.round, 'round')}.`
+	'no-gaps': (s) => `No open gaps left to search after ${plural(s.round, 'round')}.`,
+	budget: (s) =>
+		`Stopped after ${plural(s.round, 'round')}: the spend cap was reached partway through this run. Answering from what was gathered.`
 };
 
 /** How many sources fell back for each reason, for the run's rollup event. */
