@@ -109,15 +109,12 @@ describe('planning the next move', () => {
 	});
 
 	it('speaks the language of the page it is on', () => {
-		const chat = planRecovery({ ...base, runningJobId: 'j', attempt: MAX_RECOVERIES });
-		const code = planRecovery({
-			...base,
-			noun: 'session',
-			runningJobId: 'j',
-			attempt: MAX_RECOVERIES
-		});
-		expect(chat.banner).toContain('chat');
-		expect(code.banner).toContain('session');
+		const banner = (noun: 'chat' | 'session') => {
+			const plan = planRecovery({ ...base, noun, runningJobId: 'j', attempt: MAX_RECOVERIES });
+			return plan.kind === 'exhausted' ? plan.banner : '';
+		};
+		expect(banner('chat')).toContain('chat');
+		expect(banner('session')).toContain('session');
 	});
 });
 

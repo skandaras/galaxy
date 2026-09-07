@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { demuxDockerLogs, resolveExecutorKind } from './executor';
+import { DockerExecutor, demuxDockerLogs, resolveExecutorKind } from './executor';
 
 describe('resolveExecutorKind', () => {
 	it('accepts the two it knows', () => {
@@ -39,5 +39,199 @@ describe('demuxDockerLogs', () => {
 
 	it('passes an unframed tty stream through as stdout', () => {
 		expect(demuxDockerLogs(Buffer.from('plain', 'utf8')).stdout).toBe('plain');
+	});
+
+	it('recognises a tty stream longer than a header, too', () => {
+		// The old version inferred "not framed" from having parsed nothing, which
+		// it could only know at the end. This decides on the first eight bytes,
+		// because a streaming reader has to commit before it has seen the rest.
+		const text = 'plain terminal output, well past eight bytes';
+		expect(demuxDockerLogs(Buffer.from(text, 'utf8'))).toEqual({ stdout: text, stderr: '' });
+	});
+});
+
+/**
+ * The docker path, which no test had ever run.
+ *
+ * `demuxDockerLogs` was covered on three-byte inputs and `DockerExecutor` was
+ * never instantiated — so the truncation, the timeouts, the cleanup and the
+ * concurrency cap were all assertions nobody had made. A stubbed Docker API is
+ * enough for every one of them: what is being tested is this file's handling of
+ * the daemon's answers, not the daemon.
+ */
+describe('DockerExecutor against a stubbed daemon', () => {
+	const frame = (stream: 1 | 2, text: string) => {
+		const payload = Buffer.from(text, 'utf8');
+		const header = Buffer.alloc(8);
+		header[0] = stream;
+		header.writeUInt32BE(payload.length, 4);
+		return Buffer.concat([header, payload]);
+	};
+
+	/** A daemon that returns `logs`, split into `chunkSize`-byte network reads. */
+	function stubDocker(opts: {
+		logs: Buffer;
+		chunkSize?: number;
+		waitDelayMs?: number;
+		statusCode?: number;
+	}) {
+		const calls: { path: string; body?: string; hadSignal: boolean }[] = [];
+		const fetchStub = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+			const path = String(url).replace('http://docker', '');
+			calls.push({ path, body: init?.body as string, hadSignal: !!init?.signal });
+
+			if (path === '/containers/create') {
+				return new Response(JSON.stringify({ Id: 'abc' }), { status: 201 });
+			}
+			if (path.endsWith('/start')) return new Response(null, { status: 204 });
+			if (path.endsWith('/wait')) {
+				if (opts.waitDelayMs) {
+					// Respect the caller's deadline the way fetch does: reject.
+					await new Promise((resolve, reject) => {
+						const timer = setTimeout(resolve, opts.waitDelayMs);
+						init?.signal?.addEventListener('abort', () => {
+							clearTimeout(timer);
+							const err = new Error('aborted');
+							err.name = 'TimeoutError';
+							reject(err);
+						});
+					});
+				}
+				return new Response(JSON.stringify({ StatusCode: opts.statusCode ?? 0 }), { status: 200 });
+			}
+			if (path.includes('/logs')) {
+				const size = opts.chunkSize ?? (opts.logs.length || 1);
+				const stream = new ReadableStream({
+					start(controller) {
+						for (let i = 0; i < opts.logs.length; i += size) {
+							controller.enqueue(new Uint8Array(opts.logs.subarray(i, i + size)));
+						}
+						controller.close();
+					}
+				});
+				return new Response(stream, { status: 200 });
+			}
+			return new Response(null, { status: 204 }); // DELETE
+		};
+		return { calls, fetchStub };
+	}
+
+	async function runWith(opts: Parameters<typeof stubDocker>[0], command = 'echo hi') {
+		const { calls, fetchStub } = stubDocker(opts);
+		const original = globalThis.fetch;
+		globalThis.fetch = fetchStub as typeof globalThis.fetch;
+		try {
+			const exec = new DockerExecutor('http://docker', 'runner:latest', 'vol', null);
+			const result = await exec.exec(command, { cwdRel: 'work', timeoutMs: 50 });
+			return { result, calls };
+		} finally {
+			globalThis.fetch = original;
+		}
+	}
+
+	it('reassembles frames split across network reads', async () => {
+		const logs = Buffer.concat([frame(1, 'hello '), frame(2, 'a warning'), frame(1, 'world')]);
+		// Three bytes at a time, so headers straddle read boundaries.
+		const { result } = await runWith({ logs, chunkSize: 3 });
+		expect(result.stdout).toBe('hello world');
+		expect(result.stderr).toBe('a warning');
+	});
+
+	it('keeps a multi-byte character split across two reads', async () => {
+		const logs = frame(1, 'né');
+		const { result } = await runWith({ logs, chunkSize: 9 }); // splits the é
+		expect(result.stdout).toBe('né');
+	});
+
+	it('keeps the head and the tail of oversized output, and says what it dropped', async () => {
+		// A megabyte from a command that then reports its error on the last line.
+		const noise = 'x'.repeat(1_000_000);
+		const logs = frame(1, `START${noise}THE ACTUAL ERROR`);
+		const { result } = await runWith({ logs, chunkSize: 64_000 });
+
+		expect(result.stdout.startsWith('START')).toBe(true);
+		// The end is the half that used to be thrown away, and on a failing
+		// command it is the half that says what went wrong.
+		expect(result.stdout.endsWith('THE ACTUAL ERROR')).toBe(true);
+		expect(result.stdout).toContain('characters dropped');
+		expect(result.stdout.length).toBeLessThan(250_000);
+	});
+
+	it('reports a timed-out command as 124 rather than throwing', async () => {
+		// AbortSignal.timeout rejects, so the 124 the code reaches for was
+		// unreachable — the caller got an AbortError instead.
+		const { result } = await runWith({ logs: frame(1, 'partial'), waitDelayMs: 5_000 });
+		expect(result.code).toBe(124);
+		expect(result.stderr).toContain('timed out');
+		expect(result.stdout).toBe('partial');
+	});
+
+	it('puts a deadline on every Docker call, not just the wait', async () => {
+		const { calls } = await runWith({ logs: frame(1, 'ok') });
+		const paths = calls.map((c) => c.path);
+		expect(paths).toEqual([
+			'/containers/create',
+			'/containers/abc/start',
+			'/containers/abc/wait',
+			'/containers/abc/logs?stdout=1&stderr=1',
+			'/containers/abc?force=true'
+		]);
+		expect(calls.every((c) => c.hadSignal)).toBe(true);
+	});
+
+	it('removes the container even when the command timed out', async () => {
+		const { calls } = await runWith({ logs: frame(1, ''), waitDelayMs: 5_000 });
+		expect(calls.some((c) => c.path === '/containers/abc?force=true')).toBe(true);
+	});
+
+	it('caps the container resources it asks for', async () => {
+		const { calls } = await runWith({ logs: frame(1, 'ok') });
+		const body = JSON.parse(calls[0].body!);
+		expect(body.HostConfig.Memory).toBe(1024 * 1024 * 1024);
+		expect(body.HostConfig.PidsLimit).toBe(256);
+		// Neither of these existed: one runner could take every core, and the
+		// daemon's own log file grew to whatever the command wrote.
+		expect(body.HostConfig.NanoCpus).toBeGreaterThan(0);
+		expect(body.HostConfig.LogConfig.Config['max-size']).toBeTruthy();
+	});
+});
+
+describe('the global runner limit', () => {
+	it('bounds containers across runs, not just within one batch', async () => {
+		// `toolConcurrency` caps one batch at four. Nothing capped the total, so
+		// two sessions gave eight containers and the one-off git commands — which
+		// never went through the batch limiter — were on top of that.
+		process.env.RUNNER_CONCURRENCY = '2';
+		let inFlight = 0;
+		let peak = 0;
+		const original = globalThis.fetch;
+		globalThis.fetch = (async (url: string | URL) => {
+			const path = String(url);
+			if (path.endsWith('/containers/create')) {
+				inFlight++;
+				peak = Math.max(peak, inFlight);
+				return new Response(JSON.stringify({ Id: 'abc' }), { status: 201 });
+			}
+			if (path.endsWith('/wait')) {
+				await new Promise((r) => setTimeout(r, 10));
+				return new Response(JSON.stringify({ StatusCode: 0 }), { status: 200 });
+			}
+			if (path.includes('/logs')) return new Response(new Uint8Array(0), { status: 200 });
+			if (path.includes('force=true')) {
+				inFlight--;
+				return new Response(null, { status: 204 });
+			}
+			return new Response(null, { status: 204 });
+		}) as typeof globalThis.fetch;
+		try {
+			const exec = new DockerExecutor('http://docker', 'runner:latest', 'vol', null);
+			await Promise.all(
+				Array.from({ length: 6 }, () => exec.exec('echo hi', { cwdRel: 'w', timeoutMs: 1_000 }))
+			);
+		} finally {
+			globalThis.fetch = original;
+			delete process.env.RUNNER_CONCURRENCY;
+		}
+		expect(peak).toBeLessThanOrEqual(2);
 	});
 });

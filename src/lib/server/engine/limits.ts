@@ -55,6 +55,39 @@ export const toolResultMaxChars = () => num('TOOL_RESULT_MAX_CHARS', 30_000);
 export const toolConcurrency = () => num('TOOL_CONCURRENCY', 4);
 
 /**
+ * Runner containers that may exist at once, across every run on the host.
+ *
+ * `toolConcurrency` bounds one *batch*; nothing bounded the total. Two coding
+ * sessions gave eight containers, three gave twelve, and the one-off commands —
+ * the git calls in workspace.ts, the diff in state.ts, the push in
+ * pull-request.ts — never went through the batch limiter at all. At a gibibyte
+ * of headroom each, the ceiling was "however many runs happen to be going".
+ *
+ * A limit, not an allocation: a container that uses nothing costs nothing. The
+ * point is that the host's exposure is a number somebody chose.
+ */
+export const runnerConcurrency = () => num('RUNNER_CONCURRENCY', 8);
+
+/**
+ * CPUs one runner container may use.
+ *
+ * There was no CPU limit at all, so a runaway compile or a `while true` took
+ * every core the host had — including the ones the app itself needs to answer
+ * the request that started it.
+ */
+export const runnerCpus = () => num('RUNNER_CPUS', 2);
+
+/**
+ * Deadline on a single Docker API request.
+ *
+ * Distinct from the command timeout, which is how long the *container* may run.
+ * Only `/wait` carried that one, so a socket-proxy that accepted a connection
+ * and then said nothing hung create, start, logs or cleanup forever, whatever
+ * timeout the caller had asked for.
+ */
+export const dockerApiTimeoutMs = () => num('DOCKER_API_TIMEOUT_MS', 30_000);
+
+/**
  * Model round-trips one coding turn may take — *not* tool calls, since a round
  * can carry several. A model that calls one tool at a time spends these fast:
  * a dozen file reads, a few edits and a test run left the old cap of 24 with
