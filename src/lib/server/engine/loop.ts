@@ -523,6 +523,10 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		if (text.trim()) replyParts.push(text.trim());
 	};
 	const replyText = () => replyParts.join('\n\n');
+	/**
+	 * The turn total, for `onDone` and the summary. The *rows* are written per
+	 * call below — see `logCall`.
+	 */
 	let usage: Usage | null = null;
 	// Assume the step cap wins; every other exit path below sets its own reason.
 	let stopReason: StopReason = 'exhausted';
@@ -531,6 +535,34 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	const trace: TurnStep[] = [];
 	/** Label of the most recent tool-calling step, for the empty-reply fallback. */
 	let lastStepLabel = '';
+
+	/** This call's own usage, reset each iteration. */
+	let callUsage: Usage | null = null;
+	/**
+	 * Write the row for the call that just happened, and fold it into the turn.
+	 *
+	 * One row per provider call rather than one per attempt. The old shape
+	 * accumulated across every iteration and wrote once at the end, which made the
+	 * mid-run budget check below useless: `budgetBlocked` reads the database, and
+	 * the database could not see a single token of the run doing the asking. A
+	 * fifty-step coding leg could pass the cap at step two and keep going to fifty.
+	 *
+	 * It also meant a crash mid-run lost the whole turn's spend, and that the
+	 * write sat *after* `onDone` — so a failure saving the reply took the
+	 * accounting with it. Now the money is recorded before anything can drop it.
+	 */
+	const logCall = (status: 'ok' | 'error') => {
+		logUsage({
+			task: opts.task,
+			choice,
+			usage: callUsage,
+			status,
+			userId: opts.userId,
+			chatId: persist ? opts.chatId : null
+		});
+		if (callUsage) usage = addUsage(usage, callUsage);
+		callUsage = null;
+	};
 
 	for (let iteration = 0; iteration < opts.maxIterations; iteration++) {
 		// A long run has to keep asking, or it can sail well past the cap that
@@ -541,6 +573,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		}
 		steps++;
 		const started = Date.now();
+		callUsage = null;
 		let iterationText = '';
 		let toolCalls: ToolCall[] = [];
 
@@ -564,7 +597,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 				} else if (ev.type === 'tool_calls') {
 					toolCalls = ev.calls;
 				} else if (ev.type === 'usage') {
-					usage = addUsage(usage, ev.usage);
+					callUsage = addUsage(callUsage, ev.usage);
 				}
 			}
 		} catch (err) {
@@ -587,6 +620,8 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 					},
 					{ persist }
 				);
+				// Stopping a run does not refund the tokens it had already streamed.
+				logCall('ok');
 				break;
 			}
 			emitEvent(
@@ -602,20 +637,14 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 				},
 				{ persist }
 			);
-			// The tokens this attempt burned before it died are real money, and
-			// they used to vanish: `usage` is a local, the failover ladder above
-			// catches and moves on, and only the *successful* attempt ever wrote a
-			// row. A turn that streamed 40k prompt tokens and then timed out was
-			// therefore free as far as the spend cap was concerned — three times
-			// over, once per rung of the ladder.
-			logUsage({
-				task: opts.task,
-				choice,
-				usage,
-				status: 'error',
-				userId: opts.userId,
-				chatId: persist ? opts.chatId : null
-			});
+			// The tokens this call burned before it died are real money, and they
+			// used to vanish: `usage` is a local, the failover ladder above catches
+			// and moves on, and only the *successful* attempt ever wrote a row. A
+			// turn that streamed 40k prompt tokens and then timed out was therefore
+			// free as far as the spend cap was concerned — three times over, once
+			// per rung of the ladder. Only this call's usage: every earlier
+			// iteration of this attempt already wrote its own row.
+			logCall('error');
 			throw err;
 		}
 
@@ -628,10 +657,14 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 				name: choice.model.modelKey,
 				status: 'ok',
 				durationMs: Date.now() - started,
-				detail: usage ? { ...usage } : undefined
+				// This call's own numbers. It used to carry the running turn total,
+				// so a model.call event showed one call's duration against every
+				// token spent since the turn began.
+				detail: callUsage ? { ...callUsage } : undefined
 			},
 			{ persist }
 		);
+		logCall('ok');
 
 		if (!toolCalls.length) {
 			// The model answered instead of calling anything, so it considers the
@@ -777,15 +810,12 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	// until the conversation is re-read. Safe to append: a fallback only happens
 	// when assistantText is empty, so the client's buffer is empty too.
 	if (usedFallback) pushChunk(job, { type: 'delta', text: finalText });
+	// No usage write here any more: every call wrote its own row as it finished,
+	// so a throw out of onDone can no longer take the accounting with it — it used
+	// to sit immediately after this line, and a failure saving the reply meant the
+	// whole attempt was free as far as the cap was concerned. `usage` is still the
+	// turn total, which is what the summary and onDone want.
 	const messageId = opts.onDone(finalText, usage, choice, summary);
-	logUsage({
-		task: opts.task,
-		choice,
-		usage,
-		status: 'ok',
-		userId: opts.userId,
-		chatId: persist ? opts.chatId : null
-	});
 	emitEvent(
 		{
 			userId: opts.userId,
@@ -964,11 +994,16 @@ function addUsage(a: Usage | null, b: Usage): Usage {
 	// — which would read as "caching is on and doing nothing".
 	const cached = sumReported(a?.cachedPromptTokens, b.cachedPromptTokens);
 	const discount = sumReported(a?.cacheDiscountUsd, b.cacheDiscountUsd);
+	// reasoningTokens was simply missing here, so every row the loop wrote said
+	// zero however long the model deliberated — the column exists to tell "wrote a
+	// lot" from "thought a lot", and for the loop's rows it could not.
+	const reasoning = sumReported(a?.reasoningTokens, b.reasoningTokens);
 	return {
 		promptTokens: (a?.promptTokens ?? 0) + b.promptTokens,
 		completionTokens: (a?.completionTokens ?? 0) + b.completionTokens,
 		...(cached !== undefined ? { cachedPromptTokens: cached } : {}),
-		...(discount !== undefined ? { cacheDiscountUsd: discount } : {})
+		...(discount !== undefined ? { cacheDiscountUsd: discount } : {}),
+		...(reasoning !== undefined ? { reasoningTokens: reasoning } : {})
 	};
 }
 

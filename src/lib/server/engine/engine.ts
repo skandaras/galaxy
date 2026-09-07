@@ -15,7 +15,7 @@ import {
 	type FetchSettings
 } from '$lib/server/settings';
 import { typstReady } from '$lib/server/pdf';
-import { assertBudget } from './budget';
+import { assertBudget, getBudgetStatus } from './budget';
 import { buildContext } from './context';
 import { maybeCompact } from './compaction';
 import { maybeTitleChat, nameThisChatNote, setChatTitleTool } from './chat-title';
@@ -158,6 +158,10 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		backup,
 		tools: activeTools,
 		maxIterations: chatMaxSteps(),
+		// Coding has always re-checked mid-run; chat never did, so a turn with a
+		// dozen round-trips in it was gated exactly once, before the first token.
+		// Board agents route through here too and inherited the same gap.
+		budgetBlocked: () => getBudgetStatus().blocked,
 		buildMessages: () =>
 			buildContext({
 				systemPrompt: fullSystemPrompt,
