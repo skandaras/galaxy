@@ -474,7 +474,15 @@ export const usageLog = sqliteTable(
 		costUsd: real('cost_usd'),
 		status: text('status', { enum: ['ok', 'error'] }).notNull()
 	},
-	(t) => [index('usage_log_ts_idx').on(t.ts), index('usage_log_user_ts_idx').on(t.userId, t.ts)]
+	(t) => [
+		index('usage_log_ts_idx').on(t.ts),
+		index('usage_log_user_ts_idx').on(t.userId, t.ts),
+		// Hiding or deleting a chat anonymises its rows here rather than removing
+		// them — the spend stays, the identifier goes (see purgeChatTrail). Without
+		// this that update scanned the whole table, on a table that now grows a row
+		// per model call rather than one per turn.
+		index('usage_log_chat_idx').on(t.chatId)
+	]
 );
 
 // Job history for non-hidden chats; the live stream state is in-memory
