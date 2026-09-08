@@ -1,3 +1,4 @@
+import { availableParallelism } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { DockerExecutor, demuxDockerLogs, resolveExecutorKind } from './executor';
 
@@ -74,6 +75,8 @@ describe('DockerExecutor against a stubbed daemon', () => {
 		chunkSize?: number;
 		waitDelayMs?: number;
 		statusCode?: number;
+		/** Refuse a create whose HostConfig carries this key, as Docker does. */
+		refuseHostConfigKey?: string;
 	}) {
 		const calls: { path: string; body?: string; hadSignal: boolean }[] = [];
 		const fetchStub = async (url: string | URL, init?: RequestInit): Promise<Response> => {
@@ -81,6 +84,13 @@ describe('DockerExecutor against a stubbed daemon', () => {
 			calls.push({ path, body: init?.body as string, hadSignal: !!init?.signal });
 
 			if (path === '/containers/create') {
+				const key = opts.refuseHostConfigKey;
+				if (key && key in JSON.parse(String(init?.body)).HostConfig) {
+					return new Response(
+						JSON.stringify({ message: `range of CPUs is from 0.01 to 1.00, as there are only 1 CPUs available` }),
+						{ status: 400 }
+					);
+				}
 				return new Response(JSON.stringify({ Id: 'abc' }), { status: 201 });
 			}
 			if (path.endsWith('/start')) return new Response(null, { status: 204 });
@@ -233,5 +243,90 @@ describe('the global runner limit', () => {
 			delete process.env.RUNNER_CONCURRENCY;
 		}
 		expect(peak).toBeLessThanOrEqual(2);
+	});
+});
+
+/**
+ * The bug this file could not see.
+ *
+ * `caps the container resources it asks for` passed against a body Docker would
+ * have refused: the stub answered 201 to every create, so it asserted the shape
+ * of the request and never that the daemon would take it. Shipping
+ * `NanoCpus: 2e9` to a one-CPU host 400'd every create, and because a failing
+ * tool call is returned to the model rather than ending the run, the agent spent
+ * fifty model round-trips per leg rediscovering that its runner was dead.
+ */
+describe('a resource hint the host will not take', () => {
+	const frame = (stream: 1 | 2, text: string) => {
+		const payload = Buffer.from(text, 'utf8');
+		const header = Buffer.alloc(8);
+		header[0] = stream;
+		header.writeUInt32BE(payload.length, 4);
+		return Buffer.concat([header, payload]);
+	};
+
+	async function createBodies(opts: { cpus?: string; refuse?: string }) {
+		const calls: string[] = [];
+		const original = globalThis.fetch;
+		if (opts.cpus !== undefined) process.env.RUNNER_CPUS = opts.cpus;
+		globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+			const path = String(url);
+			if (path.endsWith('/containers/create')) {
+				calls.push(String(init?.body));
+				if (opts.refuse && opts.refuse in JSON.parse(String(init?.body)).HostConfig) {
+					return new Response(JSON.stringify({ message: 'range of CPUs is from 0.01 to 1.00' }), {
+						status: 400
+					});
+				}
+				return new Response(JSON.stringify({ Id: 'abc' }), { status: 201 });
+			}
+			if (path.endsWith('/wait')) {
+				return new Response(JSON.stringify({ StatusCode: 0 }), { status: 200 });
+			}
+			if (path.includes('/logs')) return new Response(frame(1, 'ok'), { status: 200 });
+			return new Response(null, { status: 204 });
+		}) as typeof globalThis.fetch;
+		try {
+			const exec = new DockerExecutor('http://docker', 'runner:latest', 'vol', null);
+			const result = await exec.exec('echo hi', { cwdRel: 'w', timeoutMs: 1_000 });
+			return { bodies: calls.map((b) => JSON.parse(b).HostConfig), result };
+		} finally {
+			globalThis.fetch = original;
+			delete process.env.RUNNER_CPUS;
+		}
+	}
+
+	it('never asks for more CPUs than the host has', async () => {
+		// The assertion that would have caught it. RUNNER_CPUS is clamped by
+		// availableParallelism, so no configured value can produce an invalid ask.
+		const { bodies } = await createBodies({ cpus: '64' });
+		expect(bodies[0].NanoCpus).toBeLessThanOrEqual(availableParallelism() * 1e9);
+		expect(bodies[0].NanoCpus).toBeGreaterThanOrEqual(0.01 * 1e9);
+	});
+
+	it('sends no CPU limit at all when it is switched off', async () => {
+		const { bodies } = await createBodies({ cpus: '0' });
+		expect(bodies[0]).not.toHaveProperty('NanoCpus');
+		// Switching off a hint must not switch off the isolation.
+		expect(bodies[0].Memory).toBe(1024 * 1024 * 1024);
+		expect(bodies[0].PidsLimit).toBe(256);
+	});
+
+	it('retries without the hints when the daemon refuses them', async () => {
+		const { bodies, result } = await createBodies({ refuse: 'NanoCpus' });
+		expect(bodies).toHaveLength(2);
+		expect(bodies[0]).toHaveProperty('NanoCpus');
+		expect(bodies[1]).not.toHaveProperty('NanoCpus');
+		expect(bodies[1]).not.toHaveProperty('LogConfig');
+		// And the command actually ran, rather than the feature going down over a
+		// field that was only ever advisory.
+		expect(result.stdout).toBe('ok');
+	});
+
+	it('keeps every isolation field on the retry', async () => {
+		const { bodies } = await createBodies({ refuse: 'NanoCpus' });
+		expect(bodies[1].Memory).toBe(1024 * 1024 * 1024);
+		expect(bodies[1].PidsLimit).toBe(256);
+		expect(bodies[1].Binds).toEqual(['vol:/data']);
 	});
 });
