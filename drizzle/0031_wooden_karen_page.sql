@@ -1,0 +1,1 @@
+CREATE INDEX `usage_log_chat_idx` ON `usage_log` (`chat_id`);

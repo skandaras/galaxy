@@ -231,31 +231,66 @@ export class DockerExecutor implements CommandExecutor {
 		return withRunnerSlot(() => this.run(command, opts));
 	}
 
+	/**
+	 * The container spec.
+	 *
+	 * `tuned` carries the two fields that are only ever hints — a CPU ceiling and
+	 * log rotation. Everything else is the isolation itself and is never optional:
+	 * the bind, the network, the memory cap, the process cap.
+	 */
+	private createBody(command: string, cwdRel: string, tuned: boolean): string {
+		const cpus = runnerCpus();
+		return JSON.stringify({
+			Image: this.image,
+			Cmd: ['sh', '-lc', command],
+			WorkingDir: `/data/${cwdRel}`,
+			Env: ['GIT_TERMINAL_PROMPT=0'],
+			HostConfig: {
+				Binds: [`${this.volume}:/data`],
+				...(this.network ? { NetworkMode: this.network } : {}),
+				Memory: 1024 * 1024 * 1024,
+				PidsLimit: 256,
+				...(tuned
+					? {
+							// A limit on the daemon's side as well as ours. We stop reading
+							// past the cap, but without this the log file itself grows to
+							// whatever the command writes, on the host's disk.
+							LogConfig: {
+								Type: 'json-file',
+								Config: { 'max-size': '16m', 'max-file': '1' }
+							},
+							// Docker's floor is 0.01 CPU and its ceiling is the host's count.
+							// Anything outside that is a 400 on *every* create, so an
+							// unusable value is left out rather than sent — see runnerCpus.
+							...(cpus >= 0.01 ? { NanoCpus: Math.round(cpus * 1e9) } : {})
+						}
+					: {})
+			}
+		});
+	}
+
 	private async run(
 		command: string,
 		opts: { cwdRel: string; timeoutMs?: number }
 	): Promise<ExecResult> {
 		const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-		const create = await this.api('/containers/create', {
+		let create = await this.api('/containers/create', {
 			method: 'POST',
-			body: JSON.stringify({
-				Image: this.image,
-				Cmd: ['sh', '-lc', command],
-				WorkingDir: `/data/${opts.cwdRel}`,
-				Env: ['GIT_TERMINAL_PROMPT=0'],
-				HostConfig: {
-					Binds: [`${this.volume}:/data`],
-					...(this.network ? { NetworkMode: this.network } : {}),
-					Memory: 1024 * 1024 * 1024,
-					// A limit on the daemon's side as well as ours. We stop reading
-					// past the cap, but without this the log file itself grows to
-					// whatever the command writes, on the host's disk.
-					LogConfig: { Type: 'json-file', Config: { 'max-size': '16m', 'max-file': '1' } },
-					NanoCpus: Math.round(runnerCpus() * 1e9),
-					PidsLimit: 256
-				}
-			})
+			body: this.createBody(command, opts.cwdRel, true)
 		});
+		// A tuning field the daemon will not take must cost a warning, not the
+		// feature. Shipping `NanoCpus: 2e9` to a one-CPU host 400'd every single
+		// create, so every coding tool call failed and the agent spent its whole
+		// step budget rediscovering that. The retry drops the hints and keeps the
+		// isolation — never the other way round.
+		if (create.status === 400) {
+			const detail = await create.text().catch(() => '');
+			warnOnce(`Docker refused the runner's tuning fields, retrying without them: ${detail.slice(0, 200)}`);
+			create = await this.api('/containers/create', {
+				method: 'POST',
+				body: this.createBody(command, opts.cwdRel, false)
+			});
+		}
 		if (!create.ok) {
 			throw new Error(`Runner create failed (${create.status}): ${await create.text()}`);
 		}
@@ -319,6 +354,14 @@ export class DockerExecutor implements CommandExecutor {
 		}
 		return demuxer.finish();
 	}
+}
+
+/** Once per process: this is a host misconfiguration, not a per-command event. */
+const warned = new Set<string>();
+function warnOnce(message: string): void {
+	if (warned.has(message)) return;
+	warned.add(message);
+	console.warn(`[runner] ${message}`);
 }
 
 function isAbort(err: unknown): boolean {

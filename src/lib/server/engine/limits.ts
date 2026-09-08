@@ -1,9 +1,17 @@
+import { availableParallelism } from 'node:os';
 import { env } from '$env/dynamic/private';
 
 function num(name: string, fallback: number): number {
 	const raw = env[name] ?? process.env[name];
 	const n = raw === undefined || raw === '' ? NaN : Number(raw);
 	return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/** As `num`, but zero is a real value meaning "off" rather than "unset". */
+function numOrZero(name: string, fallback: number): number {
+	const raw = env[name] ?? process.env[name];
+	const n = raw === undefined || raw === '' ? NaN : Number(raw);
+	return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
 /**
@@ -69,13 +77,26 @@ export const toolConcurrency = () => num('TOOL_CONCURRENCY', 4);
 export const runnerConcurrency = () => num('RUNNER_CONCURRENCY', 8);
 
 /**
- * CPUs one runner container may use.
+ * CPUs one runner container may use, clamped to what the host actually has.
  *
  * There was no CPU limit at all, so a runaway compile or a `while true` took
  * every core the host had — including the ones the app itself needs to answer
  * the request that started it.
+ *
+ * The clamp is the whole point of this function. Shipping this with a flat
+ * default of 2 took the coding agent down completely on a single-CPU host:
+ * Docker rejects `NanoCpus` above the host's count with
+ * `range of CPUs is from 0.01 to 1.00, as there are only 1 CPUs available`, and
+ * that 400 came back on *every* container create, so every tool call the agent
+ * made — grep, read, bash — failed. A resource hint took out the feature it was
+ * meant to protect.
+ *
+ * `availableParallelism` is this process's view, and the app runs in a container
+ * on the same host, so it can only ever be less than or equal to what the daemon
+ * will accept. Erring tighter is the safe direction. Set `RUNNER_CPUS=0` to send
+ * no limit at all.
  */
-export const runnerCpus = () => num('RUNNER_CPUS', 2);
+export const runnerCpus = () => Math.min(numOrZero('RUNNER_CPUS', 2), availableParallelism());
 
 /**
  * Deadline on a single Docker API request.
