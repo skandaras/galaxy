@@ -4,6 +4,7 @@
 	import Markdown from '$lib/components/Markdown.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import ListPill from '$lib/components/ListPill.svelte';
+	import { SEARCH_DEBOUNCE_MS, SEARCH_LIMIT } from '$lib/library-search';
 
 	interface Doc {
 		id: string;
@@ -88,10 +89,38 @@
 
 	onMount(load);
 
+	/** Bumped per request, so a stale answer can recognise itself. */
+	let searchSeq = 0;
+	let searchTimer: ReturnType<typeof setTimeout> | undefined;
+
 	async function load() {
+		const seq = ++searchSeq;
 		const url = query.trim() ? `/api/library?q=${encodeURIComponent(query)}` : '/api/library';
-		docs = await (await fetch(url)).json();
+		const rows = await (await fetch(url)).json();
+		// A slow answer to an older query must not overwrite a newer one. Every
+		// keystroke used to start a request with nothing ordering the replies,
+		// which on a phone connection is not a hypothetical race.
+		if (seq !== searchSeq) return;
+		docs = rows;
 	}
+
+	/** Typing is not a request. */
+	function onSearchInput() {
+		clearTimeout(searchTimer);
+		searchTimer = setTimeout(() => void load(), SEARCH_DEBOUNCE_MS);
+	}
+
+	function clearSearch() {
+		query = '';
+		clearTimeout(searchTimer);
+		void load();
+	}
+
+	/**
+	 * The server returns at most SEARCH_LIMIT rows and never said so, which
+	 * reads as "that is all there is" rather than "that is all it showed".
+	 */
+	const capped = $derived(query.trim() !== '' && docs.length >= SEARCH_LIMIT);
 
 	async function open(id: string) {
 		const res = await fetch(`/api/library/${id}`);
@@ -191,12 +220,12 @@
 				</button>
 			{/if}
 		</div>
-		<input
-			class="search"
-			placeholder="Search library…"
-			bind:value={query}
-			oninput={() => load()}
-		/>
+		<div class="search-row">
+			<input class="search" placeholder="Search library…" bind:value={query} oninput={onSearchInput} />
+			{#if query}
+				<button class="clear" aria-label="Clear search" onclick={clearSearch}>✕</button>
+			{/if}
+		</div>
 		{#snippet docRow(doc: Doc)}
 			<li class:selected={currentId === doc.id}>
 				<button class="row" onclick={() => open(doc.id)}>
@@ -210,6 +239,9 @@
 			</li>
 		{/snippet}
 
+		{#if capped}
+			<p class="capped">First {SEARCH_LIMIT} matches. Narrow the search to see others.</p>
+		{/if}
 		{#if !docs.length}
 			<ul><li class="empty">No documents{query ? ' match' : ' yet'}.</li></ul>
 		{:else if query.trim()}
@@ -252,7 +284,14 @@
 	<PaneResizer pane={listPane} label="Resize the document list" />
 
 	<section class="editor">
-		<ListPill bind:open={listOpen} label="Documents" count={docs.length} />
+		<div class="page-actions">
+			<ListPill bind:open={listOpen} label="Documents" count={docs.length} />
+			<button class="btn primary" onclick={() => startNew()}>+ New</button>
+			<label class="btn ghost upload">
+				Upload
+				<input type="file" accept=".md,.txt,text/markdown,text/plain" hidden onchange={upload} />
+			</label>
+		</div>
 		<header>
 			<input class="title" placeholder="Document title" bind:value={title} />
 			<input
@@ -327,6 +366,11 @@
 	/* Pane-level control, so unlike the per-folder + button it is visible
 	   without hovering — there is nothing to hover over to find it. */
 	.collapse-all {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: var(--tap);
+		min-width: var(--tap);
 		margin-left: auto;
 		background: none;
 		border: none;
@@ -351,7 +395,6 @@
 		font-family: inherit;
 		font-size: var(--text-md);
 		padding: 0.4rem 0.6rem;
-		margin-bottom: 0.6rem;
 	}
 	.doc-list ul {
 		list-style: none;
@@ -366,7 +409,43 @@
 		display: flex;
 		align-items: center;
 		gap: 0.2rem;
+		/* The shelf is the thing being scrolled, so the heading of whatever you
+		   are inside should still be readable while you scroll it — as the
+		   cortex panel's group headings already are. */
+		position: sticky;
+		top: 0;
+		z-index: var(--z-base);
+		background: var(--bg-pane);
 	}
+	.search-row {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		margin-bottom: 0.6rem;
+	}
+	.clear {
+		flex-shrink: 0;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: var(--tap);
+		min-width: var(--tap);
+		background: none;
+		border: none;
+		color: var(--fg-dim);
+		cursor: pointer;
+		font-family: inherit;
+		font-size: var(--text-md);
+	}
+	.clear:hover {
+		color: var(--fg);
+	}
+	.capped {
+		margin: 0 0 0.5rem;
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
+	}
+
 	.folder-name {
 		flex: 1;
 		min-width: 0;
@@ -542,6 +621,10 @@
 	}
 
 	.btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: var(--tap);
 		background: var(--border);
 		color: var(--fg);
 		border: none;
@@ -570,6 +653,9 @@
 		align-items: center;
 	}
 	.chip {
+		display: inline-flex;
+		align-items: center;
+		min-height: var(--tap);
 		background: transparent;
 		border: 1px solid var(--border);
 		border-radius: 999px;

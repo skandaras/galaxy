@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { and, desc, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { db, dataDir } from '$lib/server/db';
 import { libraryDocs } from '$lib/server/db/schema';
+import { SEARCH_LIMIT } from '$lib/library-search';
 
 export type LibraryDoc = typeof libraryDocs.$inferSelect;
 
@@ -180,7 +181,7 @@ export function deleteDoc(id: string, userId: string): boolean {
 export function searchDocs(
 	query: string,
 	userId: string,
-	limit = 20
+	limit = SEARCH_LIMIT
 ): (LibraryDoc & { match: string })[] {
 	const rows = db.all<{ id: string; match: string }>(
 		sql`SELECT id, snippet(library_fts, 2, '«', '»', '…', 12) AS match

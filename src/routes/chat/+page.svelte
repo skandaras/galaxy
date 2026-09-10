@@ -1026,7 +1026,9 @@
 	<PaneResizer pane={listPane} label="Resize the chat list" />
 
 	<section class="thread-area">
-		<ListPill bind:open={listOpen} label="Chats" count={chats.length} />
+		<div class="page-actions">
+			<ListPill bind:open={listOpen} label="Chats" count={chats.length} />
+		</div>
 		{#if errorBanner}
 			<div class="banner error">
 				{errorBanner}

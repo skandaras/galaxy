@@ -845,7 +845,9 @@
 	<PaneResizer pane={listPane} label="Resize the session list" />
 
 	<section class="work-area">
-		<ListPill bind:open={listOpen} label="Sessions" count={sessions.length} />
+		<div class="page-actions">
+			<ListPill bind:open={listOpen} label="Sessions" count={sessions.length} />
+		</div>
 		<!-- Notices used to stack here as full-width banners, detached in space and
 		     time from the step that raised them. They are now inline in the
 		     timeline; only a terminal error still earns the top of the page. -->

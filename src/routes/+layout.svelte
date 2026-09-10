@@ -93,7 +93,19 @@
 	   picks one. What the copies all lacked: overscroll-behavior, so flicking
 	   the list to its end scrolled the page behind it; and a reduced-motion
 	   escape for the slide. */
+	/* The strip a page puts above its content on a phone: the way into its
+	   list, and whatever else it cannot leave inside that list. Hidden above the
+	   breakpoint, where the list is a column and needs no way in. */
+	:global(.page-actions) {
+		display: none;
+	}
 	@media (max-width: 720px) {
+		:global(.page-actions) {
+			display: flex;
+			align-items: center;
+			gap: 0.4rem;
+			padding: 0.5rem 0.75rem 0;
+		}
 		:global(.page-list) {
 			position: fixed;
 			/* Beats the inline --list-width the resize handle writes: this is a
