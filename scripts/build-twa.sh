@@ -36,7 +36,14 @@ BUBBLEWRAP_VERSION="1.24.1"
 NODE_IMAGE="node:22"
 VOLUME="galaxy-bubblewrap"
 PROJECT_DIR="twa"
-PORT=8724
+# Port 80, not something memorable in the high range. `bubblewrap init` offers
+# the manifest URL's host as the default answer to its Domain question, and
+# validates that answer with domainToASCII(), which returns "" for anything
+# carrying a port — so a high port makes init reject its own default and the
+# interview cannot be completed by pressing Enter. On 80 the host is bare
+# "127.0.0.1", which validates. Nothing is published out of the container, and
+# it runs as root, so binding a privileged port here costs nothing.
+PORT=80
 
 ORIGIN_ARG=""
 while [ $# -gt 0 ]; do
@@ -136,7 +143,15 @@ docker run --rm $TTY_FLAGS \
 	FRESH=0
 	if [ ! -f twa-manifest.json ]; then
 		FRESH=1
-		echo "--- bubblewrap init (answer its questions; the defaults are sane) ---"
+		echo "--- bubblewrap init ---"
+		echo "Press Enter to accept every default. Two exceptions:"
+		echo "  * The signing key certificate (name, organisational unit,"
+		echo "    organisation, 2-letter country) has no defaults and cannot be"
+		echo "    left blank. Nobody verifies these; they just have to be filled."
+		echo "  * You choose two passwords, keystore then key. Save them."
+		echo "Answers about the site itself are discarded — host, package id,"
+		echo "start URL, name and icons are all re-applied from $ORIGIN below."
+		echo
 		bubblewrap init --manifest "http://127.0.0.1:${PORT}/manifest.webmanifest" --directory .
 	else
 		echo "--- twa-manifest.json exists; edit it to change the shell, then re-run ---"
