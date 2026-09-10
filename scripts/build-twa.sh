@@ -205,26 +205,52 @@ docker run --rm $TTY_FLAGS \
 	bubblewrap build --skipPwaValidation
 
 	echo
-	echo "=== Signing key fingerprint ==="
-	bubblewrap fingerprint list
+	echo "=== Signing key ==="
+
+	# NOT `bubblewrap fingerprint list`: that prints the fingerprints recorded
+	# in twa-manifest.json, and nothing ever writes one there — creating a key
+	# does not, and neither does build — so on a fresh project it prints an
+	# empty list where the one value this whole exercise needs should be. Ask
+	# the keystore directly, with the JDK bubblewrap installed for itself.
+	KEY_PATH=$(node -p "JSON.parse(require(\"fs\").readFileSync(\"twa-manifest.json\",\"utf8\")).signingKey.path")
+	KEY_ALIAS=$(node -p "JSON.parse(require(\"fs\").readFileSync(\"twa-manifest.json\",\"utf8\")).signingKey.alias")
+
+	# init resolves that path against the project directory, so it is absolute
+	# and container-side: /work is $PROJECT_DIR out on the host.
+	KEY_ON_HOST="twa/${KEY_PATH#/work/}"
+	echo "File:   $KEY_ON_HOST   <- back this up"
+
+	KEYTOOL=$(find /root/.bubblewrap -name keytool -type f | head -1)
+	if [ -z "${BUBBLEWRAP_KEYSTORE_PASSWORD:-}" ]; then
+		printf "Keystore password, to read the fingerprint: "
+		read -rs BUBBLEWRAP_KEYSTORE_PASSWORD || true
+		echo
+	fi
+	SHA=$("$KEYTOOL" -list -v -keystore "$KEY_PATH" -alias "$KEY_ALIAS" \
+		-storepass "$BUBBLEWRAP_KEYSTORE_PASSWORD" 2>/dev/null \
+		| grep -m1 "SHA256:" | sed "s/.*SHA256: *//" | tr -d "\r") || true
 
 	echo
-	echo "=== Signing key file (back this up) ==="
-	node -e "
-		const m = JSON.parse(require(\"fs\").readFileSync(\"twa-manifest.json\", \"utf8\"));
-		const p = m.signingKey && m.signingKey.path;
-		console.log(p ? require(\"path\").join(\"twa\", p) : \"(see signingKey.path in twa/twa-manifest.json)\");
-	"
+	if [ -n "$SHA" ]; then
+		echo "SHA256: $SHA"
+		echo
+		echo "Add these two lines to the .env beside docker-compose.yml on the"
+		echo "server, then: docker compose up -d"
+		echo
+		echo "  TWA_PACKAGE_ID=$PACKAGE_ID"
+		echo "  TWA_FINGERPRINTS=$SHA"
+	else
+		echo "SHA256: could not be read — wrong password, most likely."
+		echo "Nothing is lost; read it whenever you like with:"
+		echo
+		echo "  keytool -list -v -keystore $KEY_ON_HOST -alias $KEY_ALIAS"
+		echo
+		echo "and pair it with TWA_PACKAGE_ID=$PACKAGE_ID"
+	fi
 '
 
 echo
 echo "APK: $PROJECT_DIR/app-release-signed.apk"
-echo
-echo "Put the SHA-256 fingerprint printed above into .env, redeploy, and the"
-echo "address bar goes away on next launch:"
-echo
-echo "  TWA_PACKAGE_ID=$PACKAGE_ID"
-echo "  TWA_FINGERPRINTS=<SHA-256 from above>"
 echo
 echo "Then: adb install $PROJECT_DIR/app-release-signed.apk"
 echo
