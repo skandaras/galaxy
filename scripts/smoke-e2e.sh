@@ -262,6 +262,10 @@ RJOB=$(api -X POST $B/api/chats/$RCHAT/messages -d '{"content":"How do nebulae f
 RSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$RJOB/stream)
 check "research stages" "$RSTREAM" '"type":"stage","name":"synthesising"'
 check "research cites evidence" "$RSTREAM" 'FACT-42 confirmed'
+# The report a person actually reads. It had no formatting or voice rules at all
+# until this landed — only the three words "be thorough but structured".
+check "the research report gets the layout rules" "$RSTREAM" 'layout=true'
+check "the research report gets the house style" "$RSTREAM" 'voice=true'
 # The loop must actually iterate: consolidate what round one read, then search
 # the gap it named rather than the original breadth again.
 check "research consolidates between rounds" "$RSTREAM" '"name":"consolidating"'
@@ -565,6 +569,9 @@ AJ=$(as alice -X POST $M/api/chats/$AC/messages -d '{"content":"echo-system","we
 ASYS=$(curl -sN --max-time 20 -H 'Remote-User: alice' $M/api/jobs/$AJ/stream | grep -o 'SYSCHECK[^"]*' | head -1)
 check "alice's prompt carries her memory" "$ASYS" 'alpha=true'
 check "alice's prompt excludes bob's memory" "$ASYS" 'beta=false'
+# The house style is composed at call time rather than seeded into the prompt
+# stored in Admin -> Tasks, so nothing in the database proves it arrived.
+check "the prompt carries the house style" "$ASYS" 'voice=true'
 
 # Cross-user mutation must 404 exactly like a missing item. Target an item
 # explicitly chosen NOT to be the marker, so this can never invalidate the
@@ -748,6 +755,9 @@ HOUT=$(curl -sN --max-time 40 -H 'Remote-User: alice' $M/api/jobs/$HJOB/stream)
 check "the agent reads the card it was given" "$HOUT" '"name":"card_read","status":"ok"'
 check "and writes what it did to the log" "$HOUT" '"name":"card_comment","status":"ok"'
 check "the hand-off finishes" "$HOUT" 'CARD HANDLED'
+# The board prompt used to reach nothing: the agent borrowed the task config's
+# model and ran the turn on the chat prompt. This fails on the old code.
+check "the board agent runs on the board prompt" "$HOUT" 'board=true'
 check "the chat is named after the card" "$(as alice $M/api/chats/$HCHAT | jqn .chat.title)" 'Card: Book plumber'
 HLOG=$(as alice $M/api/cards/$HCARD)
 check "the card records the hand-off" "$HLOG" 'handed to agent'

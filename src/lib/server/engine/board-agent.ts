@@ -13,8 +13,10 @@ import { subscribeJob, type LiveJob } from './jobs';
  * would go to see what an agent is doing — a bespoke runner on the board would
  * have to grow all of that again, worse.
  *
- * The agent's model comes from the `board` task config, so Admin → Boards
- * governs it even though the turn itself runs as a chat.
+ * The agent's model and its system prompt both come from the `board` task
+ * config, so Admin governs the register board replies come out in even though
+ * the turn itself runs as a chat. The prompt arrives through `chats.agentTask`
+ * rather than this file — see that column, and `systemPromptFor`.
  */
 
 export type BoardAction = 'prioritise' | 'next-steps';
@@ -40,7 +42,12 @@ export function startCardTurn(cardId: string, userId: string): { chatId: string;
 		userId,
 		// Named after the card, so the history pane reads as a list of jobs
 		// rather than a run of "New chat".
-		title: `Card: ${card.title}`.slice(0, 64)
+		title: `Card: ${card.title}`.slice(0, 64),
+		// Carries the board prompt into every turn of this chat, the owner's
+		// follow-up replies included. The task config used to supply only a model
+		// here, which meant the board prompt in Admin -> Tasks reached nothing and
+		// board replies came out in the chat agent's register.
+		agentTask: 'board'
 	});
 
 	const content = [
@@ -99,7 +106,8 @@ export function startBoardTurn(
 	const open = listCards(board.id);
 	const chat = createChat({
 		userId,
-		title: `${BOARD_ACTIONS[action]} — ${board.name}`.slice(0, 64)
+		title: `${BOARD_ACTIONS[action]} — ${board.name}`.slice(0, 64),
+		agentTask: 'board'
 	});
 
 	const intro = `You are working across the "${board.name}" board, which has ${open.length} open card${open.length === 1 ? '' : 's'}. Read it with board_read first.`;

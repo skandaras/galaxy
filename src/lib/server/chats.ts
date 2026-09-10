@@ -23,6 +23,11 @@ export interface ChatMeta {
 	hidden: boolean;
 	/** Model last used in this chat; null until a turn runs. */
 	modelId: string | null;
+	/**
+	 * A task config whose prompt supplements the chat prompt for this chat's
+	 * lifetime — 'board' for a board hand-off, null for an ordinary chat.
+	 */
+	agentTask: string | null;
 	/** True once a human has named it, which stops the auto-titler. */
 	titleCustom: boolean;
 	/** When it was archived, or null while active. */
@@ -144,6 +149,7 @@ export function createChat(opts: {
 	mode?: 'chat' | 'code';
 	hidden?: boolean;
 	title?: string;
+	agentTask?: string | null;
 }): ChatMeta {
 	const now = Date.now();
 	const meta: ChatMeta = {
@@ -153,6 +159,7 @@ export function createChat(opts: {
 		title: opts.title ?? 'New chat',
 		hidden: opts.hidden ?? false,
 		modelId: null,
+		agentTask: opts.agentTask ?? null,
 		/**
 		 * A chat created with a title was named on purpose — after the repository
 		 * for a coding session, after the card for a board hand-off — so the
@@ -175,6 +182,7 @@ export function createChat(opts: {
 				userId: meta.userId,
 				mode: meta.mode,
 				title: meta.title,
+				agentTask: meta.agentTask,
 				titleCustom: meta.titleCustom,
 				createdAt: new Date(now),
 				updatedAt: new Date(now)
@@ -612,6 +620,7 @@ function rowToMeta(row: typeof chats.$inferSelect): ChatMeta {
 		title: row.title,
 		hidden: false,
 		modelId: row.modelId,
+		agentTask: row.agentTask,
 		titleCustom: row.titleCustom,
 		archivedAt: row.archivedAt?.getTime() ?? null,
 		compactSummary: row.compactSummary,

@@ -2,7 +2,14 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
 import { taskConfigs } from '$lib/server/db/schema';
-import { SUPERSEDED_PROMPTS, migrateSettings, migrateTaskPrompts, seedTaskConfigs } from './bootstrap';
+import {
+	DEFAULT_PROMPTS,
+	SUPERSEDED_PROMPTS,
+	migrateSettings,
+	migrateTaskPrompts,
+	seedTaskConfigs
+} from './bootstrap';
+import { OUTPUT_FORMAT } from './engine/voice';
 import {
 	deleteSetting,
 	getSetting,
@@ -62,6 +69,28 @@ describe('bringing a stored prompt up to date', () => {
 			migrateTaskPrompts();
 			expect(prompt(task), `${task} did not move off a superseded prompt`).not.toBe(old);
 			expect(prompt(task).length).toBeGreaterThan(0);
+		}
+	});
+
+	it('holds the superseded chat prompt as a literal, not as a live constant', () => {
+		// The entry used to end in `+ OUTPUT_FORMAT`. A superseded entry is a
+		// snapshot of what an install actually stored, so composing one from a
+		// constant means that editing the constant changes the snapshot too — it
+		// stops matching the database, the migration silently no-ops, and the
+		// symptom is indistinguishable from an owner having edited their prompt.
+		//
+		// The generic it.each above cannot catch that: it writes the stored value
+		// *from* this table, so it is self-consistent whatever the table says. This
+		// one compares the table against the constant, and goes red the day someone
+		// edits OUTPUT_FORMAT without first freezing the old text here.
+		expect(SUPERSEDED_PROMPTS.chat[0]).toContain(OUTPUT_FORMAT);
+	});
+
+	it('ships no default with the house style baked in', () => {
+		// The style block is composed at call time by systemPromptFor. A default
+		// that also contained it would hand the model two copies.
+		for (const [task, text] of Object.entries(DEFAULT_PROMPTS)) {
+			expect(text, `${task} embeds the injected style block`).not.toContain('[House style');
 		}
 	});
 

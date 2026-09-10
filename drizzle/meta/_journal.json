@@ -225,6 +225,13 @@
       "when": 1788841544777,
       "tag": "0031_wooden_karen_page",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1789003081477,
+      "tag": "0032_faulty_phalanx",
+      "breakpoints": true
     }
   ]
 }

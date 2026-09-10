@@ -80,6 +80,25 @@ export const chats = sqliteTable(
 		 */
 		modelId: text('model_id'),
 		/**
+		 * A task config whose system prompt supplements the chat prompt for the life
+		 * of this chat — 'board' for a board hand-off, null for an ordinary chat.
+		 *
+		 * It names the config rather than copying its text, so editing the board
+		 * prompt in Admin -> Tasks takes effect on the next turn of chats that
+		 * already exist. Before this the board prompt reached nothing at all: the
+		 * board agent borrowed only the model and called startChatTurn, so board
+		 * replies ran on the chat prompt and the textarea was dead.
+		 *
+		 * A nullable column rather than a new `mode` value, because an image rolled
+		 * back to the previous version ignores a column it does not know about,
+		 * where a `mode` of 'board' would reach code that renders only 'chat' and
+		 * 'code'. Passing the prompt per-turn was the other option and does not
+		 * work: a hand-off opens a chat the owner can reply in, so turn two would
+		 * arrive without it — and the system prefix would change between turns,
+		 * which is the prompt-cache defect buildContext exists to avoid.
+		 */
+		agentTask: text('agent_task'),
+		/**
 		 * Set once a human names the chat, so the auto-titler never overwrites a
 		 * title someone chose. Nothing clears it but another rename.
 		 */
