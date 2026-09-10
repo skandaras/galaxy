@@ -62,6 +62,12 @@
 </script>
 
 <section>
+	<p class="preamble">
+		The agents that write prose also carry a shared house style, which is not shown in these boxes
+		and is not editable here — it reaches chat, coding, deep research, the board, the sub-agent and
+		the background reviewers. Read it, and add your own rules to it, under Settings &rarr; House
+		style.
+	</p>
 	{#each configs as cfg (cfg.task)}
 		<article class="card">
 			<header>
@@ -157,6 +163,11 @@
 		font-size: var(--text-base);
 		padding: 0.25rem 0.4rem;
 		max-width: 14rem;
+	}
+	.preamble {
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
+		margin: 0 0 0.9rem;
 	}
 	textarea {
 		width: 100%;

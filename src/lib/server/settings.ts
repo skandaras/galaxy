@@ -535,6 +535,55 @@ export interface CompactionSettings {
 
 export const DEFAULT_COMPACTION: CompactionSettings = { ratio: 0.7, keepRecent: 8 };
 
+export interface StyleSettings {
+	/**
+	 * The owner's own additions to the house style, appended after it on every
+	 * prose turn and told to win where the two disagree.
+	 *
+	 * An object around one string rather than a bare string, because the admin
+	 * settings route fills every key by spreading it over a defaults object — a
+	 * scalar would need a special case in `fill()`.
+	 */
+	text: string;
+}
+
+/**
+ * A cap, not a preference, and enforced server-side: the textarea's `maxlength`
+ * does not survive a raw PUT.
+ *
+ * It rides every prose turn, and one research run makes around ten model calls
+ * that each carry it. Past roughly a thousand characters it stops being a style
+ * note and becomes a second system prompt — one with none of the versioning or
+ * history that Admin -> Tasks gives the first.
+ */
+export const STYLE_MAX_CHARS = 1_000;
+
+export const DEFAULT_STYLE: StyleSettings = { text: '' };
+
+/**
+ * Read through the normaliser, not around it, so the cap holds on the way out as
+ * well as in — the same reason the admin route normalises on GET. The PUT is the
+ * only writer today, but a value that arrived some other way (an image that
+ * capped differently, a hand-edited database) would otherwise be paid for on
+ * every prose turn with nothing to stop it.
+ */
+export function styleSettings(): StyleSettings {
+	return normaliseStyleSettings(getSetting<Record<string, unknown>>('style', {}));
+}
+
+/**
+ * No `settingsVersion` and no entry in the settings migration, unlike the search
+ * and research keys: this is a new key with no prior default, so there is no
+ * install to move off one. The omission is deliberate, not outstanding.
+ *
+ * Returns only `text`, which also stops the read-only `house` field the GET
+ * route attaches for the editor from ever being written back.
+ */
+export function normaliseStyleSettings(raw: Record<string, unknown>): StyleSettings {
+	const text = typeof raw.text === 'string' ? raw.text : DEFAULT_STYLE.text;
+	return { text: text.trim().slice(0, STYLE_MAX_CHARS) };
+}
+
 export interface BoardSettings {
 	/**
 	 * Boards one person may own. Not a scaling limit — a household runs out of

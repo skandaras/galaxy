@@ -46,7 +46,7 @@ import {
 	type AlignmentSettings
 } from '$lib/server/settings';
 import { getBudgetStatus } from './budget';
-import { getTaskConfig, pickModel } from './engine';
+import { getTaskConfig, pickModel, systemPromptFor } from './engine';
 import { emitEvent } from './events';
 import { extractJson } from './json';
 import { logUsage } from './usage';
@@ -573,7 +573,7 @@ export async function runAlignmentSynthesis(
 			{
 				modelKey: choice.model.modelKey,
 				messages: [
-					{ role: 'system', content: taskCfg?.systemPrompt ?? '' },
+					{ role: 'system', content: systemPromptFor('alignment-synthesis') },
 					{
 						role: 'user',
 						content: [

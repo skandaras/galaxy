@@ -29,6 +29,8 @@
 	let coding = $state({ autoCheckpoint: true, autoContinue: true, maxLegs: 3 });
 	let retention = $state({ eventDays: 60, usageDays: 400, uxIdeaDays: 14, cortexChangeDays: 90 });
 	let fetchCfg = $state({ timeoutMs: 15000, maxChars: 20000, maxFetchesPerTurn: 5 });
+	/** `house` is served read-only, for editing against — it is never sent back. */
+	let style = $state({ text: '', house: '' });
 	let saved = $state<string | null>(null);
 	let deployBusy = $state<string | null>(null);
 	let deployMsg = $state<string | null>(null);
@@ -112,6 +114,7 @@
 		coding = { ...data.coding };
 		retention = { ...data.retention };
 		fetchCfg = { ...data.fetch };
+		style = { text: '', house: '', ...data.style };
 		await loadPush();
 	}
 
@@ -165,7 +168,8 @@
 			| 'research'
 			| 'coding'
 			| 'retention'
-			| 'fetch',
+			| 'fetch'
+			| 'style',
 		value: unknown
 	) {
 		await fetch('/api/admin/settings', {
@@ -373,6 +377,33 @@
 		</p>
 		<button class="btn primary" onclick={() => save('coding', coding)}>
 			{saved === 'coding' ? 'Saved ✓' : 'Save'}
+		</button>
+	</article>
+
+	<article class="card">
+		<h3>House style</h3>
+		<label class="full">
+			your additions to how the agents write
+			<textarea
+				rows="4"
+				maxlength="1000"
+				bind:value={style.text}
+				placeholder="e.g. British spelling throughout. Never use the word &quot;utilise&quot;."
+			></textarea>
+		</label>
+		<p class="hint">
+			Appended to the built-in house style on every turn of chat, coding, deep research and the
+			board, plus the sub-agent and the background reviewers. Where the two disagree, yours wins.
+			It does not reach the agents whose reply is a fixed shape — chat titles, run summaries, the
+			memory audit or the alignment assessor. Up to 1,000 characters: it rides every prose turn,
+			and past that it is a second system prompt with none of the history Admin &rarr; Tasks keeps.
+		</p>
+		<details>
+			<summary class="hint">Read the built-in house style</summary>
+			<pre class="voice">{style.house}</pre>
+		</details>
+		<button class="btn primary" onclick={() => save('style', { text: style.text })}>
+			{saved === 'style' ? 'Saved ✓' : 'Save'}
 		</button>
 	</article>
 
@@ -662,6 +693,38 @@
 	.test-result.bad {
 		border-color: var(--danger);
 		color: var(--danger);
+	}
+	/* The prompt boxes want the whole width; the knobs above cap at 14rem. */
+	label.full {
+		margin-bottom: 0.7rem;
+	}
+	textarea {
+		width: 100%;
+		box-sizing: border-box;
+		background: var(--bg-pane);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		color: var(--fg);
+		font-family: inherit;
+		font-size: var(--text-md);
+		line-height: 1.5;
+		padding: 0.5rem 0.65rem;
+		resize: vertical;
+	}
+	summary {
+		cursor: pointer;
+	}
+	.voice {
+		background: var(--bg-pane);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		color: var(--fg-dim);
+		font-family: inherit;
+		font-size: var(--text-sm);
+		line-height: 1.5;
+		padding: 0.6rem;
+		margin: 0.5rem 0 0.7rem;
+		white-space: pre-wrap;
 	}
 	code {
 		color: var(--accent);

@@ -11,18 +11,7 @@ import { taskConfigs, CORE_TASKS, skills } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { saveSkill } from '$lib/server/skills';
 import { deleteEmptyChats } from '$lib/server/chats';
-
-/**
- * Formatting rules shared by the agents whose replies a person reads in the
- * thread. Kept as one constant so the two prompts cannot drift apart.
- *
- * These exist because the default output shape is one unbroken paragraph:
- * markdown renders single newlines as spaces, so a model that separates its
- * points with one newline produces a wall, and a reply listing six changed
- * files reads as a sentence with six clauses.
- */
-const OUTPUT_FORMAT =
-	'Format your replies to be read on a screen, not parsed out of a paragraph. Use short paragraphs of two or three sentences, separated by a blank line. Use a bulleted list whenever you are reporting more than one thing — files changed, options considered, problems found — one item per line, never as a run-on sentence. Give each bullet or section a short bold lead-in naming what it is about, so the reply can be skimmed. Use a heading only when the reply has genuinely distinct sections. Never answer with a single long paragraph.';
+import { OUTPUT_FORMAT } from '$lib/server/engine/voice';
 
 /**
  * What the memory audit is for, and — the half that was missing — what it is
@@ -61,7 +50,7 @@ const MEMORY_PROMPT =
 	'ones. Skill candidates are rarer still: propose one only for a procedure you have watched ' +
 	'repeat.';
 
-const DEFAULT_PROMPTS: Record<string, string> = {
+export const DEFAULT_PROMPTS: Record<string, string> = {
 	chat:
 		'You are the chat agent of Galaxy, a self-hosted AI workspace. Be direct, capable and concise. When you are given a URL, read it with the fetch_url tool — never search for a page whose address you already have, and never describe a link you have not opened. Use the web_search tool when current or factual information would help and you have no address to go to — and search one query at a time. Open broadly, read the titles and domains that come back, open the two or three worth reading with fetch_url, and let what they actually say decide the next query. That is the whole method: a query written before the last one returned is a guess, and the one you write after reading is a different and better query. Never repeat a query, and never rest an answer on snippets when the page was a click away. If the results are thin, answer with what you have and say what you could not confirm rather than searching repeatedly.\n\n' +
 		OUTPUT_FORMAT,
@@ -266,7 +255,12 @@ export function seedSkills(): void {
 export const SUPERSEDED_PROMPTS: Record<string, string[]> = {
 	chat: [
 		'You are the chat agent of Galaxy, a self-hosted AI workspace. Be direct, capable and concise. When you are given a URL, read it with the fetch_url tool — never search for a page whose address you already have, and never describe a link you have not opened. Use the web_search tool when current or factual information would help and you have no address to go to — but search deliberately: open broadly, read the titles and domains that come back, then search again aimed at what they showed you, and never repeat a query. If the results are thin, answer with what you have and say what you could not confirm rather than searching repeatedly.\n\n' +
-			OUTPUT_FORMAT
+			// The text OUTPUT_FORMAT held when this prompt was the shipped default,
+			// inlined rather than composed. A superseded entry is a snapshot of what an
+			// install actually stored, so building one from a live constant means that
+			// editing the constant silently stops the migration matching — and nobody
+			// finds out, because a no-op migration looks exactly like an owner's edit.
+			'Format your replies to be read on a screen, not parsed out of a paragraph. Use short paragraphs of two or three sentences, separated by a blank line. Use a bulleted list whenever you are reporting more than one thing — files changed, options considered, problems found — one item per line, never as a run-on sentence. Give each bullet or section a short bold lead-in naming what it is about, so the reply can be skimmed. Use a heading only when the reply has genuinely distinct sections. Never answer with a single long paragraph.'
 	],
 	'deep-research': [
 		'You are the research agent of Galaxy. Plan searches, gather sources, verify claims across them, and synthesise findings with citations.'

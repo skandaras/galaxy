@@ -17,6 +17,7 @@ import {
 import { typstReady } from '$lib/server/pdf';
 import { assertBudget, getBudgetStatus } from './budget';
 import { buildContext } from './context';
+import { houseStyle, PROSE_TASKS } from './voice';
 import { maybeCompact } from './compaction';
 import { maybeTitleChat, nameThisChatNote, setChatTitleTool } from './chat-title';
 import { createJob, failJob, type LiveJob } from './jobs';
@@ -52,6 +53,34 @@ export function getTaskConfig(task: string) {
 	return db.select().from(taskConfigs).where(eq(taskConfigs.task, task)).get();
 }
 
+/**
+ * The stored system prompt for a task, plus the house style where the task
+ * writes prose a person reads.
+ *
+ * The style is composed here rather than seeded into `DEFAULT_PROMPTS`, and the
+ * difference matters. A seeded default reaches only installs whose stored prompt
+ * still byte-equals a shipped one, so the owner most likely to want a house
+ * style — the one who has been editing prompts — is exactly the one who would
+ * never get it. It would also need the previous composed text frozen into
+ * SUPERSEDED_PROMPTS for every task in the set, on every future wording change,
+ * with `migrateTaskPrompts` failing silently the day one copy drifts. Composed
+ * at call time it reaches all of them regardless of edits, and a reworded block
+ * ships with no migration at all.
+ *
+ * The cost is that the block is not visible in the Admin -> Tasks textarea,
+ * which is why that page says so and points at Admin -> Settings.
+ *
+ * `supplementTask` names a second task config whose prompt is appended before
+ * the style — how a board chat gets the board prompt on top of the chat one. It
+ * is read raw and is never itself in PROSE_TASKS, so the style cannot be
+ * composed twice.
+ */
+export function systemPromptFor(task: string, supplementTask?: string | null): string {
+	const parts = [getTaskConfig(task)?.systemPrompt ?? ''];
+	if (supplementTask) parts.push(getTaskConfig(supplementTask)?.systemPrompt ?? '');
+	const stored = parts.filter(Boolean).join('\n\n');
+	return PROSE_TASKS.has(task) ? stored + houseStyle() : stored;
+}
 
 export function pickModel(modelId: string | null): ModelChoice | null {
 	if (modelId) {
@@ -77,7 +106,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		throw new EngineError('No usable model — add a provider and enable a model in admin');
 	}
 	const backup = cfg?.backupModelId ? resolveModel(cfg.backupModelId) : null;
-	const systemPrompt = cfg?.systemPrompt ?? '';
+	const systemPrompt = systemPromptFor('chat', chat.agentTask);
 
 	appendMessage(chat.id, {
 		role: 'user',

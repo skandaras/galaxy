@@ -14,7 +14,7 @@ import {
 import { listSkills, saveSkill } from '$lib/server/skills';
 import { getSetting, setSetting } from '$lib/server/settings';
 import { getBudgetStatus } from './budget';
-import { getTaskConfig, pickModel } from './engine';
+import { getTaskConfig, pickModel, systemPromptFor } from './engine';
 import { emitEvent } from './events';
 import { extractJson } from './json';
 import { logUsage } from './usage';
@@ -718,7 +718,7 @@ export async function runSkillOptimiser(
 			{
 				modelKey: choice.model.modelKey,
 				messages: [
-					{ role: 'system', content: cfg?.systemPrompt ?? '' },
+					{ role: 'system', content: systemPromptFor('skill-optimiser') },
 					{
 						role: 'user',
 						content: [

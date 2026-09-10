@@ -13,13 +13,16 @@ import {
 	DEFAULT_MEMORY,
 	DEFAULT_RESEARCH,
 	DEFAULT_RETENTION,
+	DEFAULT_STYLE,
 	DEFAULT_UX_AUDIT,
 	DEFAULT_WEB_SEARCH,
 	getSetting,
 	normaliseResearchSettings,
+	normaliseStyleSettings,
 	normaliseWebSearchSettings,
 	setSetting
 } from '$lib/server/settings';
+import { HOUSE_VOICE } from '$lib/server/engine/voice';
 import { emitEvent } from '$lib/server/engine/events';
 
 const KNOWN_KEYS = [
@@ -35,7 +38,8 @@ const KNOWN_KEYS = [
 	'fetch',
 	'boards',
 	'cortex',
-	'cortexGroom'
+	'cortexGroom',
+	'style'
 ] as const;
 const DEFAULTS: Record<string, unknown> = {
 	websearch: DEFAULT_WEB_SEARCH,
@@ -50,7 +54,8 @@ const DEFAULTS: Record<string, unknown> = {
 	fetch: DEFAULT_FETCH,
 	boards: DEFAULT_BOARDS,
 	cortex: DEFAULT_CORTEX,
-	cortexGroom: DEFAULT_CORTEX_GROOM
+	cortexGroom: DEFAULT_CORTEX_GROOM,
+	style: DEFAULT_STYLE
 };
 
 /**
@@ -69,6 +74,7 @@ const DEFAULTS: Record<string, unknown> = {
  */
 const NORMALISERS: Record<string, (v: Record<string, unknown>) => Record<string, unknown>> = {
 	research: (v) => normaliseResearchSettings(v) as unknown as Record<string, unknown>,
+	style: (v) => normaliseStyleSettings(v) as unknown as Record<string, unknown>,
 	websearch: (v) => normaliseWebSearchSettings(v) as unknown as Record<string, unknown>
 };
 
@@ -102,6 +108,10 @@ export const GET: RequestHandler = ({ locals }) => {
 			value[`has${cap(field.plain)}`] = Boolean(value[field.enc]);
 			delete value[field.enc];
 		}
+		// Read-only, like the `has…` flags above: the owner's additions are edited
+		// against the house style, so the editor has to be able to show it. It
+		// cannot be written back — normaliseStyleSettings returns `text` alone.
+		if (key === 'style') value.house = HOUSE_VOICE;
 		out[key] = value;
 	}
 	return json(out);

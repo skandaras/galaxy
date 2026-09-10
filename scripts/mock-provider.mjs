@@ -752,9 +752,14 @@ const server = createServer(async (req, res) => {
 		// Research synthesis: streamed answer citing the provided sources.
 		if (String(last?.content ?? '').includes('RESEARCH-SYNTHESIS')) {
 			const hasEvidence = String(last.content).includes('FACT-42');
+			// The longest prose in the app, and until recently the only guidance it
+			// had was "be thorough but structured". Layout arrives in this user
+			// message, voice in the system prompt — so both are reported.
+			const hasLayout = String(last.content).includes('Format your replies to be read on a screen');
 			const parts = [
 				'Nebulae form from collapsing gas clouds [1]. ',
 				`Evidence check: ${hasEvidence ? 'FACT-42 confirmed' : 'no page evidence'} [2].\n\n`,
+				`RSYS layout=${hasLayout} voice=${system.includes('[House style')}\n\n`,
 				'```mermaid\ngraph TD; Cloud-->Collapse; Collapse-->Nebula;\n```'
 			];
 			for (const p of parts) {
@@ -804,7 +809,7 @@ const server = createServer(async (req, res) => {
 			delta(res, {
 				// ALPHA-MEM / BETA-MEM prove per-user memory isolation: a user's
 				// prompt must contain their own marker and never the other's.
-				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} mem=${system.includes('[Memory')} pref=${system.includes('concise replies')} alpha=${system.includes('ALPHA-MEM')} beta=${system.includes('BETA-MEM')}`
+				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} mem=${system.includes('[Memory')} pref=${system.includes('concise replies')} alpha=${system.includes('ALPHA-MEM')} beta=${system.includes('BETA-MEM')} voice=${system.includes('[House style')}`
 			});
 			delta(res, {}, 'stop');
 			res.write('data: [DONE]\n\n');
@@ -909,7 +914,10 @@ const server = createServer(async (req, res) => {
 					]
 				});
 			} else {
-				delta(res, { content: 'CARD HANDLED' });
+				// board=true is the regression test for the board task config having
+				// been dead text: the agent borrowed only its model, so board replies
+				// came out in the chat agent's register.
+				delta(res, { content: `CARD HANDLED board=${system.includes('task boards in Galaxy')}` });
 				delta(res, {}, 'stop');
 				res.write('data: [DONE]\n\n');
 				res.end();

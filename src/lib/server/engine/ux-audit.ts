@@ -10,7 +10,7 @@ import {
 	type UxAuditSettings
 } from '$lib/server/settings';
 import { getBudgetStatus } from './budget';
-import { getTaskConfig, pickModel } from './engine';
+import { getTaskConfig, pickModel, systemPromptFor } from './engine';
 import { emitEvent } from './events';
 import { extractJson } from './json';
 import { logUsage } from './usage';
@@ -411,7 +411,7 @@ export async function runUxAudit(trigger: 'schedule' | 'manual'): Promise<UxAudi
 			{
 				modelKey: choice.model.modelKey,
 				messages: [
-					{ role: 'system', content: taskCfg?.systemPrompt ?? '' },
+					{ role: 'system', content: systemPromptFor('ux-audit') },
 					{
 						role: 'user',
 						content: await buildAuditPrompt({ since, now: startedAt, maxIdeas })

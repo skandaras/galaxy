@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getBudgetStatus } from '../budget';
-import { getTaskConfig, pickModel } from '../engine';
+import { getTaskConfig, pickModel, systemPromptFor } from '../engine';
 import { emitEvent } from '../events';
 import { createJob, pushChunk, subscribeJob, type LiveJob } from '../jobs';
 import { exploreMaxSteps } from '../limits';
@@ -193,7 +193,7 @@ async function explore(ctx: ExploreContext, question: string, hint: string): Pro
 			// The parent's tool call is what "finishes" here; the job is a vehicle.
 			autoComplete: false,
 			buildMessages: () => [
-				{ role: 'system', content: systemPrompt(cfg?.systemPrompt ?? '', ctx) },
+				{ role: 'system', content: systemPrompt(systemPromptFor('subagent'), ctx) },
 				{ role: 'user', content: hint ? `${question}\n\nStart by looking at: ${hint}` : question }
 			],
 			onDone: (text, _usage, _choice, summary) => {

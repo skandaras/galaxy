@@ -13,7 +13,7 @@ import {
 import { resolveModel } from '$lib/server/providers/registry';
 import type { ProviderMessage } from '$lib/server/providers/types';
 import { assertBudget, getBudgetStatus } from '../budget';
-import { EngineError, getTaskConfig, pickModel } from '../engine';
+import { EngineError, getTaskConfig, pickModel, systemPromptFor } from '../engine';
 import {
 	DEFAULT_CODING,
 	DEFAULT_COMPACTION,
@@ -250,7 +250,7 @@ export function startCodingTurn(opts: {
 	updateChat(chat.id, { modelId: choice.model.id });
 	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'coding', persist: true });
 
-	const systemPrompt = buildCodingSystemPrompt(cfg?.systemPrompt ?? '', session);
+	const systemPrompt = buildCodingSystemPrompt(systemPromptFor('coding'), session);
 	// Read once, before the first leg: it describes the run *before* this one,
 	// and must not start describing this turn's own legs partway through.
 	const priorRun = previousRunNote(chat.id);
