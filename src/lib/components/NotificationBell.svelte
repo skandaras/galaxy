@@ -337,7 +337,13 @@
 			left: 0.5rem;
 			right: 0.5rem;
 			width: auto;
-			bottom: 4rem;
+			/* Was a hard 4rem — the height of a bar that did not exist yet, written
+			   down a second time in a file with no way to know it had changed.
+			   Both edges are pinned now, so the box is the height and the
+			   min(28rem, 70vh) cap below would fight it. */
+			top: calc(var(--chrome-top) + 0.5rem);
+			bottom: calc(var(--chrome-bottom) + 0.5rem);
+			max-height: none;
 		}
 	}
 </style>

@@ -1522,7 +1522,10 @@
 
 	.composer {
 		border-top: 1px solid var(--border);
-		padding: 0.7rem 1rem max(0.9rem, env(safe-area-inset-bottom));
+		/* The bottom inset moved to .shell when the tab bar took the bottom of
+		   the screen. Two elements both paying env(safe-area-inset-bottom) is a
+		   double gap on a notched phone and a wrong one on every other device. */
+		padding: 0.7rem 1rem 0.9rem;
 	}
 	.jump {
 		display: block;

@@ -14,10 +14,13 @@ function isScrollable(el: Element): boolean {
 }
 
 /**
- * Find whatever is actually scrolling. On desktop that's the thread element
- * itself; below 720px the layout drops `overflow: hidden` from the shell
- * (see +layout.svelte) so the page scrolls instead and the thread element
- * never moves. Resolved per call because a short thread isn't scrollable yet.
+ * Find whatever is actually scrolling.
+ *
+ * That is normally the thread element. The walk is still here because a thread
+ * shorter than its pane isn't scrollable yet, so the nearest scroller can be
+ * further up — and because a page that hasn't been given a bounded height would
+ * otherwise scroll the document instead, which is what every width did before
+ * the shell became one screen.
  */
 function resolveScroller(from: HTMLElement): HTMLElement {
 	let node: HTMLElement | null = from;
@@ -80,9 +83,16 @@ export function createAutoscroll(): Autoscroll {
 			// the window catches both the thread element and the page.
 			window.addEventListener('scroll', onScroll, true);
 			window.addEventListener('resize', onScroll);
+			// The soft keyboard genuinely changes how much thread is visible, and
+			// only Android reports that as a window resize. On iOS the visual
+			// viewport moves and the window hears nothing, so without this the
+			// thread stays pinned to a bottom that is now behind the keyboard.
+			const vv = window.visualViewport;
+			vv?.addEventListener('resize', onScroll);
 			return () => {
 				window.removeEventListener('scroll', onScroll, true);
 				window.removeEventListener('resize', onScroll);
+				vv?.removeEventListener('resize', onScroll);
 				el = null;
 			};
 		},

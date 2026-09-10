@@ -51,6 +51,18 @@
 		levels ? new Set(RESEARCH_EFFORTS.map((e) => levels[e].rounds)).size === 1 : false
 	);
 
+	/**
+	 * How much fixed chrome the bottom of the screen is holding.
+	 *
+	 * Measured rather than read from --chrome-bottom: that token is a calc()
+	 * with an env() inside it, and getPropertyValue hands back the unresolved
+	 * string. The bar is display:none above the breakpoint, so this is 0 there.
+	 */
+	function chromeBottom(): number {
+		const bar = document.querySelector('nav.tabbar');
+		return bar ? bar.getBoundingClientRect().height : 0;
+	}
+
 	function place() {
 		const rect = chipEl?.getBoundingClientRect();
 		if (!rect) return;
@@ -59,10 +71,27 @@
 			// Clamped to the viewport, so a narrow window shifts the panel left
 			// rather than pushing it off the edge.
 			left: Math.max(MARGIN, Math.min(rect.left, window.innerWidth - width - MARGIN)),
-			bottom: Math.max(MARGIN, window.innerHeight - rect.top + 6),
+			// The floor used to be a bare MARGIN, which pins the panel eight pixels
+			// off the bottom of the viewport — which is to say, behind the tab bar.
+			bottom: Math.max(MARGIN + chromeBottom(), window.innerHeight - rect.top + 6),
 			width
 		};
 	}
+
+	$effect(() => {
+		// window.resize is the Android half of a keyboard opening; iOS moves the
+		// visual viewport instead and fires nothing on the window. Without this
+		// the panel stays where the composer was before the keyboard pushed it.
+		const vv = window.visualViewport;
+		if (!vv) return;
+		const reposition = () => open && place();
+		vv.addEventListener('resize', reposition);
+		vv.addEventListener('scroll', reposition);
+		return () => {
+			vv.removeEventListener('resize', reposition);
+			vv.removeEventListener('scroll', reposition);
+		};
+	});
 
 	function toggle() {
 		open = !open;
