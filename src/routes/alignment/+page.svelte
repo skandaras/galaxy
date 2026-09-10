@@ -3,10 +3,17 @@
 	import Journal from '$lib/components/alignment/Journal.svelte';
 	import Constitution from '$lib/components/alignment/Constitution.svelte';
 	import RubricView from '$lib/components/alignment/RubricView.svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
+	import { tabFromUrl, tabUrl } from '$lib/url-tab';
 
 	const tabs = ['Standing', 'Journal', 'Constitution', 'Rubric'] as const;
 	type Tab = (typeof tabs)[number];
-	let active = $state<Tab>('Standing');
+	// In the URL rather than in $state, so Back steps through tabs, a tab can
+	// be linked to, and the phone's More sheet can point at one.
+	const active = $derived(tabFromUrl(page.url.searchParams, tabs));
+	const show = (tab: Tab) =>
+		void goto(tabUrl(page.url.pathname, tab, tabs), { keepFocus: true, noScroll: true });
 
 	/**
 	 * Names for the ids that come back inside a reading. The assessment stores
@@ -56,14 +63,14 @@
 <div class="alignment">
 	<nav class="tabs">
 		{#each tabs as tab (tab)}
-			<button class:active={active === tab} onclick={() => (active = tab)}>{tab}</button>
+			<button class:active={active === tab} onclick={() => show(tab)}>{tab}</button>
 		{/each}
 	</nav>
 
 	<div class="body">
 		{#key revision}
 			{#if active === 'Standing'}
-				<Standing onGoTo={(tab) => (active = tab)} />
+				<Standing onGoTo={show} />
 			{:else if active === 'Journal'}
 				<Journal
 					{principleTitles}

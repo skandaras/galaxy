@@ -11,6 +11,9 @@
 	import Cortex from '$lib/components/admin/Cortex.svelte';
 	import Settings from '$lib/components/admin/Settings.svelte';
 	import Usage from '$lib/components/admin/Usage.svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
+	import { tabFromUrl, tabUrl } from '$lib/url-tab';
 
 	const tabs = [
 		'Users',
@@ -26,14 +29,18 @@
 		'Settings',
 		'Usage'
 	] as const;
-	let active = $state<(typeof tabs)[number]>('Users');
+	// In the URL rather than in $state, so Back steps through tabs, a tab can
+	// be linked to, and the phone's More sheet can point at one.
+	const active = $derived(tabFromUrl(page.url.searchParams, tabs));
+	const show = (tab: (typeof tabs)[number]) =>
+		void goto(tabUrl(page.url.pathname, tab, tabs), { keepFocus: true, noScroll: true });
 	let modelsRefreshKey = $state(0);
 </script>
 
 <div class="admin">
 	<nav class="tabs">
 		{#each tabs as tab (tab)}
-			<button class:active={active === tab} onclick={() => (active = tab)}>{tab}</button>
+			<button class:active={active === tab} onclick={() => show(tab)}>{tab}</button>
 		{/each}
 	</nav>
 

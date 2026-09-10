@@ -5,15 +5,22 @@
 	import Cortex from '$lib/components/settings/Cortex.svelte';
 	import Notifications from '$lib/components/settings/Notifications.svelte';
 	import Alignment from '$lib/components/settings/Alignment.svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
+	import { tabFromUrl, tabUrl } from '$lib/url-tab';
 
 	const tabs = ['Theme', 'Boards', 'Cortex', 'Notifications', 'Memory', 'Alignment'] as const;
-	let active = $state<(typeof tabs)[number]>('Theme');
+	// In the URL rather than in $state, so Back steps through tabs, a tab can
+	// be linked to, and the phone's More sheet can point at one.
+	const active = $derived(tabFromUrl(page.url.searchParams, tabs));
+	const show = (tab: (typeof tabs)[number]) =>
+		void goto(tabUrl(page.url.pathname, tab, tabs), { keepFocus: true, noScroll: true });
 </script>
 
 <div class="settings">
 	<nav class="tabs">
 		{#each tabs as tab (tab)}
-			<button class:active={active === tab} onclick={() => (active = tab)}>{tab}</button>
+			<button class:active={active === tab} onclick={() => show(tab)}>{tab}</button>
 		{/each}
 	</nav>
 

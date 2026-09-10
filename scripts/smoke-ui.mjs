@@ -302,6 +302,34 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 		check(`the ${tab} tab renders quietly`, problems, []);
 	}
 
+	// A tab is a place now, not a variable: it survives a reload, and Back steps
+	// through tabs rather than leaving the page.
+	await page.goto(`${B}/settings?tab=notifications`);
+	await page.locator('nav.tabs button.active').waitFor();
+	check(
+		'a tab can be linked to',
+		await page.locator('nav.tabs button.active').innerText(),
+		'Notifications'
+	);
+	await page.locator('nav.tabs button', { hasText: 'Memory' }).click();
+	await page.waitForTimeout(200);
+	await page.goBack();
+	await page.waitForTimeout(200);
+	check(
+		'and Back returns to the tab you were on',
+		await page.locator('nav.tabs button.active').innerText(),
+		'Notifications'
+	);
+	check(
+		'an unknown tab still opens the page',
+		await (async () => {
+			await page.goto(`${B}/settings?tab=telescope`);
+			await page.locator('nav.tabs button.active').waitFor();
+			return page.locator('nav.tabs button.active').innerText();
+		})(),
+		'Theme'
+	);
+
 	// The specific regression: Boards must not be carrying the Cortex pane.
 	await page.locator('nav.tabs button', { hasText: 'Boards' }).click();
 	await page.waitForTimeout(200);
