@@ -93,26 +93,32 @@ cannot have one at all.
   two selects and note — all given names via the `.sr-only` utility, so the
   layout is unchanged
 
+### Keyboard focus
+
+Every focusable thing draws a 2px `--accent` outline on `:focus-visible`, from
+one rule in `themeCss`. `:focus-visible` rather than `:focus`, so a mouse click
+does not draw one.
+
+Nine rules used to set `outline: none` with nothing put back, which lost a
+keyboard user their place entirely. Declaring the ring once is what stops that
+returning: a component that wants a different focus style should override it
+deliberately, as `BottomNav` does with an inset offset, rather than remove it.
+
+### Touch targets
+
+`--tap` is the floor for anything meant to be pressed. It is 32px by default and
+**44px** under `@media (pointer: coarse)` — the figure a finger needs — so a
+narrow desktop window does not pay for thumb-sized controls it has no use for.
+
+That split is the general rule in this interface: **width decides layout,
+capability decides size**. A control sized off a `max-width` query has mixed the
+two.
+
 ## Open — worth doing next
 
 Not fixed here, in rough priority order.
 
-### 1. Invisible keyboard focus
-
-Nine rules remove the focus outline without putting anything back, so a keyboard
-user loses their place entirely:
-
-`chat/+page.svelte:1198,1427` · `library/+page.svelte:382,471,490` ·
-`code/+page.svelte:1193` · `boards/CardDetail.svelte:301` ·
-`PaneResizer.svelte:47`
-
-Each wants a `:focus-visible` style — a 2px `--accent` outline with a small
-offset would match the interface and cost nothing.
-
-(`AlignmentConstellation.svelte:124` also sets `outline: none`, but it does
-restyle `:focus-visible`, so it is not in the list.)
-
-### 2. Disabled controls
+### 1. Disabled controls
 
 `opacity: 0.5` on a disabled button drops its label below AA. Disabled controls
 are exempt from the contrast requirement, so this is a judgement call rather than
@@ -120,10 +126,8 @@ a violation — but at these text sizes it makes "why is this greyed out?"
 genuinely hard to read. A dedicated disabled colour would read better than
 fading the text.
 
-### 3. Smaller things
+### 2. Smaller things
 
-- Touch targets: several buttons are around 24–28px tall, under the 44px that
-  makes a control comfortable on a phone. The interface is used on mobile.
 - A few tables use `<td>` in the header row rather than `<th>`, so their columns
   are not announced.
 - Heading levels jump in places (a `<h3>` with no `<h2>` above it), which makes

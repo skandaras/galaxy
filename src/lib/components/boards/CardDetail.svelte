@@ -298,7 +298,6 @@
 		font-family: inherit;
 		font-size: var(--text-lg);
 		padding: 0.25rem 0;
-		outline: none;
 	}
 	.title:focus {
 		border-bottom-color: var(--accent);

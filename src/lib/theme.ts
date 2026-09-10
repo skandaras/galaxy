@@ -293,6 +293,12 @@ export function themeCss(t: Theme): string {
 		// 3:1 that WCAG asks of a meaningful boundary — unlike the card
 		// separators that share the plain --border.
 		'input,select,textarea{border-color:var(--control-border);}',
+		// Nine rules across the tree removed the focus outline and put nothing
+		// back, so a keyboard user lost their place entirely — docs/ACCESSIBILITY
+		// listed it as the first thing worth fixing. Declared once, here, rather
+		// than as nine :focus-visible rules that can each be forgotten again.
+		// :focus-visible, not :focus, so a mouse click does not draw it.
+		'a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}',
 		// Visible text for screen readers only. Used where a control needs a name
 		// but the layout has no room for a visible caption.
 		'.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}',

@@ -60,6 +60,26 @@ describe('web manifest', () => {
 	});
 });
 
+describe('the installed shell', () => {
+	it('launches standalone, into chat', () => {
+		// display and start_url are what make an installed icon behave like an
+		// app rather than a bookmark, and nothing asserted either.
+		expect(manifest.display).toBe('standalone');
+		expect(manifest.start_url).toBe('/chat');
+	});
+
+	it('lets the page reach the notch', () => {
+		// viewport-fit=cover is what makes env(safe-area-inset-*) resolve to
+		// anything but zero. Without it the tab bar sits on the home indicator
+		// and the top strip under the notch, and every inset in the tree is a
+		// no-op that looks deliberate.
+		const html = readFileSync(new URL('../app.html', import.meta.url), 'utf8');
+		const viewport = /<meta name="viewport" content="([^"]+)"/.exec(html)?.[1];
+		expect(viewport).toContain('viewport-fit=cover');
+		expect(viewport).toContain('width=device-width');
+	});
+});
+
 describe('app.html', () => {
 	const html = readFileSync(join('src', 'app.html'), 'utf8');
 

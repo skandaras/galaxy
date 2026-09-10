@@ -44,7 +44,6 @@
 	.resizer:focus-visible,
 	.resizer.dragging {
 		background-color: var(--accent);
-		outline: none;
 	}
 	/* On a phone the list is a slide-over sheet, not a column — there is nothing
 	   to drag, and the handle would sit on top of the content. */

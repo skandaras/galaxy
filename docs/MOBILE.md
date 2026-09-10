@@ -84,17 +84,33 @@ installed app and the browser.
 
 ## What adapts on small screens
 
-- The left rail collapses into a sticky top bar that scrolls sideways, so every
-  destination stays reachable without a menu.
-- The composer respects the iOS home-indicator inset; the top bar respects the
+- Navigation moves to a **bottom tab bar** — four destinations plus **More**,
+  which holds the rest. It is where a thumb already is, and it does not move
+  when your account gains Code or Admin. Tapping the tab you are already on
+  opens that page's own list (chats, coding sessions, documents); a labelled
+  pill at the top of the page does the same.
+- The left rail becomes a slim top strip carrying identity and status only —
+  wordmark, Alerts, budget, environment, username.
+- The app becomes **one screen** rather than a document that scrolls: the
+  conversation scrolls, the composer and the bar stay put, and the keyboard
+  does not cover the input.
+- The bar respects the iOS home-indicator inset and the strip respects the
   notch (`viewport-fit=cover` + safe-area insets).
+- **Cortex** takes touch gestures: pinch to zoom, twist to turn, double-tap to
+  zoom in, plus explicit − and + buttons. Its on-screen hint names the gestures
+  the device you are holding actually has.
 - Admin tables scroll horizontally inside their panel instead of stretching the
   page, and multi-column forms collapse to one column.
-- The docked Observatory feed is hidden below 720px — it needs vertical room a
-  top bar doesn't have. The full view at `/observatory` remains available and is
-  itself responsive.
+- The docked Observatory feed is hidden below 720px — it needs vertical room the
+  strip doesn't have. The full view at `/observatory` is in the **More** sheet,
+  and is itself responsive. (Until recently it was only linked from that hidden
+  dock, which meant it could not be reached on a phone at all.)
 - Long model lists page in with **Show more / Show all** rather than rendering
   thousands of rows on a phone.
+
+A desktop browser narrowed below 720px gets the same layout, because that is
+where the rail stops fitting — but sized for a mouse rather than a thumb. Width
+decides the layout; the pointer decides how big the controls are.
 
 Because a coding session streams a lot of tool output, phones are best for chat,
 research and reviewing/approving plans; driving a long implement run is more

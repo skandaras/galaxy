@@ -97,10 +97,6 @@
 			font-size: var(--text-md);
 			cursor: pointer;
 		}
-		.list-pill:focus-visible {
-			outline: 2px solid var(--accent);
-			outline-offset: 2px;
-		}
 		.glyph {
 			color: var(--fg-dim);
 		}

@@ -1683,7 +1683,6 @@
 		   The cap is here rather than in JS so it holds before hydration. */
 		max-height: 12rem;
 		resize: none;
-		outline: none;
 		overflow-y: auto;
 	}
 	textarea:focus {

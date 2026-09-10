@@ -503,7 +503,6 @@
 	}
 	.folder-input:focus {
 		border-color: var(--accent);
-		outline: none;
 	}
 	.folder-input:disabled {
 		opacity: 0.5;
@@ -592,7 +591,6 @@
 		font-family: inherit;
 		font-size: var(--text-xl);
 		padding: 0.3rem 0;
-		outline: none;
 	}
 	.title:focus {
 		border-bottom-color: var(--accent);
@@ -611,7 +609,6 @@
 		line-height: 1.6;
 		padding: 1rem;
 		resize: none;
-		outline: none;
 	}
 	.preview {
 		flex: 1;

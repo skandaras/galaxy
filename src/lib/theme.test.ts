@@ -193,6 +193,14 @@ describe('geometry and stacking tokens', () => {
 		expect(themeCss(DEFAULT_THEME)).toContain('--kbd:0px;');
 	});
 
+	it('draws a focus ring, since nine rules used to remove it and put nothing back', () => {
+		// :focus-visible rather than :focus, or every mouse click would draw one.
+		const css = themeCss(DEFAULT_THEME);
+		expect(css).toContain('button:focus-visible');
+		expect(css).toContain('outline:2px solid var(--accent)');
+		expect(css).not.toContain('button:focus{');
+	});
+
 	it('is not themeable, because no setting writes to it', () => {
 		// The whole block is fixed text. A theme that tries to reach it should
 		// change nothing — same reasoning as the galaxy font above.

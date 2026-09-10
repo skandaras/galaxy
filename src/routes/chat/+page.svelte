@@ -1352,7 +1352,6 @@
 		font-size: var(--text-md);
 		padding: 0.4rem 0.45rem;
 		margin: 0.05rem;
-		outline: none;
 	}
 	.archive {
 		margin-top: 0.9rem;
@@ -1592,7 +1591,6 @@
 		   either. The cap is here rather than in JS so it holds before hydration. */
 		max-height: 12rem;
 		resize: none;
-		outline: none;
 		overflow-y: auto;
 	}
 	textarea:focus {
