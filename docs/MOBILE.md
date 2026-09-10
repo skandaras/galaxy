@@ -123,8 +123,13 @@ to build the APK won't, and the deployment's `.env` lives on the server, not
 here. With one present the script reads `ORIGIN` from it. Run `npm run icons`
 first only if you changed `static/icon*.svg`.
 
-The first run walks you through `bubblewrap init` — the defaults are right, and
-it offers to create a signing key. **Back that keystore up**, along with the
+The first run walks you through `bubblewrap init`. Press Enter through it: your
+answers about the site are discarded, because the script re-applies the host,
+package id, start URL, name and icons from `--origin` immediately afterwards.
+The one section that needs typing is the signing key's certificate — name,
+organisational unit, organisation, two-letter country — which has no defaults
+and cannot be blank, though nothing verifies what you put there. Then it offers
+to create the key itself. **Back that keystore up**, along with the
 passwords you choose for it. Bubblewrap writes it into the project directory,
 so it lands at `twa/android-keystore` (whatever `signingKey.path` in
 `twa/twa-manifest.json` says); the `galaxy-bubblewrap` docker volume next to it
