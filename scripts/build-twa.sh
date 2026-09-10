@@ -182,6 +182,14 @@ docker run --rm $TTY_FLAGS \
 	echo
 	echo "=== Signing key fingerprint ==="
 	bubblewrap fingerprint list
+
+	echo
+	echo "=== Signing key file (back this up) ==="
+	node -e "
+		const m = JSON.parse(require(\"fs\").readFileSync(\"twa-manifest.json\", \"utf8\"));
+		const p = m.signingKey && m.signingKey.path;
+		console.log(p ? require(\"path\").join(\"twa\", p) : \"(see signingKey.path in twa/twa-manifest.json)\");
+	"
 '
 
 echo
@@ -194,3 +202,8 @@ echo "  TWA_PACKAGE_ID=$PACKAGE_ID"
 echo "  TWA_FINGERPRINTS=<SHA-256 from above>"
 echo
 echo "Then: adb install $PROJECT_DIR/app-release-signed.apk"
+echo
+echo "And back up the signing key printed above, with the passwords you chose,"
+echo "somewhere outside this checkout. $PROJECT_DIR/ is gitignored, so nothing else"
+echo "is keeping it — lose it and the installed app can never be updated in place,"
+echo "only uninstalled and replaced."

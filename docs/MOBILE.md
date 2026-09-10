@@ -107,22 +107,36 @@ launcher icon, a name and a URL. It contains no web code — the site is rendere
 by a browser already on the phone — so deploying Galaxy updates the app, and
 this only needs re-running when the shell itself changes.
 
-Everything runs in a container, so you need Docker but no JDK and no Android
-SDK. The first run downloads ~1 GB of Android tooling into a named volume and
-is slow; later runs are not.
+You need a checkout of this repo and Docker, and nothing else — no JDK, no
+Android SDK, and no `npm install`, because everything runs in a container. The
+first run downloads ~1 GB of Android tooling into a named volume and is slow;
+later runs are not. Build it on a machine you intend to keep, for the reason
+two paragraphs down.
 
 ```sh
-npm run icons                     # only if you changed static/icon*.svg
-bash scripts/build-twa.sh         # reads ORIGIN from .env, or pass --origin
+git clone https://github.com/skandaras/galaxy.git && cd galaxy
+bash scripts/build-twa.sh --origin https://ai.example.com
 ```
 
+`--origin` is only needed when the checkout has no `.env` — a clone made just
+to build the APK won't, and the deployment's `.env` lives on the server, not
+here. With one present the script reads `ORIGIN` from it. Run `npm run icons`
+first only if you changed `static/icon*.svg`.
+
 The first run walks you through `bubblewrap init` — the defaults are right, and
-it offers to create a signing key. **Back that keystore up.** It lives in the
-`galaxy-bubblewrap` docker volume, and losing it means you can never update the
-installed app in place, only uninstall and start again.
+it offers to create a signing key. **Back that keystore up**, along with the
+passwords you choose for it. Bubblewrap writes it into the project directory,
+so it lands at `twa/android-keystore` (whatever `signingKey.path` in
+`twa/twa-manifest.json` says); the `galaxy-bubblewrap` docker volume next to it
+holds the Android SDK, not your key. `twa/` is gitignored and looks like
+disposable build output, which is exactly how it gets deleted — and losing it
+means you can never update the installed app in place, only uninstall and start
+again. The script prints the path at the end for this reason.
 
 When it finishes it prints the key's SHA-256 fingerprint. Put that and the
-package id in your `.env`:
+package id in the **deployment's** `.env` — the one beside `docker-compose.yml`
+on the server, not the checkout you just built in, which has no part in serving
+the site:
 
 ```sh
 TWA_PACKAGE_ID=net.starbasehome.ai.galaxy
@@ -141,6 +155,21 @@ to Authelia; `docs/INSTALL.md` §3 has the bypass rule. Galaxy serves this route
 without auth on purpose, but it never sees the request until the proxy lets it
 through.
 
+If it returns `{"error": "No Android app is configured for this instance"}`,
+the proxy is fine and the container simply never received the two variables.
+`.env` is read by Compose, not by the app: the values only reach the container
+because `docker-compose.yml` passes them through. A compose file older than
+that wiring will not, so re-download it (keeping your `.env`) or add these to
+the `environment:` block of each galaxy service by hand:
+
+```yaml
+      TWA_PACKAGE_ID: ${TWA_PACKAGE_ID:-}
+      TWA_FINGERPRINTS: ${TWA_FINGERPRINTS:-}
+```
+
+Either way `docker compose up -d` afterwards — env changes are applied when the
+container is recreated, not on restart.
+
 Then install it:
 
 ```sh
@@ -154,10 +183,12 @@ installing.
 
 **No address bar** means Digital Asset Links verified and you are done.
 
-**An address bar** means it did not, and there are three causes in order of
+**An address bar** means it did not, and there are four causes in order of
 likelihood: the fingerprint in `.env` does not match the APK you installed; the
-proxy is not serving `/.well-known/assetlinks.json` (check with the `curl`
-above); or the browser providing the shell does not implement TWA at all.
+container never got the variables; the proxy is not serving
+`/.well-known/assetlinks.json`; or the browser providing the shell does not
+implement TWA at all. The `curl` above separates the middle two — a login page
+is the proxy, a 404 is the container.
 
 That last one is a real possibility on GrapheneOS and cannot be looked up —
 Vanadium's lack of *WebAPK* support is documented and certain, but its *TWA*
