@@ -141,6 +141,21 @@ to Authelia; `docs/INSTALL.md` §3 has the bypass rule. Galaxy serves this route
 without auth on purpose, but it never sees the request until the proxy lets it
 through.
 
+If it returns `{"error": "No Android app is configured for this instance"}`,
+the proxy is fine and the container simply never received the two variables.
+`.env` is read by Compose, not by the app: the values only reach the container
+because `docker-compose.yml` passes them through. A compose file older than
+that wiring will not, so re-download it (keeping your `.env`) or add these to
+the `environment:` block of each galaxy service by hand:
+
+```yaml
+      TWA_PACKAGE_ID: ${TWA_PACKAGE_ID:-}
+      TWA_FINGERPRINTS: ${TWA_FINGERPRINTS:-}
+```
+
+Either way `docker compose up -d` afterwards — env changes are applied when the
+container is recreated, not on restart.
+
 Then install it:
 
 ```sh
@@ -154,10 +169,12 @@ installing.
 
 **No address bar** means Digital Asset Links verified and you are done.
 
-**An address bar** means it did not, and there are three causes in order of
+**An address bar** means it did not, and there are four causes in order of
 likelihood: the fingerprint in `.env` does not match the APK you installed; the
-proxy is not serving `/.well-known/assetlinks.json` (check with the `curl`
-above); or the browser providing the shell does not implement TWA at all.
+container never got the variables; the proxy is not serving
+`/.well-known/assetlinks.json`; or the browser providing the shell does not
+implement TWA at all. The `curl` above separates the middle two — a login page
+is the proxy, a 404 is the container.
 
 That last one is a real possibility on GrapheneOS and cannot be looked up —
 Vanadium's lack of *WebAPK* support is documented and certain, but its *TWA*
