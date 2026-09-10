@@ -131,7 +131,7 @@ organisational unit, organisation, two-letter country — which has no defaults
 and cannot be blank, though nothing verifies what you put there. Then it offers
 to create the key itself. **Back that keystore up**, along with the
 passwords you choose for it. Bubblewrap writes it into the project directory,
-so it lands at `twa/android-keystore` (whatever `signingKey.path` in
+so it lands at `twa/android.keystore` (whatever `signingKey.path` in
 `twa/twa-manifest.json` says); the `galaxy-bubblewrap` docker volume next to it
 holds the Android SDK, not your key. `twa/` is gitignored and looks like
 disposable build output, which is exactly how it gets deleted — and losing it

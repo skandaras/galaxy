@@ -172,14 +172,17 @@ docker run --rm $TTY_FLAGS \
 		const m = JSON.parse(fs.readFileSync(\"twa-manifest.json\", \"utf8\"));
 		m.host = process.env.HOST;
 		m.startUrl = \"/chat\";
-		m.webManifestUrl = process.env.ORIGIN + \"/manifest.webmanifest\";
 		m.packageId = process.env.PACKAGE_ID;
 
-		// The icons deliberately stay on the local server. Pointing them at the
-		// deployment would mean every \`bubblewrap update\` fetching them through
-		// Authelia, which answers with a login page — so the build would either
-		// fail or bake a screenshot of a sign-in form into the launcher icon.
+		// The icons and the manifest deliberately stay on the local server.
+		// Pointing them at the deployment would mean every \`bubblewrap update\`
+		// fetching them through Authelia, which answers with a login page — so
+		// the build would either fail or bake a screenshot of a sign-in form
+		// into the launcher icon. Generation copies the manifest contents into
+		// the APK and never reads the URL again, so a local one loses nothing:
+		// the app targets the host and startUrl fields above, not this.
 		const local = \"http://127.0.0.1:\" + process.env.PORT;
+		m.webManifestUrl = local + \"/manifest.webmanifest\";
 		if (m.iconUrl) m.iconUrl = local + new URL(m.iconUrl).pathname;
 		if (m.maskableIconUrl) m.maskableIconUrl = local + new URL(m.maskableIconUrl).pathname;
 
