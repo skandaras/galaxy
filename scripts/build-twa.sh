@@ -18,7 +18,12 @@
 #     not work on a Galaxy instance. Authelia sits in front of the whole domain
 #     and answers the fetch with a redirect to a login page, so Bubblewrap
 #     parses an HTML sign-in form as the manifest and fails. The manifest is
-#     served from this checkout instead and the host is patched in afterwards.
+#     served from this checkout instead, over --add-host so that the real
+#     hostname resolves to the local server for the length of the build. Init
+#     derives its suggested answers from that URL's host, and every one of them
+#     is validated, so the host it sees has to be the real one: an IP and port
+#     produce a Domain that domainToASCII() rejects and a package id whose
+#     reversed sections start with digits, and the interview dead-ends on both.
 #
 #   - The signing key is what ties the APK to the domain. Its fingerprint has
 #     to be served at /.well-known/assetlinks.json or the app launches with a
@@ -36,13 +41,12 @@ BUBBLEWRAP_VERSION="1.24.1"
 NODE_IMAGE="node:22"
 VOLUME="galaxy-bubblewrap"
 PROJECT_DIR="twa"
-# Port 80, not something memorable in the high range. `bubblewrap init` offers
-# the manifest URL's host as the default answer to its Domain question, and
-# validates that answer with domainToASCII(), which returns "" for anything
-# carrying a port — so a high port makes init reject its own default and the
-# interview cannot be completed by pressing Enter. On 80 the host is bare
-# "127.0.0.1", which validates. Nothing is published out of the container, and
-# it runs as root, so binding a privileged port here costs nothing.
+# Port 80 so the manifest URL carries no port at all. Init's defaults are
+# derived from that URL's host and then validated: domainToASCII() returns ""
+# for a host with a port, and generatePackageId() reverses the host into
+# sections that must each begin with a letter. Any port breaks the first; the
+# hostname carries the second. Nothing is published out of the container and it
+# runs as root, so binding a privileged port here costs nothing.
 PORT=80
 
 ORIGIN_ARG=""
@@ -108,6 +112,7 @@ PASS_ENV=()
 [ -n "${BUBBLEWRAP_KEY_PASSWORD:-}" ] && PASS_ENV+=(-e "BUBBLEWRAP_KEY_PASSWORD")
 
 docker run --rm $TTY_FLAGS \
+	--add-host "$HOST:127.0.0.1" \
 	-v "$VOLUME:/root/.bubblewrap" \
 	-v "$REPO_ROOT/static:/static:ro" \
 	-v "$REPO_ROOT/$PROJECT_DIR:/work" \
@@ -144,15 +149,17 @@ docker run --rm $TTY_FLAGS \
 	if [ ! -f twa-manifest.json ]; then
 		FRESH=1
 		echo "--- bubblewrap init ---"
-		echo "Press Enter to accept every default. Two exceptions:"
-		echo "  * The signing key certificate (name, organisational unit,"
-		echo "    organisation, 2-letter country) has no defaults and cannot be"
-		echo "    left blank. Nobody verifies these; they just have to be filled."
-		echo "  * You choose two passwords, keystore then key. Save them."
-		echo "Answers about the site itself are discarded — host, package id,"
-		echo "start URL, name and icons are all re-applied from $ORIGIN below."
+		echo "Press Enter to accept every default until the signing key."
+		echo "Its certificate — name, organisational unit, organisation, and a"
+		echo "two-letter country — has no defaults and rejects blanks. Nothing"
+		echo "verifies what you put there. Then you choose two passwords,"
+		echo "keystore then key: save both, they cannot be recovered."
 		echo
-		bubblewrap init --manifest "http://127.0.0.1:${PORT}/manifest.webmanifest" --directory .
+		echo "If it ever refuses a default, these are the right answers:"
+		echo "  Domain:         ${HOST}"
+		echo "  Application ID: ${PACKAGE_ID}"
+		echo
+		bubblewrap init --manifest "http://${HOST}/manifest.webmanifest" --directory .
 	else
 		echo "--- twa-manifest.json exists; edit it to change the shell, then re-run ---"
 	fi
