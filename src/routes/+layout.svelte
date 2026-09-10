@@ -38,6 +38,12 @@
 </script>
 
 <svelte:head>
+	<!-- Follows the theme rather than app.html's fixed #05060f, which is what
+	     colours the browser and status bar around an installed app. The manifest
+	     keeps the fixed value on purpose: it is read at install time, when there
+	     is no signed-in person to have a theme, and by Bubblewrap when it builds
+	     the Android package. -->
+	<meta name="theme-color" content={data.theme.bg} />
 	{@html `<style id="galaxy-theme">${themeCss(data.theme)}
 	button, input, select, textarea { border-radius: var(--radius); }</style>`}
 </svelte:head>
