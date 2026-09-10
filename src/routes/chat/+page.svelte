@@ -19,6 +19,7 @@
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import ResearchEffort from '$lib/components/ResearchEffort.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
+	import ListPill from '$lib/components/ListPill.svelte';
 	import type { ResearchEffort as Effort } from '$lib/research-effort';
 	import {
 		applyChunk,
@@ -954,11 +955,7 @@
 </script>
 
 <div class="chat-shell">
-	<button class="list-toggle" onclick={() => (listOpen = !listOpen)} aria-label="Toggle chat list">
-		☰
-	</button>
-
-	<aside class="chat-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
+	<aside class="chat-list page-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
 		<div class="list-actions">
 			<button class="btn" onclick={() => newChat(false)}>+ New chat</button>
 			<button class="btn ghost" title="Hidden: not stored, invisible to memory" onclick={() => newChat(true)}>
@@ -1029,6 +1026,7 @@
 	<PaneResizer pane={listPane} label="Resize the chat list" />
 
 	<section class="thread-area">
+		<ListPill bind:open={listOpen} label="Chats" count={chats.length} />
 		{#if errorBanner}
 			<div class="banner error">
 				{errorBanner}
@@ -1242,9 +1240,6 @@
 		padding: 0.75rem;
 		box-sizing: border-box;
 		overflow-y: auto;
-	}
-	.list-toggle {
-		display: none;
 	}
 	.list-actions {
 		display: flex;
@@ -1636,30 +1631,6 @@
 	}
 
 	@media (max-width: 720px) {
-		.list-toggle {
-			display: block;
-			position: fixed;
-			top: 0.55rem;
-			right: 0.75rem;
-			z-index: var(--z-chrome);
-			background: var(--bg-pane);
-			color: var(--fg);
-			border: 1px solid var(--border);
-			border-radius: 5px;
-			padding: 0.25rem 0.5rem;
-		}
-		.chat-list {
-			position: fixed;
-			width: auto;
-			inset: 0 30% 0 0;
-			background: var(--bg-pane);
-			z-index: var(--z-drawer);
-			transform: translateX(-100%);
-			transition: transform 0.2s ease;
-		}
-		.chat-list.open {
-			transform: translateX(0);
-		}
 	}
 
 	/* Reveal-on-hover hides these controls permanently on a touch screen, where

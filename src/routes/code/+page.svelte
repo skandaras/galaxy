@@ -19,6 +19,7 @@
 	import GalaxySpinner from '$lib/components/GalaxySpinner.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
+	import ListPill from '$lib/components/ListPill.svelte';
 	import {
 		applyChunk,
 		applyStreamText,
@@ -818,11 +819,7 @@
 </script>
 
 <div class="code-shell">
-	<button class="list-toggle" onclick={() => (listOpen = !listOpen)} aria-label="Toggle sessions">
-		☰
-	</button>
-
-	<aside class="session-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
+	<aside class="session-list page-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
 		<button class="btn primary wide" onclick={() => ((creating = true), (current = null))}>
 			+ New session
 		</button>
@@ -848,6 +845,7 @@
 	<PaneResizer pane={listPane} label="Resize the session list" />
 
 	<section class="work-area">
+		<ListPill bind:open={listOpen} label="Sessions" count={sessions.length} />
 		<!-- Notices used to stack here as full-width banners, detached in space and
 		     time from the step that raised them. They are now inline in the
 		     timeline; only a terminal error still earns the top of the page. -->
@@ -1179,9 +1177,6 @@
 		padding: 0.75rem;
 		box-sizing: border-box;
 		overflow-y: auto;
-	}
-	.list-toggle {
-		display: none;
 	}
 	.session-list ul {
 		list-style: none;
@@ -1764,32 +1759,6 @@
 			border-top: 1px solid var(--border);
 			padding-left: 0;
 			padding-top: 0.45rem;
-		}
-		.list-toggle {
-			display: block;
-			position: fixed;
-			top: 0.55rem;
-			right: 0.75rem;
-			z-index: var(--z-chrome);
-			background: var(--bg-pane);
-			color: var(--fg);
-			border: 1px solid var(--border);
-			border-radius: 5px;
-			padding: 0.25rem 0.5rem;
-		}
-		.session-list {
-			position: fixed;
-			/* Beats the inline --list-width: this is a slide-over sheet here, not
-			   a resizable column. */
-			width: auto;
-			inset: 0 30% 0 0;
-			background: var(--bg-pane);
-			z-index: var(--z-drawer);
-			transform: translateX(-100%);
-			transition: transform 0.2s ease;
-		}
-		.session-list.open {
-			transform: translateX(0);
 		}
 	}
 

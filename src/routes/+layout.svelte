@@ -68,6 +68,38 @@
 		color: var(--fg);
 		font-family: var(--font-ui);
 	}
+
+	/* The drawer a page's own list becomes on a phone. Global and declared once
+	   here, because Chat, Code and Library each wrote this block separately and
+	   identically — right down to the transition duration — and three scoped
+	   copies is how the fourth page gets it subtly wrong.
+
+	   The insets differed (25% vs 30%) for no reason anyone recorded, so this
+	   picks one. What the copies all lacked: overscroll-behavior, so flicking
+	   the list to its end scrolled the page behind it; and a reduced-motion
+	   escape for the slide. */
+	@media (max-width: 720px) {
+		:global(.page-list) {
+			position: fixed;
+			/* Beats the inline --list-width the resize handle writes: this is a
+			   sheet here, not a resizable column, and the handle is hidden. */
+			width: auto;
+			inset: 0 25% 0 0;
+			background: var(--bg-pane);
+			z-index: var(--z-drawer);
+			transform: translateX(-100%);
+			transition: transform 0.2s ease;
+			overscroll-behavior: contain;
+		}
+		:global(.page-list.open) {
+			transform: translateX(0);
+		}
+	}
+	@media (max-width: 720px) and (prefers-reduced-motion: reduce) {
+		:global(.page-list) {
+			transition: none;
+		}
+	}
 	.shell {
 		display: flex;
 		height: 100vh;

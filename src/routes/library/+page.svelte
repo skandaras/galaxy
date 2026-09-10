@@ -3,6 +3,7 @@
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
+	import ListPill from '$lib/components/ListPill.svelte';
 
 	interface Doc {
 		id: string;
@@ -169,9 +170,7 @@
 </script>
 
 <div class="lib-shell">
-	<button class="list-toggle" onclick={() => (listOpen = !listOpen)} aria-label="Toggle list">☰</button>
-
-	<aside class="doc-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
+	<aside class="doc-list page-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
 		<div class="list-actions">
 			<!-- Wrapped, or the click event arrives as the folder to file it under. -->
 			<button class="btn primary" onclick={() => startNew()}>+ New doc</button>
@@ -253,6 +252,7 @@
 	<PaneResizer pane={listPane} label="Resize the document list" />
 
 	<section class="editor">
+		<ListPill bind:open={listOpen} label="Documents" count={docs.length} />
 		<header>
 			<input class="title" placeholder="Document title" bind:value={title} />
 			<input
@@ -317,9 +317,6 @@
 		padding: 0.75rem;
 		box-sizing: border-box;
 		overflow-y: auto;
-	}
-	.list-toggle {
-		display: none;
 	}
 	.list-actions {
 		display: flex;
@@ -588,31 +585,5 @@
 	}
 
 	@media (max-width: 720px) {
-		.list-toggle {
-			display: block;
-			position: fixed;
-			top: 0.55rem;
-			right: 0.75rem;
-			z-index: var(--z-chrome);
-			background: var(--bg-pane);
-			color: var(--fg);
-			border: 1px solid var(--border);
-			border-radius: 5px;
-			padding: 0.25rem 0.5rem;
-		}
-		.doc-list {
-			position: fixed;
-			/* Beats the inline --list-width: this is a slide-over sheet here, not
-			   a resizable column. */
-			width: auto;
-			inset: 0 25% 0 0;
-			background: var(--bg-pane);
-			z-index: var(--z-drawer);
-			transform: translateX(-100%);
-			transition: transform 0.2s ease;
-		}
-		.doc-list.open {
-			transform: translateX(0);
-		}
 	}
 </style>
