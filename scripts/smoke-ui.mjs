@@ -1253,6 +1253,137 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 		check('closing behind itself', await phone.locator('.more-sheet').count(), 0);
 	}
 
+	{
+		await phone.goto(`${B}/cortex`);
+		await phone.locator('.map canvas').waitFor();
+		await phone.waitForTimeout(900);
+
+		check('the hint names a gesture a phone has', /pinch/.test(await phone.locator('.map .hint').innerText()));
+		check('the map controls are thumb-sized', await undersized(phone, '.map .ctl'), []);
+
+		/**
+		 * The bounding box of everything drawn, in canvas pixels.
+		 *
+		 * inked() above counts lit pixels, and both a zoom and a pan change that
+		 * count — so it cannot tell them apart, which is exactly the distinction
+		 * a pinch test rests on. A zoom moves this box's edges; a pan moves its
+		 * centre. Asserting both halves is what separates them.
+		 */
+		const drawnBox = () =>
+			phone.evaluate(() => {
+				const c = document.querySelector('.map canvas');
+				const ctx = c?.getContext('2d');
+				if (!ctx || !c.width) return null;
+				const { data } = ctx.getImageData(0, 0, c.width, c.height);
+				let minX = 1e9;
+				let minY = 1e9;
+				let maxX = -1;
+				let maxY = -1;
+				for (let y = 0; y < c.height; y += 2) {
+					for (let x = 0; x < c.width; x += 2) {
+						if (data[(y * c.width + x) * 4 + 3] <= 8) continue;
+						if (x < minX) minX = x;
+						if (x > maxX) maxX = x;
+						if (y < minY) minY = y;
+						if (y > maxY) maxY = y;
+					}
+				}
+				return maxX < 0
+					? null
+					: {
+							w: maxX - minX,
+							h: maxY - minY,
+							cx: Math.round((minX + maxX) / 2),
+							cy: Math.round((minY + maxY) / 2)
+						};
+			});
+
+		// CDP rather than dispatched PointerEvents. page.touchscreen is
+		// single-touch, and a synthetic PointerEvent dies on the first move
+		// because setPointerCapture throws NotFoundError for a pointer id the
+		// browser never tracked — which fails looking exactly like the gesture
+		// code being wrong. touchPoints is the full set of currently active
+		// points; Chromium diffs it against the previous list.
+		const cdp = await mobile.newCDPSession(phone);
+		const box = await phone.locator('.map canvas').boundingBox();
+		const cx = box.x + box.width / 2;
+		const cy = box.y + box.height / 2;
+		const touch = (type, pts) =>
+			cdp.send('Input.dispatchTouchEvent', {
+				type,
+				touchPoints: pts.map(([x, y], i) => ({ x, y, id: i, radiusX: 12, radiusY: 12, force: 1 }))
+			});
+
+		/**
+		 * Everything below zooms *out* from a fitted chart, or back towards it,
+		 * and never past it. drawnBox measures ink that is actually on the canvas,
+		 * so it shrinks in both directions: once because the chart got smaller,
+		 * and again once the chart is larger than the canvas and only a few nodes
+		 * are still in frame. Only the range between those is monotonic, and a
+		 * first draft of this block read the second case as a failure to zoom.
+		 */
+		const fitted = async () => {
+			await phone.locator('.map .ctl', { hasText: 'Fit' }).tap();
+			await phone.waitForTimeout(300);
+			return drawnBox();
+		};
+
+		const pinch = async (from, to) => {
+			await touch('touchStart', [
+				[cx - from, cy],
+				[cx + from, cy]
+			]);
+			for (let i = 1; i <= 6; i++) {
+				const d = from + ((to - from) * i) / 6;
+				await touch('touchMove', [
+					[cx - d, cy],
+					[cx + d, cy]
+				]);
+				await phone.waitForTimeout(30);
+			}
+			await touch('touchEnd', []);
+			await phone.waitForTimeout(300);
+			return drawnBox();
+		};
+
+		const before = await fitted();
+		// Fingers together. Symmetric about the middle, so the midpoint never
+		// moves: a pure zoom, which is a narrower drawing with its centre where
+		// it was. Asserting both halves is what separates it from a pan.
+		const zoomedOut = await pinch(120, 40);
+		check('pinching in zooms the chart out', zoomedOut.w < before.w * 0.7);
+		check('and does not drag it sideways while it does', Math.abs(zoomedOut.cx - before.cx) < 40);
+		await phoneShot('cortex-pinch');
+
+		// Straight back out, before anything moves the chart off-centre: zooming
+		// about the canvas middle pushes an off-centre chart off the edge, and the
+		// clipping reads as a failure to zoom.
+		const zoomedIn = await pinch(40, 120);
+		check('pinching out zooms it back in', zoomedIn.w > zoomedOut.w * 1.2);
+
+		// One finger, from a zoomed-out chart that sits in frame with room to
+		// spare — so its box can move without being clipped by the canvas edge.
+		const panBase = await pinch(120, 40);
+		await touch('touchStart', [[cx, cy]]);
+		for (let i = 1; i <= 5; i++) {
+			await touch('touchMove', [[cx + i * 18, cy]]);
+			await phone.waitForTimeout(25);
+		}
+		await touch('touchEnd', []);
+		await phone.waitForTimeout(300);
+		const panned = await drawnBox();
+		check('one finger still pans', panned.cx > panBase.cx + 20);
+		check('and does not zoom while it does', Math.abs(panned.w - panBase.w) < 30);
+
+		// The explicit way, for anyone who does not know the gesture exists.
+		const beforeButton = await fitted();
+		await phone.locator('.map .ctl[aria-label="Zoom out"]').tap();
+		await phone.waitForTimeout(300);
+		check('the zoom buttons work too', (await drawnBox()).w < beforeButton.w * 0.95);
+
+		check('the map is still quiet on a phone', phoneProblems, []);
+	}
+
 	check('the phone is still quiet after all that', phoneProblems, []);
 	await mobile.close();
 }
