@@ -14,12 +14,19 @@
 		if (!animate) return;
 		if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
 
+		// A phone renders the same 110x34 grid as a desktop, at a size where most
+		// of it is off the side of the screen anyway, and pays for it out of a
+		// battery. Half the cadence is still ambient; nobody watches the backdrop
+		// closely enough to count frames.
+		const coarse = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+		const frameMs = coarse ? FRAME_MS * 2 : FRAME_MS;
+
 		let raf = 0;
 		let last = -Infinity;
 		// rAF (not setInterval) so the browser suspends this on a hidden tab.
 		const tick = (t: number) => {
 			raf = requestAnimationFrame(tick);
-			if (t - last < FRAME_MS) return;
+			if (t - last < frameMs) return;
 			last = t;
 			const rotation = ((t % REVOLUTION_MS) / REVOLUTION_MS) * Math.PI * 2;
 			art = generateGalaxy(BACKDROP_COLS, BACKDROP_ROWS, { rotation });
@@ -37,7 +44,7 @@
 	.backdrop {
 		position: fixed;
 		inset: 0;
-		z-index: 0;
+		z-index: var(--z-backdrop);
 		display: flex;
 		align-items: center;
 		justify-content: center;

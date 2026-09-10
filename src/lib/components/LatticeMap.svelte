@@ -28,6 +28,8 @@
 	 */
 	import { areaColourCss } from '$lib/cortex-colour';
 	import { isLight } from '$lib/theme';
+	import { createGestureTracker, createTapTracker } from '$lib/gesture';
+	import { hasFinePointer } from '$lib/pointer';
 
 	interface MapNode {
 		id: string;
@@ -99,13 +101,8 @@
 	let yaw = $state(0.35);
 	let pitch = $state(-0.42);
 	let ready = $state(false);
-	/** 'pan' on a left drag, 'rotate' on the middle button or with shift held. */
-	let mode = $state<'pan' | 'rotate' | null>(null);
 	/** Latched by the button, for anyone without a middle button to hold. */
 	let rotateLatched = $state(false);
-	let moved = false;
-	let lastX = 0;
-	let lastY = 0;
 	let frame = 0;
 	/** The page colour the cached sprites were built for. See `draw()`. */
 	let spriteTheme = '';
@@ -730,62 +727,110 @@
 		return best?.id ?? null;
 	}
 
-	function onpointerdown(e: PointerEvent) {
+	const gestures = createGestureTracker({
 		// Middle button, shift-drag, or the latch for anyone with neither.
-		mode = e.button === 1 || e.shiftKey || rotateLatched ? 'rotate' : 'pan';
+		rotate: (e) => e.button === 1 || e.shiftKey === true || rotateLatched
+	});
+	const taps = createTapTracker();
+
+	/** Where a client point falls on the canvas. */
+	function local(clientX: number, clientY: number) {
+		const rect = canvas?.getBoundingClientRect();
+		return rect ? { x: clientX - rect.left, y: clientY - rect.top } : null;
+	}
+
+	/**
+	 * Zoom about a point rather than the centre, so the thing being looked at is
+	 * the thing that stays put. Lifted out of onwheel so the pinch shares it —
+	 * the clamp only wants to exist once.
+	 */
+	function zoomAt(sx: number, sy: number, factor: number) {
+		const next = Math.min(Math.max(scale * factor, 0.1), 6);
+		originX = sx - ((sx - originX) / scale) * next;
+		originY = sy - ((sy - originY) / scale) * next;
+		scale = next;
+	}
+
+	/** The on-screen buttons, which zoom about the middle of the chart. */
+	function nudgeZoom(factor: number) {
+		if (!canvas) return;
+		zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, factor);
+		schedule();
+	}
+
+	function onpointerdown(e: PointerEvent) {
 		// Chrome puts up its autoscroll cursor on a middle press otherwise, and
 		// then eats the drag.
 		if (e.button === 1) e.preventDefault();
-		moved = false;
-		lastX = e.clientX;
-		lastY = e.clientY;
+		gestures.down(e);
 		canvas?.setPointerCapture(e.pointerId);
 	}
 
 	function onpointermove(e: PointerEvent) {
-		if (!mode) return;
-		const dx = e.clientX - lastX;
-		const dy = e.clientY - lastY;
-		if (Math.abs(dx) > 2 || Math.abs(dy) > 2) moved = true;
-		if (mode === 'rotate') {
+		const d = gestures.move(e);
+		if (!d) return;
+		if (d.kind === 'pinch') {
+			originX += d.dx;
+			originY += d.dy;
+			const at = local(d.at.x, d.at.y);
+			if (at) zoomAt(at.x, at.y, d.scale);
+			// A twist is a roll and this camera has no roll, so yaw is the closest
+			// honest mapping. Sending the midpoint's dy to pitch as well would
+			// make one gesture do two things at once.
+			yaw += d.rotation;
+		} else if (d.kind === 'rotate') {
 			// A drag across the full width is most of a turn, which is about the
 			// rate at which a rotation stays legible rather than whipping round.
-			yaw += dx * 0.008;
-			pitch = clampPitch(pitch + dy * 0.008);
+			yaw += d.dx * 0.008;
+			pitch = clampPitch(pitch + d.dy * 0.008);
 		} else {
-			originX += dx;
-			originY += dy;
+			originX += d.dx;
+			originY += d.dy;
 		}
-		lastX = e.clientX;
-		lastY = e.clientY;
 		schedule();
 	}
 
 	function onpointerup(e: PointerEvent) {
-		const wasRotating = mode === 'rotate';
-		mode = null;
-		canvas?.releasePointerCapture(e.pointerId);
-		if (wasRotating && moved) {
+		const turning = gestures.kind === 'rotate' || gestures.kind === 'pinch';
+		const travelled = gestures.moved;
+		const { tapped } = gestures.up(e);
+		// Throws when the element does not hold capture for this id, which
+		// pointercancel now makes possible — it releases implicitly.
+		if (canvas?.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+		// Other fingers are still down; the gesture has not ended.
+		if (gestures.count > 0) return;
+
+		if (turning && travelled) {
 			saveView();
 			return;
 		}
 		// A drag that ends on a node is a pan, not a click on it.
-		if (!moved) onselect?.(nodeAt(e.clientX, e.clientY));
+		if (!tapped) return;
+
+		// Only on a touch screen: a trackpad's double-click would fire this as
+		// well as the selection below, and zoom out from under the click.
+		if (!hasFinePointer() && taps.tap({ x: e.clientX, y: e.clientY }, e.timeStamp)) {
+			const at = local(e.clientX, e.clientY);
+			if (scale >= 2.5) fit();
+			else if (at) zoomAt(at.x, at.y, 1.8);
+			schedule();
+			return;
+		}
+		onselect?.(nodeAt(e.clientX, e.clientY));
+	}
+
+	function onpointercancel() {
+		// There was no handler at all before, so a gesture the system took left
+		// the mode stuck on and the next tap panned instead of selecting.
+		gestures.cancel();
+		taps.reset();
 	}
 
 	function onwheel(e: WheelEvent) {
 		e.preventDefault();
-		if (!canvas) return;
-		const rect = canvas.getBoundingClientRect();
-		const sx = e.clientX - rect.left;
-		const sy = e.clientY - rect.top;
-		const factor = Math.exp(-e.deltaY * 0.0015);
-		const next = Math.min(Math.max(scale * factor, 0.1), 6);
-		// Zoom toward the pointer rather than the centre, so the thing being
-		// looked at is the thing that stays put.
-		originX = sx - ((sx - originX) / scale) * next;
-		originY = sy - ((sy - originY) / scale) * next;
-		scale = next;
+		const at = local(e.clientX, e.clientY);
+		if (!at) return;
+		zoomAt(at.x, at.y, Math.exp(-e.deltaY * 0.0015));
 		schedule();
 	}
 
@@ -838,13 +883,22 @@
 		{onpointerdown}
 		{onpointermove}
 		{onpointerup}
+		{onpointercancel}
 		{onwheel}
 		onauxclick={(e) => e.preventDefault()}
 		oncontextmenu={(e) => e.preventDefault()}
 	></canvas>
 	{#if nodes.length}
-		<div class="hint">drag to pan · middle-drag or shift-drag to rotate · scroll to zoom</div>
+		<div class="hint">
+			<span class="fine">drag to pan · middle-drag or shift-drag to rotate · scroll to zoom</span>
+			<span class="coarse">drag to pan · pinch to zoom · twist to turn · double-tap to zoom in</span>
+		</div>
 		<div class="controls">
+			<!-- Explicit zoom, so zooming never depends on a gesture alone: the
+			     wheel is the only way in with a mouse, and there was no way in at
+			     all with a finger. -->
+			<button class="ctl" aria-label="Zoom out" onclick={() => nudgeZoom(1 / 1.4)}>−</button>
+			<button class="ctl" aria-label="Zoom in" onclick={() => nudgeZoom(1.4)}>+</button>
 			<!-- The latch exists because a phone and most trackpads have no middle
 			     button, and the canvas is the only way to turn the chart. -->
 			<button
@@ -896,6 +950,11 @@
 		min-height: 240px;
 		overflow: hidden;
 	}
+	@media (max-width: 800px) {
+		.map {
+			min-height: min(58vh, 24rem);
+		}
+	}
 	canvas {
 		display: block;
 		width: 100%;
@@ -921,7 +980,50 @@
 		display: flex;
 		gap: 0.3rem;
 	}
+	.hint .coarse {
+		display: none;
+	}
+	@media not (pointer: fine) {
+		.hint .fine {
+			display: none;
+		}
+		.hint .coarse {
+			display: inline;
+		}
+	}
+	@media (max-width: 720px) {
+		/* The controls belong under the thumb, not in the corner furthest from
+		   it — and the hint moves out of the way rather than being crowded off
+		   the bottom by them. */
+		.controls {
+			top: auto;
+			bottom: 0.6rem;
+			left: 0.6rem;
+			right: 0.6rem;
+			justify-content: center;
+			flex-wrap: wrap;
+		}
+		.hint {
+			top: 0.6rem;
+			bottom: auto;
+			right: 0.6rem;
+		}
+		.glow-tune {
+			top: auto;
+			bottom: calc(var(--tap) + 1.4rem);
+			left: 0.6rem;
+		}
+		.glow-tune input {
+			width: auto;
+			flex: 1;
+		}
+	}
 	.ctl {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: var(--tap);
+		min-width: var(--tap);
 		font-size: var(--text-sm);
 		padding: 0.25rem 0.6rem;
 		color: var(--fg);

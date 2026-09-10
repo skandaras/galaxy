@@ -1296,7 +1296,7 @@
 		   leaves you reading an unlabelled list. */
 		position: sticky;
 		top: 0;
-		z-index: 1;
+		z-index: var(--z-base);
 		background: var(--bg-pane);
 	}
 	.group-name {

@@ -172,6 +172,141 @@ describe('themeCss', () => {
 	});
 });
 
+/** Every `--name:value;` the emitted CSS declares, last write winning. */
+function tokens(css: string): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const [, name, value] of css.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;}]+)/g)) {
+		out[name] = value.trim();
+	}
+	return out;
+}
+
+describe('geometry and stacking tokens', () => {
+	it('emits every token the layout composes its chrome from', () => {
+		const t = tokens(themeCss(DEFAULT_THEME));
+		for (const name of ['--tap', '--strip-h', '--tabbar-h', '--kbd']) {
+			expect(t[name], name).toBeDefined();
+		}
+	});
+
+	it('starts the keyboard inset at zero, so a browser that cannot report it is shut', () => {
+		expect(themeCss(DEFAULT_THEME)).toContain('--kbd:0px;');
+	});
+
+	it('draws a focus ring, since nine rules used to remove it and put nothing back', () => {
+		// :focus-visible rather than :focus, or every mouse click would draw one.
+		const css = themeCss(DEFAULT_THEME);
+		expect(css).toContain('button:focus-visible');
+		expect(css).toContain('outline:2px solid var(--accent)');
+		expect(css).not.toContain('button:focus{');
+	});
+
+	it('is not themeable, because no setting writes to it', () => {
+		// The whole block is fixed text. A theme that tries to reach it should
+		// change nothing — same reasoning as the galaxy font above.
+		const hostile = normalizeTheme({ accent: '#123456' });
+		const a = tokens(themeCss(DEFAULT_THEME));
+		const b = tokens(themeCss(hostile));
+		for (const name of ['--tap', '--strip-h', '--tabbar-h', '--z-chrome']) {
+			expect(b[name], name).toBe(a[name]);
+		}
+	});
+
+	it('orders the whole stacking ladder strictly ascending', () => {
+		// The names exist so the order is readable; this is what keeps the order
+		// true. A duplicate or an inversion here is a paint bug nobody sees until
+		// a screenshot, so it is cheaper to catch as arithmetic.
+		const t = tokens(themeCss(DEFAULT_THEME));
+		const ladder = [
+			'--z-backdrop',
+			'--z-base',
+			'--z-drag',
+			'--z-drawer',
+			'--z-sheet',
+			'--z-chrome',
+			'--z-modal',
+			'--z-scrim',
+			'--z-popover'
+		];
+		const values = ladder.map((name) => {
+			expect(t[name], name).toBeDefined();
+			return Number(t[name]);
+		});
+		expect(values.every(Number.isFinite)).toBe(true);
+		for (let i = 1; i < values.length; i++) {
+			expect(values[i], `${ladder[i]} must sit above ${ladder[i - 1]}`).toBeGreaterThan(
+				values[i - 1]
+			);
+		}
+	});
+
+	it('puts chrome above the sheet, which is what un-buries the alerts panel', () => {
+		// Not arbitrary: the panel is a descendant of the top strip, so it paints
+		// in the strip's stacking context whatever number it carries. This
+		// ordering is the fix, and reversing it silently restores the bug.
+		const t = tokens(themeCss(DEFAULT_THEME));
+		expect(Number(t['--z-chrome'])).toBeGreaterThan(Number(t['--z-sheet']));
+		expect(Number(t['--z-chrome'])).toBeGreaterThan(Number(t['--z-drawer']));
+	});
+
+	it('puts a full-screen modal above the chrome it covers', () => {
+		// The drag ghost belongs under the chrome and a card detail does not, even
+		// though both were written as 40. A card below 900px is inset:0 and takes
+		// the screen; a tab bar painted over it covers what you opened it to read.
+		const t = tokens(themeCss(DEFAULT_THEME));
+		expect(Number(t['--z-modal'])).toBeGreaterThan(Number(t['--z-chrome']));
+		expect(Number(t['--z-drag'])).toBeLessThan(Number(t['--z-chrome']));
+	});
+});
+
+describe('the coarse-pointer block', () => {
+	/**
+	 * The CSS either side of the coarse-pointer block.
+	 *
+	 * Split rather than read whole, because tokens() keeps the last write of each
+	 * name and the override sits later in the same string — so "the default" read
+	 * off the full sheet is the override, and a test comparing the two compares a
+	 * value with itself. It passed until --tap and its override were both 44.
+	 */
+	const halves = () => {
+		const css = themeCss(DEFAULT_THEME);
+		const at = css.indexOf('@media (pointer: coarse)');
+		expect(at, 'the coarse-pointer block should be emitted').toBeGreaterThan(-1);
+		return { fine: css.slice(0, at), coarse: css.slice(at) };
+	};
+	const coarse = () => halves().coarse;
+
+	it('raises the sizes rather than lowering them', () => {
+		// The rule is that a finger gets more room than a mouse. Written the other
+		// way round it would shrink every target on the devices that need them
+		// biggest, and still pass a test that only checked the values differ.
+		const { fine } = halves();
+		const base = tokens(fine);
+		const bumped = tokens(coarse());
+		for (const name of ['--tap', '--tabbar-h']) {
+			expect(parseFloat(bumped[name]), name).toBeGreaterThan(parseFloat(base[name]));
+		}
+	});
+
+	it('holds a finger to the 44px docs/ACCESSIBILITY.md commits to', () => {
+		expect(parseFloat(tokens(coarse())['--tap'])).toBeGreaterThanOrEqual(44);
+	});
+
+	it('floors form controls at 16px, or Safari zooms the page on focus', () => {
+		// Under 16px iOS scales the whole viewport to the focused field and leaves
+		// it there. --text-base is 0.9rem and the Void preset puts html at 94% on
+		// top, so almost every control in the app was tripping it.
+		expect(coarse()).toContain('input,select,textarea{font-size:max(16px,1em)!important;}');
+	});
+
+	it('changes nothing that a narrow window would also change', () => {
+		// The dividing line this block exists to hold: capability decides size,
+		// width decides layout. A max-width query in here means the two axes have
+		// been mixed, which is what gives a narrow desktop window thumb chrome.
+		expect(coarse()).not.toContain('max-width');
+	});
+});
+
 describe('fonts', () => {
 	it('keeps a font id that is in the catalogue', () => {
 		const t = normalizeTheme({ fontUi: 'georgia', fontMono: 'consolas' });

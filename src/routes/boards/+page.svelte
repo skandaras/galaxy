@@ -722,7 +722,7 @@
 		position: fixed;
 		top: 0;
 		left: 0;
-		z-index: 40;
+		z-index: var(--z-drag);
 		pointer-events: none;
 		box-sizing: border-box;
 		background: var(--bg);

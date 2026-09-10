@@ -298,7 +298,6 @@
 		font-family: inherit;
 		font-size: var(--text-lg);
 		padding: 0.25rem 0;
-		outline: none;
 	}
 	.title:focus {
 		border-bottom-color: var(--accent);
@@ -467,7 +466,7 @@
 			position: fixed;
 			inset: 0;
 			width: auto;
-			z-index: 40;
+			z-index: var(--z-modal);
 			border-left: none;
 		}
 	}

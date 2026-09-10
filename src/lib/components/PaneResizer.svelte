@@ -31,7 +31,7 @@
 	   is the difference between a handle you can grab and one you can't. */
 	.resizer {
 		position: relative;
-		z-index: 1;
+		z-index: var(--z-base);
 		flex: 0 0 5px;
 		margin-right: -4px;
 		background: var(--border);
@@ -44,7 +44,6 @@
 	.resizer:focus-visible,
 	.resizer.dragging {
 		background-color: var(--accent);
-		outline: none;
 	}
 	/* On a phone the list is a slide-over sheet, not a column — there is nothing
 	   to drag, and the handle would sit on top of the content. */

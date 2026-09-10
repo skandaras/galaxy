@@ -302,6 +302,34 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 		check(`the ${tab} tab renders quietly`, problems, []);
 	}
 
+	// A tab is a place now, not a variable: it survives a reload, and Back steps
+	// through tabs rather than leaving the page.
+	await page.goto(`${B}/settings?tab=notifications`);
+	await page.locator('nav.tabs button.active').waitFor();
+	check(
+		'a tab can be linked to',
+		await page.locator('nav.tabs button.active').innerText(),
+		'Notifications'
+	);
+	await page.locator('nav.tabs button', { hasText: 'Memory' }).click();
+	await page.waitForTimeout(200);
+	await page.goBack();
+	await page.waitForTimeout(200);
+	check(
+		'and Back returns to the tab you were on',
+		await page.locator('nav.tabs button.active').innerText(),
+		'Notifications'
+	);
+	check(
+		'an unknown tab still opens the page',
+		await (async () => {
+			await page.goto(`${B}/settings?tab=telescope`);
+			await page.locator('nav.tabs button.active').waitFor();
+			return page.locator('nav.tabs button.active').innerText();
+		})(),
+		'Theme'
+	);
+
 	// The specific regression: Boards must not be carrying the Cortex pane.
 	await page.locator('nav.tabs button', { hasText: 'Boards' }).click();
 	await page.waitForTimeout(200);
@@ -1010,6 +1038,396 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 
 	check('the map is still quiet after all that', problems, []);
 	await shot('cortex-map');
+}
+
+// --- 9. the phone ---------------------------------------------------------
+// A second context rather than a resize: hasTouch decides which events fire at
+// all and whether (pointer: coarse) matches, and a narrow desktop window is a
+// different thing wearing the same width. Last, because every block above
+// mutates fixtures — board order, cleared notifications, an added Cortex area —
+// and this should read a populated app rather than race one.
+{
+	const mobile = await browser.newContext({
+		viewport: { width: 390, height: 844 },
+		isMobile: true,
+		hasTouch: true,
+		extraHTTPHeaders: { 'Remote-User': ALICE }
+	});
+	const phone = await mobile.newPage();
+	let phoneProblems = [];
+	phone.on('pageerror', (e) => phoneProblems.push(`uncaught: ${e.message}`));
+	phone.on('console', (m) => {
+		if (m.type() === 'error') phoneProblems.push(`console: ${m.text()}`);
+	});
+	const phoneShot = (name) => phone.screenshot({ path: join(SHOTS, `phone-${name}.png`) });
+
+	/**
+	 * Every control in a selector that is too small, with its text. A bare count
+	 * says nothing about which one shrank, and the whole point of the number is
+	 * that a bar you miss is worse than no bar.
+	 */
+	const undersized = (p, selector, min = 44) =>
+		p.locator(selector).evaluateAll(
+			(els, min) =>
+				els
+					.map((el) => {
+						const r = el.getBoundingClientRect();
+						return {
+							what: (el.textContent || el.getAttribute('aria-label') || el.tagName)
+								.trim()
+								.slice(0, 24),
+							w: Math.round(r.width),
+							h: Math.round(r.height)
+						};
+					})
+					.filter((m) => m.w < min || m.h < min),
+			min
+		);
+
+	/**
+	 * What is painted on top at points across a box. The brand check above does
+	 * this for one point; a bar is the full width of the screen, and one point in
+	 * the middle misses anything covering only one end of it.
+	 */
+	const coveringAcross = async (p, selector, n = 5) => {
+		const box = await p.locator(selector).boundingBox();
+		if (!box) return ['missing'];
+		const pts = Array.from({ length: n }, (_, i) => ({
+			x: box.x + (box.width * (i + 0.5)) / n,
+			y: box.y + box.height / 2
+		}));
+		return p.evaluate(
+			({ pts, selector }) =>
+				pts
+					.map(({ x, y }) => {
+						const el = document.elementFromPoint(x, y);
+						return el?.closest(selector)
+							? null
+							: el?.className?.toString?.() || el?.tagName || 'unknown';
+					})
+					.filter(Boolean),
+			{ pts, selector }
+		);
+	};
+
+	// hasTouch and isMobile are Chromium-only in Playwright. This suite launches
+	// Chromium explicitly so it holds today; asserting it makes the day it stops
+	// one legible failure instead of every check below going strange at once.
+	await phone.goto(`${B}/chat`);
+	check(
+		'the phone reports a coarse pointer',
+		await phone.evaluate(() => matchMedia('(pointer: coarse)').matches)
+	);
+	// Let this page's own requests finish before the loop below navigates to it
+	// again. Without it the first iteration aborts them mid-flight and reports
+	// the abort as a console error, which looks exactly like a broken page.
+	await phone.waitForTimeout(500);
+
+	for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settings']) {
+		phoneProblems = [];
+		await phone.goto(B + path);
+		// The same wait as the desktop loop, which is the whole payoff of leaving
+		// the rail as one element that reflows rather than swapping it out.
+		await phone.locator('aside.pane').waitFor();
+		await phone.locator('nav.tabbar').waitFor();
+		await phone.waitForTimeout(500);
+		check(`${path} renders on a phone without errors`, phoneProblems, []);
+		check(`${path} keeps the brand clear on a phone`, await coveringAcross(phone, '.brand', 1), []);
+	}
+
+	{
+		const labels = () =>
+			phone
+				.locator('nav.tabbar .tab .label')
+				.allTextContents()
+				.then((t) => t.map((s) => s.trim()));
+
+		await phone.goto(`${B}/chat`);
+		await phone.locator('nav.tabbar').waitFor();
+		// Alice has the coding grant and alignment on, and is not an admin.
+		check('the bar offers four destinations and a way to the rest', await labels(), [
+			'Chat',
+			'Code',
+			'Boards',
+			'Library',
+			'More'
+		]);
+
+		await phone.goto(`${B}/settings`);
+		await phone.locator('nav.tabbar').waitFor();
+		check('the same four wherever you are', await labels(), [
+			'Chat',
+			'Code',
+			'Boards',
+			'Library',
+			'More'
+		]);
+		check(
+			'with More marked as where you are',
+			(await phone.locator('nav.tabbar .tab.on .label').innerText()).trim(),
+			'More'
+		);
+		check('every tab is a thumb wide', await undersized(phone, 'nav.tabbar .tab'), []);
+		await phoneShot('tabbar');
+	}
+
+	{
+		await phone.goto(`${B}/chat`);
+		await phone.locator('nav.tabbar').waitFor();
+		await phone.waitForTimeout(400);
+		const bar = await phone.locator('nav.tabbar').boundingBox();
+
+		// The assertion that would have caught the original toggle-over-the-nav bug.
+		check('nothing covers the tab bar', await coveringAcross(phone, 'nav.tabbar'), []);
+
+		// The composer used to own the bottom safe-area inset, so it is the thing
+		// that ends up underneath the bar when ownership slips.
+		const composer = await phone.locator('.composer').boundingBox();
+		check('the composer stops above the bar', composer.y + composer.height <= bar.y + 1);
+
+		// The page itself must not scroll: the composer and the bar cannot be
+		// scrolled off a screen that does not move.
+		const doc = await phone.evaluate(() => ({
+			scroll: document.scrollingElement.scrollHeight,
+			client: document.scrollingElement.clientHeight
+		}));
+		check('the page itself does not scroll', doc.scroll <= doc.client + 1);
+		await phoneShot('chat');
+	}
+
+	{
+		// The alerts panel was pinned at a hard bottom:4rem — the bar's height,
+		// written down in a file that had no idea the bar existed.
+		await phone.goto(`${B}/chat`);
+		await phone.locator('nav.tabbar').waitFor();
+		const bar = await phone.locator('nav.tabbar').boundingBox();
+		const strip = await phone.locator('aside.pane').boundingBox();
+		await phone.locator('.bell').click();
+		await phone.locator('.panel').waitFor();
+		const panel = await phone.locator('.panel').boundingBox();
+		check('the alerts panel clears the tab bar', panel.y + panel.height <= bar.y + 1);
+		check('and clears the top strip', panel.y >= strip.height);
+		await phoneShot('alerts');
+		await phone.keyboard.press('Escape');
+	}
+
+	{
+		await phone.goto(`${B}/chat`);
+		const pill = phone.locator('.list-pill');
+		await pill.waitFor();
+		check('the pill says what it opens', /Chats/.test(await pill.innerText()));
+		check('it is a thumb wide', await undersized(phone, '.list-pill'), []);
+		check('the list starts closed', await phone.locator('.page-list.open').count(), 0);
+
+		await pill.tap();
+		await phone.waitForTimeout(300);
+		check('tapping it opens the list', await phone.locator('.page-list.open').count(), 1);
+		check('the open list leaves the bar alone', await coveringAcross(phone, 'nav.tabbar'), []);
+		await phoneShot('chat-list');
+
+		// The dismiss the old toggle never had: a scrim you can tap beside the
+		// sheet. A point, not the element's centre — the scrim is full-screen
+		// behind the drawer, so its middle is under the drawer, and tapping here
+		// is also what asserts the uncovered strip actually dismisses.
+		await phone.touchscreen.tap(360, 420);
+		await phone.waitForTimeout(300);
+		check('tapping beside it closes it', await phone.locator('.page-list.open').count(), 0);
+
+		await pill.tap();
+		await phone.waitForTimeout(300);
+		await phone.keyboard.press('Escape');
+		await phone.waitForTimeout(300);
+		check('and so does Escape', await phone.locator('.page-list.open').count(), 0);
+
+		// The second way in: the tab you are already on.
+		await phone.locator('nav.tabbar .tab', { hasText: 'Chat' }).tap();
+		await phone.waitForTimeout(300);
+		check(
+			're-tapping the active tab opens it too',
+			await phone.locator('.page-list.open').count(),
+			1
+		);
+		await phone.touchscreen.tap(360, 420);
+		await phone.waitForTimeout(300);
+
+		// A tab you are not on still navigates rather than being eaten by that.
+		await phone.locator('nav.tabbar .tab', { hasText: 'Boards' }).tap();
+		await phone.waitForURL(/\/boards/);
+		check('a different tab still navigates', new URL(phone.url()).pathname, '/boards');
+	}
+
+	{
+		await phone.goto(`${B}/chat`);
+		await phone.locator('nav.tabbar .tab.more').tap();
+		await phone.locator('.more-sheet').waitFor();
+		const items = (await phone.locator('.more-sheet .more-item').allTextContents()).map((s) =>
+			s.replace(/\s+/g, ' ').trim()
+		);
+		// Observatory is in here because its only other link is the docked feed,
+		// which is display:none at this width — so the full view has been
+		// unreachable on a phone.
+		check('More holds everything the bar could not', items, [
+			'✧ Cortex',
+			'◉ Alignment',
+			'⚙ Settings',
+			'◎ Observatory'
+		]);
+		check('every entry is a thumb tall', await undersized(phone, '.more-sheet .more-item'), []);
+		await phoneShot('more');
+
+		await phone.locator('.more-sheet .more-item', { hasText: 'Observatory' }).tap();
+		await phone.waitForURL(/\/observatory/);
+		check('and it navigates', new URL(phone.url()).pathname, '/observatory');
+		check('closing behind itself', await phone.locator('.more-sheet').count(), 0);
+	}
+
+	{
+		await phone.goto(`${B}/cortex`);
+		await phone.locator('.map canvas').waitFor();
+		await phone.waitForTimeout(900);
+
+		check('the hint names a gesture a phone has', /pinch/.test(await phone.locator('.map .hint').innerText()));
+		check('the map controls are thumb-sized', await undersized(phone, '.map .ctl'), []);
+
+		/**
+		 * The bounding box of everything drawn, in canvas pixels.
+		 *
+		 * inked() above counts lit pixels, and both a zoom and a pan change that
+		 * count — so it cannot tell them apart, which is exactly the distinction
+		 * a pinch test rests on. A zoom moves this box's edges; a pan moves its
+		 * centre. Asserting both halves is what separates them.
+		 */
+		const drawnBox = () =>
+			phone.evaluate(() => {
+				const c = document.querySelector('.map canvas');
+				const ctx = c?.getContext('2d');
+				if (!ctx || !c.width) return null;
+				const { data } = ctx.getImageData(0, 0, c.width, c.height);
+				let minX = 1e9;
+				let minY = 1e9;
+				let maxX = -1;
+				let maxY = -1;
+				for (let y = 0; y < c.height; y += 2) {
+					for (let x = 0; x < c.width; x += 2) {
+						if (data[(y * c.width + x) * 4 + 3] <= 8) continue;
+						if (x < minX) minX = x;
+						if (x > maxX) maxX = x;
+						if (y < minY) minY = y;
+						if (y > maxY) maxY = y;
+					}
+				}
+				return maxX < 0
+					? null
+					: {
+							w: maxX - minX,
+							h: maxY - minY,
+							cx: Math.round((minX + maxX) / 2),
+							cy: Math.round((minY + maxY) / 2)
+						};
+			});
+
+		// CDP rather than dispatched PointerEvents. page.touchscreen is
+		// single-touch, and a synthetic PointerEvent dies on the first move
+		// because setPointerCapture throws NotFoundError for a pointer id the
+		// browser never tracked — which fails looking exactly like the gesture
+		// code being wrong. touchPoints is the full set of currently active
+		// points; Chromium diffs it against the previous list.
+		const cdp = await mobile.newCDPSession(phone);
+		const box = await phone.locator('.map canvas').boundingBox();
+		const cx = box.x + box.width / 2;
+		const cy = box.y + box.height / 2;
+		const touch = (type, pts) =>
+			cdp.send('Input.dispatchTouchEvent', {
+				type,
+				touchPoints: pts.map(([x, y], i) => ({ x, y, id: i, radiusX: 12, radiusY: 12, force: 1 }))
+			});
+
+		/**
+		 * Everything below zooms *out* from a fitted chart, or back towards it,
+		 * and never past it. drawnBox measures ink that is actually on the canvas,
+		 * so it shrinks in both directions: once because the chart got smaller,
+		 * and again once the chart is larger than the canvas and only a few nodes
+		 * are still in frame. Only the range between those is monotonic, and a
+		 * first draft of this block read the second case as a failure to zoom.
+		 */
+		const fitted = async () => {
+			await phone.locator('.map .ctl', { hasText: 'Fit' }).tap();
+			await phone.waitForTimeout(300);
+			return drawnBox();
+		};
+
+		const pinch = async (from, to) => {
+			await touch('touchStart', [
+				[cx - from, cy],
+				[cx + from, cy]
+			]);
+			for (let i = 1; i <= 6; i++) {
+				const d = from + ((to - from) * i) / 6;
+				await touch('touchMove', [
+					[cx - d, cy],
+					[cx + d, cy]
+				]);
+				await phone.waitForTimeout(30);
+			}
+			await touch('touchEnd', []);
+			await phone.waitForTimeout(300);
+			return drawnBox();
+		};
+
+		const before = await fitted();
+		// Fingers together. Symmetric about the middle, so the midpoint never
+		// moves: a pure zoom, which is a narrower drawing with its centre where
+		// it was. Asserting both halves is what separates it from a pan.
+		const zoomedOut = await pinch(120, 40);
+		check('pinching in zooms the chart out', zoomedOut.w < before.w * 0.7);
+		check('and does not drag it sideways while it does', Math.abs(zoomedOut.cx - before.cx) < 40);
+		await phoneShot('cortex-pinch');
+
+		// Straight back out, before anything moves the chart off-centre: zooming
+		// about the canvas middle pushes an off-centre chart off the edge, and the
+		// clipping reads as a failure to zoom.
+		const zoomedIn = await pinch(40, 120);
+		check('pinching out zooms it back in', zoomedIn.w > zoomedOut.w * 1.2);
+
+		// One finger, from a zoomed-out chart that sits in frame with room to
+		// spare — so its box can move without being clipped by the canvas edge.
+		const panBase = await pinch(120, 40);
+		await touch('touchStart', [[cx, cy]]);
+		for (let i = 1; i <= 5; i++) {
+			await touch('touchMove', [[cx + i * 18, cy]]);
+			await phone.waitForTimeout(25);
+		}
+		await touch('touchEnd', []);
+		await phone.waitForTimeout(300);
+		const panned = await drawnBox();
+		check('one finger still pans', panned.cx > panBase.cx + 20);
+		check('and does not zoom while it does', Math.abs(panned.w - panBase.w) < 30);
+
+		// The explicit way, for anyone who does not know the gesture exists.
+		const beforeButton = await fitted();
+		await phone.locator('.map .ctl[aria-label="Zoom out"]').tap();
+		await phone.waitForTimeout(300);
+		check('the zoom buttons work too', (await drawnBox()).w < beforeButton.w * 0.95);
+
+		check('the map is still quiet on a phone', phoneProblems, []);
+	}
+
+	check('the phone is still quiet after all that', phoneProblems, []);
+	await mobile.close();
+}
+
+// --- 10. a narrow desktop window ------------------------------------------
+// The other half of the breakpoint rule, and it needs no context of its own:
+// width decides layout, so this window gets the bar; capability decides size,
+// so it does not get thumb-sized chrome it has no use for.
+{
+	await page.setViewportSize({ width: 600, height: 900 });
+	await page.goto(`${B}/chat`);
+	await page.locator('nav.tabbar').waitFor();
+	const bar = await page.locator('nav.tabbar').boundingBox();
+	check('a narrow window gets the bar too', bar.width > 0);
+	check('but not a thumb-sized one', bar.height < 44);
+	await page.setViewportSize({ width: 1400, height: 900 });
 }
 
 if (fail.length) await shot('final-state');

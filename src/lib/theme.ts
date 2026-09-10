@@ -223,6 +223,68 @@ export function themeCss(t: Theme): string {
 		'--text-xl:1.18rem;',
 		'--text-2xl:1.35rem;',
 		'}',
+		// Geometry and stacking order. Deliberately not part of the Theme object:
+		// nothing in Settings writes to these, and normalizeTheme never sees them.
+		// They live here because this is the only place that emits global CSS, so
+		// the whole ladder is greppable in one file instead of spread across the
+		// seventeen component <style> blocks that used to hold the numbers.
+		//
+		// Two axes, kept apart on purpose. Width decides layout — what is fixed,
+		// what scrolls, what is hidden — and lives in the components' own media
+		// queries. Capability decides size, and lives in the (pointer: coarse)
+		// block below. A rule that mixes the two is a bug in this scheme: it is
+		// what gives a narrow desktop window thumb-sized chrome it has no use for.
+		':root{',
+		// The floor a control may not go under. 44px is the figure
+		// docs/ACCESSIBILITY.md commits to for a finger; a mouse is precise enough
+		// that spending the same vertical room on every button is just waste, so
+		// the coarse-pointer block raises it rather than this being one value.
+		'--tap:32px;',
+		'--strip-h:44px;',
+		'--tabbar-h:40px;',
+		// How much of the viewport the software keyboard is covering, written from
+		// JS by attachViewport(). Zero until something says otherwise, so a
+		// browser that cannot report it behaves as though the keyboard is shut.
+		'--kbd:0px;',
+		'}',
+		// The stacking order, as names. Every one of these was a bare number in a
+		// component before, and the numbers had drifted into three clusters with
+		// gaps nobody could explain — 40 for a drag ghost that floated over the
+		// chrome, two different things both claiming 60.
+		//
+		// Chrome sits above the sheet, which looks wrong until you follow it: the
+		// alerts panel is a descendant of the top strip, so it paints in the
+		// strip's stacking context whatever number it carries. Ordering chrome
+		// above the sheet is what puts that panel over the page drawers, rather
+		// than a special case for the panel.
+		':root{',
+		'--z-backdrop:0;',
+		'--z-base:1;',
+		'--z-drag:10;',
+		'--z-drawer:20;',
+		'--z-sheet:30;',
+		'--z-chrome:40;',
+		// Above chrome, unlike the drag ghost: a card detail below 900px is
+		// inset:0 and takes the screen, so a tab bar painted over it would sit on
+		// top of the thing being read.
+		'--z-modal:45;',
+		'--z-scrim:50;',
+		'--z-popover:51;',
+		'}',
+		// Everything that changes because a finger is imprecise, and nothing that
+		// changes because a window is narrow.
+		'@media (pointer: coarse){',
+		':root{--tap:44px;--tabbar-h:56px;}',
+		// Safari zooms the whole viewport when a focused control's text is under
+		// 16px, and then leaves it zoomed. The scale here tops out at --text-2xl
+		// (1.35rem) but most controls name --text-base (0.9rem), and the Void
+		// preset puts html at 94% on top of that — so nearly every input in the
+		// app trips it. !important because this has to beat the scoped class
+		// Svelte compiles into each component's own font-size, which outranks a
+		// bare element selector; the alternative was editing every control by hand
+		// and hoping the next one remembers.
+		'input,select,textarea{font-size:max(16px,1em)!important;}',
+		'}',
 		// Digits in a proportional face are not equal width, so figures in a
 		// column stop lining up. The monospace font is the fix; tabular-nums
 		// costs nothing and helps in any face that carries tabular figures.
@@ -231,6 +293,12 @@ export function themeCss(t: Theme): string {
 		// 3:1 that WCAG asks of a meaningful boundary — unlike the card
 		// separators that share the plain --border.
 		'input,select,textarea{border-color:var(--control-border);}',
+		// Nine rules across the tree removed the focus outline and put nothing
+		// back, so a keyboard user lost their place entirely — docs/ACCESSIBILITY
+		// listed it as the first thing worth fixing. Declared once, here, rather
+		// than as nine :focus-visible rules that can each be forgotten again.
+		// :focus-visible, not :focus, so a mouse click does not draw it.
+		'a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}',
 		// Visible text for screen readers only. Used where a control needs a name
 		// but the layout has no room for a visible caption.
 		'.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}',

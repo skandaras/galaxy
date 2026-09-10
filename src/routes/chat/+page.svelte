@@ -19,6 +19,7 @@
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import ResearchEffort from '$lib/components/ResearchEffort.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
+	import ListPill from '$lib/components/ListPill.svelte';
 	import type { ResearchEffort as Effort } from '$lib/research-effort';
 	import {
 		applyChunk,
@@ -954,11 +955,7 @@
 </script>
 
 <div class="chat-shell">
-	<button class="list-toggle" onclick={() => (listOpen = !listOpen)} aria-label="Toggle chat list">
-		☰
-	</button>
-
-	<aside class="chat-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
+	<aside class="chat-list page-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
 		<div class="list-actions">
 			<button class="btn" onclick={() => newChat(false)}>+ New chat</button>
 			<button class="btn ghost" title="Hidden: not stored, invisible to memory" onclick={() => newChat(true)}>
@@ -1029,6 +1026,9 @@
 	<PaneResizer pane={listPane} label="Resize the chat list" />
 
 	<section class="thread-area">
+		<div class="page-actions">
+			<ListPill bind:open={listOpen} label="Chats" count={chats.length} />
+		</div>
 		{#if errorBanner}
 			<div class="banner error">
 				{errorBanner}
@@ -1243,9 +1243,6 @@
 		box-sizing: border-box;
 		overflow-y: auto;
 	}
-	.list-toggle {
-		display: none;
-	}
 	.list-actions {
 		display: flex;
 		gap: 0.4rem;
@@ -1355,7 +1352,6 @@
 		font-size: var(--text-md);
 		padding: 0.4rem 0.45rem;
 		margin: 0.05rem;
-		outline: none;
 	}
 	.archive {
 		margin-top: 0.9rem;
@@ -1527,7 +1523,10 @@
 
 	.composer {
 		border-top: 1px solid var(--border);
-		padding: 0.7rem 1rem max(0.9rem, env(safe-area-inset-bottom));
+		/* The bottom inset moved to .shell when the tab bar took the bottom of
+		   the screen. Two elements both paying env(safe-area-inset-bottom) is a
+		   double gap on a notched phone and a wrong one on every other device. */
+		padding: 0.7rem 1rem 0.9rem;
 	}
 	.jump {
 		display: block;
@@ -1592,7 +1591,6 @@
 		   either. The cap is here rather than in JS so it holds before hydration. */
 		max-height: 12rem;
 		resize: none;
-		outline: none;
 		overflow-y: auto;
 	}
 	textarea:focus {
@@ -1636,30 +1634,6 @@
 	}
 
 	@media (max-width: 720px) {
-		.list-toggle {
-			display: block;
-			position: fixed;
-			top: 0.55rem;
-			right: 0.75rem;
-			z-index: 30;
-			background: var(--bg-pane);
-			color: var(--fg);
-			border: 1px solid var(--border);
-			border-radius: 5px;
-			padding: 0.25rem 0.5rem;
-		}
-		.chat-list {
-			position: fixed;
-			width: auto;
-			inset: 0 30% 0 0;
-			background: var(--bg-pane);
-			z-index: 20;
-			transform: translateX(-100%);
-			transition: transform 0.2s ease;
-		}
-		.chat-list.open {
-			transform: translateX(0);
-		}
 	}
 
 	/* Reveal-on-hover hides these controls permanently on a touch screen, where
