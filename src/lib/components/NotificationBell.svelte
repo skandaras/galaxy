@@ -214,7 +214,7 @@
 	.scrim {
 		position: fixed;
 		inset: 0;
-		z-index: 60;
+		z-index: var(--z-scrim);
 	}
 	/* Fixed, not absolute: the nav pane scrolls, and a scroll container clips
 	   any child that overflows it sideways. Coordinates come from the button's
@@ -227,7 +227,7 @@
 		border: 1px solid var(--border);
 		border-radius: 8px;
 		box-shadow: 0 6px 20px rgb(0 0 0 / 0.4);
-		z-index: 61;
+		z-index: var(--z-popover);
 	}
 	/* The list scrolls under it, so the action stays reachable at fifty alerts. */
 	header {

@@ -31,7 +31,7 @@
 	   is the difference between a handle you can grab and one you can't. */
 	.resizer {
 		position: relative;
-		z-index: 1;
+		z-index: var(--z-base);
 		flex: 0 0 5px;
 		margin-right: -4px;
 		background: var(--border);

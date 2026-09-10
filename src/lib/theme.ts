@@ -264,6 +264,10 @@ export function themeCss(t: Theme): string {
 		'--z-drawer:20;',
 		'--z-sheet:30;',
 		'--z-chrome:40;',
+		// Above chrome, unlike the drag ghost: a card detail below 900px is
+		// inset:0 and takes the screen, so a tab bar painted over it would sit on
+		// top of the thing being read.
+		'--z-modal:45;',
 		'--z-scrim:50;',
 		'--z-popover:51;',
 		'}',

@@ -75,7 +75,7 @@
 	.sheet {
 		position: fixed;
 		inset: auto 0 0 0;
-		z-index: 60;
+		z-index: var(--z-sheet);
 		background: var(--bg-pane);
 		border-top: 1px solid var(--accent);
 		box-shadow: 0 -8px 24px rgb(0 0 0 / 0.35);

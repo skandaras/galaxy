@@ -1641,7 +1641,7 @@
 			position: fixed;
 			top: 0.55rem;
 			right: 0.75rem;
-			z-index: 30;
+			z-index: var(--z-chrome);
 			background: var(--bg-pane);
 			color: var(--fg);
 			border: 1px solid var(--border);
@@ -1653,7 +1653,7 @@
 			width: auto;
 			inset: 0 30% 0 0;
 			background: var(--bg-pane);
-			z-index: 20;
+			z-index: var(--z-drawer);
 			transform: translateX(-100%);
 			transition: transform 0.2s ease;
 		}

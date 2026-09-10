@@ -187,11 +187,11 @@
 	.scrim {
 		position: fixed;
 		inset: 0;
-		z-index: 60;
+		z-index: var(--z-scrim);
 	}
 	.panel {
 		position: fixed;
-		z-index: 61;
+		z-index: var(--z-popover);
 		box-sizing: border-box;
 		background: var(--bg-pane);
 		border: 1px solid var(--border);

@@ -37,7 +37,7 @@
 	.backdrop {
 		position: fixed;
 		inset: 0;
-		z-index: 0;
+		z-index: var(--z-backdrop);
 		display: flex;
 		align-items: center;
 		justify-content: center;

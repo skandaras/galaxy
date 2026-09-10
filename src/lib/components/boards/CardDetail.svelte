@@ -467,7 +467,7 @@
 			position: fixed;
 			inset: 0;
 			width: auto;
-			z-index: 40;
+			z-index: var(--z-modal);
 			border-left: none;
 		}
 	}

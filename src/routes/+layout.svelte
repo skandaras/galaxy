@@ -73,7 +73,7 @@
 		height: 100vh;
 		overflow: hidden;
 		position: relative;
-		z-index: 1;
+		z-index: var(--z-base);
 	}
 	.pane {
 		width: 260px;
@@ -171,7 +171,7 @@
 			overflow-y: visible;
 			position: sticky;
 			top: 0;
-			z-index: 10;
+			z-index: var(--z-chrome);
 		}
 		.brand {
 			margin-bottom: 0;

@@ -216,6 +216,7 @@ describe('geometry and stacking tokens', () => {
 			'--z-drawer',
 			'--z-sheet',
 			'--z-chrome',
+			'--z-modal',
 			'--z-scrim',
 			'--z-popover'
 		];
@@ -238,6 +239,15 @@ describe('geometry and stacking tokens', () => {
 		const t = tokens(themeCss(DEFAULT_THEME));
 		expect(Number(t['--z-chrome'])).toBeGreaterThan(Number(t['--z-sheet']));
 		expect(Number(t['--z-chrome'])).toBeGreaterThan(Number(t['--z-drawer']));
+	});
+
+	it('puts a full-screen modal above the chrome it covers', () => {
+		// The drag ghost belongs under the chrome and a card detail does not, even
+		// though both were written as 40. A card below 900px is inset:0 and takes
+		// the screen; a tab bar painted over it covers what you opened it to read.
+		const t = tokens(themeCss(DEFAULT_THEME));
+		expect(Number(t['--z-modal'])).toBeGreaterThan(Number(t['--z-chrome']));
+		expect(Number(t['--z-drag'])).toBeLessThan(Number(t['--z-chrome']));
 	});
 });
 
