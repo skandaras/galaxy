@@ -107,22 +107,36 @@ launcher icon, a name and a URL. It contains no web code — the site is rendere
 by a browser already on the phone — so deploying Galaxy updates the app, and
 this only needs re-running when the shell itself changes.
 
-Everything runs in a container, so you need Docker but no JDK and no Android
-SDK. The first run downloads ~1 GB of Android tooling into a named volume and
-is slow; later runs are not.
+You need a checkout of this repo and Docker, and nothing else — no JDK, no
+Android SDK, and no `npm install`, because everything runs in a container. The
+first run downloads ~1 GB of Android tooling into a named volume and is slow;
+later runs are not. Build it on a machine you intend to keep, for the reason
+two paragraphs down.
 
 ```sh
-npm run icons                     # only if you changed static/icon*.svg
-bash scripts/build-twa.sh         # reads ORIGIN from .env, or pass --origin
+git clone https://github.com/skandaras/galaxy.git && cd galaxy
+bash scripts/build-twa.sh --origin https://ai.example.com
 ```
 
+`--origin` is only needed when the checkout has no `.env` — a clone made just
+to build the APK won't, and the deployment's `.env` lives on the server, not
+here. With one present the script reads `ORIGIN` from it. Run `npm run icons`
+first only if you changed `static/icon*.svg`.
+
 The first run walks you through `bubblewrap init` — the defaults are right, and
-it offers to create a signing key. **Back that keystore up.** It lives in the
-`galaxy-bubblewrap` docker volume, and losing it means you can never update the
-installed app in place, only uninstall and start again.
+it offers to create a signing key. **Back that keystore up**, along with the
+passwords you choose for it. Bubblewrap writes it into the project directory,
+so it lands at `twa/android-keystore` (whatever `signingKey.path` in
+`twa/twa-manifest.json` says); the `galaxy-bubblewrap` docker volume next to it
+holds the Android SDK, not your key. `twa/` is gitignored and looks like
+disposable build output, which is exactly how it gets deleted — and losing it
+means you can never update the installed app in place, only uninstall and start
+again. The script prints the path at the end for this reason.
 
 When it finishes it prints the key's SHA-256 fingerprint. Put that and the
-package id in your `.env`:
+package id in the **deployment's** `.env` — the one beside `docker-compose.yml`
+on the server, not the checkout you just built in, which has no part in serving
+the site:
 
 ```sh
 TWA_PACKAGE_ID=net.starbasehome.ai.galaxy
