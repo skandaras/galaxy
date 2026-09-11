@@ -9,6 +9,8 @@ See [AGENTS.md](./AGENTS.md) for the conventions this repo is worked to — the 
 agent reads it on every session, and so should you.
 See [docs/ACCESSIBILITY.md](./docs/ACCESSIBILITY.md) for the contrast and labelling
 guarantees the themes are held to, and what is still open.
+See [docs/FEED.md](./docs/FEED.md) for the design of Feed, the trawling agent that
+watches standing topics and files what it finds by importance — designed, not yet built.
 See [docs/INSTALL.md](./docs/INSTALL.md) for the Ubuntu server installation guide
 (Docker, reverse proxy + Authelia, runners, backups, promotion), and
 [docs/MOBILE.md](./docs/MOBILE.md) for installing it to a phone home screen and
