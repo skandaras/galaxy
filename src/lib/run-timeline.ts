@@ -338,3 +338,53 @@ export function applyStreamText(current: StreamText, chunk: TimelineChunk): Stre
 	const text = `${current.text.trimEnd()}\n\n`;
 	return { text, mark: text.length };
 }
+
+// --- live activity ---------------------------------------------------------
+
+/**
+ * Tools that mean "out looking something up" rather than "working locally".
+ *
+ * Named rather than pattern-matched on the string `search`: a tool called
+ * `search_replace` is an edit, and reporting it as a web lookup would be a
+ * confident lie about where the answer came from.
+ */
+const SEARCH_TOOLS: Record<string, string> = {
+	web_search: 'Searching the web',
+	library_search: 'Searching the library'
+};
+
+export interface LiveActivity {
+	/** Which indicator to draw. */
+	mode: 'thinking' | 'searching';
+	/**
+	 * What to call it, when the run is doing something nameable. Absent means
+	 * the caller should name the thinking state itself — only it knows which
+	 * model is answering.
+	 */
+	label?: string;
+}
+
+/**
+ * What the run is doing at this instant, for the indicator beside the reply.
+ *
+ * Reads the live timeline rather than tracking a second copy of the state: the
+ * timeline is already idempotent under replay, so a reconnecting client derives
+ * the same answer as one that watched the whole run. Keeping a separate flag
+ * updated from the chunk stream meant a reconnect mid-search showed "thinking"
+ * until the search happened to finish.
+ *
+ * The last running search wins. Several can be in flight at once, and naming
+ * the most recent is what makes the label track the work rather than freeze on
+ * whichever call was dispatched first.
+ */
+export function liveActivity(items: TimelineItem[]): LiveActivity {
+	let found: LiveActivity | null = null;
+	for (const item of items) {
+		if (item.kind !== 'step') continue;
+		for (const tool of item.tools) {
+			const label = SEARCH_TOOLS[tool.name];
+			if (label && tool.status === 'running') found = { mode: 'searching', label };
+		}
+	}
+	return found ?? { mode: 'thinking' };
+}
