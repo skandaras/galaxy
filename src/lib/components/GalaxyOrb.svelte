@@ -2,14 +2,14 @@
 	import { orbDots } from '$lib/galaxy-orb';
 
 	let {
-		/** What the turn is doing. Decides the colour and how the sphere moves. */
+		/** What the turn is doing. Decides the orbits, and the colour after them. */
 		mode = 'thinking',
 		/** Read out to assistive tech, and shown beside the orb unless `bare`. */
 		label = 'Thinking',
 		/** Any CSS length. */
 		size = '1.8em',
-		/** Seconds for a polar dot to come round. Equatorial ones are faster. */
-		swirl = mode === 'searching' ? 2.8 : 4.6,
+		/** Seconds for the outermost dot to come round. Inner ones are faster. */
+		swirl = mode === 'searching' ? 3 : 4.6,
 		/** Drop the pill and the label, leaving just the sphere. */
 		bare = false
 	}: {
@@ -20,12 +20,14 @@
 		bare?: boolean;
 	} = $props();
 
-	// Searching shears the bands harder, so the sphere churns rather than
-	// turning. The two states are told apart by movement first and colour
-	// second, which is what keeps them legible to anyone who cannot rely on
-	// the colour.
+	// The states are told apart by how the dots move before anything else: free
+	// tilts every orbit differently and reads as association, axial allows only
+	// circles of latitude and meridians and reads as a sweep being conducted.
+	// Colour follows, so neither state depends on it being seen.
 	const dots = $derived(
-		orbDots(mode === 'searching' ? { count: 34, shear: 0.42, turn: 0.5 } : { count: 30 })
+		mode === 'searching'
+			? orbDots({ count: 34, pattern: 'axial', turn: 0.5 })
+			: orbDots({ count: 30, pattern: 'free' })
 	);
 </script>
 
@@ -38,14 +40,12 @@
 	aria-label={label}
 >
 	<span class="orb" aria-hidden="true">
-		<span class="shell">
-			{#each dots as d, i (i)}
-				<span
-					class="pip"
-					style={`--y:${d.y}; --ring:${d.ring}; --size:${d.size}; --dim:${d.dim}; --period:${d.period}; --phase:${d.phase}`}
-				></span>
-			{/each}
-		</span>
+		{#each dots as d, i (i)}
+			<span
+				class="pip"
+				style={`--cy:${d.cy}; --rad:${d.rad}; --ux:${d.ux}; --uy:${d.uy}; --uz:${d.uz}; --vx:${d.vx}; --vy:${d.vy}; --vz:${d.vz}; --size:${d.size}; --dim:${d.dim}; --period:${d.period}; --phase:${d.phase}`}
+			></span>
+		{/each}
 	</span>
 	{#if !bare}<span class="label">{label}</span>{/if}
 </span>
@@ -63,15 +63,17 @@
 		/* The dots take the body colour rather than the dimmed one the label
 		   uses: they are the one part that must stay visible on every preset. */
 		--pip: var(--fg);
-		--pip-lit: var(--fg);
 		--sheen-base: var(--fg-dim);
 		--sheen-hi: var(--fg);
 	}
 	/* Falls back to the accent, matching GalaxyBackdrop and GalaxySpinner — a
-	   theme saved before the backdrop had a colour of its own still lights up. */
+	   theme saved before the backdrop had a colour of its own still lights up.
+	   Mixed back toward the body colour rather than used neat, so searching
+	   reads as the same dots tinted rather than as a second palette; the plain
+	   value above it stands where color-mix is not supported. */
 	.orb-pill.searching {
 		--pip: var(--galaxy, var(--accent));
-		--pip-lit: var(--fg);
+		--pip: color-mix(in oklab, var(--galaxy, var(--accent)) 72%, var(--fg));
 		--sheen-hi: var(--galaxy, var(--accent));
 	}
 	.orb-pill.bare {
@@ -87,12 +89,8 @@
 		height: var(--orb-size);
 		flex: 0 0 auto;
 	}
-	.shell {
-		position: absolute;
-		inset: 0;
-	}
 	/*
-	 * One dot, carried around its circle of latitude by the keyframes below.
+	 * One dot, carried around its own circle by the keyframes below.
 	 *
 	 * This was three nested elements and a real 3D rotation once — a ring
 	 * turning about the Y axis, and the dot counter-rotating inside it to stay
@@ -115,11 +113,12 @@
 		margin: calc(var(--orb-size) * var(--size) / -2);
 		border-radius: 50%;
 		background: var(--pip);
-		/* How far this dot swings across the face of the sphere, and the height
-		   it holds while it does. Screen Y runs down and the sphere's does not,
-		   hence the negation. */
-		--ox: calc(var(--orb-size) * var(--ring) * 0.5);
-		--oy: calc(var(--orb-size) * var(--y) * -0.5);
+		/* Its own light, rather than the theme's --glow: that one is documented
+		   as the hover glow on buttons, a user can switch it off entirely with
+		   glowStrength, and a white button glow over blue dots would fight them.
+		   The element's own opacity covers the shadow too, so a dot's halo
+		   fades as it goes round the back without being animated separately. */
+		box-shadow: 0 0 calc(var(--orb-size) * var(--size) * 0.35) var(--pip);
 		opacity: var(--dim);
 		animation: orb-orbit calc(var(--swirl) * var(--period)) linear infinite;
 		/* Negative, so every dot is already somewhere else on its circle at the
@@ -131,115 +130,136 @@
 	/*
 	 * The circle, sampled every thirty degrees.
 	 *
-	 * Keyframes interpolate linearly, so this is a twelve-sided approximation
-	 * of the orbit rather than the orbit; at this size the error is under two
-	 * percent of a dot's travel and invisible. Depth rides the same track —
-	 * a dot grows and brightens as it comes to the front and shrinks as it goes
-	 * behind, scaled by how far it actually travels, so a dot near a pole
-	 * barely changes and one at the equator changes most. That scaling is what
-	 * makes the cluster read as a sphere rather than as a flat scatter.
+	 * The dot sits at `centre + rad · (u·cos θ + v·sin θ)`, so each of its three
+	 * coordinates is a single sinusoid and the whole orbit survives being cut
+	 * into keyframes. That is what lets one rule drive orbits of every
+	 * orientation: the plane arrives per dot as u and v, and only the cosines
+	 * are baked in here. Keyframes interpolate linearly, so this is a
+	 * twelve-sided approximation of a circle — under two percent of a dot's
+	 * travel at this size, and invisible.
+	 *
+	 * Depth rides the same track: a dot grows and brightens as it comes to the
+	 * front and shrinks as it goes behind, by however much its own circle
+	 * actually carries it toward the viewer. A dot on a meridian seen edge-on
+	 * barely changes; one whose plane faces us changes most.
 	 */
 	@keyframes orb-orbit {
 		0% {
-			transform: translate3d(calc(var(--ox) * 1), var(--oy), 0)
-				scale(calc(1 + 0.3 * var(--ring) * 0));
-			opacity: calc(var(--dim) + 0.32 * var(--ring) * 0);
+			transform: translate3d(
+					calc(var(--orb-size) * 0.5 * var(--rad) * (var(--ux) * 1 + var(--vx) * 0)),
+					calc(var(--orb-size) * -0.5 * (var(--cy) + var(--rad) * (var(--uy) * 1 + var(--vy) * 0))),
+					0
+				)
+				scale(calc(1 + 0.3 * (var(--rad) * (var(--uz) * 1 + var(--vz) * 0))));
+			opacity: calc(var(--dim) + 0.32 * (var(--rad) * (var(--uz) * 1 + var(--vz) * 0)));
 		}
 		8.333% {
-			transform: translate3d(calc(var(--ox) * 0.866), var(--oy), 0)
-				scale(calc(1 + 0.3 * var(--ring) * 0.5));
-			opacity: calc(var(--dim) + 0.32 * var(--ring) * 0.5);
+			transform: translate3d(
+					calc(var(--orb-size) * 0.5 * var(--rad) * (var(--ux) * 0.866 + var(--vx) * 0.5)),
+					calc(var(--orb-size) * -0.5 * (var(--cy) + var(--rad) * (var(--uy) * 0.866 + var(--vy) * 0.5))),
+					0
+				)
+				scale(calc(1 + 0.3 * (var(--rad) * (var(--uz) * 0.866 + var(--vz) * 0.5))));
+			opacity: calc(var(--dim) + 0.32 * (var(--rad) * (var(--uz) * 0.866 + var(--vz) * 0.5)));
 		}
 		16.667% {
-			transform: translate3d(calc(var(--ox) * 0.5), var(--oy), 0)
-				scale(calc(1 + 0.3 * var(--ring) * 0.866));
-			opacity: calc(var(--dim) + 0.32 * var(--ring) * 0.866);
+			transform: translate3d(
+					calc(var(--orb-size) * 0.5 * var(--rad) * (var(--ux) * 0.5 + var(--vx) * 0.866)),
+					calc(var(--orb-size) * -0.5 * (var(--cy) + var(--rad) * (var(--uy) * 0.5 + var(--vy) * 0.866))),
+					0
+				)
+				scale(calc(1 + 0.3 * (var(--rad) * (var(--uz) * 0.5 + var(--vz) * 0.866))));
+			opacity: calc(var(--dim) + 0.32 * (var(--rad) * (var(--uz) * 0.5 + var(--vz) * 0.866)));
 		}
 		25% {
-			transform: translate3d(calc(var(--ox) * 0), var(--oy), 0)
-				scale(calc(1 + 0.3 * var(--ring) * 1));
-			opacity: calc(var(--dim) + 0.32 * var(--ring) * 1);
+			transform: translate3d(
+					calc(var(--orb-size) * 0.5 * var(--rad) * (var(--ux) * 0 + var(--vx) * 1)),
+					calc(var(--orb-size) * -0.5 * (var(--cy) + var(--rad) * (var(--uy) * 0 + var(--vy) * 1))),
+					0
+				)
+				scale(calc(1 + 0.3 * (var(--rad) * (var(--uz) * 0 + var(--vz) * 1))));
+			opacity: calc(var(--dim) + 0.32 * (var(--rad) * (var(--uz) * 0 + var(--vz) * 1)));
 		}
 		33.333% {
-			transform: translate3d(calc(var(--ox) * -0.5), var(--oy), 0)
-				scale(calc(1 + 0.3 * var(--ring) * 0.866));
-			opacity: calc(var(--dim) + 0.32 * var(--ring) * 0.866);
+			transform: translate3d(
+					calc(var(--orb-size) * 0.5 * var(--rad) * (var(--ux) * -0.5 + var(--vx) * 0.866)),
+					calc(var(--orb-size) * -0.5 * (var(--cy) + var(--rad) * (var(--uy) * -0.5 + var(--vy) * 0.866))),
+					0
+				)
+				scale(calc(1 + 0.3 * (var(--rad) * (var(--uz) * -0.5 + var(--vz) * 0.866))));
+			opacity: calc(var(--dim) + 0.32 * (var(--rad) * (var(--uz) * -0.5 + var(--vz) * 0.866)));
 		}
 		41.667% {
-			transform: translate3d(calc(var(--ox) * -0.866), var(--oy), 0)
-				scale(calc(1 + 0.3 * var(--ring) * 0.5));
-			opacity: calc(var(--dim) + 0.32 * var(--ring) * 0.5);
+			transform: translate3d(
+					calc(var(--orb-size) * 0.5 * var(--rad) * (var(--ux) * -0.866 + var(--vx) * 0.5)),
+					calc(var(--orb-size) * -0.5 * (var(--cy) + var(--rad) * (var(--uy) * -0.866 + var(--vy) * 0.5))),
+					0
+				)
+				scale(calc(1 + 0.3 * (var(--rad) * (var(--uz) * -0.866 + var(--vz) * 0.5))));
+			opacity: calc(var(--dim) + 0.32 * (var(--rad) * (var(--uz) * -0.866 + var(--vz) * 0.5)));
 		}
 		50% {
-			transform: translate3d(calc(var(--ox) * -1), var(--oy), 0)
-				scale(calc(1 + 0.3 * var(--ring) * 0));
-			opacity: calc(var(--dim) + 0.32 * var(--ring) * 0);
+			transform: translate3d(
+					calc(var(--orb-size) * 0.5 * var(--rad) * (var(--ux) * -1 + var(--vx) * 0)),
+					calc(var(--orb-size) * -0.5 * (var(--cy) + var(--rad) * (var(--uy) * -1 + var(--vy) * 0))),
+					0
+				)
+				scale(calc(1 + 0.3 * (var(--rad) * (var(--uz) * -1 + var(--vz) * 0))));
+			opacity: calc(var(--dim) + 0.32 * (var(--rad) * (var(--uz) * -1 + var(--vz) * 0)));
 		}
 		58.333% {
-			transform: translate3d(calc(var(--ox) * -0.866), var(--oy), 0)
-				scale(calc(1 + 0.3 * var(--ring) * -0.5));
-			opacity: calc(var(--dim) + 0.32 * var(--ring) * -0.5);
+			transform: translate3d(
+					calc(var(--orb-size) * 0.5 * var(--rad) * (var(--ux) * -0.866 + var(--vx) * -0.5)),
+					calc(var(--orb-size) * -0.5 * (var(--cy) + var(--rad) * (var(--uy) * -0.866 + var(--vy) * -0.5))),
+					0
+				)
+				scale(calc(1 + 0.3 * (var(--rad) * (var(--uz) * -0.866 + var(--vz) * -0.5))));
+			opacity: calc(var(--dim) + 0.32 * (var(--rad) * (var(--uz) * -0.866 + var(--vz) * -0.5)));
 		}
 		66.667% {
-			transform: translate3d(calc(var(--ox) * -0.5), var(--oy), 0)
-				scale(calc(1 + 0.3 * var(--ring) * -0.866));
-			opacity: calc(var(--dim) + 0.32 * var(--ring) * -0.866);
+			transform: translate3d(
+					calc(var(--orb-size) * 0.5 * var(--rad) * (var(--ux) * -0.5 + var(--vx) * -0.866)),
+					calc(var(--orb-size) * -0.5 * (var(--cy) + var(--rad) * (var(--uy) * -0.5 + var(--vy) * -0.866))),
+					0
+				)
+				scale(calc(1 + 0.3 * (var(--rad) * (var(--uz) * -0.5 + var(--vz) * -0.866))));
+			opacity: calc(var(--dim) + 0.32 * (var(--rad) * (var(--uz) * -0.5 + var(--vz) * -0.866)));
 		}
 		75% {
-			transform: translate3d(calc(var(--ox) * 0), var(--oy), 0)
-				scale(calc(1 + 0.3 * var(--ring) * -1));
-			opacity: calc(var(--dim) + 0.32 * var(--ring) * -1);
+			transform: translate3d(
+					calc(var(--orb-size) * 0.5 * var(--rad) * (var(--ux) * 0 + var(--vx) * -1)),
+					calc(var(--orb-size) * -0.5 * (var(--cy) + var(--rad) * (var(--uy) * 0 + var(--vy) * -1))),
+					0
+				)
+				scale(calc(1 + 0.3 * (var(--rad) * (var(--uz) * 0 + var(--vz) * -1))));
+			opacity: calc(var(--dim) + 0.32 * (var(--rad) * (var(--uz) * 0 + var(--vz) * -1)));
 		}
 		83.333% {
-			transform: translate3d(calc(var(--ox) * 0.5), var(--oy), 0)
-				scale(calc(1 + 0.3 * var(--ring) * -0.866));
-			opacity: calc(var(--dim) + 0.32 * var(--ring) * -0.866);
+			transform: translate3d(
+					calc(var(--orb-size) * 0.5 * var(--rad) * (var(--ux) * 0.5 + var(--vx) * -0.866)),
+					calc(var(--orb-size) * -0.5 * (var(--cy) + var(--rad) * (var(--uy) * 0.5 + var(--vy) * -0.866))),
+					0
+				)
+				scale(calc(1 + 0.3 * (var(--rad) * (var(--uz) * 0.5 + var(--vz) * -0.866))));
+			opacity: calc(var(--dim) + 0.32 * (var(--rad) * (var(--uz) * 0.5 + var(--vz) * -0.866)));
 		}
 		91.667% {
-			transform: translate3d(calc(var(--ox) * 0.866), var(--oy), 0)
-				scale(calc(1 + 0.3 * var(--ring) * -0.5));
-			opacity: calc(var(--dim) + 0.32 * var(--ring) * -0.5);
+			transform: translate3d(
+					calc(var(--orb-size) * 0.5 * var(--rad) * (var(--ux) * 0.866 + var(--vx) * -0.5)),
+					calc(var(--orb-size) * -0.5 * (var(--cy) + var(--rad) * (var(--uy) * 0.866 + var(--vy) * -0.5))),
+					0
+				)
+				scale(calc(1 + 0.3 * (var(--rad) * (var(--uz) * 0.866 + var(--vz) * -0.5))));
+			opacity: calc(var(--dim) + 0.32 * (var(--rad) * (var(--uz) * 0.866 + var(--vz) * -0.5)));
 		}
 		100% {
-			transform: translate3d(calc(var(--ox) * 1), var(--oy), 0)
-				scale(calc(1 + 0.3 * var(--ring) * 0));
-			opacity: calc(var(--dim) + 0.32 * var(--ring) * 0);
-		}
-	}
-
-	/*
-	 * Searching moves differently, not just faster.
-	 *
-	 * The whole sphere rolls in the plane of the screen, so it tumbles rather
-	 * than spinning on the spot, and a brightening travels through the dots on
-	 * a period of its own — a sweep crossing the body rather than a rotation of
-	 * it. The sweep rides a property nothing else animates, so it composes with
-	 * the orbit instead of replacing it.
-	 */
-	.searching .shell {
-		animation: orb-roll calc(var(--swirl) * 4.5) linear infinite;
-	}
-	.searching .pip {
-		animation:
-			orb-orbit calc(var(--swirl) * var(--period)) linear infinite,
-			orb-sweep calc(var(--swirl) * 0.8) ease-in-out infinite;
-		animation-delay:
-			calc(var(--swirl) * var(--period) * var(--phase) * -1),
-			calc(var(--swirl) * 0.8 * var(--phase) * -1);
-	}
-	@keyframes orb-roll {
-		to {
-			transform: rotate(360deg);
-		}
-	}
-	@keyframes orb-sweep {
-		0%,
-		70%,
-		100% {
-			background-color: var(--pip);
-		}
-		85% {
-			background-color: var(--pip-lit);
+			transform: translate3d(
+					calc(var(--orb-size) * 0.5 * var(--rad) * (var(--ux) * 1 + var(--vx) * 0)),
+					calc(var(--orb-size) * -0.5 * (var(--cy) + var(--rad) * (var(--uy) * 1 + var(--vy) * 0))),
+					0
+				)
+				scale(calc(1 + 0.3 * (var(--rad) * (var(--uz) * 1 + var(--vz) * 0))));
+			opacity: calc(var(--dim) + 0.32 * (var(--rad) * (var(--uz) * 1 + var(--vz) * 0)));
 		}
 	}
 
@@ -275,19 +295,25 @@
 	}
 
 	/* The sphere still reads as a sphere standing still; the churn is what some
-	   people cannot have. Each dot keeps the position its own phase puts it at,
-	   so the cluster stays a sphere rather than collapsing to one meridian. The
+	   people cannot have. Each dot holds the place its own phase puts it at, so
+	   the cluster stays a sphere rather than collapsing onto one meridian. The
 	   label keeps a solid fill rather than freezing mid-sheen, which lands on
 	   whatever colour the gradient stopped on. */
 	@media (prefers-reduced-motion: reduce) {
-		.shell,
 		.pip {
 			animation: none;
-		}
-		.pip {
 			transform: translate3d(
-				calc(var(--ox) * cos(var(--phase) * 360deg)),
-				var(--oy),
+				calc(
+					var(--orb-size) * 0.5 * var(--rad) *
+						(var(--ux) * cos(var(--phase) * 1turn) + var(--vx) * sin(var(--phase) * 1turn))
+				),
+				calc(
+					var(--orb-size) * -0.5 *
+						(
+							var(--cy) + var(--rad) *
+								(var(--uy) * cos(var(--phase) * 1turn) + var(--vy) * sin(var(--phase) * 1turn))
+						)
+				),
 				0
 			);
 		}

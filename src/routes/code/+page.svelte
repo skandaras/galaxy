@@ -16,7 +16,7 @@
 		planRecovery
 	} from '$lib/stream-recovery';
 	import AskSheet from '$lib/components/AskSheet.svelte';
-	import GalaxySpinner from '$lib/components/GalaxySpinner.svelte';
+	import GalaxyOrb from '$lib/components/GalaxyOrb.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
 	import ListPill from '$lib/components/ListPill.svelte';
@@ -25,6 +25,7 @@
 		applyStreamText,
 		isTimelineChunk,
 		itemsFromTrace,
+		liveActivity,
 		unfinishedNote,
 		type MessageTrace,
 		type TimelineItem
@@ -151,6 +152,13 @@
 	/** Task default, used when a session has no remembered model. */
 	let defaultModelId = $state('');
 	let streaming = $state(false);
+	/**
+	 * The latest glimpse of what a reasoning model is thinking, shown under the
+	 * indicator. Replaced rather than accumulated — it is a status line, not a
+	 * transcript, and the server sends each note in full. See the chat page's
+	 * copy of this.
+	 */
+	let thought = $state('');
 	/** Job currently streaming, so it can be stopped. */
 	let activeJobId = $state<string | null>(null);
 	/** Open question from ask_user; cleared by the server's `answer` chunk. */
@@ -166,6 +174,12 @@
 	let streamModel = $state('');
 	/** Steps, stages and notices for the run in flight, in the order they arrived. */
 	let timeline = $state<TimelineItem[]>([]);
+	/**
+	 * What the run is doing right now, for the indicator beside it. Both search
+	 * tools reach this page — library_search is always in the coding toolset and
+	 * web_search is there whenever the toggle above is on.
+	 */
+	const activity = $derived(liveActivity(timeline));
 	/**
 	 * How the last run ended, when that was not "it finished". Held in page
 	 * state rather than on the message: it describes the run, and it is gone on
@@ -426,6 +440,7 @@
 		streamText = '';
 		streamMark = 0;
 		streamModel = '';
+		thought = '';
 		timeline = [];
 		// Refilled from the replayed chunks; a stale row from a previous attach
 		// would otherwise sit there claiming to be running.
@@ -447,13 +462,22 @@
 				streamModel = chunk.model;
 				streamText = '';
 				streamMark = 0;
+				thought = '';
 			} else if (chunk.type === 'delta') streamText += chunk.text;
-			else if (isTimelineChunk(chunk)) {
+			else if (chunk.type === 'reasoning') {
+				// The loop has pushed these since chat started showing them —
+				// coding runs through the same `runAgentLoop` — and this page
+				// dropped them on the floor the whole time. They are most of what
+				// there is to show while a reasoning model works out its next move.
+				thought = chunk.text;
+			} else if (isTimelineChunk(chunk)) {
 				// A step settles the leg that just streamed: dropped back to the
 				// mark when the server took its text for the label, and closed with
 				// a blank line when it did not. Clearing the whole buffer here threw
 				// away what earlier legs had written for the user.
 				if (chunk.type === 'step') {
+					// The leg that just reasoned is over; the next one starts afresh.
+					thought = '';
 					const settled = applyStreamText({ text: streamText, mark: streamMark }, chunk);
 					streamText = settled.text;
 					streamMark = settled.mark;
@@ -627,6 +651,7 @@
 		question = null;
 		streamText = '';
 		streamMark = 0;
+		thought = '';
 		timeline = [];
 		subAgents = [];
 		runStartedAt = null;
@@ -1022,11 +1047,21 @@
 						{/if}
 						{#if streamText}
 							<Markdown text={streamText} />
-						{:else if !timeline.length}
-							<span class="thinking working">
-								<GalaxySpinner label="Working" />
-								{streamModel || '…'} is working
-							</span>
+						{/if}
+						{#if !question && (!streamText || activity.mode === 'searching')}
+							<!-- Shown whenever nothing else is moving, not only before the
+							     first step. The old gate dropped this the moment a timeline
+							     existed, so every silence after the first — and a reasoning
+							     model goes quiet again between every leg — looked exactly
+							     like a hung run. Parked on a question is the one silence
+							     that is not the model working, and the rail says so. -->
+							<div class="live">
+								<GalaxyOrb
+									mode={activity.mode}
+									label={activity.label ?? `${streamModel || '…'} is working`}
+								/>
+								{#if thought}<span class="thought">{thought}</span>{/if}
+							</div>
 						{/if}
 					</div>
 				{/if}
@@ -1554,17 +1589,27 @@
 		font-size: var(--text-xs);
 		margin-top: 0.25rem;
 	}
-	.thinking {
-		color: var(--fg-dim);
-		font-size: var(--text-md);
-		animation: pulse 1.4s ease-in-out infinite;
+	/* Both of these are the chat page's, copied rather than shared — the two
+	   indicator blocks differ in what gates them, and attach/finalize are hand
+	   copies for the same reason. See the same rules there. */
+	.live {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.45rem;
+		margin-top: 0.35rem;
 	}
-	/* The spinner is the animation on this line — see the same rule in chat. */
-	.thinking.working {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.4rem;
-		animation: none;
+	/* The model's own words about what it is doing. Dim, small and italic so it
+	   reads as a status line rather than as the beginning of the reply — it is
+	   not kept, and mistaking it for the answer would be worse than not showing
+	   it. Held to a readable measure so a long thought does not stretch the
+	   pane. */
+	.thought {
+		max-width: 62ch;
+		color: var(--fg-dim);
+		font-size: var(--text-sm);
+		font-style: italic;
+		line-height: 1.45;
 	}
 	@keyframes pulse {
 		50% {
@@ -1572,7 +1617,6 @@
 		}
 	}
 	@media (prefers-reduced-motion: reduce) {
-		.thinking,
 		.dot {
 			animation: none;
 		}

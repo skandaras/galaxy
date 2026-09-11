@@ -542,7 +542,14 @@
 				thought = '';
 			} else if (chunk.type === 'delta') streamText += chunk.text;
 			else if (chunk.type === 'reasoning') thought = chunk.text;
-			else if (chunk.type === 'stage') stages = [...stages, { name: chunk.name, detail: chunk.detail }];
+			else if (chunk.type === 'stage') {
+				// Deep research advances by stage and emits no steps at all, so
+				// without this a note from the planning model stayed on screen
+				// through searching and reading — describing work that had
+				// finished two stages ago.
+				thought = '';
+				stages = [...stages, { name: chunk.name, detail: chunk.detail }];
+			}
 			else if (chunk.type === 'step' || chunk.type === 'tool' || chunk.type === 'search') {
 				// A step settles the leg that just streamed — see the same block on
 				// the code page: dropped back to the mark when the server took its
