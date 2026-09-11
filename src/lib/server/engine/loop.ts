@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { REASONING_NOTE_INTERVAL_MS, reasoningNote } from '$lib/reasoning-note';
 import type { RunStep, RunToolCall, SearchResultRow } from '$lib/run-timeline';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import type {
@@ -576,6 +577,12 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		callUsage = null;
 		let iterationText = '';
 		let toolCalls: ToolCall[] = [];
+		// Chain-of-thought for this call, and when a note off it last went out.
+		// Per-iteration rather than per-run: each model call reasons afresh, and
+		// carrying the previous leg's thought over showed a note about a search
+		// that had already come back.
+		let reasoning = '';
+		let notedAt = 0;
 
 		try {
 			const stream = streamWithIdleTimeout(
@@ -594,6 +601,25 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 				if (ev.type === 'text') {
 					iterationText += ev.delta;
 					pushChunk(job, { type: 'delta', text: ev.delta });
+				} else if (ev.type === 'reasoning') {
+					// Dropped on the floor until now. A reasoning model can spend
+					// half a minute here before its first token of answer or its
+					// first tool call, and chat showed nothing for all of it — the
+					// spinner alone, which looks exactly like a hung run. It was
+					// reported as the model being slow; the model was working and
+					// the interface would not say so.
+					reasoning += ev.delta;
+					// Only the tail is ever read, and a long think is tens of
+					// kilobytes of it.
+					if (reasoning.length > 2400) reasoning = reasoning.slice(-2000);
+					const now = Date.now();
+					if (now - notedAt >= REASONING_NOTE_INTERVAL_MS) {
+						notedAt = now;
+						const note = reasoningNote(reasoning);
+						// Under a dozen characters a note is a fragment — "So", "The
+						// user" — and the line reads as flicker rather than progress.
+						if (note.length >= 12) pushChunk(job, { type: 'reasoning', text: note });
+					}
 				} else if (ev.type === 'tool_calls') {
 					toolCalls = ev.calls;
 				} else if (ev.type === 'usage') {
