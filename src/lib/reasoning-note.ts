@@ -55,3 +55,56 @@ export function reasoningNote(text: string, max = REASONING_NOTE_MAX): string {
 	// word is longer than the cap would otherwise render as a lone ellipsis.
 	return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
+
+/**
+ * A throttled sink for a reasoning model's chain-of-thought.
+ *
+ * Every caller that surfaces reasoning wants the same four things — keep a
+ * tail, cap it, rate-limit the notes, and drop the ones too short to mean
+ * anything — and the agent loop and the research pipeline had no business
+ * each owning a copy of that. Returns the feed to hand deltas to.
+ *
+ * Build one per model call, not per run: the buffer is that call's thought,
+ * and carrying it across a leg showed a note about work that had already
+ * finished.
+ *
+ * A missing `onNote` yields a sink that does nothing, so a caller with
+ * nowhere to send notes — research runs `frameQuestion` and friends directly
+ * from tests, with no job — needs no branch of its own.
+ */
+export function reasoningNotes(
+	onNote?: (text: string) => void
+): (delta: string) => void {
+	if (!onNote) return () => {};
+	let buffer = '';
+	let notedAt = 0;
+	return (delta: string) => {
+		buffer += delta;
+		// Only the tail is ever read, and a long think is tens of kilobytes of it.
+		if (buffer.length > REASONING_BUFFER_MAX) {
+			buffer = buffer.slice(-REASONING_BUFFER_KEEP);
+		}
+		const now = Date.now();
+		if (now - notedAt < REASONING_NOTE_INTERVAL_MS) return;
+		// Cheap gate before the expensive one, and before anything is spent: the
+		// first token of a call is a word or two, which cannot make a note.
+		if (buffer.length < REASONING_NOTE_MIN) return;
+		const note = reasoningNote(buffer);
+		// Under a dozen characters a note is a fragment — "So", "The user" — and
+		// the line reads as flicker rather than as progress.
+		if (note.length < REASONING_NOTE_MIN) return;
+		// Only a note that went out closes the window. Closing it on an attempt
+		// instead meant the first fragment of a call — too short to say anything
+		// — spent the whole interval, and the status line sat empty for a second
+		// after the model had already started thinking.
+		notedAt = now;
+		onNote(note);
+	};
+}
+
+/** Where the tail is trimmed, and back to what, so trimming is not per-token. */
+const REASONING_BUFFER_MAX = 2400;
+const REASONING_BUFFER_KEEP = 2000;
+
+/** Shortest note worth showing — see the note in `reasoningNotes`. */
+const REASONING_NOTE_MIN = 12;

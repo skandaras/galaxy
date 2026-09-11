@@ -3,6 +3,7 @@ import { env } from '$env/dynamic/private';
 import type { AttachmentRef } from '$lib/server/db/schema';
 import { appendMessage, getChat, getMessages, updateChat, type StoredMessage } from '$lib/server/chats';
 import { EFFORT_FRACTION, type ResearchEffort } from '$lib/research-effort';
+import { reasoningNotes } from '$lib/reasoning-note';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import { isRetryable, type Usage } from '$lib/server/providers/types';
 import {
@@ -196,6 +197,18 @@ async function runResearch(
 			totalUsage.completionTokens += u.completionTokens;
 		}
 	};
+	/**
+	 * A glimpse of what the model is thinking, for the phases that otherwise
+	 * leave one stage line on screen for a long time.
+	 *
+	 * Handed down as a closure for the same reason the triage counts are: the
+	 * phases below take a signal and a usage sink and nothing else, and giving
+	 * them the whole job to reach one chunk would be a much wider door than
+	 * this needs. Only the phases that can actually go quiet get it — triage
+	 * asks for `reasoning: 'low'` and is capped at 200 tokens, so there is
+	 * nothing there to watch.
+	 */
+	const onNote = (text: string) => pushChunk(job, { type: 'reasoning', text });
 	const event = (name: string, status: 'ok' | 'error', durationMs: number, detail?: Record<string, unknown>) =>
 		emitEvent(
 			{ userId: opts.userId, chatId: opts.chatId, task: 'deep-research', type: 'tool.call', name, status, durationMs, detail },
@@ -233,7 +246,8 @@ async function runResearch(
 			history: conversation.history,
 			compactSummary: conversation.compactSummary,
 			track,
-			signal: job.controller.signal
+			signal: job.controller.signal,
+			onNote
 		});
 		if (framed.fellBack) {
 			pushChunk(job, {
@@ -293,7 +307,7 @@ async function runResearch(
 		cfg,
 		track,
 		defaultLanguage,
-		{ maxQueries: budget.openingQueries, signal: job.controller.signal }
+		{ maxQueries: budget.openingQueries, signal: job.controller.signal, onNote }
 	);
 	const queries = plan.queries;
 	if (plan.fellBack) {
@@ -484,7 +498,8 @@ async function runResearch(
 			const wider = dedupeQueries(
 				(await planQueries(choice, systemPrompt, question, cfg, track, defaultLanguage, {
 					maxQueries: budget.queriesPerRound,
-					signal: job.controller.signal
+					signal: job.controller.signal,
+					onNote
 				})).queries,
 				ranQueries
 			);
@@ -535,7 +550,8 @@ async function runResearch(
 				cfg,
 				track,
 				defaultLanguage,
-				signal: job.controller.signal
+				signal: job.controller.signal,
+				onNote
 			});
 		let outcome = await runConsolidation();
 		// Round one gets a second attempt on the same sources.
@@ -689,6 +705,12 @@ async function runResearch(
 	let finishReason: string | null = null;
 
 	const synthesise = async (maxTokens: number) => {
+		// Built per attempt, not per run: the retry below reasons afresh, and
+		// carrying the first attempt's thought into it would show a note about
+		// work that had already failed.
+		const noteReasoning = reasoningNotes((text) =>
+			pushChunk(job, { type: 'reasoning', text })
+		);
 		// Idle-bounded, not total-bounded: synthesis over many sources is slow but
 		// healthy, and a flat deadline killed it mid-answer (same defect the chat
 		// and coding loops had).
@@ -746,7 +768,13 @@ async function runResearch(
 					answer += ev.delta;
 					pushChunk(job, { type: 'delta', text: ev.delta });
 				} else if (ev.type === 'reasoning') {
+					// The count decides whether an empty answer earns a retry; the
+					// text is the only thing on screen while it is being produced.
+					// This is the longest silence in the whole pipeline — the
+					// biggest prompt it ever sends, and a reasoning model can spend
+					// the entire budget on it before one visible token.
 					reasoningChars += ev.delta.length;
+					noteReasoning(ev.delta);
 				} else if (ev.type === 'usage') {
 					synthUsage = synthUsage
 						? { ...ev.usage, promptTokens: synthUsage.promptTokens + ev.usage.promptTokens, completionTokens: synthUsage.completionTokens + ev.usage.completionTokens }
@@ -1457,6 +1485,13 @@ export async function frameQuestion(args: {
 	compactSummary?: string | null;
 	track: (u: Usage | null) => void;
 	signal?: AbortSignal;
+	/**
+	 * Where to send a glimpse of the model's thinking while it thinks.
+	 *
+	 * Optional because only `runResearch` holds the job this ends up on — the
+	 * tests, and anything calling this phase on its own, simply pass nothing.
+	 */
+	onNote?: (text: string) => void;
 }): Promise<Framing> {
 	const transcript = args.history
 		.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${clipExcerpt(m.content, FRAME_TURN_CHARS)}`)
@@ -1483,7 +1518,8 @@ export async function frameQuestion(args: {
 				],
 				maxTokens
 			},
-			args.signal
+			args.signal,
+			args.onNote
 		);
 
 	const asIs = (fellBack: Framing['fellBack']): Framing => ({
@@ -1553,8 +1589,14 @@ function isTimeout(err: unknown): boolean {
 async function completeIdleBounded(
 	choice: ModelChoice,
 	req: { messages: ProviderMessage[]; maxTokens: number },
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	onNote?: (text: string) => void
 ): Promise<CompletionResult> {
+	// Framing, planning and consolidation all come through here, and all three
+	// are stretches where the run shows one unchanging stage line. The caller
+	// has the job; this does not — so the note goes out through a closure, the
+	// same way the triage counts already reach the browser.
+	const noteReasoning = reasoningNotes(onNote);
 	let text = '';
 	let reasoning = '';
 	let usage: Usage | null = null;
@@ -1565,8 +1607,10 @@ async function completeIdleBounded(
 		signal ?? new AbortController().signal
 	)) {
 		if (ev.type === 'text') text += ev.delta;
-		else if (ev.type === 'reasoning') reasoning += ev.delta;
-		else if (ev.type === 'usage') usage = ev.usage;
+		else if (ev.type === 'reasoning') {
+			reasoning += ev.delta;
+			noteReasoning(ev.delta);
+		} else if (ev.type === 'usage') usage = ev.usage;
 		else if (ev.type === 'done') finishReason = ev.finishReason;
 	}
 	// Same judgement the adapters make on a non-streamed reply: thought, but no
@@ -1581,7 +1625,7 @@ export async function planQueries(
 	cfg: ResearchSettings,
 	track: (u: Usage | null) => void,
 	defaultLanguage = '',
-	opts: { maxQueries?: number; signal?: AbortSignal } = {}
+	opts: { maxQueries?: number; signal?: AbortSignal; onNote?: (text: string) => void } = {}
 ): Promise<PlanOutcome> {
 	const maxQueries = Math.max(1, opts.maxQueries ?? cfg.maxQueries);
 	// The opening round asks for something different in kind, not just fewer of
@@ -1604,7 +1648,8 @@ export async function planQueries(
 				],
 				maxTokens
 			},
-			opts.signal
+			opts.signal,
+			opts.onNote
 		);
 
 	const asked = (fellBack: PlanOutcome['fellBack'], reasonedOnly: boolean): PlanOutcome => ({
@@ -2193,6 +2238,12 @@ export async function consolidate(args: {
 	track: (u: Usage | null) => void;
 	defaultLanguage?: string;
 	signal?: AbortSignal;
+	/**
+	 * Where to send a glimpse of the model's thinking while it thinks. Optional
+	 * for the same reason as on `frameQuestion` — only `runResearch` holds the
+	 * job these end up on.
+	 */
+	onNote?: (text: string) => void;
 }): Promise<ConsolidateOutcome> {
 	const { choice, cfg, prior, fresh, track } = args;
 	const perSource = evidenceExcerptBudget(
@@ -2258,7 +2309,8 @@ export async function consolidate(args: {
 				],
 				maxTokens
 			},
-			args.signal
+			args.signal,
+			args.onNote
 		);
 
 	const read = (text: string) =>

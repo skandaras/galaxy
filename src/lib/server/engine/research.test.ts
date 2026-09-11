@@ -82,7 +82,14 @@ function choiceOf(...replies: CompletionResult[]): ModelChoice {
 				const reply = next();
 				// An empty answer with `reasonedOnly` is a model that spent the whole
 				// budget thinking: chain-of-thought on its own channel, no text.
-				if (reply.reasonedOnly) yield { type: 'reasoning', delta: 'thinking…' };
+				// A sentence rather than a word: chain-of-thought is prose, and the
+				// status line deliberately drops anything too short to read.
+				if (reply.reasonedOnly) {
+					yield {
+						type: 'reasoning',
+						delta: 'Working out which angles this question actually has before searching.'
+					};
+				}
 				if (reply.text) yield { type: 'text', delta: reply.text };
 				if (reply.usage) yield { type: 'usage', usage: reply.usage };
 				yield { type: 'done', finishReason: reply.finishReason ?? 'stop' };
@@ -221,6 +228,39 @@ describe('planQueries', () => {
 		);
 		expect(out.queries.map((q) => q.q)).toEqual(['x', 'y', 'z']);
 		expect(out.fellBack).toBeNull();
+	});
+
+	it('says what the model is thinking while it plans', async () => {
+		// Planning is the first stage of a run and a two-call stretch, and it
+		// used to leave one stage line on screen saying nothing for all of it.
+		const notes: string[] = [];
+		await planQueries(choiceOf(reasonedOut, ok('{"queries":["x"]}')), '', 'question?', cfg, () => {}, '', {
+			onNote: (t) => notes.push(t)
+		});
+		expect(notes.length).toBeGreaterThan(0);
+		expect(notes[0]).toContain('Working out which angles');
+	});
+
+	it('plans the same whether or not anyone is listening for notes', async () => {
+		// The sink is optional: these phases are called directly from here and
+		// from anything without a job, and neither should need a branch.
+		const withSink = await planQueries(
+			choiceOf(reasonedOut, ok('{"queries":["x","y"]}')),
+			'',
+			'question?',
+			cfg,
+			() => {},
+			'',
+			{ onNote: () => {} }
+		);
+		const without = await planQueries(
+			choiceOf(reasonedOut, ok('{"queries":["x","y"]}')),
+			'',
+			'question?',
+			cfg,
+			() => {}
+		);
+		expect(withSink).toEqual(without);
 	});
 
 	it('reports the fallback rather than silently searching the question', async () => {
