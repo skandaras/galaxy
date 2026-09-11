@@ -11,6 +11,22 @@ import type { StopReason } from './loop';
 export type JobChunk =
 	| { type: 'meta'; model: string }
 	| { type: 'delta'; text: string }
+	/**
+	 * A glimpse of what a reasoning model is thinking, while it is thinking.
+	 *
+	 * Chat had no signal at all for this. A reasoning model can spend half a
+	 * minute on chain-of-thought before it emits a single token of answer or
+	 * names one tool, and for that whole time the only thing on screen was the
+	 * spinner — indistinguishable from a run that had hung. The symptom was
+	 * reported as "the model is slow"; the model was working the whole time and
+	 * the interface was refusing to say so.
+	 *
+	 * Carries the latest note rather than the whole trace: this is a status
+	 * line, not a transcript. It is never written to the database — see
+	 * persistFinal, which stores a job's status and nothing it streamed — so a
+	 * hidden chat's reasoning leaves no more of a trail than its reply does.
+	 */
+	| { type: 'reasoning'; text: string }
 	// One model round-trip that ended in tool calls, labelled with whatever the
 	// model said it was about to do. Re-sent with the same `id` when its status
 	// changes, so replay converges rather than duplicating — see subscribeJob.
@@ -174,6 +190,12 @@ export function pushChunk(job: LiveJob, chunk: JobChunk): void {
 	const last = job.chunks.at(-1);
 	if (chunk.type === 'delta' && last?.type === 'delta') {
 		job.chunks[job.chunks.length - 1] = { type: 'delta', text: last.text + chunk.text };
+	} else if (chunk.type === 'reasoning' && last?.type === 'reasoning') {
+		// Replaced rather than concatenated: a reasoning chunk is the current
+		// status line in full, so replay wants the newest one and nothing older.
+		// Appending them would have put a whole chain-of-thought in the buffer
+		// that is replayed to every reconnecting client.
+		job.chunks[job.chunks.length - 1] = chunk;
 	} else {
 		job.chunks.push(chunk);
 	}

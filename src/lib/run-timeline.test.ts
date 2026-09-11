@@ -4,6 +4,7 @@ import {
 	applyStreamText,
 	emptyStreamText,
 	itemsFromTrace,
+	liveActivity,
 	type TimelineChunk,
 	type TimelineItem,
 	type TimelineSearch,
@@ -278,5 +279,61 @@ describe('applyStreamText', () => {
 	it('leaves everything that is not a step alone', () => {
 		const s = streamed('mid-flight');
 		expect(applyStreamText(s, { type: 'notice', text: 'x' })).toBe(s);
+	});
+});
+
+describe('liveActivity', () => {
+	const searching = (name: string): TimelineChunk[] => [
+		{ type: 'step', id: 's1', label: 'Looking it up', status: 'running' },
+		{ type: 'tool', name, status: 'running', callId: 'c1', stepId: 's1' }
+	];
+
+	it('reports thinking when nothing is running', () => {
+		expect(liveActivity([])).toEqual({ mode: 'thinking' });
+		expect(liveActivity(fold([{ type: 'stage', name: 'Planning' }]))).toEqual({ mode: 'thinking' });
+	});
+
+	it('names a search while it is in flight', () => {
+		expect(liveActivity(fold(searching('web_search')))).toEqual({
+			mode: 'searching',
+			label: 'Searching the web'
+		});
+		expect(liveActivity(fold(searching('library_search')))).toEqual({
+			mode: 'searching',
+			label: 'Searching the library'
+		});
+	});
+
+	it('goes back to thinking once the search settles', () => {
+		const done: TimelineChunk[] = [
+			...searching('web_search'),
+			{ type: 'tool', name: 'web_search', status: 'ok', callId: 'c1', stepId: 's1' }
+		];
+		expect(liveActivity(fold(done))).toEqual({ mode: 'thinking' });
+	});
+
+	it('does not call a local tool a web lookup', () => {
+		// `search_replace` is an edit. Matching on the substring "search" would
+		// report it as going out to the network, which is a confident lie about
+		// where the answer came from.
+		expect(liveActivity(fold(searching('search_replace')))).toEqual({ mode: 'thinking' });
+		expect(liveActivity(fold(searching('write_file')))).toEqual({ mode: 'thinking' });
+	});
+
+	it('names the most recent search when several are in flight', () => {
+		const both: TimelineChunk[] = [
+			{ type: 'step', id: 's1', label: 'Looking it up', status: 'running' },
+			{ type: 'tool', name: 'web_search', status: 'running', callId: 'c1', stepId: 's1' },
+			{ type: 'tool', name: 'library_search', status: 'running', callId: 'c2', stepId: 's1' }
+		];
+		expect(liveActivity(fold(both)).label).toBe('Searching the library');
+	});
+
+	it('derives the same answer from a replayed history as from a watched one', () => {
+		// subscribeJob replays every chunk to a reconnecting client. A flag kept
+		// alongside the stream instead showed "thinking" after a reconnect until
+		// the search in flight happened to finish.
+		const chunks = searching('web_search');
+		expect(liveActivity(fold([...chunks, ...chunks]))).toEqual(liveActivity(fold(chunks)));
 	});
 });

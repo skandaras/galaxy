@@ -15,7 +15,7 @@
 	import { hasFinePointer } from '$lib/pointer';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import AskSheet from '$lib/components/AskSheet.svelte';
-	import GalaxySpinner from '$lib/components/GalaxySpinner.svelte';
+	import GalaxyOrb from '$lib/components/GalaxyOrb.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import ResearchEffort from '$lib/components/ResearchEffort.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
@@ -25,6 +25,7 @@
 		applyChunk,
 		applyStreamText,
 		itemsFromTrace,
+		liveActivity,
 		unfinishedNote,
 		type MessageTrace,
 		type TimelineItem
@@ -124,6 +125,12 @@
 	);
 
 	let streaming = $state(false);
+	/**
+	 * The latest glimpse of what a reasoning model is thinking, shown under the
+	 * indicator. Replaced rather than accumulated — it is a status line, not a
+	 * transcript, and the server sends each note in full.
+	 */
+	let thought = $state('');
 	/** Job currently streaming, so it can be stopped. */
 	let activeJobId = $state<string | null>(null);
 	/**
@@ -154,6 +161,12 @@
 	 * stopped with no explanation.
 	 */
 	let lastStopReason = $state<string | null>(null);
+	/**
+	 * What the run is doing right now, for the indicator beside it. Derived from
+	 * the timeline rather than tracked separately, so a client that reconnects
+	 * mid-search reads the same answer as one that watched the whole run.
+	 */
+	const activity = $derived(liveActivity(timeline));
 	let stages = $state<{ name: string; detail?: string }[]>([]);
 	/**
 	 * A research run at full effort emits a stage per round plus the fixed ones,
@@ -509,6 +522,7 @@
 		streamModel = '';
 		timeline = [];
 		lastStopReason = null;
+		thought = '';
 		stages = [];
 		notices = [];
 		question = null;
@@ -525,13 +539,16 @@
 				streamModel = chunk.model;
 				streamText = '';
 				streamMark = 0;
+				thought = '';
 			} else if (chunk.type === 'delta') streamText += chunk.text;
+			else if (chunk.type === 'reasoning') thought = chunk.text;
 			else if (chunk.type === 'stage') stages = [...stages, { name: chunk.name, detail: chunk.detail }];
 			else if (chunk.type === 'step' || chunk.type === 'tool' || chunk.type === 'search') {
 				// A step settles the leg that just streamed — see the same block on
 				// the code page: dropped back to the mark when the server took its
 				// text for the label, closed with a blank line when it did not.
 				if (chunk.type === 'step') {
+					thought = '';
 					const settled = applyStreamText({ text: streamText, mark: streamMark }, chunk);
 					streamText = settled.text;
 					streamMark = settled.mark;
@@ -778,6 +795,7 @@
 		question = null;
 		streamText = '';
 		streamMark = 0;
+		thought = '';
 		timeline = [];
 		stages = [];
 		closeStream();
@@ -1091,13 +1109,21 @@
 					{/if}
 					{#if streamText}
 						<Markdown text={streamText} />
-					{:else if question}
+					{/if}
+					{#if question}
 						<span class="thinking">waiting on your answer</span>
-					{:else if !stages.length && !timeline.length}
-						<span class="thinking working">
-							<GalaxySpinner label="Thinking" />
-							{streamModel || '…'} is thinking
-						</span>
+					{:else if !streamText || activity.mode === 'searching'}
+						<!-- Shown whenever nothing else is moving, not only before the
+						     first step. A reasoning model goes quiet again between every
+						     leg, and hiding this the moment a timeline existed left that
+						     silence looking identical to a hung run. -->
+						<div class="live">
+							<GalaxyOrb
+								mode={activity.mode}
+								label={activity.label ?? `${streamModel || '…'} is thinking`}
+							/>
+							{#if thought}<span class="thought">{thought}</span>{/if}
+						</div>
 					{/if}
 				</div>
 			{/if}
@@ -1479,13 +1505,24 @@
 		font-size: var(--text-md);
 		animation: pulse 1.4s ease-in-out infinite;
 	}
-	/* The spinner is the animation on this line. A fading label beside a
-	   turning galaxy is two things saying the same thing. */
-	.thinking.working {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.4rem;
-		animation: none;
+	.live {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.45rem;
+		margin-top: 0.35rem;
+	}
+	/* The model's own words about what it is doing. Dim, small and italic so it
+	   reads as a status line rather than as the beginning of the reply — it is
+	   not kept, and mistaking it for the answer would be worse than not
+	   showing it. Held to a readable measure so a long thought does not stretch
+	   the pane. */
+	.thought {
+		max-width: 62ch;
+		color: var(--fg-dim);
+		font-size: var(--text-sm);
+		font-style: italic;
+		line-height: 1.45;
 	}
 	/* Stays put after the turn ends. Chat had no signal at all for a turn that
 	   ran out of steps — it just stopped. */
