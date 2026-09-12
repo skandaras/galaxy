@@ -1254,6 +1254,149 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 		await phone.locator('nav.tabbar .tab', { hasText: 'Boards' }).tap();
 		await phone.waitForURL(/\/boards/);
 		check('a different tab still navigates', new URL(phone.url()).pathname, '/boards');
+
+		// "Tap the tab twice" is what people actually do, and it used to mean two
+		// different things depending on where they started: from another page the
+		// pair was navigate-then-open, and from the page itself it was open-then-
+		// close, which looks exactly like the tap not registering. Both paths end
+		// with the list open now.
+		const chatTab = phone.locator('nav.tabbar .tab', { hasText: 'Chat' });
+		await chatTab.tap();
+		await phone.waitForURL(/\/chat/);
+		await chatTab.tap();
+		await phone.waitForTimeout(300);
+		check(
+			'two taps from another page leave the list open',
+			await phone.locator('.page-list.open').count(),
+			1
+		);
+
+		// The same pair, from the page you are already on, with no pause between
+		// them — a pause is what would hide a second tap being swallowed.
+		await phone.touchscreen.tap(360, 420);
+		await phone.waitForTimeout(300);
+		await chatTab.tap();
+		await chatTab.tap();
+		await phone.waitForTimeout(300);
+		check(
+			'and so do two taps from the page itself',
+			await phone.locator('.page-list.open').count(),
+			1
+		);
+		await phone.touchscreen.tap(360, 420);
+		await phone.waitForTimeout(300);
+	}
+
+	{
+		// The drawer's geometry, which had three separate things wrong with it:
+		// it ran to bottom:0 under the tab bar, so the end of the list was
+		// unreachable; and the layout's width:auto never applied, so it opened at
+		// the *desktop* pane width instead of an inset — which on a narrow phone
+		// covers the screen and leaves no scrim to dismiss it with.
+		await phone.goto(`${B}/chat`);
+		await phone.locator('.list-pill').tap();
+		await phone.waitForTimeout(400);
+		const bar = await phone.locator('nav.tabbar').boundingBox();
+		const drawer = await phone.locator('.page-list').boundingBox();
+		check('the drawer stops above the tab bar', drawer.y + drawer.height <= bar.y + 1);
+		check('and leaves a strip of scrim beside it', drawer.width <= 390 - 48);
+
+		// 320 is the narrowest phone worth caring about, and the one where a pane
+		// width of 340 stopped leaving any strip at all.
+		await phone.setViewportSize({ width: 320, height: 844 });
+		await phone.waitForTimeout(400);
+		const narrow = await phone.locator('.page-list').boundingBox();
+		check('still a strip at 320px', narrow.width <= 320 - 48);
+		await phoneShot('chat-list-narrow');
+		// And the strip is a dismiss, not just empty space. The pill underneath it
+		// is covered by the drawer on purpose, so this is the thumb-sized way out
+		// at this width — the other two are Escape and the tab bar.
+		await phone.touchscreen.tap(320 - 24, 420);
+		await phone.waitForTimeout(300);
+		check('and tapping it still closes the sheet', await phone.locator('.page-list.open').count(), 0);
+		await phone.setViewportSize({ width: 390, height: 844 });
+		await phone.waitForTimeout(300);
+	}
+
+	{
+		// Nothing on the phone context had ever typed into the composer or pressed
+		// send. That is how a send button a third under the tap floor, and a
+		// drawer left open over the thing it sends you to, both survived: on touch
+		// this button is the only way to send at all, because Enter inserts a
+		// newline when the pointer is coarse.
+		await phone.goto(`${B}/chat`);
+		await phone.locator('.composer textarea').waitFor();
+		await phone.waitForTimeout(500);
+
+		check('the send button is a thumb wide', await undersized(phone, '.composer .btn'), []);
+		check('and so is every composer chip', await undersized(phone, '.composer .chip'), []);
+		check('nothing covers the composer', await coveringAcross(phone, '.composer'), []);
+
+		// The state the bug report named: an existing conversation, opened from
+		// the drawer rather than loaded fresh.
+		await phone.locator('.list-pill').tap();
+		await phone.waitForTimeout(400);
+		await phone.locator('.page-list .chat-row').first().tap();
+		await phone.waitForTimeout(700);
+		check('opening a chat closes the drawer', await phone.locator('.page-list.open').count(), 0);
+		check('and leaves the composer clear', await coveringAcross(phone, '.composer'), []);
+		check('down to the send button itself', await coveringAcross(phone, '.composer .btn.send'), []);
+
+		await phone.locator('.composer textarea').fill('does the arrow wake up');
+		await phone.waitForTimeout(300);
+		check(
+			'typing in an existing chat arms send',
+			await phone.locator('.composer .btn.send').isEnabled()
+		);
+		await phoneShot('chat-existing');
+
+		// "+ New chat" lives *inside* the drawer, so it is the one route that can
+		// leave the scrim up over the composer it just sent you to. Chat was the
+		// only one of the three pages whose new-thing button did not close it.
+		await phone.locator('.list-pill').tap();
+		await phone.waitForTimeout(400);
+		await phone.locator('.page-list').getByRole('button', { name: '+ New chat' }).tap();
+		await phone.waitForTimeout(500);
+		check(
+			'+ New chat closes the drawer behind it',
+			await phone.locator('.page-list.open').count(),
+			0
+		);
+		check('leaving no scrim on the composer', await coveringAcross(phone, '.composer'), []);
+		check(
+			'and carries no attachment over from the last chat',
+			await phone.locator('.composer .att-chip').count(),
+			0
+		);
+	}
+
+	{
+		// The soft keyboard. There isn't one in headless Chromium — visualViewport
+		// never shrinks — so --kbd is driven by hand here. The arithmetic behind
+		// it is covered by src/lib/viewport.test.ts; what only a browser can say
+		// is whether any rule *reads* the number. It was measured and published
+		// with no consumer at all, and docs/MOBILE.md promised the opposite.
+		await phone.goto(`${B}/chat`);
+		await phone.locator('.composer').waitFor();
+		await phone.waitForTimeout(500);
+		const shutBar = await phone.locator('nav.tabbar').boundingBox();
+
+		const KBD = 320;
+		await phone.evaluate(
+			(px) => document.documentElement.style.setProperty('--kbd', `${px}px`),
+			KBD
+		);
+		await phone.waitForTimeout(400);
+		const openBar = await phone.locator('nav.tabbar').boundingBox();
+		const openComposer = await phone.locator('.composer').boundingBox();
+		check('the tab bar rides above the keyboard', openBar.y + openBar.height <= 844 - KBD + 1);
+		check('and the composer stays above the bar', openComposer.y + openComposer.height <= openBar.y + 1);
+		await phoneShot('chat-keyboard');
+
+		await phone.evaluate(() => document.documentElement.style.removeProperty('--kbd'));
+		await phone.waitForTimeout(400);
+		const backBar = await phone.locator('nav.tabbar').boundingBox();
+		check('and both drop back when it shuts', Math.abs(backBar.y - shutBar.y) <= 1);
 	}
 
 	{
@@ -1275,6 +1418,19 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 		check('every entry is a thumb tall', await undersized(phone, '.more-sheet .more-item'), []);
 		await phoneShot('more');
 
+		// The sheet's scrim used to be inset:0 at a layer above the bar, so the
+		// bar it is anchored to went dead the moment the sheet opened: the first
+		// tap on any tab only dismissed the sheet, and you needed a second. A
+		// scrim over the thing that opened it is never right.
+		check('the open sheet leaves the bar alone', await coveringAcross(phone, 'nav.tabbar'), []);
+		await phone.locator('nav.tabbar .tab', { hasText: 'Boards' }).tap();
+		await phone.waitForURL(/\/boards/);
+		check('so one tap on a tab still gets there', new URL(phone.url()).pathname, '/boards');
+		check('and the sheet went with it', await phone.locator('.more-sheet').count(), 0);
+
+		await phone.goto(`${B}/chat`);
+		await phone.locator('nav.tabbar .tab.more').tap();
+		await phone.locator('.more-sheet').waitFor();
 		await phone.locator('.more-sheet .more-item', { hasText: 'Observatory' }).tap();
 		await phone.waitForURL(/\/observatory/);
 		check('and it navigates', new URL(phone.url()).pathname, '/observatory');
