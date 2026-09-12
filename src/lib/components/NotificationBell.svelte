@@ -60,7 +60,15 @@
 		void load();
 		const source = new EventSource('/api/notifications/stream');
 		source.onmessage = (ev) => {
-			const msg = JSON.parse(ev.data);
+			// A frame that will not parse is not worth a thrown handler: these
+			// streams reconnect after every backgrounded resume, and an exception
+			// here is one more uncaught error in a page that has no console.
+			let msg;
+			try {
+				msg = JSON.parse(ev.data);
+			} catch {
+				return;
+			}
 			if (msg.type === 'new') {
 				items = [msg.notification, ...items].slice(0, 50);
 				unread++;

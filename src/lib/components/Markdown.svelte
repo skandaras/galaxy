@@ -76,6 +76,21 @@
 	.md :global(p) {
 		margin: 0.4rem 0;
 	}
+	/* Prose wraps, even mid-token, rather than pushing the thread sideways — a
+	   pasted URL used to take the whole conversation off the right of a phone.
+	   `anywhere` rather than `break-word` because only the former is allowed to
+	   affect the min-content width, which is the number that was too big. */
+	.md {
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+	/* A table is the one thing here with no sensible break point, so it gets the
+	   same treatment as a code block: its own scroller, not the page's. */
+	.md :global(table) {
+		display: block;
+		max-width: 100%;
+		overflow-x: auto;
+	}
 	.md :global(a) {
 		color: var(--accent);
 	}

@@ -6,6 +6,7 @@
 	import GalaxyBackdrop from '$lib/components/GalaxyBackdrop.svelte';
 	import BottomNav from '$lib/components/BottomNav.svelte';
 	import { themeCss } from '$lib/theme';
+	import { reportClientError } from '$lib/client-report';
 	import { attachViewport } from '$lib/viewport.svelte';
 
 	let { data, children } = $props();
@@ -84,7 +85,26 @@
 		</div>
 	</aside>
 	<main class="main">
-		{@render children()}
+		<!-- The tree had no boundary anywhere, and Svelte's invoke_error_boundary
+		     walks up looking for one: finding none it rethrows out of the flush,
+		     abandoning every effect still queued behind it in that batch. The
+		     symptom is an interface that paints, scrolls, takes focus and answers
+		     no taps — which is exactly how the viewport effect's own loop
+		     presented, twice, with nothing on screen or in any log to say so. -->
+		<svelte:boundary onerror={(e) => reportClientError(e)}>
+			{@render children()}
+			{#snippet failed(error, reset)}
+				<div class="boundary">
+					<p class="boundary-title">This page stopped working.</p>
+					<p class="boundary-what">{(error as Error)?.message ?? String(error)}</p>
+					<p class="boundary-actions">
+						<button onclick={reset}>Try again</button>
+						<button onclick={() => location.reload()}>Reload</button>
+					</p>
+					<p class="boundary-note">It has been recorded — you can find it in Observatory.</p>
+				</div>
+			{/snippet}
+		</svelte:boundary>
 	</main>
 	<BottomNav links={barLinks} />
 </div>
@@ -250,6 +270,47 @@
 	}
 	.user {
 		color: var(--fg-dim);
+	}
+	/* Deliberately plain. This renders when the page it replaces could not, so
+	   it leans on nothing the failure might have taken with it. */
+	.boundary {
+		margin: auto;
+		padding: 1.5rem;
+		max-width: 32rem;
+		text-align: center;
+	}
+	.boundary-title {
+		color: var(--fg);
+		font-size: var(--text-lg);
+		margin: 0 0 0.4rem;
+	}
+	.boundary-what {
+		color: var(--danger);
+		font-family: var(--font-mono);
+		font-size: var(--text-base);
+		margin: 0 0 1rem;
+		overflow-wrap: anywhere;
+	}
+	.boundary-actions {
+		display: flex;
+		gap: 0.5rem;
+		justify-content: center;
+		margin: 0 0 0.8rem;
+	}
+	.boundary-actions button {
+		min-height: var(--tap);
+		padding: 0 1rem;
+		background: var(--border);
+		border: none;
+		color: var(--fg);
+		font-family: inherit;
+		font-size: var(--text-md);
+		cursor: pointer;
+	}
+	.boundary-note {
+		color: var(--fg-dim);
+		font-size: var(--text-sm);
+		margin: 0;
 	}
 	.main {
 		flex: 1;

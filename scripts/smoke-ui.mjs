@@ -1400,6 +1400,132 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 	}
 
 	{
+		// The one that killed the app on a phone for two rounds, and left no mark
+		// on the layout to find it by.
+		//
+		// attachViewport runs inside an $effect and used to de-duplicate against
+		// the same $state it writes, so the first real inset re-dirtied that
+		// effect: teardown zeroed the signal, the body re-read a still-non-zero
+		// inset, and round again until Svelte threw effect_update_depth_exceeded.
+		// With no boundary that throw escapes into a microtask and takes every
+		// effect queued behind it, so the page keeps its last frame and stops
+		// responding to anything — while the inset settles back to 0 and the
+		// layout looks perfect.
+		//
+		// The trigger is one event where the layout viewport and the visual
+		// viewport disagree by more than KEYBOARD_MIN, which is what resuming an
+		// installed app produces. That is what this fakes.
+		phoneProblems = [];
+		await phone.goto(`${B}/chat`);
+		await phone.locator('.list-pill').waitFor();
+		await phone.waitForTimeout(600);
+
+		await phone.evaluate(() => {
+			const vv = window.visualViewport;
+			Object.defineProperty(vv, 'height', {
+				configurable: true,
+				get: () => window.innerHeight - 300
+			});
+			vv.dispatchEvent(new Event('resize'));
+		});
+		await phone.waitForTimeout(900);
+		check('a viewport that disagrees with itself raises nothing', phoneProblems, []);
+		check(
+			'and the inset is published, not looped over',
+			await phone.evaluate(() =>
+				getComputedStyle(document.documentElement).getPropertyValue('--kbd').trim()
+			),
+			'300px'
+		);
+
+		// The assertion that actually matters: the interface still works. Tapping
+		// is the only thing the failure took away — scrolling, focus and typing
+		// all carried on, which is why it read as "the app looks fine".
+		await phone.locator('.list-pill').tap();
+		await phone.waitForTimeout(400);
+		check('and the interface still answers a tap', await phone.locator('.page-list.open').count(), 1);
+		await phone.touchscreen.tap(360, 420);
+		await phone.waitForTimeout(300);
+
+		// Putting it away has to publish too — the teardown used to zero the
+		// signal and leave --kbd on the document saying something else.
+		await phone.evaluate(() => {
+			Object.defineProperty(window.visualViewport, 'height', {
+				configurable: true,
+				get: () => window.innerHeight
+			});
+			window.visualViewport.dispatchEvent(new Event('resize'));
+		});
+		await phone.waitForTimeout(600);
+		check(
+			'and shutting it puts the inset back',
+			await phone.evaluate(() =>
+				getComputedStyle(document.documentElement).getPropertyValue('--kbd').trim()
+			),
+			'0px'
+		);
+		check('with the page still quiet', phoneProblems, []);
+	}
+
+	{
+		// The other half of that failure: it was reporting itself the whole time,
+		// into a console an installed phone app does not have. A crash now reaches
+		// the Observatory, and the boundary keeps it inside the page it happened
+		// in instead of letting it take the flush — and with it every effect
+		// queued behind it — down with it.
+		const before = (await as(ALICE, '/api/events?type=client&limit=50')).length;
+		await phone.goto(`${B}/chat`);
+		await phone.locator('.composer').waitFor();
+		await phone.waitForTimeout(500);
+
+		await phone.evaluate(() => {
+			// Straight at the handler hooks.client.ts installs, which is the same
+			// path an uncaught effect error takes.
+			window.dispatchEvent(
+				new ErrorEvent('error', { error: new Error('smoke: deliberate client failure') })
+			);
+		});
+		await phone.waitForTimeout(800);
+
+		const after = await as(ALICE, '/api/events?type=client&limit=50');
+		check('a crash in the browser reaches the Observatory', after.length, before + 1);
+		check('named by its message', after[0].name, 'Error: smoke: deliberate client failure');
+		// The one rule about what a report may carry.
+		check('and carrying no chat id', after[0].chat_id ?? after[0].chatId ?? null, null);
+
+		// And the page is still the page.
+		await phone.locator('.list-pill').tap();
+		await phone.waitForTimeout(400);
+		check('with the page still working', await phone.locator('.page-list.open').count(), 1);
+		await phone.touchscreen.tap(360, 420);
+		await phone.waitForTimeout(300);
+	}
+
+	{
+		// The reply arrived clipped mid-word at the right edge of the phone, with
+		// a scrollbar under it: a long unbroken token has a min-content width, and
+		// nothing said the prose could break inside one.
+		const chat = await as(ALICE, '/api/chats', { method: 'POST', body: JSON.stringify({}) });
+		await as(ALICE, `/api/chats/${chat.id}/messages`, {
+			method: 'POST',
+			body: JSON.stringify({
+				content:
+					'https://example.com/' + 'a'.repeat(300) + ' and ' + 'x'.repeat(200) + ' done',
+				webSearch: false
+			})
+		});
+		await phone.goto(`${B}/chat?chat=${chat.id}`);
+		await phone.locator('.thread .msg').first().waitFor();
+		await phone.waitForTimeout(800);
+		const over = await phone.evaluate(() => {
+			const t = document.querySelector('.thread');
+			return t ? t.scrollWidth - t.clientWidth : -1;
+		});
+		check('a long unbroken link does not widen the conversation', over <= 1);
+		await phoneShot('chat-wrapping');
+	}
+
+	{
 		await phone.goto(`${B}/chat`);
 		await phone.locator('nav.tabbar .tab.more').tap();
 		await phone.locator('.more-sheet').waitFor();

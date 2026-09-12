@@ -106,6 +106,13 @@ installed app and the browser.
   of the keyboard so the composer still has somewhere to sit.
 - The bar respects the iOS home-indicator inset and the strip respects the
   notch (`viewport-fit=cover` + safe-area insets).
+- **If something in the browser throws, you find out.** A crash is caught by
+  `src/hooks.client.ts`, recorded as a `client` event, and shown in
+  **Observatory** — which is in the **More** sheet. A failure that breaks the
+  page shows a message and a Reload button rather than a screen that looks
+  perfect and answers nothing, which is what it used to do: an uncaught error
+  inside a Svelte flush abandons every update queued behind it, and an installed
+  app has no console to notice that in.
 - **Cortex** takes touch gestures: pinch to zoom, twist to turn, double-tap to
   zoom in, plus explicit − and + buttons. Its on-screen hint names the gestures
   the device you are holding actually has.

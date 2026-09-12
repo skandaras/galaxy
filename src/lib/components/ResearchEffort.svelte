@@ -103,7 +103,12 @@
 	}
 </script>
 
-<svelte:window onresize={() => open && place()} />
+<svelte:window
+	onresize={() => open && place()}
+	onkeydown={(e) => {
+		if (e.key === 'Escape' && open) open = false;
+	}}
+/>
 
 <div class="effort-wrap" bind:this={chipEl}>
 	<button
@@ -138,13 +143,10 @@
 
 	{#if open}
 		<!-- Click-away and reposition-on-resize, so a fixed panel cannot be left
-		     stranded away from the chip it belongs to. -->
-		<div
-			class="scrim"
-			role="presentation"
-			onclick={() => (open = false)}
-			onkeydown={(e) => e.key === 'Escape' && (open = false)}
-		></div>
+		     stranded away from the chip it belongs to. Escape is on the window
+		     rather than here: a role="presentation" div takes no focus, so the
+		     handler this used to carry could never fire. -->
+		<div class="scrim" role="presentation" onclick={() => (open = false)}></div>
 		<div
 			class="panel"
 			role="dialog"
@@ -213,9 +215,15 @@
 	.glyph {
 		flex-shrink: 0;
 	}
+	/* Stops above the tab bar, like the More sheet's scrim and the alerts panel's.
+	   This one was written from the same template and missed the fix: at inset:0
+	   over --z-chrome it covered the bar, so with the effort popover open the
+	   first tap on any destination was swallowed as a dismiss and went nowhere
+	   else. There is no window-level Escape here either, so that swallowed tap
+	   was the only way out. */
 	.scrim {
 		position: fixed;
-		inset: 0;
+		inset: 0 0 var(--above-bar) 0;
 		z-index: var(--z-scrim);
 	}
 	.panel {
