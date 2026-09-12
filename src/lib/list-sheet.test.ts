@@ -41,19 +41,31 @@ describe('the page list registry', () => {
 	});
 
 	it('opens whatever the mounted page registered', () => {
-		const open = vi.fn();
-		const off = registerPageList(open);
+		const setOpen = vi.fn();
+		const off = registerPageList(setOpen);
 		expect(pageList.present).toBe(true);
-		pageList.toggle();
-		expect(open).toHaveBeenCalledTimes(1);
+		pageList.open();
+		expect(setOpen).toHaveBeenCalledWith(true);
 		off();
 		expect(pageList.present).toBe(false);
+	});
+
+	it('opens on every tap rather than toggling back', () => {
+		// "Tap the tab twice" is what people do, and a toggle made that mean
+		// open-then-close on the page you were already on — indistinguishable
+		// from the tap not registering, and reported as exactly that.
+		const setOpen = vi.fn();
+		const off = registerPageList(setOpen);
+		pageList.open();
+		pageList.open();
+		expect(setOpen.mock.calls).toEqual([[true], [true]]);
+		off();
 	});
 
 	it('does nothing, rather than throwing, once the page is gone', () => {
 		const off = registerPageList(vi.fn());
 		off();
-		expect(() => pageList.toggle()).not.toThrow();
+		expect(() => pageList.open()).not.toThrow();
 	});
 
 	it('keeps the incoming page’s registration when the outgoing one tears down', () => {
@@ -69,7 +81,7 @@ describe('the page list registry', () => {
 		offOld();
 
 		expect(pageList.present).toBe(true);
-		pageList.toggle();
+		pageList.open();
 		expect(newPage).toHaveBeenCalledTimes(1);
 		expect(oldPage).not.toHaveBeenCalled();
 		offNew();

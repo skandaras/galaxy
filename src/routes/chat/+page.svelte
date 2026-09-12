@@ -14,6 +14,7 @@
 	import { autoresize } from '$lib/autoresize';
 	import { hasFinePointer } from '$lib/pointer';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
+	import { swipeToClose } from '$lib/list-sheet.svelte';
 	import AskSheet from '$lib/components/AskSheet.svelte';
 	import GalaxyOrb from '$lib/components/GalaxyOrb.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
@@ -980,7 +981,12 @@
 </script>
 
 <div class="chat-shell">
-	<aside class="chat-list page-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
+	<aside
+		class="chat-list page-list"
+		class:open={listOpen}
+		style={`--list-width:${listPane.width}px`}
+		use:swipeToClose={() => (listOpen = false)}
+	>
 		<div class="list-actions">
 			<button class="btn" onclick={() => newChat(false)}>+ New chat</button>
 			<button class="btn ghost" title="Hidden: not stored, invisible to memory" onclick={() => newChat(true)}>

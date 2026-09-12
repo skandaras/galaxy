@@ -8,6 +8,7 @@
 	import { hasFinePointer } from '$lib/pointer';
 	import { copyText } from '$lib/clipboard';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
+	import { swipeToClose } from '$lib/list-sheet.svelte';
 	import {
 		beginAttach,
 		cancelFailureBanner,
@@ -844,7 +845,12 @@
 </script>
 
 <div class="code-shell">
-	<aside class="session-list page-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
+	<aside
+		class="session-list page-list"
+		class:open={listOpen}
+		style={`--list-width:${listPane.width}px`}
+		use:swipeToClose={() => (listOpen = false)}
+	>
 		<button class="btn primary wide" onclick={() => ((creating = true), (current = null))}>
 			+ New session
 		</button>

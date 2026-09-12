@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
+	import { swipeToClose } from '$lib/list-sheet.svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import ListPill from '$lib/components/ListPill.svelte';
@@ -199,7 +200,12 @@
 </script>
 
 <div class="lib-shell">
-	<aside class="doc-list page-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
+	<aside
+		class="doc-list page-list"
+		class:open={listOpen}
+		style={`--list-width:${listPane.width}px`}
+		use:swipeToClose={() => (listOpen = false)}
+	>
 		<div class="list-actions">
 			<!-- Wrapped, or the click event arrives as the folder to file it under. -->
 			<button class="btn primary" onclick={() => startNew()}>+ New doc</button>

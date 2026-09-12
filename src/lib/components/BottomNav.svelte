@@ -33,7 +33,8 @@
 		// list register nothing, and the tap stays an ordinary navigation.
 		if (!isActive(href) || !pageList.present) return;
 		e.preventDefault();
-		pageList.toggle();
+		// Opens rather than toggles, deliberately — see pageList.open.
+		pageList.open();
 	}
 </script>
 
