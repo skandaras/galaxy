@@ -103,7 +103,11 @@
 		.tabbar {
 			display: flex;
 			position: fixed;
-			inset: auto 0 0 0;
+			/* Rides on top of the keyboard rather than behind it. Fixed to the
+			   layout viewport, which neither platform shrinks for a keyboard, so
+			   without the offset the bar — and the composer sitting on it — were
+			   both under the thing being typed on. --kbd is 0 when it is shut. */
+			inset: auto 0 var(--kbd) 0;
 			height: var(--chrome-bottom);
 			/* The bar is the bottom-most element on the screen, so it is the one
 			   that pays the home-indicator inset. Nothing above it does — see the
@@ -151,14 +155,19 @@
 		.more-scrim {
 			display: block;
 			position: fixed;
-			inset: 0;
+			/* Stops above the bar. It was inset:0 at a layer over --z-chrome, which
+			   killed the bar the moment the sheet opened: the first tap on any tab
+			   only dismissed the sheet, so every destination needed two. A scrim
+			   over the control that opened it is never right — and the sheet is
+			   anchored to that bar, so it is the one thing that must stay live. */
+			inset: 0 0 var(--above-bar) 0;
 			z-index: var(--z-scrim);
 		}
 		.more-sheet {
 			display: flex;
 			flex-direction: column;
 			position: fixed;
-			inset: auto 0 var(--chrome-bottom) 0;
+			inset: auto 0 var(--above-bar) 0;
 			z-index: var(--z-popover);
 			background: var(--bg-pane);
 			border-top: 1px solid var(--border);

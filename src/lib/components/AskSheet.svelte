@@ -77,7 +77,7 @@
 		/* Was inset: auto 0 0 0, which put this on top of the tab bar. It is
 		   aria-modal="false" on purpose — the run is parked, the app is not — so
 		   it must not cover the way out of the page. */
-		inset: auto 0 var(--chrome-bottom) 0;
+		inset: auto 0 var(--above-bar) 0;
 		z-index: var(--z-sheet);
 		background: var(--bg-pane);
 		border-top: 1px solid var(--accent);

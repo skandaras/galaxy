@@ -1269,8 +1269,6 @@
 		min-width: 0;
 	}
 	.chat-list {
-		/* Set from the drag handle and remembered per browser — see PaneResizer. */
-		width: var(--list-width, 340px);
 		flex-shrink: 0;
 		padding: 0.75rem;
 		box-sizing: border-box;
@@ -1677,7 +1675,17 @@
 		max-width: 16rem;
 	}
 
-	@media (max-width: 720px) {
+	/* Set from the drag handle and remembered per browser — see PaneResizer — and
+	   a desktop concern only. Below the breakpoint this pane is the off-canvas
+	   sheet the layout draws, which sizes itself from an inset. It used to be
+	   declared unconditionally, with the layout trying to cancel it from a less
+	   specific selector; scoped styles won, so the sheet opened at whatever width
+	   the drag handle had last been left on — 340px of a 390px screen by default,
+	   and all of a 320px one, leaving nothing beside it to tap to dismiss. */
+	@media (min-width: 721px) {
+		.chat-list {
+			width: var(--list-width, 340px);
+		}
 	}
 
 	/* Reveal-on-hover hides these controls permanently on a touch screen, where
