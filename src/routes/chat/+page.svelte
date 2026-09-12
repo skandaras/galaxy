@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
 	import { ATTACHMENT_ACCEPT, attachmentIcon, screenFiles } from '$lib/attachment-types';
 	import { clearDraft, draftKey, getDraft, renameDraft, setDraft } from '$lib/composer-drafts.svelte';
@@ -243,6 +243,18 @@
 		// agent asks, since selectChat reattaches to the running job.
 		const wanted = new URLSearchParams(location.search).get('chat');
 		if (wanted) await selectChat(wanted);
+	});
+
+	// Nothing tore this pane down: onMount is async here, so its return value is
+	// a promise Svelte cannot use as a cleanup, and there was no onDestroy in the
+	// file. Leaving the page left the EventSource open and — worse — left any
+	// recoverStream loop running against a component that no longer exists,
+	// re-checking a `viewGeneration` that nothing could ever bump again. Coming
+	// back from a backgrounded app drops every stream at once, so each visit
+	// added another loop to the pile that woke up together.
+	onDestroy(() => {
+		viewGeneration++;
+		closeStream();
 	});
 
 	/**
@@ -550,7 +562,15 @@
 		question = null;
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
-			const chunk = JSON.parse(ev.data);
+			// A frame that will not parse is not worth a thrown handler: these
+			// streams reconnect after every backgrounded resume, and an exception
+			// here is one more uncaught error in a page that has no console.
+			let chunk;
+			try {
+				chunk = JSON.parse(ev.data);
+			} catch {
+				return;
+			}
 			// Only chunks past the replayed prefix count as the stream working. A
 			// reattach replays the whole buffer before a single live chunk, so
 			// resetting on any chunk reset the budget one tick after connecting.

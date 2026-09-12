@@ -39,7 +39,15 @@
 		const source = new EventSource('/api/events/stream');
 		source.onmessage = (ev) => {
 			if (paused) return;
-			const e: Ev = JSON.parse(ev.data);
+			// A frame that will not parse is not worth a thrown handler: these
+			// streams reconnect after every backgrounded resume, and an exception
+			// here is one more uncaught error in a page that has no console.
+			let e;
+			try {
+				e = JSON.parse(ev.data);
+			} catch {
+				return;
+			}
 			if (type && e.type !== type) return;
 			if (status && e.status !== status) return;
 			rows = [e, ...rows].slice(0, 300);

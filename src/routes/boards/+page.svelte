@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import CardDetail from '$lib/components/boards/CardDetail.svelte';
@@ -78,6 +78,14 @@
 	let running = $state(false);
 
 	onMount(loadBoards);
+
+	// The drag installs three window listeners on pointerdown and takes them off
+	// again on pointerup — so a component destroyed mid-press left them behind,
+	// with a closure over a board that no longer exists. onPointerMove calls
+	// preventDefault() once a drag is real, which suppresses the compatibility
+	// mouse events, and with them every click in the app: an interface that
+	// paints normally and ignores taps, for the rest of the session.
+	onDestroy(detach);
 
 	async function loadBoards() {
 		boards = await (await fetch('/api/boards')).json();

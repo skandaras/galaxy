@@ -26,7 +26,15 @@
 		// lands shows the spend that turn just added.
 		const source = new EventSource('/api/events/stream');
 		source.onmessage = (ev) => {
-			const e = JSON.parse(ev.data);
+			// A frame that will not parse is not worth a thrown handler: these
+			// streams reconnect after every backgrounded resume, and an exception
+			// here is one more uncaught error in a page that has no console.
+			let e;
+			try {
+				e = JSON.parse(ev.data);
+			} catch {
+				return;
+			}
 			if (e.type === 'job' && e.status !== 'running') void load();
 		};
 		return () => {
