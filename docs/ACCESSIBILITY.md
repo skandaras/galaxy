@@ -126,6 +126,11 @@ a violation — but at these text sizes it makes "why is this greyed out?"
 genuinely hard to read. A dedicated disabled colour would read better than
 fading the text.
 
+The other half of that question — *why* it is greyed out — was worse on a phone,
+because the answer lived only in a `title`, and a title needs a hover. The chat
+composer's send button now carries its reason in `aria-label` as well; nothing
+else does yet, and the fade itself is unchanged.
+
 ### 2. Smaller things
 
 - A few tables use `<td>` in the header row rather than `<th>`, so their columns

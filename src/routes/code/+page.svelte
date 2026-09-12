@@ -8,6 +8,7 @@
 	import { hasFinePointer } from '$lib/pointer';
 	import { copyText } from '$lib/clipboard';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
+	import { swipeToClose } from '$lib/list-sheet.svelte';
 	import {
 		beginAttach,
 		cancelFailureBanner,
@@ -844,7 +845,12 @@
 </script>
 
 <div class="code-shell">
-	<aside class="session-list page-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
+	<aside
+		class="session-list page-list"
+		class:open={listOpen}
+		style={`--list-width:${listPane.width}px`}
+		use:swipeToClose={() => (listOpen = false)}
+	>
 		<button class="btn primary wide" onclick={() => ((creating = true), (current = null))}>
 			+ New session
 		</button>
@@ -1207,9 +1213,6 @@
 		min-width: 0;
 	}
 	.session-list {
-		/* Set from the drag handle and remembered per browser — see PaneResizer,
-		   which also draws the dividing line this used to carry as a border. */
-		width: var(--list-width, 250px);
 		flex-shrink: 0;
 		padding: 0.75rem;
 		box-sizing: border-box;
@@ -1750,7 +1753,14 @@
 		max-width: 16rem;
 	}
 
+	/* --tap, not a padding that happens to come out near it — see the same rule on
+	   the chat page for the measurement and the reason. */
 	.btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: var(--tap);
+		min-width: var(--tap);
 		background: var(--border);
 		color: var(--fg);
 		border: none;
@@ -1779,6 +1789,11 @@
 		opacity: 0.5;
 	}
 	.chip {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: var(--tap);
+		min-width: var(--tap);
 		background: transparent;
 		border: 1px solid var(--border);
 		border-radius: 999px;
@@ -1807,6 +1822,17 @@
 			border-top: 1px solid var(--border);
 			padding-left: 0;
 			padding-top: 0.45rem;
+		}
+	}
+
+	/* Set from the drag handle and remembered per browser — see PaneResizer, which
+	   also draws the dividing line this used to carry as a border. Desktop only:
+	   below the breakpoint this pane is the off-canvas sheet the layout draws,
+	   sized from an inset. See the same block on the chat page for the failure
+	   that moved it here. */
+	@media (min-width: 721px) {
+		.session-list {
+			width: var(--list-width, 250px);
 		}
 	}
 

@@ -14,7 +14,7 @@
 	 * never offered — the uncovered strip of page looked like a dismiss target
 	 * and was not.
 	 */
-	import { isDismissSwipe, registerPageList, type Point } from '$lib/list-sheet.svelte';
+	import { registerPageList } from '$lib/list-sheet.svelte';
 
 	interface Props {
 		/** Bound to the page's own listOpen, which also drives the aside. */
@@ -26,20 +26,7 @@
 	}
 	let { open = $bindable(), label, count }: Props = $props();
 
-	$effect(() => registerPageList(() => (open = !open)));
-
-	let from: Point | null = null;
-
-	function onpointerdown(e: PointerEvent) {
-		from = { x: e.clientX, y: e.clientY };
-	}
-
-	function onpointermove(e: PointerEvent) {
-		if (!from) return;
-		if (!isDismissSwipe(from, { x: e.clientX, y: e.clientY })) return;
-		from = null;
-		open = false;
-	}
+	$effect(() => registerPageList((next) => (open = next)));
 </script>
 
 <svelte:window
@@ -62,15 +49,7 @@
 {#if open}
 	<!-- Not a button: it is a dismiss surface, and Escape and the pill are the
 	     ways in that a keyboard or a screen reader should be offered. -->
-	<div
-		class="list-scrim"
-		role="presentation"
-		onclick={() => (open = false)}
-		{onpointerdown}
-		{onpointermove}
-		onpointerup={() => (from = null)}
-		onpointercancel={() => (from = null)}
-	></div>
+	<div class="list-scrim" role="presentation" onclick={() => (open = false)}></div>
 {/if}
 
 <style>

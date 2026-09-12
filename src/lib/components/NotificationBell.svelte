@@ -210,10 +210,13 @@
 		text-align: center;
 	}
 	/* Catches the click that dismisses the panel. Transparent, but it has to be
-	   under the panel and over everything else. */
+	   under the panel and over everything else — everything except the phone's
+	   tab bar, which it stops short of. Covering that made the first tap on any
+	   destination a dismiss and nothing else, the same way the More sheet's own
+	   scrim did; the panel already clears the bar, so the scrim should too. */
 	.scrim {
 		position: fixed;
-		inset: 0;
+		inset: 0 0 var(--above-bar) 0;
 		z-index: var(--z-scrim);
 	}
 	/* Fixed, not absolute: the nav pane scrolls, and a scroll container clips
@@ -342,7 +345,7 @@
 			   Both edges are pinned now, so the box is the height and the
 			   min(28rem, 70vh) cap below would fight it. */
 			top: calc(var(--chrome-top) + 0.5rem);
-			bottom: calc(var(--chrome-bottom) + 0.5rem);
+			bottom: calc(var(--above-bar) + 0.5rem);
 			max-height: none;
 		}
 	}

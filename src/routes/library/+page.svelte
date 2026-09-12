@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
+	import { swipeToClose } from '$lib/list-sheet.svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import ListPill from '$lib/components/ListPill.svelte';
@@ -199,7 +200,12 @@
 </script>
 
 <div class="lib-shell">
-	<aside class="doc-list page-list" class:open={listOpen} style={`--list-width:${listPane.width}px`}>
+	<aside
+		class="doc-list page-list"
+		class:open={listOpen}
+		style={`--list-width:${listPane.width}px`}
+		use:swipeToClose={() => (listOpen = false)}
+	>
 		<div class="list-actions">
 			<!-- Wrapped, or the click event arrives as the folder to file it under. -->
 			<button class="btn primary" onclick={() => startNew()}>+ New doc</button>
@@ -349,9 +355,6 @@
 		min-width: 0;
 	}
 	.doc-list {
-		/* Set from the drag handle and remembered per browser — see PaneResizer,
-		   which also draws the dividing line this used to carry as a border. */
-		width: var(--list-width, 290px);
 		flex-shrink: 0;
 		padding: 0.75rem;
 		box-sizing: border-box;
@@ -667,6 +670,14 @@
 		color: var(--accent);
 	}
 
-	@media (max-width: 720px) {
+	/* Set from the drag handle and remembered per browser — see PaneResizer, which
+	   also draws the dividing line this used to carry as a border. Desktop only:
+	   below the breakpoint this pane is the off-canvas sheet the layout draws,
+	   sized from an inset. See the same block on the chat page for the failure
+	   that moved it here. */
+	@media (min-width: 721px) {
+		.doc-list {
+			width: var(--list-width, 290px);
+		}
 	}
 </style>

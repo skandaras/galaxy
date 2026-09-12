@@ -44,8 +44,15 @@
 	     is no signed-in person to have a theme, and by Bubblewrap when it builds
 	     the Android package. -->
 	<meta name="theme-color" content={data.theme.bg} />
+	<!-- touch-action is here rather than on each control because the failure it
+	     fixes is not any one component's. iOS keeps double-tap-to-zoom on a
+	     width=device-width page — Chrome drops it, Safari does not — and the
+	     gesture recogniser can swallow the second tap of a quick pair on the same
+	     element. The tab bar's "tap the tab you are already on" *is* that pair, so
+	     whether it worked came down to how fast the thumb was. -->
 	{@html `<style id="galaxy-theme">${themeCss(data.theme)}
-	button, input, select, textarea { border-radius: var(--radius); }</style>`}
+	button, input, select, textarea { border-radius: var(--radius); }
+	button, a, input, select, textarea { touch-action: manipulation; }</style>`}
 </svelte:head>
 
 {#if data.theme.galaxyBg}
@@ -114,10 +121,19 @@
 		}
 		:global(.page-list) {
 			position: fixed;
-			/* Beats the inline --list-width the resize handle writes: this is a
-			   sheet here, not a resizable column, and the handle is hidden. */
-			width: auto;
-			inset: var(--chrome-top) 25% 0 0;
+			/* This used to say width:auto, with a comment claiming it beat the
+			   inline --list-width the resize handle writes. It never did: the pages
+			   write a custom property, not a width, and their own
+			   `.chat-list { width: … }` compiles to a scoped two-class selector that
+			   outranks this one-class global whatever the media query says. So the
+			   sheet opened at the *desktop* pane width — 340px of a 390px screen,
+			   and all of a 320px one, which left no scrim to dismiss it with and
+			   covered the pill too. The width now lives behind (min-width: 721px) in
+			   each page, so there is nothing here to beat.
+			   The bottom inset clears the bar rather than being 0: the drawer sits
+			   below the bar in the stacking order, so a list running to the bottom
+			   of the screen had its last rows permanently underneath it. */
+			inset: var(--chrome-top) 25% var(--above-bar) 0;
 			background: var(--bg-pane);
 			z-index: var(--z-drawer);
 			transform: translateX(-100%);
@@ -136,18 +152,32 @@
 	:global(:root) {
 		/* What the fixed chrome occupies at each edge, composed here because the
 		   sizes come from the theme and the breakpoint is the layout's. Every
-		   bottom-anchored thing reads --chrome-bottom rather than measuring the
-		   bar or, as the alerts panel did, hard-coding 4rem and hoping. */
+		   bottom-anchored thing reads one of these rather than measuring the bar
+		   or, as the alerts panel did, hard-coding 4rem and hoping. */
 		--chrome-top: 0px;
 		--chrome-bottom: env(safe-area-inset-bottom, 0px);
+		/* Where a position:fixed thing has to sit to clear the bar. Two tokens
+		   rather than one because they answer different questions: anything
+		   *inside* the shell measures against --chrome-bottom, since the shell
+		   has already been shortened by the keyboard; anything fixed to the
+		   viewport has the keyboard underneath it as well. Everything that got
+		   this wrong got it wrong by writing the sum out by hand. */
+		--above-bar: calc(var(--chrome-bottom) + var(--kbd));
 	}
 	.shell {
 		display: flex;
 		/* dvh, not vh: on iOS 100vh is the largest viewport, so anything pinned
 		   to the bottom of it hides under the URL bar until you scroll. Headless
 		   Chromium resolves the two identically, so no test here can tell them
-		   apart and this comment is the only record. */
-		height: 100dvh;
+		   apart and this comment is the only record.
+		   Minus --kbd because dvh does not account for the software keyboard on
+		   either platform that matters. attachViewport() had been measuring the
+		   inset and publishing it since the bar arrived, and nothing in the tree
+		   read it — so the composer sat behind the keyboard for the whole of that
+		   time, which is the one thing docs/MOBILE.md promises it does not do. The
+		   number is 0 wherever the layout viewport shrank on its own, so this is
+		   one rule for both. */
+		height: calc(100dvh - var(--kbd));
 		overflow: hidden;
 		position: relative;
 		z-index: var(--z-base);
