@@ -1523,6 +1523,17 @@
 		line-height: 1.55;
 		position: relative;
 	}
+	/* A message may not make the conversation wider than the screen. On a phone
+	   the reply arrived clipped mid-word at the right edge with a scrollbar under
+	   it, because a long unbroken token — a URL, an id, a path — has a min-content
+	   width and nothing here said it could break. The blocks that are legitimately
+	   wide (code, tables, diagrams) scroll inside their own box; see Markdown. */
+	.msg,
+	.user-text {
+		min-width: 0;
+		max-width: 100%;
+		overflow-wrap: anywhere;
+	}
 	.msg.user {
 		align-self: flex-end;
 		background: var(--bg-pane);
