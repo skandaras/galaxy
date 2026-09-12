@@ -90,12 +90,34 @@ describe('attachViewport', () => {
 		const setVar = vi.fn();
 		const w = fakeWindow();
 		const detach = attachViewport(w.win, setVar);
+		// Attaching publishes the reading it starts from, even when that is zero.
+		// It used to skip that, so --kbd took an inline value only once an inset
+		// had been seen — and a stale one left behind by an earlier attach had
+		// nothing to correct it.
+		expect(setVar).toHaveBeenCalledWith('--kbd', '0px');
+		setVar.mockClear();
 
 		w.resizeTo(480);
 		w.resizeTo(480);
 		w.resizeTo(480);
 		expect(setVar).toHaveBeenCalledTimes(1);
 		detach();
+	});
+
+	it('puts the inset back on the way out, not just the reading of it', () => {
+		// The teardown used to assign the signal directly and leave --kbd on the
+		// document saying something else — and the de-duplication then compared
+		// against the zeroed signal and never corrected it, so a phone could be
+		// left laid out around a keyboard that had long since gone.
+		const setVar = vi.fn();
+		const w = fakeWindow();
+		const detach = attachViewport(w.win, setVar);
+		w.resizeTo(480);
+		setVar.mockClear();
+
+		detach();
+		expect(setVar).toHaveBeenCalledWith('--kbd', '0px');
+		expect(viewport.keyboard).toBe(0);
 	});
 
 	it('puts Safari’s scroll back exactly once, on the way open', () => {
@@ -166,7 +188,8 @@ describe('attachViewport', () => {
 		const detach = attachViewport(win, setVar);
 		for (const fn of listeners.resize ?? []) fn();
 		expect(viewport.keyboard).toBe(0);
-		expect(setVar).not.toHaveBeenCalled();
+		// Zero, published once on attach and not repeated per event.
+		expect(setVar.mock.calls).toEqual([['--kbd', '0px']]);
 		detach();
 		expect(listeners.resize).toEqual([]);
 	});
