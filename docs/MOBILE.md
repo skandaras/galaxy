@@ -88,12 +88,22 @@ installed app and the browser.
   which holds the rest. It is where a thumb already is, and it does not move
   when your account gains Code or Admin. Tapping the tab you are already on
   opens that page's own list (chats, coding sessions, documents); a labelled
-  pill at the top of the page does the same.
+  pill at the top of the page does the same. That tap only ever *opens* — it
+  used to toggle, which made tapping a tab twice mean "show me the list" from
+  another page and "show it then hide it again" from the page you were on. The
+  scrim beside the list, Escape and the pill all close it.
+- The list itself is an off-canvas sheet covering about three quarters of the
+  width, so there is always a strip beside it to tap to dismiss, and it can be
+  dragged off to the left. It stops above the tab bar rather than running under
+  it, so its last rows stay reachable.
 - The left rail becomes a slim top strip carrying identity and status only —
   wordmark, Alerts, budget, environment, username.
 - The app becomes **one screen** rather than a document that scrolls: the
   conversation scrolls, the composer and the bar stay put, and the keyboard
-  does not cover the input.
+  does not cover the input. Neither platform shrinks the page for a software
+  keyboard on its own, so the inset is measured (`$lib/viewport.svelte.ts`),
+  published as `--kbd`, and taken off the shell's height; the bar rides on top
+  of the keyboard so the composer still has somewhere to sit.
 - The bar respects the iOS home-indicator inset and the strip respects the
   notch (`viewport-fit=cover` + safe-area insets).
 - **Cortex** takes touch gestures: pinch to zoom, twist to turn, double-tap to

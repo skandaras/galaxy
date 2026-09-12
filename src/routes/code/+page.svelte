@@ -1753,7 +1753,14 @@
 		max-width: 16rem;
 	}
 
+	/* --tap, not a padding that happens to come out near it — see the same rule on
+	   the chat page for the measurement and the reason. */
 	.btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: var(--tap);
+		min-width: var(--tap);
 		background: var(--border);
 		color: var(--fg);
 		border: none;
@@ -1782,6 +1789,11 @@
 		opacity: 0.5;
 	}
 	.chip {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: var(--tap);
+		min-width: var(--tap);
 		background: transparent;
 		border: 1px solid var(--border);
 		border-radius: 999px;

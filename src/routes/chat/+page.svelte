@@ -301,12 +301,22 @@
 		closeStream();
 		errorBanner = null;
 		blockingJobId = null;
+		// Before the fetch, not after it. This used to sit below the early return,
+		// so a load that failed left the drawer — and its full-screen scrim —
+		// standing over a composer that could no longer be tapped, with nothing on
+		// screen to say why.
+		listOpen = false;
+		// Nothing staged for one conversation may follow you into another: files
+		// are uploaded against a chat id, and `canSend` counts them, so a leftover
+		// armed the send button over an empty box and then posted the wrong chat's
+		// attachments. /code has said this since it was written.
+		pendingFiles = [];
+		uploadedRefs = [];
 		const res = await fetch(`/api/chats/${id}`);
 		if (!res.ok) return;
 		const data = await res.json();
 		currentChat = { ...data.chat };
 		messages = data.messages;
-		listOpen = false;
 		applyChatModel(currentChat);
 		loadDraft(draftKey('chat', id));
 		// Open on the newest message rather than the top of the history.
@@ -344,6 +354,17 @@
 		input = getDraft(NEW_KEY);
 		errorBanner = null;
 		lastStopReason = null;
+		blockingJobId = null;
+		// Same scoping as loadChat: a file staged for the last conversation is not
+		// for this one.
+		pendingFiles = [];
+		uploadedRefs = [];
+		// The buttons that call this live *inside* the drawer on a phone, so
+		// leaving it open put its scrim over the composer you were just sent to —
+		// every tap on the box or the send arrow hit the scrim instead. Chat was
+		// the only one of the three list pages whose new-thing button forgot this;
+		// /library and /code have always closed it.
+		listOpen = false;
 	}
 
 	/** Create the chat a first message is being sent to. */
@@ -1008,7 +1029,16 @@
 							aria-label="Chat name"
 						/>
 					{:else}
-						<button class="chat-row" onclick={() => selectChat(chat.id)} ondblclick={(e) => startRename(chat, e)}>
+						<!-- Double-click renames on a mouse only. On a phone a double tap on
+						     a row is just an impatient tap, and it opened a rename box over
+						     the chat the person was trying to read; the ✎ beside it is
+						     permanently visible on touch (see the hover:none block) and is
+						     the way in there. -->
+						<button
+							class="chat-row"
+							onclick={() => selectChat(chat.id)}
+							ondblclick={(e) => hasFinePointer() && startRename(chat, e)}
+						>
 							<span class="title">{chat.hidden ? '◌ ' : ''}{chat.title}</span>
 						</button>
 						<span class="row-actions">
@@ -1202,12 +1232,16 @@
 						aria-label="Stop generating">{stopping ? '…' : '■'}</button
 					>
 				{:else}
+					<!-- The reason is in the label as well as the title: a title needs a
+					     hover, and a phone has none — so the only explanation of why the
+					     arrow was greyed was one a thumb could never reach. -->
 					<button
 						class="btn send"
 						onclick={() => send()}
 						disabled={!canSend}
 						title={canSend ? 'Send message' : 'Type a message or attach a file first'}
-						aria-label="Send message">➤</button
+						aria-label={canSend ? 'Send message' : 'Send message — type something first'}
+						>➤</button
 					>
 				{/if}
 			</div>
@@ -1285,7 +1319,18 @@
 		gap: 0.4rem;
 		margin-bottom: 0.75rem;
 	}
+	/* --tap, not a padding that happens to come out near it. This measured 36x33
+	   on a phone against a floor of 44 (docs/ACCESSIBILITY.md), and on touch the
+	   send button is the *only* way to send — Enter inserts a newline when the
+	   pointer is coarse — so a thumb that missed it had no second route and no
+	   way to tell a miss from a dead control. The Library page has been sized
+	   this way all along; chat and code were left behind. */
 	.btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: var(--tap);
+		min-width: var(--tap);
 		background: var(--border);
 		color: var(--fg);
 		border: none;
@@ -1333,6 +1378,7 @@
 	.chat-row {
 		flex: 1;
 		min-width: 0;
+		min-height: var(--tap);
 		background: none;
 		border: none;
 		color: var(--fg);
@@ -1358,13 +1404,15 @@
 	}
 	/* Sized as a target rather than a glyph: at 0.8rem with 0.1rem of padding
 	   these were a ~13px tap area, which is a miss waiting to happen next to
-	   a Delete. */
+	   a Delete. Tall to the floor, but deliberately not wide to it: four of these
+	   at 44px would take 176px of a 292px drawer and leave the chat's name with
+	   nowhere to go. Height is the axis a thumb misses on in a list. */
 	.icon {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
 		min-width: 1.5rem;
-		min-height: 1.5rem;
+		min-height: var(--tap);
 		background: none;
 		border: none;
 		border-radius: 4px;
@@ -1652,6 +1700,13 @@
 		flex-wrap: wrap;
 	}
 	.chip {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		/* Same floor as .btn above. These measured 28px tall, and the icon-only
+		   one — the paperclip — 42 wide, which is why both axes are named. */
+		min-height: var(--tap);
+		min-width: var(--tap);
 		background: transparent;
 		border: 1px solid var(--border);
 		border-radius: 999px;
