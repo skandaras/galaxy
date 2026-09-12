@@ -150,7 +150,11 @@ Internet ─► Proxy ──┤
 - **GitHub App + PR watching** — review agent, CI auto-fix via webhooks, replacing the PAT. Opening the pull request itself is shipped (`open_pull_request`, and a button on the session header).
 - **Artifacts pane** — sandboxed iframe rendering of interactive HTML/SVG the agents produce.
 - **Image generation providers** + a gallery surface in the Library; deep image analysis (OCR, structured extraction).
-- **Generic scheduled tasks** — user-defined cron agents beyond the memory job (morning brief, repo health check).
+- **Generic scheduled tasks** — user-defined cron agents beyond the memory job (morning
+  brief, repo health check). *Partly designed*: **Feed** (`docs/FEED.md`) is the first
+  concrete shape of this — per-topic cadence, a trawl that searches and reads on a
+  schedule, and three importance tiers whose admission is gated in code rather than by
+  the prompt. Designed, not built.
 - **Multi-agent orchestration** — *partly shipped*: the coding agent can dispatch a read-only `explore` sub-agent (its own model and step budget under the `subagent` task, no recursion, usage broken out in Admin → Usage). Still outstanding: sub-agents that can write, and pipelines (research → draft → review).
 - **Voice** — dictation input and TTS replies, mobile-first.
 - **Per-user spending caps** and model-access policies.
