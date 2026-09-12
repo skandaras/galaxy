@@ -9,7 +9,17 @@ export interface GalaxyEvent {
 	userId?: string;
 	chatId?: string;
 	task?: string;
-	type: 'model.call' | 'tool.call' | 'job' | 'failover' | 'compaction' | 'admin' | 'budget';
+	type:
+		| 'model.call'
+		| 'tool.call'
+		| 'job'
+		| 'failover'
+		| 'compaction'
+		| 'admin'
+		| 'budget'
+		// A crash in someone's browser. The Observatory is the only place the
+		// phone can be read from, and an events row needs no migration.
+		| 'client';
 	name: string;
 	status: 'ok' | 'error' | 'running';
 	durationMs?: number;
