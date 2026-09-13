@@ -44,6 +44,18 @@ const REASONING_MODEL = {
 	architecture: { input_modalities: ['text'] }
 };
 
+// A model that cannot see. Orion above takes image input, so nothing here could
+// exercise the path a text-only model takes when a screenshot is attached — the
+// one where view_image hands the picture to somebody else.
+const BLIND_MODEL = {
+	id: 'mock/mole-1',
+	name: 'Mole 1 (mock, no vision)',
+	context_length: 8192,
+	pricing: { prompt: '0.000001', completion: '0.000002' },
+	supported_parameters: ['tools'],
+	architecture: { input_modalities: ['text'] }
+};
+
 // A model that draws. OpenRouter reports the capability as an output modality
 // and returns the picture on message.images, which is the shape generate_image
 // reads — so a mock that only streamed text would prove nothing about it.
@@ -277,7 +289,7 @@ const server = createServer(async (req, res) => {
 
 	if (req.method === 'GET' && url.pathname === '/v1/models') {
 		res.writeHead(200, { 'content-type': 'application/json' });
-		res.end(JSON.stringify({ data: [MODEL, REASONING_MODEL, PAINTER_MODEL] }));
+		res.end(JSON.stringify({ data: [MODEL, REASONING_MODEL, BLIND_MODEL, PAINTER_MODEL] }));
 		return;
 	}
 
@@ -456,12 +468,23 @@ const server = createServer(async (req, res) => {
 		const system = String(parsed.messages[0]?.content ?? '');
 		const offered = (name) =>
 			Array.isArray(parsed.tools) && parsed.tools.some((t) => t.function?.name === name);
+		// A message carrying an image is an array of parts, not a string, so
+		// String(content) on one reads "[object Object]" and every word test
+		// against it quietly fails — which is how a vision model asked to look at
+		// a screenshot fell through to the generic reply.
+		const textOf = (content) =>
+			Array.isArray(content)
+				? content.map((part) => (part?.type === 'text' ? part.text : '')).join(' ')
+				: String(content ?? '');
 		const asksFor = (word) =>
-			last?.role === 'user' && String(last.content).toLowerCase().includes(word);
+			last?.role === 'user' && textOf(last.content).toLowerCase().includes(word);
 		const wantsTool = offered('web_search') && asksFor('search');
 		// Same shape as the search trigger above, for the drawing path: the agent
 		// calls generate_image, which calls the painter model behind it.
 		const wantsImage = offered('generate_image') && asksFor('draw');
+		// And the reading path: a model with no vision is offered view_image, and
+		// only then can it be asked to look at anything.
+		const wantsView = offered('view_image') && asksFor('look');
 
 		// A provider that is simply down. Checked before either path picks its
 		// response headers — a 503 after the SSE headers are already out is an
@@ -483,6 +506,33 @@ const server = createServer(async (req, res) => {
 			const userText = String(last?.content ?? '');
 			// Image generation. Answered only when the caller actually asked for
 			// the modality, so the mock also proves the request carried it.
+			// The vision half of the same chain: answered only when the request
+			// really carried the picture, so the mock proves the data URL was
+			// built and sent rather than the tool merely having been called.
+			const shown = Array.isArray(last?.content)
+				? last.content.find((part) => part?.type === 'image_url')
+				: null;
+			if (shown) {
+				const isData = String(shown.image_url?.url ?? '').startsWith('data:image/');
+				res.writeHead(200, { 'content-type': 'application/json' });
+				res.end(
+					JSON.stringify({
+						id: 'mock',
+						choices: [
+							{
+								index: 0,
+								message: {
+									role: 'assistant',
+									content: `SEEN-BY-VISION data-url:${isData} model:${parsed.model}`
+								},
+								finish_reason: 'stop'
+							}
+						],
+						usage: { prompt_tokens: 900, completion_tokens: 12 }
+					})
+				);
+				return;
+			}
 			if (isPainter(parsed.model) && (parsed.modalities ?? []).includes('image')) {
 				res.writeHead(200, { 'content-type': 'application/json' });
 				res.end(
@@ -943,12 +993,17 @@ const server = createServer(async (req, res) => {
 		const drewAlready = parsed.messages.some(
 			(m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.function?.name === 'generate_image')
 		);
+		const viewedAlready = parsed.messages.some(
+			(m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.function?.name === 'view_image')
+		);
 		if (
 			system.includes('[This conversation has no name yet]') &&
 			!namedAlready &&
 			!wantsTool &&
 			!wantsImage &&
-			!drewAlready
+			!wantsView &&
+			!drewAlready &&
+			!viewedAlready
 		) {
 			delta(res, {
 				tool_calls: [
@@ -990,6 +1045,30 @@ const server = createServer(async (req, res) => {
 				]
 			});
 			delta(res, {}, 'tool_calls');
+		} else if (wantsView) {
+			delta(res, {
+				tool_calls: [
+					{
+						index: 0,
+						id: 'call_view',
+						function: {
+							name: 'view_image',
+							arguments: JSON.stringify({ question: 'what does it say?' })
+						}
+					}
+				]
+			});
+			delta(res, {}, 'tool_calls');
+		} else if (last?.role === 'tool' && String(last.content ?? '').includes('SEEN-BY-VISION')) {
+			// What a real model does with view_image's result: it has no other way
+			// to know what was in the picture, so the answer has to come through.
+			delta(res, { content: `The image says: ${String(last.content).trim()}` });
+			delta(res, {}, 'stop');
+		} else if (asksFor('look')) {
+			// Reached only when the tool was never on the table — which is the
+			// case for a model that can see the image for itself.
+			delta(res, { content: `Nothing to delegate. view-image-offered:${offered('view_image')}` });
+			delta(res, {}, 'stop');
 		} else if (last?.role === 'tool' && String(last.content ?? '').includes('](/api/chats/')) {
 			// What a real model does with generate_image's result: it is told to
 			// put the link in its reply verbatim, and the picture only reaches the

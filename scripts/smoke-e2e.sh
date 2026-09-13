@@ -38,7 +38,12 @@ MOCK_PID=$!
 # SSRF guard rightly blocks in production.
 # SEARCH_THROTTLED_GAP_MS: the real 2s gap is the point in production and dead
 # time here — the smoke asserts that throttling engages, not how slow it is.
-AUTH_MODE=dev DEV_USER=smoke DATA_DIR=$DATA PORT=$APP_PORT CODING_EXECUTOR=local ALLOW_PRIVATE_RESEARCH_FETCH=1 SEARCH_THROTTLED_GAP_MS=50 node build &
+# ORIGIN because adapter-node assumes https when it is unset, so its idea of
+# its own origin never matches the http one a client sends and SvelteKit's
+# CSRF guard refuses every multipart POST — which is to say every upload.
+# docs/INSTALL.md tells operators to set it for exactly this reason, so the
+# smoke sets it too rather than testing a configuration nobody runs.
+AUTH_MODE=dev DEV_USER=smoke DATA_DIR=$DATA PORT=$APP_PORT ORIGIN=http://127.0.0.1:$APP_PORT CODING_EXECUTOR=local ALLOW_PRIVATE_RESEARCH_FETCH=1 SEARCH_THROTTLED_GAP_MS=50 node build &
 APP_PID=$!
 trap 'kill $MOCK_PID $APP_PID 2>/dev/null; rm -rf $DATA' EXIT
 wait_for "the mock provider" "http://127.0.0.1:$MOCK_PORT/" --any
@@ -458,6 +463,51 @@ check "the image renders inline rather than downloading" "$IHDR" 'content-dispos
 check "the image is served with sniffing off" "$IHDR" 'x-content-type-options: nosniff'
 # od rather than xxd: xxd ships with vim, which a CI runner need not have.
 check "the bytes are a real PNG" "$(curl -s $B$IMG_URL | od -An -tx1 -N4 | tr -d ' ')" '89504e47'
+
+# ---------------------------------------------------------------------------
+# Reading an image, which is the other direction and a longer chain: a chat
+# model with no vision is offered view_image, calls it, and the tool hands the
+# picture to the model the `vision` task points at. Every link has to hold —
+# the tool is only offered to a model that needs it, the attachment becomes a
+# data URL, that URL reaches the second model, and its answer comes back far
+# enough to appear in the reply the person reads.
+# ---------------------------------------------------------------------------
+BLIND_ID=$(api $B/api/admin/models | node -pe "JSON.parse(require('fs').readFileSync(0)).find(m=>m.modelKey.includes('mole')).id")
+check "a model that cannot see is imported as such" "$(api $B/api/admin/models)" '"modelKey":"mock/mole-1","displayName":"Mole 1 (mock, no vision)","contextWindow":8192,"supportsTools":true,"supportsVision":false'
+api -X PATCH $B/api/admin/models/$BLIND_ID -d '{"enabled":true}' > /dev/null
+api -X PUT $B/api/admin/task-configs -d "{\"task\":\"vision\",\"primaryModelId\":\"$MODEL_ID\"}" > /dev/null
+
+VCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+# A one-pixel PNG, written out rather than fetched: the point is that real
+# bytes make the round trip to disk and back out as a data URL.
+printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' \
+  | base64 -d > "$DATA/shot.png"
+# The origin header is what a browser always sends and curl never does, and
+# SvelteKit's CSRF guard rejects a multipart POST without one.
+VREF=$(curl -sf -H "origin: $B" -F "file=@$DATA/shot.png;type=image/png" $B/api/chats/$VCHAT/attachments)
+check "the image uploads as an image" "$VREF" '"kind":"image"'
+VJOB=$(api -X POST $B/api/chats/$VCHAT/messages \
+  -d "{\"content\":\"Please look at this and tell me what it says\",\"modelId\":\"$BLIND_ID\",\"webSearch\":false,\"attachments\":[$VREF]}" | jqn .jobId)
+VSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$VJOB/stream)
+check "the blind model delegates the looking" "$VSTREAM" '"name":"view_image","status":"ok"'
+VREPLY=$(api $B/api/chats/$VCHAT | jqn '.messages.at(-1).content')
+check "the picture really travelled, as a data URL" "$VREPLY" 'data-url:true'
+check "and it was the vision task's model that was shown it" "$VREPLY" 'model:mock/orion-1'
+# The spend is counted; the conversation it was spent on is not this tool's to
+# name, so the row carries the task and no chat id.
+check "the looking is billed to the vision task" "$(api $B/api/admin/usage)" '"vision"'
+
+# ...and withheld from a model that can see for itself, which is the other half
+# of the rule: offering it there is paying twice for one image.
+SCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+# Named up front so the turn is not spent on set_chat_title: the reply that
+# reports what was offered has to be the model's own, not its second pass.
+api -X PATCH $B/api/chats/$SCHAT -d '{"title":"Looking"}' > /dev/null
+SREF=$(curl -sf -H "origin: $B" -F "file=@$DATA/shot.png;type=image/png" $B/api/chats/$SCHAT/attachments)
+SJOB=$(api -X POST $B/api/chats/$SCHAT/messages \
+  -d "{\"content\":\"Please look at this one\",\"modelId\":\"$MODEL_ID\",\"webSearch\":false,\"attachments\":[$SREF]}" | jqn .jobId)
+curl -sN --max-time 60 $B/api/jobs/$SJOB/stream > /dev/null
+check "a model with vision is not offered the tool" "$(api $B/api/chats/$SCHAT | jqn '.messages.at(-1).content')" 'view-image-offered:false'
 
 # The nav cost bar reads this; it must be available to a non-admin user, since
 # the cap blocks everyone's turns.

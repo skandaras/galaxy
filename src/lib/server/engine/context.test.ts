@@ -75,6 +75,15 @@ describe('messageContent', () => {
 		expect(out).toContain('cannot view images');
 	});
 
+	it('points a non-vision model at view_image, with the id it needs to call it', () => {
+		// The note is the only place the model is told the id, so a pointer
+		// without one is a pointer it cannot follow.
+		const { ref, message } = chatWith({ name: 'shot.png', mime: 'image/png', kind: 'image' });
+		const out = messageContent(message, false) as string;
+		expect(out).toContain('view_image');
+		expect(out).toContain(`id="${ref.id}"`);
+	});
+
 	it('still reads documents when the model has no vision', () => {
 		const chat = createChat({ userId: 'u1', hidden: true });
 		const doc = addAttachment(chat.id, {

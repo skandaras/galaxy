@@ -261,6 +261,7 @@ export const CORE_TASKS = [
 	'coding',
 	'deep-research',
 	'visual',
+	'vision',
 	'memory',
 	'skill-optimiser',
 	'ux-audit',

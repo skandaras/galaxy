@@ -2,6 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
 	import { ATTACHMENT_ACCEPT, attachmentIcon, screenFiles } from '$lib/attachment-types';
+	import { carriesFiles, filesFrom, nameArrival } from '$lib/composer-files';
 	import { clearDraft, draftKey, getDraft, setDraft } from '$lib/composer-drafts.svelte';
 	import { createAutoscroll } from '$lib/autoscroll.svelte';
 	import { autoresize } from '$lib/autoresize';
@@ -772,12 +773,67 @@
 		}
 	}
 
-	function onFilesPicked(ev: Event) {
-		const target = ev.target as HTMLInputElement;
-		const { accepted, rejected } = screenFiles([...(target.files ?? [])]);
+	/** The one way in for the picker, a paste and a drop alike. */
+	function acceptFiles(files: File[]) {
+		const { accepted, rejected } = screenFiles(files);
 		if (accepted.length) pendingFiles = [...pendingFiles, ...accepted];
 		errorBanner = rejected.length ? rejected.join(' ') : null;
+	}
+
+	function onFilesPicked(ev: Event) {
+		const target = ev.target as HTMLInputElement;
+		acceptFiles([...(target.files ?? [])]);
 		target.value = '';
+	}
+
+	/**
+	 * A screenshot in the clipboard, attached as though it had been picked.
+	 *
+	 * The paste *event* rather than navigator.clipboard.read(): the async
+	 * Clipboard API only exists in a secure context and Galaxy is routinely
+	 * served over plain HTTP on a LAN, which is the same reason copyText keeps
+	 * its execCommand fallback.
+	 */
+	function onPaste(ev: ClipboardEvent) {
+		const files = filesFrom(ev.clipboardData).map((f) => nameArrival(f, new Date()));
+		// Only a paste actually carrying a file is ours. Calling preventDefault
+		// before this check swallowed every ordinary paste of text into the box.
+		if (!files.length) return;
+		ev.preventDefault();
+		acceptFiles(files);
+	}
+
+	/**
+	 * Depth, not a boolean: dragleave fires every time the pointer crosses into
+	 * a child, so the highlight flickered off over the send button and over each
+	 * attachment chip on the way past.
+	 */
+	let dragDepth = $state(0);
+
+	function onDragEnter(ev: DragEvent) {
+		if (!carriesFiles(ev.dataTransfer)) return;
+		dragDepth++;
+	}
+
+	function onDragOver(ev: DragEvent) {
+		if (!carriesFiles(ev.dataTransfer)) return;
+		// Without this the browser takes the drop itself and navigates away from
+		// the conversation to display the file.
+		ev.preventDefault();
+		if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy';
+	}
+
+	function onDragLeave(ev: DragEvent) {
+		if (!carriesFiles(ev.dataTransfer)) return;
+		dragDepth = Math.max(0, dragDepth - 1);
+	}
+
+	function onDrop(ev: DragEvent) {
+		dragDepth = 0;
+		const files = filesFrom(ev.dataTransfer).map((f) => nameArrival(f, new Date()));
+		if (!files.length) return;
+		ev.preventDefault();
+		acceptFiles(files);
 	}
 
 	async function copyDiff() {
@@ -855,11 +911,27 @@
 	);
 
 	const selectedModel = $derived(models.find((m) => m.id === selectedModelId) ?? null);
-	const pendingImages = $derived(pendingFiles.filter((f) => f.type.startsWith('image/')).length);
-	/** Images are dropped by non-vision models; warn instead of failing quietly. */
+	/**
+	 * Staged images, counting the ones a failed send has already banked. This
+	 * read pendingFiles alone, so a send refused with a 409 moved the images into
+	 * uploadedRefs and took the warning about them down with it.
+	 */
+	const pendingImages = $derived(
+		pendingFiles.filter((f) => f.type.startsWith('image/')).length +
+			uploadedRefs.filter((r) => r.mime.startsWith('image/')).length
+	);
+	/** Whether anything enabled here could read one on the chat model's behalf. */
+	const canDelegateVision = $derived(models.some((m) => m.supportsVision));
+	/**
+	 * A model without vision no longer means the image is thrown away: view_image
+	 * hands it to one that can see it and reads the answer back. What is still
+	 * worth saying before the message goes is which of those two is happening.
+	 */
 	const visionWarning = $derived(
 		pendingImages > 0 && selectedModel && !selectedModel.supportsVision
-			? `${selectedModel.displayName} can't read images — attached image${pendingImages > 1 ? 's' : ''} will be ignored.`
+			? canDelegateVision
+				? `👁 ${selectedModel.displayName} can't read images itself — it will ask a vision model and work from what comes back.`
+				: `⚠ ${selectedModel.displayName} can't read images, and no model here can. Enable one badged “V” in Admin → Models.`
 			: null
 	);
 </script>
@@ -1105,7 +1177,17 @@
 				{/if}
 			</div>
 
-			<footer class="composer">
+			<!-- The whole composer is the drop target, not just the box: a
+			     screenshot dragged at a two-line textarea mostly misses it. The
+			     paperclip stays the route that needs no pointer at all. -->
+			<footer
+				class="composer"
+				class:dragging={dragDepth > 0}
+				ondragenter={onDragEnter}
+				ondragover={onDragOver}
+				ondragleave={onDragLeave}
+				ondrop={onDrop}
+			>
 				{#if !scroll.pinned}
 					<button class="jump" onclick={() => scroll.toBottom('smooth')}>↓ Jump to latest</button>
 				{/if}
@@ -1137,7 +1219,7 @@
 					</div>
 				{/if}
 				{#if visionWarning}
-					<div class="composer-hint">⚠ {visionWarning}</div>
+					<div class="composer-hint">{visionWarning}</div>
 				{/if}
 				<div class="composer-row">
 					<textarea
@@ -1147,6 +1229,7 @@
 						use:autoresize={input}
 						oninput={stashDraft}
 						onkeydown={onKeydown}
+						onpaste={onPaste}
 					></textarea>
 					{#if streaming}
 						<button
@@ -1686,6 +1769,14 @@
 		   the screen. Two elements both paying env(safe-area-inset-bottom) is a
 		   double gap on a notched phone and a wrong one on every other device. */
 		padding: 0.7rem 1rem 0.9rem;
+	}
+
+	/* Outlined inwards, and an outline rather than a border, so lighting up
+	   cannot change the composer's size and shove the thread up a line every
+	   time a file passes over it. */
+	.composer.dragging {
+		outline: 2px dashed var(--accent);
+		outline-offset: -4px;
 	}
 	.jump {
 		display: block;

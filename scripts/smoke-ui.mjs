@@ -826,6 +826,46 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 	if (fail.length) await shot('new-chat');
 }
 
+// N+2. The composer's two newest affordances, neither of which any other check
+//      can see: a screenshot pasted straight into the box, and a Hidden state
+//      legible once there is text on top of the placeholder that used to be the
+//      only thing saying so. The sole attachment assertion in this file before
+//      today was that there was *not* one.
+{
+	problems = [];
+	await page.goto(`${B}/chat`);
+	await page.locator('.composer textarea').waitFor();
+
+	// Constructed by hand because Playwright cannot put an image on the system
+	// clipboard, and the paste event is precisely the thing under test.
+	await page.evaluate((b64) => {
+		const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+		const dt = new DataTransfer();
+		dt.items.add(new File([bytes], 'image.png', { type: 'image/png' }));
+		document.querySelector('.composer textarea').dispatchEvent(
+			new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })
+		);
+	}, 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==');
+	await page.waitForTimeout(300);
+	check('a pasted image becomes an attachment', await page.locator('.composer .att-chip').count(), 1);
+	check(
+		'and is named for the paste, not "image.png" like every other one',
+		(await page.locator('.composer .att-chip').first().innerText()).includes('pasted-')
+	);
+	await page.locator('.composer .att-chip button').click();
+
+	const hiddenChip = page.locator('.composer').getByRole('button', { name: 'Hidden' });
+	const lit = () => hiddenChip.evaluate((el) => el.classList.contains('on'));
+	await page.locator('.composer textarea').fill('typed before choosing');
+	check('the Hidden chip starts off', await lit(), false);
+	await hiddenChip.click();
+	await page.waitForTimeout(200);
+	// The exact case the placeholder could never cover: there is text over it.
+	check('and lights with a message already in the box', await lit());
+	check('none of which logged an error', problems, []);
+	if (fail.length) await shot('composer-paste');
+}
+
 // 8. The Cortex map. A canvas is the one thing on the page whose failure is
 //    completely silent — nothing throws, nothing is missing from the DOM, it
 //    just draws nothing. So this seeds a small lattice, checks the chart put
