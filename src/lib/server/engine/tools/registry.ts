@@ -14,6 +14,7 @@ import { imageTools } from './images';
 import { knowledgeTools } from './knowledge';
 import { runHistoryToolDef } from '../run-history';
 import { setChatTitleToolDef } from '../chat-title';
+import { viewImageToolDef } from './vision';
 import { webSearchToolDef } from './web-search';
 
 export type ToolSource = 'builtin' | 'mcp';
@@ -111,6 +112,15 @@ export function builtinDescriptors(): ToolDescriptor[] {
 	);
 	// Placeholder ids again: they scope execution, never the declaration.
 	add(imageTools('*', '*'), 'visual', ['chat']);
+	// Declaration only, like web_search above. The live tool joins a turn solely
+	// when that turn's model has no vision of its own, but it has to be listed
+	// here either way or an admin cannot find it to switch it off.
+	add(
+		[{ def: viewImageToolDef, execute: async () => '' }],
+		'visual',
+		['chat', 'coding'],
+		'offered only when the turn\u2019s model cannot read images itself'
+	);
 	// Built from its declaration alone, like web_search above: create_pdf is only
 	// added to a live toolset when the Typst binary is present, but it must be
 	// listed here either way or an admin cannot find it to switch it off.

@@ -36,7 +36,7 @@ export function attachmentTools(chatId: string): LoopTool[] {
 			def: {
 				name: 'read_attachment',
 				description:
-					'Read the text of a document attached to this conversation. Use offset/limit to page through long files. Images cannot be read this way.',
+					'Read the text of a document attached to this conversation. Use offset/limit to page through long files. Images have no text to read — use view_image for those.',
 				parameters: {
 					type: 'object',
 					properties: {
@@ -70,7 +70,7 @@ export function attachmentTools(chatId: string): LoopTool[] {
 				}
 				if (match.kind === 'image') {
 					throw new Error(
-						`${match.name} is an image — it is shown directly to vision-capable models and has no text to read.`
+						`${match.name} is an image and has no text to read. A vision-capable model is shown it directly; otherwise call view_image with id ${match.id}.`
 					);
 				}
 

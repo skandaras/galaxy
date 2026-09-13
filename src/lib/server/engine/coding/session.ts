@@ -46,6 +46,7 @@ import { fetchUrlTool } from '../tools/fetch-url';
 import { bootstrapContext, knowledgeTools } from '../tools/knowledge';
 import { mcpLoopTools } from '../tools/mcp';
 import { applyToolPolicy } from '../tools/registry';
+import { visionTools } from '../tools/vision';
 import { getExecutor } from './executor';
 import { exploreTool } from './explore';
 import {
@@ -310,6 +311,9 @@ export function startCodingTurn(opts: {
 				...(opts.webSearch && webSearchConfigured(searchCfg)
 					? [webSearchTool(searchCfg, { scope: 'leg' })]
 					: []),
+				// Same rule as chat: a screenshot of a failing build is only unreadable
+				// to a model that cannot see it, so the tool appears only for those.
+				...(choice.model.supportsVision ? [] : visionTools(chat.id, opts.userId)),
 				...mcpLoopTools('coding')
 			],
 			'coding'

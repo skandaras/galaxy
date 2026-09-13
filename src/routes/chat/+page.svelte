@@ -2,6 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
 	import { ATTACHMENT_ACCEPT, attachmentIcon, screenFiles } from '$lib/attachment-types';
+	import { carriesFiles, filesFrom, nameArrival } from '$lib/composer-files';
 	import { clearDraft, draftKey, getDraft, renameDraft, setDraft } from '$lib/composer-drafts.svelte';
 	import {
 		beginAttach,
@@ -88,6 +89,13 @@
 	 * so it is held here and handed to `createChat`.
 	 */
 	let pendingHidden = $state(false);
+	/**
+	 * Whether what is in the composer is going somewhere hidden — the open chat's
+	 * own flag, or the choice made before there is a chat to hang it on. Read by
+	 * the placeholder, the chip and the draft store, which each used to work it
+	 * out for themselves.
+	 */
+	const isHidden = $derived(currentChat?.hidden ?? pendingHidden);
 	const NEW_KEY = draftKey('chat', null);
 	let activeKey = $state(NEW_KEY);
 	let input = $state(getDraft(NEW_KEY));
@@ -117,11 +125,27 @@
 	let threadEl = $state<HTMLElement | null>(null);
 
 	const selectedModel = $derived(models.find((m) => m.id === selectedModelId) ?? null);
-	const pendingImages = $derived(pendingFiles.filter((f) => f.type.startsWith('image/')).length);
-	/** Images are dropped by non-vision models; warn instead of failing quietly. */
+	/**
+	 * Staged images, counting the ones a failed send has already banked. This
+	 * read pendingFiles alone, so a send refused with a 409 moved the images into
+	 * uploadedRefs and took the warning about them down with it.
+	 */
+	const pendingImages = $derived(
+		pendingFiles.filter((f) => f.type.startsWith('image/')).length +
+			uploadedRefs.filter((r) => r.mime.startsWith('image/')).length
+	);
+	/** Whether anything enabled here could read one on the chat model's behalf. */
+	const canDelegateVision = $derived(models.some((m) => m.supportsVision));
+	/**
+	 * A model without vision no longer means the image is thrown away: view_image
+	 * hands it to one that can see it and reads the answer back. What is still
+	 * worth saying before the message goes is which of those two is happening.
+	 */
 	const visionWarning = $derived(
 		pendingImages > 0 && selectedModel && !selectedModel.supportsVision
-			? `${selectedModel.displayName} can't read images — attached image${pendingImages > 1 ? 's' : ''} will be ignored.`
+			? canDelegateVision
+				? `👁 ${selectedModel.displayName} can't read images itself — it will ask a vision model and work from what comes back.`
+				: `⚠ ${selectedModel.displayName} can't read images, and no model here can. Enable one badged “V” in Admin → Models.`
 			: null
 	);
 
@@ -280,7 +304,7 @@
 
 	/** Park the current composer text against the chat it was written for. */
 	function stashDraft() {
-		setDraft(activeKey, input, { ephemeral: currentChat?.hidden ?? pendingHidden });
+		setDraft(activeKey, input, { ephemeral: isHidden });
 	}
 
 	function loadDraft(key: string) {
@@ -954,8 +978,26 @@
 		await refreshChats();
 	}
 
-	async function toggleHidden(chat: ChatMeta, evOrNull?: Event) {
-		evOrNull?.stopPropagation();
+	/**
+	 * Flip Hidden for whatever the composer is pointed at.
+	 *
+	 * This was a button on every row of the list, which meant it could act on a
+	 * conversation you were not looking at, and its only feedback near the box
+	 * you were typing in was a placeholder — invisible the moment there was text
+	 * to hide it. The single control is now the chip under the composer, so the
+	 * subject is always the open conversation, and there are two cases because a
+	 * chat that does not exist yet has nothing to PATCH.
+	 */
+	async function toggleHidden() {
+		if (!currentChat) {
+			pendingHidden = !pendingHidden;
+			// setDraft rewrites the whole stored blob minus the ephemeral keys, so
+			// re-stashing is what evicts text typed before the flip. Without it the
+			// draft written while this was an ordinary chat simply stays there.
+			stashDraft();
+			return;
+		}
+		const chat = currentChat;
 		const res = await fetch(`/api/chats/${chat.id}`, {
 			method: 'PATCH',
 			headers: { 'content-type': 'application/json' },
@@ -969,13 +1011,14 @@
 			blockingJobId = res?.status === 409 && err?.jobId ? err.jobId : null;
 			return;
 		}
+		// Ahead of the re-stash below, which reads the flag through isHidden.
+		currentChat = { ...chat, hidden: !chat.hidden };
 		// Drafts are kept in sessionStorage and skipped for hidden chats, but one
-		// typed while the chat was visible is already written — and `currentChat`
-		// still says visible here, so the next keystroke would write it again.
-		if (!chat.hidden) {
-			clearDraft(draftKey('chat', chat.id));
-			if (currentChat?.id === chat.id) currentChat = { ...currentChat, hidden: true };
-		}
+		// typed while the chat was visible is already written. This used to be a
+		// clearDraft: throwing the text away was tolerable from a sidebar button
+		// aimed at some other chat, and is not when the control sits directly
+		// under what you have just written.
+		stashDraft();
 		await refreshChats();
 	}
 
@@ -988,6 +1031,9 @@
 		clearDraft(draftKey('chat', chat.id));
 		if (currentChat?.id === chat.id) {
 			currentChat = null;
+			// Or the chip stays lit over the blank composer and the next chat is
+			// created hidden by a choice made for one that no longer exists.
+			pendingHidden = false;
 			messages = [];
 			uploadedRefs = [];
 			pendingFiles = [];
@@ -997,12 +1043,67 @@
 		await refreshChats();
 	}
 
-	function onFilesPicked(ev: Event) {
-		const target = ev.target as HTMLInputElement;
-		const { accepted, rejected } = screenFiles([...(target.files ?? [])]);
+	/** The one way in for the picker, a paste and a drop alike. */
+	function acceptFiles(files: File[]) {
+		const { accepted, rejected } = screenFiles(files);
 		if (accepted.length) pendingFiles = [...pendingFiles, ...accepted];
 		errorBanner = rejected.length ? rejected.join(' ') : null;
+	}
+
+	function onFilesPicked(ev: Event) {
+		const target = ev.target as HTMLInputElement;
+		acceptFiles([...(target.files ?? [])]);
 		target.value = '';
+	}
+
+	/**
+	 * A screenshot in the clipboard, attached as though it had been picked.
+	 *
+	 * The paste *event* rather than navigator.clipboard.read(): the async
+	 * Clipboard API only exists in a secure context and Galaxy is routinely
+	 * served over plain HTTP on a LAN, which is the same reason copyText keeps
+	 * its execCommand fallback.
+	 */
+	function onPaste(ev: ClipboardEvent) {
+		const files = filesFrom(ev.clipboardData).map((f) => nameArrival(f, new Date()));
+		// Only a paste actually carrying a file is ours. Calling preventDefault
+		// before this check swallowed every ordinary paste of text into the box.
+		if (!files.length) return;
+		ev.preventDefault();
+		acceptFiles(files);
+	}
+
+	/**
+	 * Depth, not a boolean: dragleave fires every time the pointer crosses into
+	 * a child, so the highlight flickered off over the send button and over each
+	 * attachment chip on the way past.
+	 */
+	let dragDepth = $state(0);
+
+	function onDragEnter(ev: DragEvent) {
+		if (!carriesFiles(ev.dataTransfer)) return;
+		dragDepth++;
+	}
+
+	function onDragOver(ev: DragEvent) {
+		if (!carriesFiles(ev.dataTransfer)) return;
+		// Without this the browser takes the drop itself and navigates away from
+		// the conversation to display the file.
+		ev.preventDefault();
+		if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy';
+	}
+
+	function onDragLeave(ev: DragEvent) {
+		if (!carriesFiles(ev.dataTransfer)) return;
+		dragDepth = Math.max(0, dragDepth - 1);
+	}
+
+	function onDrop(ev: DragEvent) {
+		dragDepth = 0;
+		const files = filesFrom(ev.dataTransfer).map((f) => nameArrival(f, new Date()));
+		if (!files.length) return;
+		ev.preventDefault();
+		acceptFiles(files);
 	}
 
 	/**
@@ -1067,11 +1168,6 @@
 								class="icon"
 								title="Archive — keeps the chat, removes it from this list"
 								onclick={(e) => toggleArchived(chat, e)}>▤</button
-							>
-							<button
-								class="icon"
-								title={chat.hidden ? 'Make visible (persist)' : 'Make hidden (forget)'}
-								onclick={(e) => toggleHidden(chat, e)}>{chat.hidden ? '◉' : '◌'}</button
 							>
 							<button class="icon" title="Delete" onclick={(e) => removeChat(chat, e)}>×</button>
 						</span>
@@ -1198,7 +1294,17 @@
 			{/if}
 		</div>
 
-		<footer class="composer">
+		<!-- The whole composer is the drop target, not just the box: a
+		     screenshot dragged at a two-line textarea mostly misses it. The
+		     paperclip stays the route that needs no pointer at all. -->
+		<footer
+			class="composer"
+			class:dragging={dragDepth > 0}
+			ondragenter={onDragEnter}
+			ondragover={onDragOver}
+			ondragleave={onDragLeave}
+			ondrop={onDrop}
+		>
 			{#if !scroll.pinned}
 				<button class="jump" onclick={() => scroll.toBottom('smooth')}>↓ Jump to latest</button>
 			{/if}
@@ -1230,18 +1336,17 @@
 				</div>
 			{/if}
 			{#if visionWarning}
-				<div class="composer-hint">⚠ {visionWarning}</div>
+				<div class="composer-hint">{visionWarning}</div>
 			{/if}
 			<div class="composer-row">
 				<textarea
 					rows="2"
-					placeholder={(currentChat?.hidden ?? pendingHidden)
-						? 'Hidden chat — nothing here is stored'
-						: 'Message Galaxy…'}
+					placeholder={isHidden ? 'Hidden chat — nothing here is stored' : 'Message Galaxy…'}
 					bind:value={input}
 					use:autoresize={input}
 					oninput={stashDraft}
 					onkeydown={onKeydown}
+					onpaste={onPaste}
 				></textarea>
 				{#if streaming}
 					<button
@@ -1298,6 +1403,25 @@
 						onchange={(next) => (researchEffort = next)}
 					/>
 				{/if}
+				<!-- The only Hidden control there is, and beside the box rather than in
+				     the list on purpose: the placeholder that used to be the sole
+				     feedback stops being drawn the moment there is text to hide it, so
+				     turning Hidden on with a half-written message looked like nothing
+				     had happened. Lit exactly like Web search above it. -->
+				<button
+					class="chip"
+					class:on={isHidden}
+					disabled={streaming}
+					aria-pressed={isHidden}
+					title={streaming
+						? 'Visibility cannot change while a reply is running'
+						: isHidden
+							? 'Hidden: nothing here is stored, and memory never sees it. Click to keep this chat.'
+							: 'Make this chat hidden — nothing stored, invisible to memory'}
+					onclick={() => toggleHidden()}
+				>
+					◌ Hidden
+				</button>
 				<select
 					class="model-select"
 					bind:value={selectedModelId}
@@ -1654,6 +1778,14 @@
 		   the screen. Two elements both paying env(safe-area-inset-bottom) is a
 		   double gap on a notched phone and a wrong one on every other device. */
 		padding: 0.7rem 1rem 0.9rem;
+	}
+
+	/* Outlined inwards, and an outline rather than a border, so lighting up
+	   cannot change the composer's size and shove the thread up a line every
+	   time a file passes over it. */
+	.composer.dragging {
+		outline: 2px dashed var(--accent);
+		outline-offset: -4px;
 	}
 	.jump {
 		display: block;

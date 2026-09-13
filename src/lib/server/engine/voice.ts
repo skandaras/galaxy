@@ -63,6 +63,8 @@ export const HOUSE_VOICE =
  * - `chat-title` (two to five words) and `run-summary` (one line, no markdown) —
  *   a block this size shaping a fifteen-word output is pure cost.
  * - `visual` — the output is Mermaid or SVG.
+ * - `vision` — the reader is another agent, and the output is a transcription
+ *   of what is in an image. House voice would be shaping the wrong thing.
  * - `memory` and `cortex-groom` — JSON, and both prompts are already stricter
  *   about what earns a line than this block knows how to be.
  * - `alignment` — this one would actively conflict. The block bans ritual

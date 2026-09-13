@@ -254,6 +254,20 @@ describe('uiDigest', () => {
 		expect(text.length).toBeLessThan(20_000);
 	});
 
+	it('carries both daily-use surfaces whole at the real budget', async () => {
+		// The regression this exists for: the budget was smaller than the first
+		// file, so the audit received chat/+page.svelte cut in half and nothing
+		// else at all — including the code page ranked joint-first beside it.
+		const text = await uiDigest();
+		expect(text).toContain('/src/routes/chat/+page.svelte');
+		expect(text).toContain('/src/routes/code/+page.svelte');
+		// The composer is the last markup in both files, so having both of them
+		// is what says neither page was cut short. A later file still runs out
+		// of budget and is truncated — that is the design; losing the surfaces
+		// the priority order exists to protect was not.
+		expect(text.match(/class="composer"/g)?.length).toBe(2);
+	});
+
 	it('puts the two daily-use surfaces first', async () => {
 		const text = await uiDigest(6_000);
 		const chatAt = text.indexOf('/src/routes/chat/+page.svelte');

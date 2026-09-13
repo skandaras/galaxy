@@ -35,6 +35,7 @@ import { imageTools } from './tools/images';
 import { bootstrapContext, knowledgeTools } from './tools/knowledge';
 import { mcpLoopTools } from './tools/mcp';
 import { applyToolPolicy } from './tools/registry';
+import { visionTools } from './tools/vision';
 import { webSearchConfigured, webSearchTool } from './tools/web-search';
 
 export interface TurnOptions {
@@ -148,6 +149,11 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	// Only where the compiler exists. An instance without the binary should be
 	// unable to write PDFs rather than offering a tool that always throws.
 	if (typstReady()) tools.push(...documentTools(chat.id));
+
+	// Only where the model cannot see the picture itself. One that can already
+	// has it in context, and offering it a tool to describe what it is looking at
+	// is an invitation to pay for the same image twice.
+	if (!choice.model.supportsVision) tools.push(...visionTools(chat.id, opts.userId));
 
 	/**
 	 * Naming happens inside this turn when the chat is still unnamed: the agent

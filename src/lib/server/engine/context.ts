@@ -74,10 +74,13 @@ export function messageContent(m: StoredMessage, supportsVision: boolean): Messa
 	if (!images.length) return text;
 
 	if (!supportsVision) {
-		// These used to vanish without trace. Say so, so the model can tell the
-		// user rather than answering as if nothing had been attached.
-		const names = images.map((a) => a.name).join(', ');
-		return `${text}\n\n[Attached image${images.length > 1 ? 's' : ''}: ${names} — the selected model cannot view images, so the contents are unavailable.]`;
+		// These used to vanish without trace, and then to be announced as a dead
+		// end: "the contents are unavailable" told the model to apologise. The
+		// contents are reachable — view_image hands the picture to a model that
+		// can see it — so the note carries the ids that tool needs, the way the
+		// document block above carries them for read_attachment.
+		const names = images.map((a) => `${a.name} (id="${a.id}")`).join(', ');
+		return `${text}\n\n[Attached image${images.length > 1 ? 's' : ''}: ${names} — the selected model cannot view images. Call view_image with the id and what you need to know, and a vision model will answer for you.]`;
 	}
 
 	const parts: MessageContent = [{ type: 'text', text }];

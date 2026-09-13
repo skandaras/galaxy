@@ -30,7 +30,18 @@ const FIRST_RUN_WINDOW_MS = 30 * 86_400_000;
  * idea name the control to change.
  */
 const MAX_TELEMETRY_CHARS = 12_000;
-const MAX_UI_CHARS = 45_000;
+/**
+ * Big enough for the pages uiPriority puts first, which is the whole point of
+ * putting them first. At 45,000 it was not: chat/+page.svelte alone exhausted
+ * the budget and was itself cut short, so every audit ever run saw one
+ * truncated file and a list of fifty-one omitted ones — the code page, ranked
+ * joint-first here as a surface in daily use, among them. The failure was
+ * silent because a truncated page still reads like a page. Sized against the
+ * two daily-use pages plus the layout, with room for them to grow; the guard
+ * is in ux-audit.test.ts, so the next time they outgrow it a test says so
+ * instead of an audit quietly narrowing.
+ */
+const MAX_UI_CHARS = 160_000;
 const MAX_HISTORY_CHARS = 8_000;
 /** Prior ideas replayed to the agent, newest first. */
 const MAX_HISTORY_ITEMS = 200;
