@@ -193,6 +193,13 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		backup,
 		tools: activeTools,
 		maxIterations: chatMaxSteps(),
+		// The turn a person is sitting and watching, so it asks for the floor.
+		// Chat asked for nothing, and on a reasoning model "nothing" means the
+		// provider's own default: four fifths of one turn's output went on
+		// deliberation before a word of the reply, for a question that wanted a
+		// plain answer. An admin who wants a given model to think harder sets
+		// `reasoningMode` on its row, which wins — see reasoningFor.
+		reasoning: 'low',
 		// Coding has always re-checked mid-run; chat never did, so a turn with a
 		// dozen round-trips in it was gated exactly once, before the first token.
 		// Board agents route through here too and inherited the same gap.

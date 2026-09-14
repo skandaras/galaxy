@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { reasoningNotes } from '$lib/reasoning-note';
 import type { RunStep, RunToolCall, SearchResultRow } from '$lib/run-timeline';
-import type { ModelChoice } from '$lib/server/providers/registry';
+import { reasoningFor, type ModelChoice } from '$lib/server/providers/registry';
 import type {
 	ChatRequest,
 	ProviderAdapter,
 	ProviderMessage,
+	ReasoningEffort,
 	StreamEvent,
 	ToolCall,
 	ToolDef,
@@ -126,6 +127,29 @@ export interface LoopOptions {
 	buildMessages: () => ProviderMessage[];
 	tools: LoopTool[];
 	maxIterations: number;
+	/**
+	 * How hard the model should think on each leg of this turn.
+	 *
+	 * The job that reads material and emits JSON or a short label has asked for
+	 * `'low'` since `reasoningFor` existed — chat-title, memory, compaction,
+	 * run-summary, ux-audit, alignment, vision and cortex-groom all do. This loop
+	 * asked for nothing, and it is the path a person sits and waits on.
+	 *
+	 * What that cost: a chat turn on a reasoning model spent 1,672 of its 2,087
+	 * completion tokens thinking — eighty per cent of the answer's wall clock —
+	 * before saying anything, on a question that wanted a plain reply. Reasoning
+	 * tokens are output tokens, so they are the wall clock, and `max_tokens` does
+	 * not bound them; the incident that produced `reasoningFor` is written up in
+	 * full on commit 9d7c83d.
+	 *
+	 * Left undefined the request carries no reasoning field at all and the model
+	 * falls back to its own default. That is still what the coding paths want — a
+	 * long repository turn is not waiting on a first token the way a chat is —
+	 * and it is also where research's synthesis stream (research.ts) remains, on
+	 * the same reasoning. Image generation never had a view: `modalities` is what
+	 * that call is about.
+	 */
+	reasoning?: ReasoningEffort;
 	/**
 	 * Re-checked every few steps on a long run. `assertBudget` only guards the
 	 * start of a turn, which is not enough once turns can run for dozens of
@@ -591,7 +615,15 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 						modelKey: choice.model.modelKey,
 						messages,
 						tools: toolDefs,
-						cacheMode: choice.model.cacheMode
+						cacheMode: choice.model.cacheMode,
+						// Resolved per call rather than per turn: failover can land on a
+						// different model, and whether the field may be sent at all is
+						// that model's answer to give. `reasoningFor` drops it for an
+						// endpoint that never advertised it — one that has not heard of
+						// it is entitled to reject the whole request — and lets an
+						// admin's `reasoningMode` on the model row override what the
+						// task asked for, in either direction.
+						reasoning: reasoningFor(choice, opts.reasoning)
 					},
 				// The user pressing stop drops the provider connection immediately;
 				// the idle watchdog inside handles a connection that goes quiet.
