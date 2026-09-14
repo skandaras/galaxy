@@ -427,9 +427,33 @@ export const DEFAULT_BUDGET: BudgetSettings = { enabled: false, limitUsd: 25, pe
 export interface MemorySettings {
 	enabled: boolean;
 	intervalHours: number;
+	/**
+	 * How many memories a person keeps at once.
+	 *
+	 * This is the whole design, not a tuning knob: only this many ever reached a
+	 * system prompt, but the audit used to add without ever removing, so the
+	 * stored list grew forever — and the audit's own prompt carried every line
+	 * of it, which is how a job that had always worked started timing out. Past
+	 * the cap a new memory has to displace one, judged against it.
+	 */
+	maxItems: number;
+	/**
+	 * Wall-clock ceiling on each of the memory job's model calls.
+	 *
+	 * A background call is a plain non-streaming request, so this is the whole
+	 * of it — no idle allowance, unlike a streamed turn, which tolerates 180s of
+	 * silence and 1800s in total. This was an unnamed 120_000 in three places,
+	 * which is less than a streaming call is allowed to spend saying nothing.
+	 */
+	timeoutSeconds: number;
 }
 
-export const DEFAULT_MEMORY: MemorySettings = { enabled: true, intervalHours: 12 };
+export const DEFAULT_MEMORY: MemorySettings = {
+	enabled: true,
+	intervalHours: 12,
+	maxItems: 20,
+	timeoutSeconds: 180
+};
 
 export interface AlignmentSettings {
 	/**

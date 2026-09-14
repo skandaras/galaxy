@@ -212,8 +212,11 @@ async function scriptedReply(userText, maxTokens = 0) {
 				: userText.includes('beta-topic')
 					? 'BETA-MEM'
 					: null;
+			// `add` rather than `memories`: the audit keeps a fixed working set now,
+			// and past the cap an entry has to name the memory it displaces. These
+			// go into a fresh instance with slots to spare, so none of them do.
 			content = JSON.stringify({
-				memories: [
+				add: [
 					...(marker ? [{ kind: 'fact', content: `Observed marker ${marker}` }] : []),
 					{ kind: 'preference', content: 'User prefers concise replies' },
 					{ kind: 'fact', content: 'Prod restarts via systemctl restart galaxy' }

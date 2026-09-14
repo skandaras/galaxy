@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
 import {
-	MEMORY_DIGEST_MAX_ITEMS,
+	memoryCap,
 	getMemoryStatus,
 	listCandidates,
 	listMemoryItems
@@ -19,7 +19,7 @@ export const GET: RequestHandler = ({ locals }) => {
 		items: listMemoryItems(user.id),
 		// How many of those actually reach a system prompt, so the page can show
 		// the context cost rather than just the stored count.
-		digestMaxItems: MEMORY_DIGEST_MAX_ITEMS,
+		digestMaxItems: memoryCap(),
 		enabled: status.enabled,
 		lastRun: status.lastRun,
 		nextDue: status.lastRun + global.intervalHours * 3_600_000,
