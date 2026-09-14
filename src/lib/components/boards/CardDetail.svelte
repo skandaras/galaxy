@@ -217,7 +217,12 @@
 				<h4>Attachments</h4>
 				{#each attachments as a (a.id)}
 					<div class="file">
-						<a href={`/api/cards/${cardId}/attachments/${a.id}`}>{a.name}</a>
+						<!-- The browser's, not the router's: there is no client route
+						     under /api, so SvelteKit files a 404 through handleError
+						     before falling through to a real navigation. -->
+						<a href={`/api/cards/${cardId}/attachments/${a.id}`} data-sveltekit-reload
+							>{a.name}</a
+						>
 						<span class="meta">{Math.max(1, Math.round(a.size / 1024))} KB</span>
 						<button class="icon" title="Remove" onclick={() => removeAttachment(a.id)}>✕</button>
 					</div>

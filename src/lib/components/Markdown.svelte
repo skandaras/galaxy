@@ -5,6 +5,7 @@
 	import CodeBlock from './CodeBlock.svelte';
 	import SvgBlock from './SvgBlock.svelte';
 	import { segmentMarkdown } from '$lib/markdown-segments';
+	import { releaseApiLinks } from '$lib/markdown-links';
 
 	let { text }: { text: string } = $props();
 
@@ -15,7 +16,11 @@
 	 * paragraph — the wall of prose every reply arrived as.
 	 */
 	const parse = (md: string) =>
-		DOMPurify.sanitize(marked.parse(md, { async: false, gfm: true, breaks: true }) as string);
+		// After sanitising, not before: releaseApiLinks reads the anchors
+		// DOMPurify actually kept, rather than whatever the model wrote.
+		releaseApiLinks(
+			DOMPurify.sanitize(marked.parse(md, { async: false, gfm: true, breaks: true }) as string)
+		);
 
 	/**
 	 * Rendered segments, keyed by their own text.

@@ -31,6 +31,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	const user = requireUser(locals);
 	let chat = getChat(params.id, user.id);
 	if (!chat) error(404, 'Chat not found');
+	let dropped: string[] = [];
 	const body = await request.json().catch(() => ({}));
 
 	if (typeof body.title === 'string' && body.title.trim()) {
@@ -56,12 +57,17 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 				ageMinutes: mins
 			});
 		}
-		chat = setHidden(chat.id, user.id, body.hidden) ?? chat;
+		const hid = setHidden(chat.id, user.id, body.hidden);
+		chat = hid?.meta ?? chat;
+		// Hiding copies attachments into memory and then deletes the originals.
+		// Anything whose file had already gone missing cannot come along, and
+		// saying so beats a conversation that quietly lost a file.
+		dropped = hid?.dropped ?? [];
 	}
 	if (typeof body.archived === 'boolean' && body.archived !== Boolean(chat.archivedAt)) {
 		chat = setArchived(chat.id, user.id, body.archived) ?? chat;
 	}
-	return json(getChat(params.id, user.id));
+	return json({ ...getChat(params.id, user.id), droppedAttachments: dropped });
 };
 
 export const DELETE: RequestHandler = ({ locals, params }) => {

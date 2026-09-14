@@ -270,14 +270,6 @@
 
 	$effect(() => (threadEl ? scroll.attach(threadEl) : undefined));
 
-	// Follow the run as it streams, unless the user has scrolled up to read.
-	$effect(() => {
-		streamText;
-		messages.length;
-		timeline.length;
-		if (scroll.pinned) void scroll.toBottom('auto');
-	});
-
 	/** Park the current composer text against the session it was written for. */
 	function stashDraft() {
 		setDraft(activeKey, input);
