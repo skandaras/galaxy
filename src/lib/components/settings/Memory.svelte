@@ -69,8 +69,9 @@
 		notice = null;
 		const result = await (await fetch('/api/memory/run', { method: 'POST' })).json();
 		busy = false;
+		const kept = result.memories ?? 0;
 		notice = result.ran
-			? `Found ${result.memories ?? 0} new ${result.memories === 1 ? 'memory' : 'memories'}${result.candidates ? `, ${result.candidates} skill candidate(s)` : ''}`
+			? `Kept ${kept} new ${kept === 1 ? 'memory' : 'memories'}${result.displaced ? `, making room by dropping ${result.displaced}` : ''}${result.candidates ? `, and proposed ${result.candidates} skill candidate(s)` : ''}`
 			: `Nothing to do: ${result.reason}`;
 		await load();
 	}
@@ -121,9 +122,11 @@
 	const archived = $derived(items.filter((i) => i.status === 'archived'));
 
 	/**
-	 * What the memory actually costs per message. Only the first
-	 * `digestMaxItems` reach a system prompt, and the character count is the
-	 * figure that turns into tokens on every single turn.
+	 * What the memory actually costs per message, and how much of the ceiling is
+	 * spoken for. `truncated` is normally zero now that the stored set is held at
+	 * the same number that reaches a prompt — it survives for the one case where
+	 * it is not, which is a list still being cut down by hand from before the
+	 * cap existed.
 	 */
 	const footprint = $derived.by(() => {
 		const inContext = active.slice(0, digestMaxItems);
@@ -203,19 +206,24 @@
 		<h3>What it remembers {active.length ? `(${active.length})` : ''}</h3>
 		{#if active.length}
 			<p class="hint footprint">
-				In context: {footprint.count} of {active.length}
-				{active.length === 1 ? 'memory' : 'memories'}, about {footprint.chars.toLocaleString()} characters
+				Holding {footprint.count} of {digestMaxItems}, about {footprint.chars.toLocaleString()} characters
 				added to every chat and coding turn.{#if footprint.truncated}
-					The other {footprint.truncated} are stored but not sent.{/if}
+					{footprint.truncated} more are stored but never sent, and nothing new can be recorded
+					until you are back under {digestMaxItems}.{/if}
 			</p>
 		{/if}
 		<p class="hint">
+			This list has a ceiling, and every line is paid for on every turn. Once it is full, a new
+			memory can only take the place of one already here, and has to be worth more than the one
+			it displaces — what it pushes out is either filed in your “Long term user memory”
+			document, where agents can go and look for it, or dropped.
+		</p>
+		<p class="hint">
 			<strong>Archive</strong> is how you say "not that" — it leaves the observation out of every
-			agent's context and tells the next audit never to record it again. <strong>Delete</strong>
+			agent's context and tells the next audit not to record it again. <strong>Delete</strong>
 			erases it outright; since the activity it came from is still there, a later audit can
-			record the same thing afresh. <strong>Consolidate</strong> above merges memories that say the
-			same thing and clears out ones that were only ever a record of what you asked about, which
-			is the one that keeps this list from growing without end.
+			record the same thing afresh. <strong>Consolidate</strong> above merges memories that say
+			the same thing, which buys back room without waiting for an audit to do it.
 		</p>
 		<table>
 			<tbody>
@@ -248,7 +256,10 @@
 
 		{#if archived.length}
 			<details>
-				<summary>{archived.length} archived — kept out of context, and never recorded again</summary>
+				<summary
+					>{archived.length} archived — kept out of context, and the audit is told not to record
+					them again</summary
+				>
 				<table>
 					<tbody>
 						{#each archived as item (item.id)}

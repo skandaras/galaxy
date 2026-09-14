@@ -295,13 +295,6 @@
 
 	$effect(() => (threadEl ? scroll.attach(threadEl) : undefined));
 
-	// Follow the reply as it streams, unless the user has scrolled up to read.
-	$effect(() => {
-		streamText;
-		messages.length;
-		if (scroll.pinned) void scroll.toBottom('auto');
-	});
-
 	/** Park the current composer text against the chat it was written for. */
 	function stashDraft() {
 		setDraft(activeKey, input, { ephemeral: isHidden });
@@ -553,7 +546,7 @@
 			return;
 		}
 		blockingJobId = null;
-		errorBanner = 'Stopping that run — try sending again in a moment.';
+		errorBanner = 'Stopping that run — try again in a moment.';
 	}
 
 	/**
@@ -915,19 +908,30 @@
 		return list.filter((c) => !c.mode || c.mode === 'chat');
 	}
 
+	/**
+	 * Re-read both lists, and stay quiet if the network says no.
+	 *
+	 * finalizeStream fires this as `void refreshChats()` on every done chunk,
+	 * every error chunk and every stream recovery, so on a phone with a patchy
+	 * connection the rejection nobody was holding reached `unhandledrejection`
+	 * and filed a `TypeError: Failed to fetch` through hooks.client.ts several
+	 * times an hour — for something no one could see go wrong. AGENTS.md names
+	 * this exactly: work started with `void` needs a `.catch()`. A dropped
+	 * refresh of a sidebar is not worth a banner; the next one fixes it.
+	 */
 	async function refreshChats() {
 		const [activeRes, archivedRes] = await Promise.all([
-			fetch('/api/chats'),
-			fetch('/api/chats?archived=1')
+			fetch('/api/chats').catch(() => null),
+			fetch('/api/chats?archived=1').catch(() => null)
 		]);
-		if (activeRes.ok) {
+		if (activeRes?.ok) {
 			chats = filterChatMode(await activeRes.json());
 			if (currentChat) {
 				const updated = chats.find((c) => c.id === currentChat!.id);
 				if (updated) currentChat = { ...updated };
 			}
 		}
-		if (archivedRes.ok) archived = filterChatMode(await archivedRes.json());
+		if (archivedRes?.ok) archived = filterChatMode(await archivedRes.json());
 	}
 
 	/** Chat being renamed inline, and the text as typed. */
@@ -947,11 +951,14 @@
 		if (!id || !title) return;
 		const existing = [...chats, ...archived].find((c) => c.id === id);
 		if (existing?.title === title) return;
-		await fetch(`/api/chats/${id}`, {
+		// Reached from onblur as well as Enter, so a failure here has no one
+		// looking at it — see refreshChats.
+		const res = await fetch(`/api/chats/${id}`, {
 			method: 'PATCH',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ title })
-		});
+		}).catch(() => null);
+		if (!res?.ok) return;
 		await refreshChats();
 		if (currentChat?.id === id) currentChat = { ...currentChat, title };
 	}
@@ -968,11 +975,15 @@
 
 	async function toggleArchived(chat: ChatMeta, ev?: Event) {
 		ev?.stopPropagation();
-		await fetch(`/api/chats/${chat.id}`, {
+		const res = await fetch(`/api/chats/${chat.id}`, {
 			method: 'PATCH',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ archived: !chat.archivedAt })
-		});
+		}).catch(() => null);
+		if (!res?.ok) {
+			errorBanner = 'Could not archive this chat.';
+			return;
+		}
 		// Archiving the open chat leaves it on screen deliberately: it is still a
 		// perfectly good conversation, just no longer in the list.
 		await refreshChats();
@@ -1011,6 +1022,16 @@
 			blockingJobId = res?.status === 409 && err?.jobId ? err.jobId : null;
 			return;
 		}
+		// Hiding copies attachments into memory and deletes the originals, so
+		// anything whose file had already gone missing cannot come along. Say so
+		// rather than letting the conversation quietly lose a file.
+		const lost: string[] = (await res.json().catch(() => null))?.droppedAttachments ?? [];
+		if (lost.length) {
+			notices = [
+				...notices,
+				`${lost.length} file${lost.length === 1 ? '' : 's'} could not be carried over and ${lost.length === 1 ? 'is' : 'are'} no longer available: ${lost.join(', ')}`
+			];
+		}
 		// Ahead of the re-stash below, which reads the flag through isHidden.
 		currentChat = { ...chat, hidden: !chat.hidden };
 		// Drafts are kept in sessionStorage and skipped for hidden chats, but one
@@ -1027,7 +1048,11 @@
 		// The row actions are always visible on touch (no hover to reveal them),
 		// which puts an unlabelled × a thumb's width from the row you meant to open.
 		if (!confirm(`Delete "${chat.title}"? This cannot be undone.`)) return;
-		await fetch(`/api/chats/${chat.id}`, { method: 'DELETE' });
+		const res = await fetch(`/api/chats/${chat.id}`, { method: 'DELETE' }).catch(() => null);
+		if (!res?.ok) {
+			errorBanner = 'Could not delete this chat.';
+			return;
+		}
 		clearDraft(draftKey('chat', chat.id));
 		if (currentChat?.id === chat.id) {
 			currentChat = null;
@@ -1407,17 +1432,22 @@
 				     the list on purpose: the placeholder that used to be the sole
 				     feedback stops being drawn the moment there is text to hide it, so
 				     turning Hidden on with a half-written message looked like nothing
-				     had happened. Lit exactly like Web search above it. -->
+				     had happened. Lit exactly like Web search above it.
+
+				     Deliberately not disabled while a reply runs. It was, and
+				     .chip:disabled fades to 45% — so the one indicator that a
+				     conversation is hidden went grey for the whole of every reply,
+				     which is when you are most likely to be looking at it. The server
+				     refuses the flip with a 409 that names the run and offers to stop
+				     it; that is better feedback than a grey button whose only
+				     explanation is a title a phone cannot show. -->
 				<button
 					class="chip"
 					class:on={isHidden}
-					disabled={streaming}
 					aria-pressed={isHidden}
-					title={streaming
-						? 'Visibility cannot change while a reply is running'
-						: isHidden
-							? 'Hidden: nothing here is stored, and memory never sees it. Click to keep this chat.'
-							: 'Make this chat hidden — nothing stored, invisible to memory'}
+					title={isHidden
+						? 'Hidden: nothing here is stored, and memory never sees it. Click to keep this chat.'
+						: 'Make this chat hidden — nothing stored, invisible to memory'}
 					onclick={() => toggleHidden()}
 				>
 					◌ Hidden

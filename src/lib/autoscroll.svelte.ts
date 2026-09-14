@@ -73,6 +73,10 @@ export function createAutoscroll(): Autoscroll {
 		pinned = true;
 	}
 
+	async function follow(): Promise<void> {
+		if (pinned) await toBottom('auto');
+	}
+
 	return {
 		get pinned() {
 			return pinned;
@@ -89,16 +93,47 @@ export function createAutoscroll(): Autoscroll {
 			// thread stays pinned to a bottom that is now behind the keyboard.
 			const vv = window.visualViewport;
 			vv?.addEventListener('resize', onScroll);
+
+			/**
+			 * Follow whatever grows, rather than a list of things each page
+			 * remembers to tell us about.
+			 *
+			 * Both pages used to re-run the follow on the reply text and the
+			 * message count alone, so a turn that spent two minutes calling tools
+			 * grew the timeline off the bottom of the screen while the view sat
+			 * still — which is the whole of the time there was anything to watch.
+			 * They kept separate lists, the lists had already drifted apart, and
+			 * neither could have been complete: applyChunk returns a new array of
+			 * the *same length* when a step finishes, and no state changes at all
+			 * when an image finally loads.
+			 */
+			let queued = false;
+			const grew = () => {
+				// One scroll a frame. A streamed reply mutates the DOM per token,
+				// and each follow reads layout.
+				if (queued) return;
+				queued = true;
+				requestAnimationFrame(() => {
+					queued = false;
+					void follow();
+				});
+			};
+			const growth = new MutationObserver(grew);
+			growth.observe(node, { childList: true, subtree: true, characterData: true });
+			// An image or a diagram that finishes loading changes the height
+			// without touching the DOM, and load does not bubble — but it captures.
+			node.addEventListener('load', grew, true);
+
 			return () => {
 				window.removeEventListener('scroll', onScroll, true);
 				window.removeEventListener('resize', onScroll);
 				vv?.removeEventListener('resize', onScroll);
+				growth.disconnect();
+				node.removeEventListener('load', grew, true);
 				el = null;
 			};
 		},
 		toBottom,
-		async follow() {
-			if (pinned) await toBottom('auto');
-		}
+		follow
 	};
 }

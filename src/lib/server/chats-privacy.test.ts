@@ -10,7 +10,17 @@ import {
 	notifications,
 	usageLog
 } from '$lib/server/db/schema';
-import { appendMessage, createChat, deleteChat, getMessages, listChats, setHidden } from './chats';
+import { rmSync } from 'node:fs';
+import {
+	addAttachment,
+	appendMessage,
+	createChat,
+	deleteChat,
+	getMessages,
+	listAttachments,
+	listChats,
+	setHidden
+} from './chats';
 import { emitEvent } from './engine/events';
 import { recentRuns } from './engine/run-history';
 
@@ -141,6 +151,35 @@ describe('hiding a chat that was visible', () => {
 		expect(recentRuns(chat.id).length).toBeGreaterThan(0);
 		setHidden(chat.id, USER, true);
 		expect(recentRuns(chat.id)).toHaveLength(0);
+	});
+
+	it('says which files it could not carry over', () => {
+		// The copy into memory is guarded on the file existing, and the erase
+		// that follows is not — so an attachment whose bytes had already gone
+		// was dropped from the hidden chat with nothing said, its id still live
+		// in the message markdown. Hiding still has to succeed; it just must not
+		// claim the conversation came through whole.
+		const chat = usedChat('Missing bytes');
+		const ref = addAttachment(chat.id, {
+			name: 'gone.png',
+			mime: 'image/png',
+			data: Buffer.from('bytes'),
+			kind: 'image'
+		});
+		const kept = addAttachment(chat.id, {
+			name: 'here.png',
+			mime: 'image/png',
+			data: Buffer.from('bytes'),
+			kind: 'image'
+		});
+		const row = db.select().from(attachments).where(eq(attachments.id, ref.id)).get()!;
+		rmSync(row.path);
+
+		const result = setHidden(chat.id, USER, true)!;
+		expect(result.dropped).toEqual(['gone.png']);
+		expect(result.meta.hidden).toBe(true);
+		// And the one that was still there came along.
+		expect(listAttachments(chat.id).map((a) => a.id)).toEqual([kept.id]);
 	});
 
 	it('is a faithful round trip', () => {

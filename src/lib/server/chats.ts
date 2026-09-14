@@ -357,38 +357,58 @@ function eraseChatRows(chatId: string): void {
 	});
 }
 
+export interface HideResult {
+	meta: ChatMeta;
+	/**
+	 * Files that could not come along, by name.
+	 *
+	 * Hiding copies each attachment's bytes into memory and then deletes the
+	 * rows and the upload directory. An attachment whose file was already
+	 * missing is skipped by that copy and deleted by the erase regardless, so
+	 * its id stays live in the message markdown pointing at nothing, and
+	 * un-hiding restores only what made it into the map. The flip still has to
+	 * succeed — it is a privacy action, and refusing it to protect a file that
+	 * is already gone would be the wrong trade — but it must not pretend the
+	 * conversation came through whole.
+	 */
+	dropped: string[];
+}
+
 /**
  * Flip a chat's Hidden state. visible→hidden pulls every trace out of the DB
  * (rows and uploaded files) into memory; hidden→visible persists it.
  */
-export function setHidden(chatId: string, userId: string, hidden: boolean): ChatMeta | null {
+export function setHidden(chatId: string, userId: string, hidden: boolean): HideResult | null {
 	const meta = getChat(chatId, userId);
-	if (!meta || meta.hidden === hidden) return meta;
+	if (!meta || meta.hidden === hidden) return meta ? { meta, dropped: [] } : null;
 
 	if (hidden) {
 		const msgs = getMessages(chatId);
 		const files = new Map<string, HiddenAttachment>();
+		const dropped: string[] = [];
 		for (const att of db.select().from(attachments).where(eq(attachments.chatId, chatId)).all()) {
-			if (existsSync(att.path)) {
-				const b64 = readFileSync(att.path).toString('base64');
-				files.set(att.id, {
-					name: att.name,
-					mime: att.mime,
-					dataUrl: `data:${att.mime};base64,${b64}`,
-					kind: att.kind,
-					text: att.extractedText ?? ''
-				});
+			if (!existsSync(att.path)) {
+				dropped.push(att.name);
+				continue;
 			}
+			const b64 = readFileSync(att.path).toString('base64');
+			files.set(att.id, {
+				name: att.name,
+				mime: att.mime,
+				dataUrl: `data:${att.mime};base64,${b64}`,
+				kind: att.kind,
+				text: att.extractedText ?? ''
+			});
 		}
 		const newMeta: ChatMeta = { ...meta, hidden: true, updatedAt: Date.now() };
 		hiddenChats.set(chatId, { meta: newMeta, messages: msgs, attachments: files });
 		eraseChatRows(chatId);
 		rmSync(uploadsDir(chatId), { recursive: true, force: true });
-		return newMeta;
+		return { meta: newMeta, dropped };
 	}
 
 	const record = hiddenChats.get(chatId);
-	if (!record) return meta;
+	if (!record) return { meta, dropped: [] };
 	const now = Date.now();
 	db.insert(chats)
 		.values({
@@ -421,7 +441,7 @@ export function setHidden(chatId: string, userId: string, hidden: boolean): Chat
 		db.insert(attachments).values(saved).run();
 	}
 	hiddenChats.delete(chatId);
-	return { ...record.meta, hidden: false, updatedAt: now };
+	return { meta: { ...record.meta, hidden: false, updatedAt: now }, dropped: [] };
 }
 
 export function deleteChat(chatId: string, userId: string): boolean {

@@ -48,7 +48,13 @@ const MEMORY_PROMPT =
 	'more than it costs. Returning nothing is the correct answer on most days and is never a ' +
 	'failure — a run that finds one real thing has done better than one that finds six plausible ' +
 	'ones. Skill candidates are rarer still: propose one only for a procedure you have watched ' +
-	'repeat.';
+	'repeat.\n\n' +
+	'That scarcity is enforced, not advisory: a person keeps a fixed number of memories, and once ' +
+	'the set is full a new one can only take the place of an existing one. So the question stops ' +
+	'being "is this worth recording" and becomes "is this worth more than the weakest thing ' +
+	'already held". Usually it is not, and the honest answer is to add nothing. When it is, say ' +
+	'plainly what makes it worth more — and decide whether the memory it pushes out is worth ' +
+	'filing in the long-term record or was never worth keeping in the first place.';
 
 export const DEFAULT_PROMPTS: Record<string, string> = {
 	chat:

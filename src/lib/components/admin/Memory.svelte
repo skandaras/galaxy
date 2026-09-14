@@ -19,7 +19,7 @@
 		proposedBy: string;
 	}
 
-	let settings = $state({ enabled: true, intervalHours: 12 });
+	let settings = $state({ enabled: true, intervalHours: 12, maxItems: 20, timeoutSeconds: 180 });
 	let userStatus = $state<UserStatus[]>([]);
 	let candidates = $state<Candidate[]>([]);
 	let expandedCand = $state<string | null>(null);
@@ -86,6 +86,14 @@
 				every (hours)
 				<input type="number" min="1" max="168" bind:value={settings.intervalHours} />
 			</label>
+			<label>
+				memories kept each
+				<input type="number" min="5" max="100" bind:value={settings.maxItems} />
+			</label>
+			<label>
+				time limit (seconds)
+				<input type="number" min="30" max="900" bind:value={settings.timeoutSeconds} />
+			</label>
 		</div>
 		<div class="row-buttons">
 			<button class="btn primary" onclick={saveSettings}>Save</button>
@@ -97,6 +105,13 @@
 			Applies to every user. Each person can opt their own audit out and run it on demand from
 			Settings → Memory; an audit only reads that user's own activity, and never hidden chats.
 		</p>
+		<p class="hint">
+			The number kept is a hard ceiling, not a target: past it a new memory has to displace one
+			and say why it is worth more, and what it pushes out is either filed in that person's
+			“Long term user memory” document or dropped. The time limit is the whole of one model
+			call — a background call is not streamed, so unlike a chat turn it gets no allowance for
+			going quiet. Raise it if audits time out against a slow provider.
+		</p>
 	</article>
 
 	<article class="card">
@@ -107,14 +122,14 @@
 		</p>
 		<table>
 			<thead>
-				<tr><th>User</th><th>Auto</th><th>Memories</th><th>Last run</th><th>Next due</th></tr>
+				<tr><th>User</th><th>Auto</th><th>Kept</th><th>Last run</th><th>Next due</th></tr>
 			</thead>
 			<tbody>
 				{#each userStatus as s (s.userId)}
 					<tr class:off={!s.enabled}>
 						<td>{s.username}</td>
 						<td>{s.enabled ? 'on' : 'opted out'}</td>
-						<td class="num">{s.activeItems}</td>
+						<td class="num">{s.activeItems} / {settings.maxItems}</td>
 						<td class="num">{when(s.lastRun)}</td>
 						<td class="num">{s.enabled && settings.enabled ? when(s.nextDue) : '—'}</td>
 					</tr>
