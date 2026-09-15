@@ -1,7 +1,9 @@
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
 import { chats, events, jobs, messages, usageLog, uxIdeas } from '$lib/server/db/schema';
+import { DEFAULT_BUDGET, setSetting } from '$lib/server/settings';
 import {
 	buildAuditPrompt,
 	decideUxIdea,
@@ -10,6 +12,7 @@ import {
 	historyDigest,
 	listUxIdeas,
 	recordIdeas,
+	runUxAudit,
 	telemetryDigest,
 	uiDigest
 } from './ux-audit';
@@ -311,5 +314,58 @@ describe('buildAuditPrompt', () => {
 
 		const prompt = await buildAuditPrompt({ since: Date.now() - 86_400_000, maxIdeas: 5 });
 		expect(prompt).not.toContain(SECRET);
+	});
+});
+
+describe('a run skipped because the spend cap is hit', () => {
+	/**
+	 * The scheduler gates the sweep on `ux.lastRun`, and this agent only stamps
+	 * that on a run that *completed* — deliberately, so a failure re-reads the
+	 * same window rather than losing a week of activity. The consequence was that
+	 * while the cap was hit nothing advanced, the five-minute tick called this
+	 * every time, and every call wrote another identical "budget cap reached"
+	 * row. A cap left on over a weekend buried real failures under hundreds of
+	 * copies for the whole retention window.
+	 */
+	beforeEach(() => {
+		// enabled with a zero limit blocks on `spent >= limit` without needing a
+		// single usage row — see getBudgetStatus.
+		setSetting('budget', { enabled: true, limitUsd: 0, period: 'day' });
+		setSetting('ux.lastSkip', 0);
+	});
+
+	// Settings live in the database, and a worker runs more than one file against
+	// the same one. Leaving the cap on would block whatever ran next, somewhere
+	// else entirely.
+	afterAll(() => setSetting('budget', DEFAULT_BUDGET));
+
+	const notices = () =>
+		db.select().from(events).where(eq(events.name, 'ux-audit.run')).all();
+
+	it('says so the first time', async () => {
+		expect((await runUxAudit('schedule')).ran).toBe(false);
+		expect(notices()).toHaveLength(1);
+	});
+
+	it('does not repeat itself on every tick', async () => {
+		await runUxAudit('schedule');
+		await runUxAudit('schedule');
+		await runUxAudit('schedule');
+		expect(notices()).toHaveLength(1);
+	});
+
+	it('says so again once the gap has passed', async () => {
+		await runUxAudit('schedule');
+		setSetting('ux.lastSkip', Date.now() - 3_700_000);
+		await runUxAudit('schedule');
+		expect(notices()).toHaveLength(2);
+	});
+
+	it('always answers a person who asked for it by hand', async () => {
+		// A manual run is somebody watching for the result, so silence is the one
+		// thing it must not do.
+		await runUxAudit('schedule');
+		await runUxAudit('manual');
+		expect(notices()).toHaveLength(2);
 	});
 });

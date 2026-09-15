@@ -20,6 +20,7 @@ import { buildContext } from './context';
 import { houseStyle, PROSE_TASKS } from './voice';
 import { maybeCompact } from './compaction';
 import { maybeTitleChat, nameThisChatNote, setChatTitleTool } from './chat-title';
+import { emitEvent } from './events';
 import { createJob, failJob, type LiveJob } from './jobs';
 import { chatMaxSteps } from './limits';
 import { runAgentLoop, type LoopTool } from './loop';
@@ -83,13 +84,42 @@ export function systemPromptFor(task: string, supplementTask?: string | null): s
 	return PROSE_TASKS.has(task) ? stored + houseStyle() : stored;
 }
 
-export function pickModel(modelId: string | null): ModelChoice | null {
+/**
+ * The model a task should run on, falling back to any enabled one.
+ *
+ * The fallback is worth keeping — a background agent whose model was disabled
+ * is better off running on something than not running at all — but it used to
+ * be completely silent, and `listEnabledModels()` has no ORDER BY, so
+ * "something" is whatever SQLite happened to return first. Disable the model
+ * the memory job was pointed at and it carries on against an arbitrary
+ * substitute: no capability check, no event, and output that quietly gets worse
+ * for a reason nothing records. cortex-groom.ts already names this in a comment
+ * about why it prints the model it used.
+ *
+ * So a substitution now says so. `task` is only a label for that event; passing
+ * nothing still works and still reports. A task with no stored preference at
+ * all is not a substitution — that is an unconfigured task, not a broken one —
+ * and stays quiet.
+ */
+export function pickModel(modelId: string | null, task?: string): ModelChoice | null {
 	if (modelId) {
 		const direct = resolveModel(modelId);
 		if (direct) return direct;
 	}
 	const first = listEnabledModels()[0];
-	return first ? resolveModel(first.id) : null;
+	const choice = first ? resolveModel(first.id) : null;
+	if (modelId && choice) {
+		emitEvent({
+			task,
+			type: 'failover',
+			name: `${modelId} → ${choice.model.modelKey}`,
+			status: 'error',
+			detail: {
+				reason: 'the configured model is missing or disabled; used the first enabled one'
+			}
+		});
+	}
+	return choice;
 }
 
 /**
@@ -102,7 +132,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	assertBudget(opts.userId, 'chat');
 
 	const cfg = getTaskConfig('chat');
-	const choice = pickModel(opts.modelId ?? cfg?.primaryModelId ?? null);
+	const choice = pickModel(opts.modelId ?? cfg?.primaryModelId ?? null, 'chat');
 	if (!choice) {
 		throw new EngineError('No usable model — add a provider and enable a model in admin');
 	}

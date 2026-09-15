@@ -33,6 +33,14 @@
 	let uploadError = $state<string | null>(null);
 	let busy = $state(false);
 	let handoffError = $state<string | null>(null);
+	/**
+	 * Failures from the card's own writes — edit, comment, delete.
+	 *
+	 * Upload and hand-off already had one each; these four did not, and every one
+	 * of them changed the screen as though the request had worked. A refused
+	 * delete closed the drawer and the card came back on the next refresh.
+	 */
+	let actionError = $state<string | null>(null);
 
 	// Reloads whenever the drawer is pointed at a different card.
 	$effect(() => {
@@ -56,12 +64,15 @@
 			method: 'PATCH',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify(body)
-		});
+		}).catch(() => null);
 		busy = false;
-		if (res.ok) {
-			await load(cardId);
-			onchanged();
+		if (!res?.ok) {
+			actionError = 'Could not save that change.';
+			return;
 		}
+		actionError = null;
+		await load(cardId);
+		onchanged();
 	}
 
 	const saveText = () => patch({ title, description });
@@ -69,12 +80,21 @@
 	async function addComment() {
 		const detail = comment.trim();
 		if (!detail) return;
-		comment = '';
-		await fetch(`/api/cards/${cardId}/log`, {
+		// Cleared only once the server has taken it. Clearing first meant a
+		// dropped connection destroyed what somebody had just typed, with no
+		// error, nothing in the box to retry from, and a Log that simply did not
+		// gain the line they thought they had written.
+		const res = await fetch(`/api/cards/${cardId}/log`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ detail })
-		});
+		}).catch(() => null);
+		if (!res?.ok) {
+			actionError = 'Could not add that note — it is still in the box.';
+			return;
+		}
+		comment = '';
+		actionError = null;
 		await load(cardId);
 	}
 
@@ -96,7 +116,14 @@
 	}
 
 	async function removeAttachment(id: string) {
-		await fetch(`/api/cards/${cardId}/attachments/${id}`, { method: 'DELETE' });
+		const res = await fetch(`/api/cards/${cardId}/attachments/${id}`, {
+			method: 'DELETE'
+		}).catch(() => null);
+		if (!res?.ok) {
+			actionError = 'Could not remove that attachment.';
+			return;
+		}
+		actionError = null;
 		await load(cardId);
 	}
 
@@ -121,7 +148,14 @@
 
 	async function remove() {
 		if (!confirm('Delete this card and its log? This cannot be undone.')) return;
-		await fetch(`/api/cards/${cardId}`, { method: 'DELETE' });
+		const res = await fetch(`/api/cards/${cardId}`, { method: 'DELETE' }).catch(() => null);
+		// Closing regardless said the card was gone and left it on the board: the
+		// drawer shut, the board refreshed behind it, and the card was still
+		// there with nothing to explain why. Stay open and say so.
+		if (!res?.ok) {
+			actionError = 'Could not delete this card.';
+			return;
+		}
 		onchanged();
 		onclose();
 	}
@@ -233,7 +267,7 @@
 					Attach a file
 					<input type="file" hidden onchange={upload} />
 				</label>
-				{#if uploadError}<p class="error">{uploadError}</p>{/if}
+				{#if uploadError}<p class="error" role="alert">{uploadError}</p>{/if}
 			</section>
 
 			<section class="log">
@@ -267,7 +301,11 @@
 				</button>
 				<button class="btn danger" disabled={busy} onclick={remove}>Delete card</button>
 			</footer>
-			{#if handoffError}<p class="error">{handoffError}</p>{/if}
+			{#if handoffError}<p class="error" role="alert">{handoffError}</p>{/if}
+			<!-- Sits with the footer rather than beside each control: these four
+			     writes are spread the length of the drawer, and role="alert" is
+			     what actually delivers the message wherever the reader is. -->
+			{#if actionError}<p class="error" role="alert">{actionError}</p>{/if}
 			<p class="hint">
 				The agent reads the card, its attachments and its Log first, and asks you before
 				guessing at anything it needs.

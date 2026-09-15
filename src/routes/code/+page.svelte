@@ -753,7 +753,17 @@
 	async function removeSession(chatId: string, ev?: Event) {
 		ev?.stopPropagation();
 		if (!confirm('Delete this session and its workspace?')) return;
-		await fetch(`/api/code/sessions/${chatId}`, { method: 'DELETE' });
+		const res = await fetch(`/api/code/sessions/${chatId}`, { method: 'DELETE' }).catch(
+			() => null
+		);
+		// Filtering regardless removed the row from the list while the session and
+		// its workspace were still there, so it reappeared on the next load with
+		// nothing to say why.
+		if (!res?.ok) {
+			errorBanner = 'Could not delete that session.';
+			return;
+		}
+		errorBanner = null;
 		sessions = sessions.filter((s) => s.id !== chatId);
 		clearDraft(draftKey('code', chatId));
 		if (current?.chatId === chatId) {

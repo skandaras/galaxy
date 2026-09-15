@@ -131,7 +131,7 @@ export async function maybeTitleChat(chatId: string, userId: string): Promise<st
 
 	if (getBudgetStatus().blocked) return skip('budget cap reached');
 	const cfg = getTaskConfig('chat-title');
-	const choice = pickModel(cfg?.primaryModelId ?? null);
+	const choice = pickModel(cfg?.primaryModelId ?? null, 'chat-title');
 	if (!choice) return skip('no model configured');
 
 	const started = Date.now();

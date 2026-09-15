@@ -1,7 +1,14 @@
 <script lang="ts">
 	interface UsageData {
 		days: number;
-		totals: { prompt: number; completion: number; cached: number; cost: number; calls: number };
+		totals: {
+			prompt: number;
+			completion: number;
+			cached: number;
+			reasoning: number;
+			cost: number;
+			calls: number;
+		};
 		byDay: { day: string; prompt: number; completion: number; cost: number; calls: number }[];
 		byModel: {
 			modelKey: string;
@@ -10,6 +17,8 @@
 			completion: number;
 			/** Prompt tokens the provider served from its cache, where it says so. */
 			cached: number;
+			/** Completion tokens spent thinking rather than answering. Part of completion, not extra. */
+			reasoning: number;
 			cost: number;
 			calls: number;
 			errors: number;
@@ -43,6 +52,30 @@
 	 */
 	const cachedShare = (cached: number, prompt: number) =>
 		prompt > 0 ? `${Math.round((cached / prompt) * 100)}%` : '—';
+
+	/**
+	 * Deliberation as a share of what the model actually wrote.
+	 *
+	 * The same reading as cachedShare above and for the same reason: the absolute
+	 * count scales with how much work was done and says nothing on its own. A
+	 * dash rather than 0% where nothing was written, so "no data" cannot be read
+	 * as "no thinking".
+	 *
+	 * Worth a tile of its own because reasoning tokens are output tokens — they
+	 * are charged as output, generated at output speed, and `max_tokens` does not
+	 * bound them. They are the wall clock, and until this row existed the only
+	 * screen that said so was the Cortex page, about its own job.
+	 */
+	const thinkingShare = (reasoning: number, completion: number) =>
+		completion > 0 ? `${Math.round((reasoning / completion) * 100)}%` : '—';
+
+	/** Past half, the call is mostly deliberation and the setting is worth a look. */
+	const thinksHard = (reasoning: number, completion: number) =>
+		completion > 0 && reasoning > completion * 0.5;
+
+	const heavy = $derived(
+		data?.byModel.filter((r) => thinksHard(r.reasoning, r.completion)) ?? []
+	);
 </script>
 
 <section>
@@ -75,6 +108,10 @@
 				<span>{cachedShare(data.totals.cached, data.totals.prompt)}</span>
 				<small>prompt served from cache</small>
 			</div>
+			<div class="tile" class:alert={thinksHard(data.totals.reasoning, data.totals.completion)}>
+				<span>{thinkingShare(data.totals.reasoning, data.totals.completion)}</span>
+				<small>output spent thinking</small>
+			</div>
 		</div>
 
 		<h3>By model</h3>
@@ -82,7 +119,7 @@
 			<thead>
 				<tr>
 					<th>Model</th><th>Task</th><th>Calls</th><th>Errors</th><th>Tokens in/out</th>
-					<th>Cached</th><th>Cost</th>
+					<th>Cached</th><th>Thinking</th><th>Cost</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -94,13 +131,31 @@
 						<td class="num" class:err={row.errors > 0}>{row.errors}</td>
 						<td class="num">{fmt(row.prompt)} / {fmt(row.completion)}</td>
 						<td class="num">{cachedShare(row.cached, row.prompt)}</td>
+						<td class="num" class:err={thinksHard(row.reasoning, row.completion)}>
+							{thinkingShare(row.reasoning, row.completion)}
+						</td>
 						<td class="num">{money(row.cost)}</td>
 					</tr>
 				{:else}
-					<tr><td colspan="7" class="empty">No usage in this window.</td></tr>
+					<tr><td colspan="8" class="empty">No usage in this window.</td></tr>
 				{/each}
 			</tbody>
 		</table>
+		{#if heavy.length}
+			<!-- The same warning the Cortex page has carried for its own job since
+			     9d7c83d, which is where this wording comes from. It belongs here
+			     too: that page can only ever say it about cortex-groom, and the
+			     task most worth hearing it about is whichever one a person is
+			     sitting and waiting on. -->
+			<p class="hint">
+				Most of what {heavy.length === 1
+					? `${heavy[0].task} wrote on ${heavy[0].modelKey}`
+					: `${heavy.length} task/model pairs wrote`} was deliberation, not answer. Reasoning
+				tokens are output tokens: they are the wall clock, and max tokens does not govern them.
+				Set <strong>Reasoning</strong> on the model in Admin → Providers, or point the task at a
+				model that does not reason.
+			</p>
+		{/if}
 
 		<h3>By user</h3>
 		<table>
@@ -163,6 +218,12 @@
 		gap: 0.7rem;
 		flex-wrap: wrap;
 		margin-bottom: 1.1rem;
+	}
+	.hint {
+		color: var(--fg-dim);
+		font-size: var(--text-sm);
+		margin: 0.5rem 0 0;
+		max-width: 46rem;
 	}
 	.tile {
 		border: 1px solid var(--border);

@@ -355,7 +355,7 @@ export async function assessEntry(userId: string, entryId: string): Promise<Asse
 	}
 
 	const cfg = getTaskConfig('alignment');
-	const choice = pickModel(cfg?.primaryModelId ?? null);
+	const choice = pickModel(cfg?.primaryModelId ?? null, 'alignment');
 	if (!choice) {
 		emitEvent({
 			userId,
@@ -538,7 +538,7 @@ export async function runAlignmentSynthesis(
 	}
 
 	const taskCfg = getTaskConfig('alignment-synthesis');
-	const choice = pickModel(taskCfg?.primaryModelId ?? null);
+	const choice = pickModel(taskCfg?.primaryModelId ?? null, 'alignment-synthesis');
 	if (!choice) return { ran: false, reason: 'no model configured' };
 
 	const principles = livePrinciples(userId);

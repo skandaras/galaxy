@@ -18,6 +18,28 @@ import { logUsage } from './usage';
 const LAST_RUN_KEY = 'ux.lastRun';
 
 /**
+ * When the last budget-blocked attempt was announced.
+ *
+ * Deliberately not `LAST_RUN_KEY`. Its sibling agents stamp their last-run key
+ * on entry, so a skipped run still advances the clock — this one stamps it only
+ * on a run that completed, on purpose (see the note at the bottom of the try
+ * block), so a failure re-reads the same window instead of losing a week of
+ * activity. Moving it would trade this bug for a worse one.
+ *
+ * The bug it does have: the scheduler gates on `LAST_RUN_KEY`, so while the
+ * spend cap is hit nothing advances, the sweep calls this every tick — five
+ * minutes — and each call wrote another "budget cap reached" row. A cap left on
+ * over a weekend buried every real failure in the Observatory under several
+ * hundred copies of the same line, for the whole 60-day retention window.
+ *
+ * So the skip is announced at most once an hour. The work is unchanged, the
+ * audit still resumes within the hour of the cap clearing, and the feed carries
+ * the fact without drowning in it.
+ */
+const LAST_SKIP_KEY = 'ux.lastSkip';
+const SKIP_NOTICE_GAP_MS = 3_600_000;
+
+/**
  * Window used on the very first run, when there is no previous run to measure
  * from. Long enough to see a pattern, short enough that the first audit is
  * about how the platform is used *now*.
@@ -390,18 +412,23 @@ export async function runUxAudit(trigger: 'schedule' | 'manual'): Promise<UxAudi
 	const cfg = getSetting<UxAuditSettings>('uxaudit', DEFAULT_UX_AUDIT);
 
 	if (getBudgetStatus().blocked) {
-		emitEvent({
-			task: 'ux-audit',
-			type: 'job',
-			name: 'ux-audit.run',
-			status: 'error',
-			detail: { trigger, skipped: true, reason: 'budget cap reached' }
-		});
+		// A manual run is somebody watching for the answer, so it always gets one.
+		const lastSkip = getSetting<number>(LAST_SKIP_KEY, 0);
+		if (trigger === 'manual' || startedAt - lastSkip >= SKIP_NOTICE_GAP_MS) {
+			setSetting(LAST_SKIP_KEY, startedAt);
+			emitEvent({
+				task: 'ux-audit',
+				type: 'job',
+				name: 'ux-audit.run',
+				status: 'error',
+				detail: { trigger, skipped: true, reason: 'budget cap reached' }
+			});
+		}
 		return { ran: false, reason: 'budget cap reached' };
 	}
 
 	const taskCfg = getTaskConfig('ux-audit');
-	const choice = pickModel(taskCfg?.primaryModelId ?? null);
+	const choice = pickModel(taskCfg?.primaryModelId ?? null, 'ux-audit');
 	if (!choice) {
 		emitEvent({
 			task: 'ux-audit',

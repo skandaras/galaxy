@@ -395,7 +395,7 @@ export async function runMemory(
 	}
 
 	const cfg = getTaskConfig('memory');
-	const choice = pickModel(cfg?.primaryModelId ?? null);
+	const choice = pickModel(cfg?.primaryModelId ?? null, 'memory');
 	if (!choice) {
 		emitEvent({
 			userId,
@@ -753,7 +753,7 @@ export async function consolidateMemory(
 	if (getBudgetStatus().blocked) return { ran: false, reason: 'budget cap reached' };
 
 	const cfg = getTaskConfig('memory');
-	const choice = pickModel(cfg?.primaryModelId ?? null);
+	const choice = pickModel(cfg?.primaryModelId ?? null, 'memory');
 	if (!choice) return { ran: false, reason: 'no model configured' };
 
 	// Indices, not ids: shorter to emit, and a model cannot invent one that maps
@@ -959,7 +959,7 @@ export async function runSkillOptimiser(
 	if (!enabled.length) return { ran: false, reason: 'no skills to optimise' };
 	if (getBudgetStatus().blocked) return { ran: false, reason: 'budget cap reached' };
 	const cfg = getTaskConfig('skill-optimiser');
-	const choice = pickModel(cfg?.primaryModelId ?? null);
+	const choice = pickModel(cfg?.primaryModelId ?? null, 'skill-optimiser');
 	if (!choice) return { ran: false, reason: 'no model configured' };
 
 	const skillDump = enabled

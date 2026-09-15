@@ -76,6 +76,8 @@
 	let preview = $state(false);
 	let saved = $state(false);
 	let listOpen = $state(false);
+	/** Anything the server refused — this page had nowhere at all to say so. */
+	let error = $state<string | null>(null);
 
 	/**
 	 * Width of the document list, draggable by the divider. The floor keeps the
@@ -152,29 +154,37 @@
 
 	async function save() {
 		if (!title.trim()) return;
-		const res = currentId
-			? await fetch(`/api/library/${currentId}`, {
-					method: 'PUT',
-					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({ title, content: body, visibility, folder })
-				})
-			: await fetch('/api/library', {
-					method: 'POST',
-					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({ title, content: body, visibility, folder })
-				});
-		if (res.ok) {
-			const doc = await res.json();
-			currentId = doc.id;
-			saved = true;
-			setTimeout(() => (saved = false), 1500);
-			await load();
+		const payload = JSON.stringify({ title, content: body, visibility, folder });
+		const init = { headers: { 'content-type': 'application/json' }, body: payload };
+		const res = await (currentId
+			? fetch(`/api/library/${currentId}`, { method: 'PUT', ...init })
+			: fetch('/api/library', { method: 'POST', ...init })
+		).catch(() => null);
+		// A failed save used to be indistinguishable from a successful one: the
+		// button simply went back to reading "Save". In the app's document editor
+		// that means somebody keeps typing against a copy the server never took.
+		if (!res?.ok) {
+			error = 'Could not save this document. Your text is still here — try again.';
+			return;
 		}
+		error = null;
+		const doc = await res.json();
+		currentId = doc.id;
+		saved = true;
+		setTimeout(() => (saved = false), 1500);
+		await load();
 	}
 
 	async function remove() {
 		if (!currentId || !confirm(`Delete "${title}"?`)) return;
-		await fetch(`/api/library/${currentId}`, { method: 'DELETE' });
+		const res = await fetch(`/api/library/${currentId}`, { method: 'DELETE' }).catch(
+			() => null
+		);
+		if (!res?.ok) {
+			error = 'Could not delete this document.';
+			return;
+		}
+		error = null;
 		startNew();
 		await load();
 	}
@@ -334,6 +344,7 @@
 				{/if}
 			</div>
 		</header>
+		{#if error}<p class="error" role="alert">{error}</p>{/if}
 		{#if preview}
 			<div class="preview"><Markdown text={body} /></div>
 		{:else}
@@ -353,6 +364,11 @@
 		display: flex;
 		flex: 1;
 		min-width: 0;
+	}
+	.error {
+		color: var(--danger);
+		font-size: var(--text-sm);
+		margin: 0 0.75rem;
 	}
 	.doc-list {
 		flex-shrink: 0;

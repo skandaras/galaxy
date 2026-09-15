@@ -98,7 +98,7 @@ export function startResearchTurn(opts: {
 	assertBudget(opts.userId, 'deep-research');
 
 	const cfg = getTaskConfig('deep-research');
-	const choice = pickModel(cfg?.primaryModelId ?? null);
+	const choice = pickModel(cfg?.primaryModelId ?? null, 'deep-research');
 	if (!choice) throw new EngineError('No usable model — configure one in admin');
 
 	const searchCfg = resolveSearchCfg();
