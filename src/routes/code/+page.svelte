@@ -673,13 +673,22 @@
 	}
 
 	/** Resolves the waiting tool call; the sheet closes on the server's reply. */
-	async function answerQuestion(answer: string) {
-		if (!activeJobId || !question) return;
-		await fetch(`/api/jobs/${activeJobId}/answer`, {
+	async function answerQuestion(answer: string): Promise<boolean> {
+		if (!activeJobId || !question) return false;
+		const res = await fetch(`/api/jobs/${activeJobId}/answer`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ questionId: question.id, answer })
-		}).catch(() => {});
+		}).catch(() => null);
+		if (res?.ok) return true;
+		// The run that asked is gone, so nothing will ever accept this answer and
+		// nothing will ever close the sheet. See the same handler in chat.
+		if (res?.status === 404) {
+			question = null;
+			errorBanner = 'That run has ended, so its question can no longer be answered.';
+			return true;
+		}
+		return false;
 	}
 
 	function closeStream() {
@@ -976,7 +985,7 @@
 		<!-- Notices used to stack here as full-width banners, detached in space and
 		     time from the step that raised them. They are now inline in the
 		     timeline; only a terminal error still earns the top of the page. -->
-		{#if errorBanner}<div class="banner error">{errorBanner}</div>{/if}
+		{#if errorBanner}<div class="banner error" role="alert">{errorBanner}</div>{/if}
 
 		{#if creating}
 			<div class="new-session">

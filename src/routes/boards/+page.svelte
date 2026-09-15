@@ -417,7 +417,7 @@
 		{/if}
 	</header>
 
-	{#if error}<p class="error">{error}</p>{/if}
+	{#if error}<p class="error" role="alert">{error}</p>{/if}
 
 	{#if view && (view.projects.length || view.members.length > 1)}
 		<div class="filters">

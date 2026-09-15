@@ -873,13 +873,24 @@
 	 * server pushes back, not here — so what the screen shows is what the run
 	 * actually received.
 	 */
-	async function answerQuestion(answer: string) {
-		if (!activeJobId || !question) return;
-		await fetch(`/api/jobs/${activeJobId}/answer`, {
+	async function answerQuestion(answer: string): Promise<boolean> {
+		if (!activeJobId || !question) return false;
+		const res = await fetch(`/api/jobs/${activeJobId}/answer`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ questionId: question.id, answer })
-		}).catch(() => {});
+		}).catch(() => null);
+		if (res?.ok) return true;
+		// A 404 is the run itself being gone — the server restarted under it, or
+		// it aged out — so there is nothing left that could ever accept this. The
+		// sheet closes on a chunk from that run, which is never coming, so take it
+		// down here and say why rather than leaving an unanswerable question up.
+		if (res?.status === 404) {
+			question = null;
+			errorBanner = 'That run has ended, so its question can no longer be answered.';
+			return true;
+		}
+		return false;
 	}
 
 	async function saveToLibrary(msg: Msg) {
@@ -1232,7 +1243,7 @@
 			<ListPill bind:open={listOpen} label="Chats" count={chats.length} />
 		</div>
 		{#if errorBanner}
-			<div class="banner error">
+			<div class="banner error" role="alert">
 				{errorBanner}
 				{#if blockingJobId}
 					<button class="banner-action" onclick={stopBlockingRun}>Stop it</button>

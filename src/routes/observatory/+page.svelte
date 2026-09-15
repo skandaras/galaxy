@@ -20,6 +20,17 @@
 	let rows = $state<Ev[]>([]);
 	let expanded = $state<string | null>(null);
 	let paused = $state(false);
+	/**
+	 * Whether the feed is actually receiving anything.
+	 *
+	 * Distinct from `paused`, which is a choice somebody made. The stream had no
+	 * onerror at all, so a connection that died terminally — an expired session,
+	 * a proxy giving up — stopped the feed for good while the chip still read
+	 * "live". On the one page whose whole purpose is to show failures, that was
+	 * the worst place in the app to fail quietly. The docked widget has had this
+	 * since it was written; see components/Observatory.svelte.
+	 */
+	let connected = $state(false);
 
 	async function load() {
 		const params = new URLSearchParams({ limit: '200' });
@@ -37,6 +48,11 @@
 
 	onMount(() => {
 		const source = new EventSource('/api/events/stream');
+		source.onopen = () => (connected = true);
+		// The browser retries an ordinary drop on its own and fires this each time,
+		// so it means "not receiving right now" rather than "give up" — which is
+		// exactly what the chip should say.
+		source.onerror = () => (connected = false);
 		source.onmessage = (ev) => {
 			if (paused) return;
 			// A frame that will not parse is not worth a thrown handler: these
@@ -76,6 +92,9 @@
 			<button class="chip" class:on={paused} onclick={() => (paused = !paused)}>
 				{paused ? 'paused' : 'live'}
 			</button>
+			{#if !paused && !connected}
+				<span class="offline" role="status">reconnecting…</span>
+			{/if}
 		</div>
 	</header>
 
@@ -147,6 +166,11 @@
 		font-size: var(--text-sm);
 		padding: 0.25rem 0.7rem;
 		cursor: pointer;
+	}
+	.offline {
+		color: var(--danger);
+		font-size: var(--text-sm);
+		align-self: center;
 	}
 	.chip.on {
 		border-color: var(--danger);
