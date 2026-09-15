@@ -237,6 +237,31 @@ export function telemetryDigest(sinceMs: number, now = Date.now()): string {
 		);
 	}
 
+	/**
+	 * What people thought of the replies, where they said.
+	 *
+	 * The only direct quality signal the platform has. Everything else in this
+	 * digest is a proxy — a retry, a cancel, a run that ended early — and a proxy
+	 * cannot tell a reply that was slow from one that was wrong.
+	 *
+	 * **Counts and model keys only.** The claim this whole function makes is that
+	 * no conversation content reaches an admin-visible, model-read surface, and it
+	 * is asserted rather than intended (see the canary in ux-audit.test.ts). A
+	 * rating is a thumb, so it carries none — which is exactly why the thumb was
+	 * built without the free-text note that was offered alongside it.
+	 */
+	rows(
+		'Replies rated by the person who got them',
+		db.all<{ modelKey: string | null; feedback: string; n: number }>(
+			sql`SELECT model_key AS modelKey, feedback, COUNT(*) AS n
+			    FROM messages
+			    WHERE created_at >= ${sinceMs} AND feedback IS NOT NULL
+			    GROUP BY model_key, feedback
+			    ORDER BY n DESC`
+		),
+		(r) => `- ${r.modelKey ?? 'unknown model'}: ${r.n} marked ${r.feedback === 'up' ? 'good' : 'bad'}`
+	);
+
 	rows(
 		'When it gets used (hour of day, server local)',
 		db.all<{ hour: string; n: number }>(

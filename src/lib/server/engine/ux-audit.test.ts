@@ -232,6 +232,46 @@ describe('telemetryDigest', () => {
 		expect(text).toContain('$0.25');
 	});
 
+	it('counts what people thought of the replies', () => {
+		// The only direct quality signal in the whole digest: everything else here
+		// is a proxy, and a proxy cannot tell a reply that was slow from one that
+		// was wrong.
+		const chatId = randomUUID();
+		db.insert(chats)
+			.values({
+				id: chatId,
+				userId: 'u1',
+				mode: 'chat',
+				title: SECRET,
+				createdAt: new Date(),
+				updatedAt: new Date()
+			})
+			.run();
+		for (const [i, feedback] of (['down', 'down', 'up'] as const).entries()) {
+			db.insert(messages)
+				.values({
+					id: randomUUID(),
+					chatId,
+					seq: i,
+					role: 'assistant',
+					content: SECRET,
+					modelKey: 'test-model',
+					feedback,
+					createdAt: new Date()
+				})
+				.run();
+		}
+
+		const text = telemetryDigest(since);
+		expect(text).toContain('Replies rated');
+		expect(text).toContain('test-model: 2 marked bad');
+		expect(text).toContain('test-model: 1 marked good');
+		// A thumb carries no words, which is the whole reason it is a thumb: this
+		// digest is read by a model and shown to an admin, and the rule that no
+		// conversation content crosses into it holds for ratings too.
+		expect(text).not.toContain(SECRET);
+	});
+
 	it('never includes message or chat-title content', () => {
 		seedActivity();
 		expect(telemetryDigest(since)).not.toContain(SECRET);

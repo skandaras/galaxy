@@ -64,6 +64,8 @@
 		attachments: AttachmentRef[] | null;
 		/** What the agent did to produce this reply, when it used tools. */
 		trace?: MessageTrace | null;
+		/** What this person thought of it, where they said. Null is the normal case. */
+		feedback?: 'up' | 'down' | null;
 	}
 	interface ModelOption {
 		id: string;
@@ -893,6 +895,34 @@
 		return false;
 	}
 
+	/**
+	 * Rate a reply, or take the rating back by pressing the same thumb again.
+	 *
+	 * Applied locally first so the thumb responds immediately, and put back if
+	 * the server refuses — the alternative is a control that does nothing for a
+	 * round trip, on the one affordance whose whole job is being trivial to use.
+	 */
+	async function rate(msg: Msg, value: 'up' | 'down') {
+		const chat = currentChat;
+		// A hidden chat is never written to the database, so there is no row to
+		// carry an opinion and nothing on the server that would accept one.
+		if (!chat || chat.hidden) return;
+		const next = msg.feedback === value ? null : value;
+		const previous = msg.feedback ?? null;
+		msg.feedback = next;
+		messages = [...messages];
+		const res = await fetch(`/api/chats/${chat.id}/messages/${msg.id}`, {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ feedback: next })
+		}).catch(() => null);
+		if (!res?.ok) {
+			msg.feedback = previous;
+			messages = [...messages];
+			errorBanner = 'Could not record that.';
+		}
+	}
+
 	async function saveToLibrary(msg: Msg) {
 		const res = await fetch('/api/library', {
 			method: 'POST',
@@ -1276,6 +1306,30 @@
 								<button class="save-doc" title="Save to Library" onclick={() => saveToLibrary(msg)}>
 									{savedDocId === msg.id ? '✓ saved' : '⌘ save to library'}
 								</button>
+								<!-- Not offered on a hidden chat: it is never written to the
+								     database, so there is no row to hold an opinion. Pressing the
+								     same thumb again clears it — a rating somebody changed their
+								     mind about is worth less than no rating, and this is the only
+								     honest signal the platform has about whether an answer was
+								     any good. -->
+								{#if !isHidden}
+								<button
+									class="rate"
+									class:on={msg.feedback === 'up'}
+									aria-pressed={msg.feedback === 'up'}
+									aria-label="Mark this reply good"
+									title="Good reply"
+									onclick={() => rate(msg, 'up')}>▲</button
+								>
+								<button
+									class="rate"
+									class:on={msg.feedback === 'down'}
+									aria-pressed={msg.feedback === 'down'}
+									aria-label="Mark this reply bad"
+									title="Not a good reply"
+									onclick={() => rate(msg, 'down')}>▼</button
+								>
+								{/if}
 							</span>
 						{:else}
 							<p class="user-text">{msg.content}</p>
@@ -1739,6 +1793,32 @@
 	.save-doc:hover {
 		color: var(--accent);
 	}
+	/* Sized like save-doc and revealed with it, except once a thumb is set:
+	   a rating that vanished when the pointer left would be a control with no
+	   way to see its own state. */
+	.rate {
+		background: none;
+		border: none;
+		color: var(--fg-dim);
+		font-family: inherit;
+		font-size: var(--text-xs);
+		cursor: pointer;
+		padding: 0 0.15rem;
+		opacity: 0;
+		transition: opacity 0.15s;
+		min-width: var(--tap-min, 0);
+	}
+	.msg.assistant:hover .rate,
+	.rate:focus-visible,
+	.rate.on {
+		opacity: 1;
+	}
+	.rate:hover {
+		color: var(--accent);
+	}
+	.rate.on {
+		color: var(--accent);
+	}
 	.stages {
 		display: flex;
 		align-items: center;
@@ -1961,7 +2041,8 @@
 		.row-actions {
 			display: inline-flex;
 		}
-		.save-doc {
+		.save-doc,
+		.rate {
 			opacity: 1;
 		}
 	}
