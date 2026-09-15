@@ -587,15 +587,22 @@ async function runResearch(
 			// that was useful but incomplete still improves the answer.
 			brief = mergeBrief(brief, outcome.brief, round);
 			consolidateFailures = 0;
+			const mayStop = canStopOnSufficient(brief);
 			event('research.consolidate', 'ok', took, {
 				round,
 				findings: brief.findings.length,
 				gaps: brief.gaps.length,
 				conflicts: brief.conflicts.length,
 				sufficient: brief.sufficient,
+				// Recorded rather than left to be inferred: "it said it was done and
+				// the run carried on anyway" is exactly what the Observatory should
+				// be able to answer afterwards. See canStopOnSufficient.
+				...(brief.sufficient && !mayStop
+					? { heldOpen: 'no finding rests on a page that was read' }
+					: {}),
 				nextQueries: outcome.queries.length
 			});
-			if (brief.sufficient) {
+			if (mayStop) {
 				stopCause = 'sufficient';
 				break;
 			}
@@ -1113,6 +1120,28 @@ export function shouldStopAfterRound(s: {
 	if (!s.freshCount) return 'no-new-sources';
 	if (s.searchesLeft <= 0) return 'search-budget';
 	return null;
+}
+
+/**
+ * Whether the model's own "that is enough" may end the run.
+ *
+ * `sufficient` used to end it the moment it was returned, with nothing checking
+ * what the answer rested on. The weak path was short and entirely plausible: the
+ * opening round is pinned to one query whatever the effort setting, a handful of
+ * results come back, a page or two is opened, and a model that is confident — or
+ * merely satisficing — says it has what it needs. Every round after that, which
+ * is where Quick, Balanced and Exhaustive differ at all, simply never happened.
+ *
+ * So the floor is on *evidence*, not on rounds: at least one finding has to rest
+ * on a page that was actually read rather than a search engine's summary of one.
+ * A minimum round count would have charged every easy question for the hard
+ * ones, and length is not what makes an answer thin.
+ *
+ * Pure and exported for the same reason `shouldStopAfterRound` is: a loop exit
+ * condition should be testable without a job, a database or a network.
+ */
+export function canStopOnSufficient(brief: ResearchBrief): boolean {
+	return brief.sufficient && brief.findings.some((f) => f.support === 'read');
 }
 
 /**

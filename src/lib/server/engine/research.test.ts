@@ -37,6 +37,7 @@ import {
 	roundBudget,
 	runSearches,
 	searchAllowance,
+	canStopOnSufficient,
 	shouldStopAfterRound,
 	shouldWidenAfterOpening,
 	extractLinks,
@@ -816,6 +817,47 @@ describe('shouldStopAfterRound', () => {
 
 	it('stops when the run has no searches left to spend', () => {
 		expect(shouldStopAfterRound({ ...healthy, searchesLeft: 0 })).toBe('search-budget');
+	});
+});
+
+describe('canStopOnSufficient', () => {
+	const brief = (support: 'read' | 'snippet', sufficient = true) => ({
+		round: 1,
+		findings: [{ claim: 'A holds', sources: [1], support }],
+		gaps: [],
+		conflicts: [],
+		sufficient
+	});
+
+	it('lets a run finish once something it read backs a finding', () => {
+		expect(canStopOnSufficient(brief('read'))).toBe(true);
+	});
+
+	it('holds the run open when every finding rests on a search snippet', () => {
+		// The weak path the gate exists for: one opening query, a few results,
+		// nothing actually opened, and a confident model calling it done before
+		// any of the rounds effort is spent on have happened.
+		expect(canStopOnSufficient(brief('snippet'))).toBe(false);
+	});
+
+	it('one read finding among snippets is enough', () => {
+		expect(
+			canStopOnSufficient({
+				...brief('snippet'),
+				findings: [
+					{ claim: 'A', sources: [1], support: 'snippet' as const },
+					{ claim: 'B', sources: [2], support: 'read' as const }
+				]
+			})
+		).toBe(true);
+	});
+
+	it('never stops a run the model has not called sufficient', () => {
+		expect(canStopOnSufficient(brief('read', false))).toBe(false);
+	});
+
+	it('does not stop on a brief with no findings at all', () => {
+		expect(canStopOnSufficient({ ...brief('read'), findings: [] })).toBe(false);
 	});
 });
 
