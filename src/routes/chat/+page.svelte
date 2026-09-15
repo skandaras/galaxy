@@ -245,11 +245,19 @@
 	);
 
 	onMount(async () => {
+		// Three bare fetches under a Promise.all with nothing catching it: one
+		// refused request rejected the whole onMount, which reaches the layout's
+		// error boundary and takes down a page whose composer would otherwise
+		// still work perfectly well.
 		const [chatsRes, archivedRes, modelsRes] = await Promise.all([
-			fetch('/api/chats'),
-			fetch('/api/chats?archived=1'),
-			fetch('/api/models')
+			fetch('/api/chats').catch(() => null),
+			fetch('/api/chats?archived=1').catch(() => null),
+			fetch('/api/models').catch(() => null)
 		]);
+		if (!chatsRes?.ok || !archivedRes?.ok || !modelsRes?.ok) {
+			errorBanner = 'Could not load your chats. Reload to try again.';
+			return;
+		}
 		chats = filterChatMode(await chatsRes.json());
 		archived = filterChatMode(await archivedRes.json());
 		const m = await modelsRes.json();
