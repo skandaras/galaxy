@@ -78,6 +78,15 @@
 	let listOpen = $state(false);
 	/** Anything the server refused — this page had nowhere at all to say so. */
 	let error = $state<string | null>(null);
+	/**
+	 * Whether the document list has arrived, and whether it arrived at all.
+	 *
+	 * "No documents yet" was shown for loading, empty and failed alike, so a
+	 * dropped request read as an empty Library — which for the store the agents
+	 * read their context from is the most alarming possible way to be wrong.
+	 */
+	let listLoaded = $state(false);
+	let listFailed = $state(false);
 
 	/**
 	 * Width of the document list, draggable by the divider. The floor keeps the
@@ -99,12 +108,19 @@
 	async function load() {
 		const seq = ++searchSeq;
 		const url = query.trim() ? `/api/library?q=${encodeURIComponent(query)}` : '/api/library';
-		const rows = await (await fetch(url)).json();
+		const res = await fetch(url).catch(() => null);
 		// A slow answer to an older query must not overwrite a newer one. Every
 		// keystroke used to start a request with nothing ordering the replies,
 		// which on a phone connection is not a hypothetical race.
 		if (seq !== searchSeq) return;
-		docs = rows;
+		if (!res?.ok) {
+			listFailed = true;
+			listLoaded = true;
+			return;
+		}
+		docs = await res.json();
+		listFailed = false;
+		listLoaded = true;
 	}
 
 	/** Typing is not a request. */
@@ -194,14 +210,21 @@
 		if (!file) return;
 		const reader = new FileReader();
 		reader.onload = async () => {
-			await fetch('/api/library', {
+			const res = await fetch('/api/library', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({
 					title: file.name.replace(/\.(md|txt)$/i, ''),
 					content: String(reader.result ?? '')
 				})
-			});
+			}).catch(() => null);
+			// Same shape as save() above: the file picker resets either way, so a
+			// refused upload was a document that simply never appeared.
+			if (!res?.ok) {
+				error = `Could not upload ${file.name}.`;
+				return;
+			}
+			error = null;
 			await load();
 		};
 		reader.readAsText(file);
@@ -259,7 +282,17 @@
 			<p class="capped">First {SEARCH_LIMIT} matches. Narrow the search to see others.</p>
 		{/if}
 		{#if !docs.length}
-			<ul><li class="empty">No documents{query ? ' match' : ' yet'}.</li></ul>
+			<ul>
+				<li class="empty">
+					{#if !listLoaded}
+						Loading…
+					{:else if listFailed}
+						Could not load your documents.
+					{:else}
+						No documents{query ? ' match' : ' yet'}.
+					{/if}
+				</li>
+			</ul>
 		{:else if query.trim()}
 			<!-- Results are ranked by relevance; folders would fight that ordering. -->
 			<ul>

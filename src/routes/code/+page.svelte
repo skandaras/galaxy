@@ -697,26 +697,36 @@
 		streaming = false;
 	}
 
-	async function approvePlan() {
-		if (!current) return;
-		await fetch(`/api/code/sessions/${current.chatId}`, {
-			method: 'PATCH',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ mode: 'implement' })
-		});
-		current = { ...current, mode: 'implement' };
-		await send('The plan is approved — implement it now.');
-	}
-
-	async function setMode(mode: 'plan' | 'implement') {
-		if (!current) return;
-		await fetch(`/api/code/sessions/${current.chatId}`, {
+	/**
+	 * Move the session between plan and implement.
+	 *
+	 * The response is checked because mode is *engine permission state*, not a
+	 * label: it decides whether the agent gets write tools. Flipping the badge on
+	 * a PATCH that failed put the screen and the server into different modes with
+	 * nothing to reveal it — and approvePlan below then sent "the plan is
+	 * approved, implement it now" to a session still holding read-only tools.
+	 */
+	async function changeMode(mode: 'plan' | 'implement'): Promise<boolean> {
+		if (!current) return false;
+		const res = await fetch(`/api/code/sessions/${current.chatId}`, {
 			method: 'PATCH',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ mode })
-		});
+		}).catch(() => null);
+		if (!res?.ok) {
+			errorBanner = `Could not switch this session to ${mode} mode.`;
+			return false;
+		}
+		errorBanner = null;
 		current = { ...current, mode };
+		return true;
 	}
+
+	async function approvePlan() {
+		if (await changeMode('implement')) await send('The plan is approved — implement it now.');
+	}
+
+	const setMode = (mode: 'plan' | 'implement') => changeMode(mode);
 
 	async function loadDiff() {
 		if (!current) return;

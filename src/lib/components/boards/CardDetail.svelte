@@ -42,9 +42,30 @@
 	 */
 	let actionError = $state<string | null>(null);
 
+	let panel = $state<HTMLElement | null>(null);
+
 	// Reloads whenever the drawer is pointed at a different card.
 	$effect(() => {
 		void load(cardId);
+	});
+
+	/**
+	 * Move focus into the drawer, and hand it back when the drawer goes.
+	 *
+	 * Below 900px this is a full-screen modal, so leaving focus on the card
+	 * behind it meant a keyboard or screen-reader user opened the editor and was
+	 * still, as far as focus was concerned, standing outside it — and on closing
+	 * landed back at the top of the document rather than on the card they came
+	 * from.
+	 *
+	 * Deliberately not `aria-modal`: above that width the board beside it is
+	 * still live and still usable, so claiming the rest of the page is inert
+	 * would be a lie in half the cases.
+	 */
+	$effect(() => {
+		const previous = document.activeElement as HTMLElement | null;
+		panel?.focus();
+		return () => previous?.focus?.();
 	});
 
 	async function load(id: string) {
@@ -170,7 +191,19 @@
 		new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 </script>
 
-<aside class="detail">
+<!-- Escape closes it because below 900px this stops being a side panel and
+     becomes a full-screen modal (see the media query in the styles), and on a
+     phone it is the only way to edit a card, its notes or its attachments. It
+     was the one overlay in the app with no Escape, no focus moved into it and
+     no focus returned — ListPill, BottomNav and AskSheet all wire at least the
+     first of those. -->
+<svelte:window
+	onkeydown={(e) => {
+		if (e.key === 'Escape') onclose();
+	}}
+/>
+
+<aside class="detail" bind:this={panel} tabindex="-1" aria-label="Card details">
 	<header>
 		<input class="title" bind:value={title} onblur={saveText} aria-label="Card title" />
 		<button class="icon" title="Close" onclick={onclose}>✕</button>
