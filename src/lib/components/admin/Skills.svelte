@@ -16,11 +16,33 @@
 	let form = $state({ name: '', category: 'general', description: '', triggers: '', body: '' });
 	let saved = $state(false);
 	let errorMsg = $state<string | null>(null);
+	/**
+	 * The optimiser's schedule.
+	 *
+	 * Off by default, and the only background agent that is. It was fully built
+	 * and reachable from nothing but the button below, so skills were reviewed
+	 * exactly as often as somebody remembered it existed — but switching it on
+	 * starts a recurring model call, and skills change rarely enough that weekly
+	 * is a decision rather than an obvious default.
+	 */
+	let schedule = $state({ enabled: false, intervalHours: 168 });
+	let scheduleNotice = $state<string | null>(null);
 
 	async function load() {
 		const data = await (await fetch('/api/skills')).json();
 		skills = data.skills;
 		template = data.template;
+		const settings = await (await fetch('/api/admin/settings')).json().catch(() => null);
+		if (settings?.skillOptimiser) schedule = { ...settings.skillOptimiser };
+	}
+
+	async function saveSchedule() {
+		const res = await fetch('/api/admin/settings', {
+			method: 'PUT',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ key: 'skillOptimiser', value: schedule })
+		}).catch(() => null);
+		scheduleNotice = res?.ok ? 'Schedule saved' : 'Could not save the schedule';
 	}
 	$effect(() => {
 		void load();
@@ -95,6 +117,28 @@
 
 <section>
 	{#if editing === null}
+		<div class="schedule">
+			<label class="sched-on">
+				<input type="checkbox" bind:checked={schedule.enabled} onchange={saveSchedule} />
+				Review skills automatically
+			</label>
+			<label class="sched-every">
+				every
+				<input
+					type="number"
+					min="1"
+					max="8760"
+					bind:value={schedule.intervalHours}
+					onchange={saveSchedule}
+					disabled={!schedule.enabled}
+				/>
+				hours
+			</label>
+			<span class="sched-note">
+				Off by default: this spends on a model call each time it runs.
+			</span>
+			{#if scheduleNotice}<span class="sched-notice" role="status">{scheduleNotice}</span>{/if}
+		</div>
 		<button class="btn primary" onclick={startNew}>+ New skill</button>
 		{#each grouped as group (group.category)}
 			<h3>{group.category}</h3>
@@ -154,6 +198,37 @@
 </section>
 
 <style>
+	.schedule {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.75rem;
+		margin-bottom: 0.9rem;
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
+	}
+	.sched-on,
+	.sched-every {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+	}
+	.schedule input[type='number'] {
+		width: 4.5rem;
+		background: var(--bg-pane);
+		border: 1px solid var(--border);
+		border-radius: 5px;
+		color: var(--fg);
+		font-family: inherit;
+		font-size: var(--text-sm);
+		padding: 0.2rem 0.35rem;
+	}
+	.sched-note {
+		flex-basis: 100%;
+	}
+	.sched-notice {
+		color: var(--accent);
+	}
 	h3 {
 		font-size: var(--text-base);
 		color: var(--heading);

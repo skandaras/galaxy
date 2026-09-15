@@ -48,6 +48,8 @@ export interface StoredMessage {
 	modelKey: string | null;
 	/** What the agent did to produce this reply; null for everything else. */
 	trace: MessageTrace | null;
+	/** What the person thought of this reply, where they said. See setMessageFeedback. */
+	feedback: 'up' | 'down' | null;
 	createdAt: number;
 }
 
@@ -205,8 +207,50 @@ export function getMessages(chatId: string): StoredMessage[] {
 			...r,
 			createdAt: r.createdAt.getTime(),
 			attachments: r.attachments ?? null,
-			trace: r.trace ?? null
+			trace: r.trace ?? null,
+			feedback: r.feedback ?? null
 		}));
+}
+
+/**
+ * Record what someone thought of one reply, or clear it.
+ *
+ * Ownership rides in the SQL predicate rather than a check in the route, which
+ * is the rule this codebase holds itself to: the update joins on the chat being
+ * theirs, so "exists but not yours" changes nothing and answers the same as
+ * "does not exist". Returns false for both, which is the 404 the route wants.
+ *
+ * Only an assistant message can carry one — rating your own question means
+ * nothing, and the telemetry that reads this counts replies.
+ *
+ * Hidden chats have no row here at all, so this cannot touch one by
+ * construction. That is the same boundary appendMessage keeps, arrived at from
+ * the other side: there is nothing to guard because there is nothing written.
+ */
+export function setMessageFeedback(
+	chatId: string,
+	messageId: string,
+	userId: string,
+	feedback: 'up' | 'down' | null
+): boolean {
+	const owned = db
+		.select({ id: chats.id })
+		.from(chats)
+		.where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
+		.get();
+	if (!owned) return false;
+	const res = db
+		.update(messages)
+		.set({ feedback })
+		.where(
+			and(
+				eq(messages.id, messageId),
+				eq(messages.chatId, chatId),
+				eq(messages.role, 'assistant')
+			)
+		)
+		.run();
+	return res.changes > 0;
 }
 
 export function appendMessage(
@@ -231,6 +275,9 @@ export function appendMessage(
 		attachments: msg.attachments ?? null,
 		modelKey: msg.modelKey ?? null,
 		trace: msg.trace ?? null,
+		// Nothing is ever written with an opinion already attached; it arrives
+		// later or not at all, and not at all is the ordinary case.
+		feedback: null,
 		createdAt: now
 	};
 	if (hidden) {

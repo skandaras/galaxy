@@ -29,7 +29,8 @@ const ran = {
 	memory: 0,
 	groom: 0,
 	alignment: 0,
-	uxAudit: 0
+	uxAudit: 0,
+	skills: 0
 };
 
 vi.mock('$lib/server/cortex', async (importOriginal) => {
@@ -54,6 +55,10 @@ vi.mock('./memory', async (importOriginal) => {
 		runMemory: async () => {
 			ran.memory++;
 			if (failMemory) throw new Error('provider exploded');
+			return { ran: true };
+		},
+		runSkillOptimiser: async () => {
+			ran.skills++;
 			return { ran: true };
 		}
 	};
@@ -131,6 +136,10 @@ beforeEach(() => {
 	setSetting('cortex.groom.lastRun', 0, ANA);
 	setSetting('alignment.synthesis.lastRun', 0, ANA);
 	setSetting('ux.lastRun', 0);
+	// The one agent that ships off. Every case here is about whether tick reaches
+	// a sweep, so it is switched on explicitly rather than left at its default.
+	setSetting('skillOptimiser', { enabled: true, intervalHours: 0 });
+	setSetting('skills.lastRun', 0);
 });
 
 describe('one tick', () => {
@@ -142,6 +151,16 @@ describe('one tick', () => {
 		expect(ran.groom, 'the Cortex groomer').toBeGreaterThan(0);
 		expect(ran.alignment, 'the alignment letter').toBeGreaterThan(0);
 		expect(ran.uxAudit, 'the UX audit').toBeGreaterThan(0);
+		expect(ran.skills, 'the skill optimiser').toBeGreaterThan(0);
+	});
+
+	it('leaves the skill optimiser alone while it is off', async () => {
+		// Its default, and the reason it needs its own case: every other sweep in
+		// this file ships enabled, so "off" is not otherwise exercised here.
+		setSetting('skillOptimiser', { enabled: false, intervalHours: 0 });
+		await tick();
+		expect(ran.skills).toBe(0);
+		expect(ran.uxAudit).toBeGreaterThan(0);
 	});
 
 	it('honours the switch on each one', async () => {

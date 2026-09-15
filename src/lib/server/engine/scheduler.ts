@@ -7,22 +7,26 @@ import {
 	DEFAULT_ALIGNMENT,
 	DEFAULT_MEMORY,
 	DEFAULT_RETENTION,
+	DEFAULT_SKILL_OPTIMISER,
 	DEFAULT_UX_AUDIT,
 	getSetting,
+	setSetting,
 	type AlignmentSettings,
 	type MemorySettings,
 	type RetentionSettings,
+	type SkillOptimiserSettings,
 	type UxAuditSettings
 } from '$lib/server/settings';
 import { decayReinforcement, refreshLayout } from '$lib/server/cortex';
 import { groomSettings, groomStatus, runCortexGroom } from './cortex-groom';
 import { getSynthesisStatus, runAlignmentSynthesis } from './alignment';
 import { emitEvent } from './events';
-import { getMemoryStatus, runMemory } from './memory';
+import { getMemoryStatus, runMemory, runSkillOptimiser } from './memory';
 import { runUxAudit } from './ux-audit';
 
 const TICK_MS = 5 * 60 * 1000;
 const UX_LAST_RUN_KEY = 'ux.lastRun';
+const SKILLS_LAST_RUN_KEY = 'skills.lastRun';
 /** Pruning is cheap but pointless to repeat every tick. */
 const PRUNE_INTERVAL_MS = 6 * 3_600_000;
 
@@ -72,9 +76,48 @@ export async function tick(): Promise<void> {
 		await sweepCortexGroom();
 		await sweepAlignmentSynthesis();
 		await sweepUxAudit();
+		await sweepSkillOptimiser();
 		prune();
 	} finally {
 		sweeping = false;
+	}
+}
+
+/**
+ * Run one scheduled agent, and make sure a failure leaves a trace somewhere.
+ *
+ * All four sweeps used to swallow with an empty catch, each carrying a comment
+ * saying the agent "reports its own failures via events". That is true of what
+ * happens inside the agent's own try block — every one of them catches, emits
+ * and returns rather than rethrowing, so nothing reaching here has been
+ * reported. It is not true of the work before it: `gatherActivity()`, a
+ * settings read, the working/dismissed queries in memory.ts, `tidy()` and
+ * `detect()` in cortex-groom.ts all run outside that block.
+ *
+ * A throw there reached neither the Observatory nor stdout — `tick`'s own
+ * console.error never saw it either, because the empty catch had already eaten
+ * it — so the agent simply went dark for a whole interval. For the UX audit
+ * that is a week of nothing, with no way to find out why.
+ *
+ * Exported for tests.
+ */
+export async function runSweep(
+	task: string,
+	userId: string | undefined,
+	run: () => Promise<unknown>
+): Promise<void> {
+	try {
+		await run();
+	} catch (err) {
+		emitEvent({
+			userId,
+			task,
+			type: 'job',
+			name: `${task}.sweep`,
+			status: 'error',
+			detail: { reason: String(err), note: 'failed before the agent could report it' }
+		});
+		console.error(`[scheduler] ${task} failed before it could report:`, err);
 	}
 }
 
@@ -89,9 +132,7 @@ async function sweepMemory(): Promise<void> {
 		if (now < status.lastRun + cfg.intervalHours * 3_600_000) continue;
 		// Sequential on purpose: parallel audits would race the budget cap
 		// and hammer the provider. One user's failure must not stop the rest.
-		await runMemory('schedule', user.id).catch(() => {
-			// runMemory reports its own failures via events
-		});
+		await runSweep('memory', user.id, () => runMemory('schedule', user.id));
 	}
 }
 
@@ -111,9 +152,7 @@ async function sweepCortexGroom(): Promise<void> {
 		if (now < status.lastRun + cfg.intervalHours * 3_600_000) continue;
 		// Sequential, like the memory sweep: parallel runs would race the budget
 		// cap, and one person's failure must not stop the rest.
-		await runCortexGroom('schedule', user.id).catch(() => {
-			// runCortexGroom reports its own failures via events.
-		});
+		await runSweep('cortex-groom', user.id, () => runCortexGroom('schedule', user.id));
 	}
 }
 
@@ -196,9 +235,9 @@ async function sweepAlignmentSynthesis(): Promise<void> {
 		if (now < lastRun + cfg.synthesisIntervalHours * 3_600_000) continue;
 		// Sequential for the same reason the memory sweep is, and one person's
 		// failure must not stop the rest.
-		await runAlignmentSynthesis('schedule', user.id).catch(() => {
-			// runAlignmentSynthesis reports its own failures via events
-		});
+		await runSweep('alignment-synthesis', user.id, () =>
+			runAlignmentSynthesis('schedule', user.id)
+		);
 	}
 }
 
@@ -211,9 +250,33 @@ async function sweepUxAudit(): Promise<void> {
 	if (!cfg.enabled) return;
 	const lastRun = getSetting<number>(UX_LAST_RUN_KEY, 0);
 	if (Date.now() < lastRun + cfg.intervalHours * 3_600_000) return;
-	await runUxAudit('schedule').catch(() => {
-		// runUxAudit reports its own failures via events
-	});
+	await runSweep('ux-audit', undefined, () => runUxAudit('schedule'));
+}
+
+/**
+ * Global like the UX audit above, because skills are platform-wide — and off
+ * until somebody turns it on, unlike anything else in this file.
+ *
+ * `runSkillOptimiser` has been a complete background agent from the day it was
+ * written and reachable only from the admin button, so it is the one agent that
+ * ran exactly as often as a person remembered it existed. The default stays
+ * `false` because switching it on starts a recurring model call that nothing
+ * spends today, and skills change rarely enough that weekly is a decision rather
+ * than an obvious default.
+ *
+ * Stamping the last-run key here rather than inside the agent: unlike the UX
+ * audit there is no activity window to lose by advancing it on a failure, and
+ * this way a broken run backs off for the interval instead of being retried on
+ * every five-minute tick.
+ */
+async function sweepSkillOptimiser(): Promise<void> {
+	const cfg = getSetting<SkillOptimiserSettings>('skillOptimiser', DEFAULT_SKILL_OPTIMISER);
+	if (!cfg.enabled) return;
+	const lastRun = getSetting<number>(SKILLS_LAST_RUN_KEY, 0);
+	const now = Date.now();
+	if (now < lastRun + cfg.intervalHours * 3_600_000) return;
+	setSetting(SKILLS_LAST_RUN_KEY, now);
+	await runSweep('skill-optimiser', undefined, () => runSkillOptimiser());
 }
 
 /**

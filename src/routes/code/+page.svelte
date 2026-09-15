@@ -673,13 +673,22 @@
 	}
 
 	/** Resolves the waiting tool call; the sheet closes on the server's reply. */
-	async function answerQuestion(answer: string) {
-		if (!activeJobId || !question) return;
-		await fetch(`/api/jobs/${activeJobId}/answer`, {
+	async function answerQuestion(answer: string): Promise<boolean> {
+		if (!activeJobId || !question) return false;
+		const res = await fetch(`/api/jobs/${activeJobId}/answer`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ questionId: question.id, answer })
-		}).catch(() => {});
+		}).catch(() => null);
+		if (res?.ok) return true;
+		// The run that asked is gone, so nothing will ever accept this answer and
+		// nothing will ever close the sheet. See the same handler in chat.
+		if (res?.status === 404) {
+			question = null;
+			errorBanner = 'That run has ended, so its question can no longer be answered.';
+			return true;
+		}
+		return false;
 	}
 
 	function closeStream() {
@@ -688,26 +697,36 @@
 		streaming = false;
 	}
 
-	async function approvePlan() {
-		if (!current) return;
-		await fetch(`/api/code/sessions/${current.chatId}`, {
-			method: 'PATCH',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ mode: 'implement' })
-		});
-		current = { ...current, mode: 'implement' };
-		await send('The plan is approved — implement it now.');
-	}
-
-	async function setMode(mode: 'plan' | 'implement') {
-		if (!current) return;
-		await fetch(`/api/code/sessions/${current.chatId}`, {
+	/**
+	 * Move the session between plan and implement.
+	 *
+	 * The response is checked because mode is *engine permission state*, not a
+	 * label: it decides whether the agent gets write tools. Flipping the badge on
+	 * a PATCH that failed put the screen and the server into different modes with
+	 * nothing to reveal it — and approvePlan below then sent "the plan is
+	 * approved, implement it now" to a session still holding read-only tools.
+	 */
+	async function changeMode(mode: 'plan' | 'implement'): Promise<boolean> {
+		if (!current) return false;
+		const res = await fetch(`/api/code/sessions/${current.chatId}`, {
 			method: 'PATCH',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ mode })
-		});
+		}).catch(() => null);
+		if (!res?.ok) {
+			errorBanner = `Could not switch this session to ${mode} mode.`;
+			return false;
+		}
+		errorBanner = null;
 		current = { ...current, mode };
+		return true;
 	}
+
+	async function approvePlan() {
+		if (await changeMode('implement')) await send('The plan is approved — implement it now.');
+	}
+
+	const setMode = (mode: 'plan' | 'implement') => changeMode(mode);
 
 	async function loadDiff() {
 		if (!current) return;
@@ -753,7 +772,17 @@
 	async function removeSession(chatId: string, ev?: Event) {
 		ev?.stopPropagation();
 		if (!confirm('Delete this session and its workspace?')) return;
-		await fetch(`/api/code/sessions/${chatId}`, { method: 'DELETE' });
+		const res = await fetch(`/api/code/sessions/${chatId}`, { method: 'DELETE' }).catch(
+			() => null
+		);
+		// Filtering regardless removed the row from the list while the session and
+		// its workspace were still there, so it reappeared on the next load with
+		// nothing to say why.
+		if (!res?.ok) {
+			errorBanner = 'Could not delete that session.';
+			return;
+		}
+		errorBanner = null;
 		sessions = sessions.filter((s) => s.id !== chatId);
 		clearDraft(draftKey('code', chatId));
 		if (current?.chatId === chatId) {
@@ -966,7 +995,7 @@
 		<!-- Notices used to stack here as full-width banners, detached in space and
 		     time from the step that raised them. They are now inline in the
 		     timeline; only a terminal error still earns the top of the page. -->
-		{#if errorBanner}<div class="banner error">{errorBanner}</div>{/if}
+		{#if errorBanner}<div class="banner error" role="alert">{errorBanner}</div>{/if}
 
 		{#if creating}
 			<div class="new-session">

@@ -509,6 +509,34 @@ export const DEFAULT_UX_AUDIT: UxAuditSettings = {
 	maxIdeasPerRun: 8
 };
 
+/**
+ * The skill optimiser's schedule.
+ *
+ * It is the one background agent that was fully built — it reviews the enabled
+ * skills, proposes improvements, logs its usage and files its candidates in the
+ * approval queue — and had no schedule at all: its only caller anywhere was the
+ * admin button, so skills were reviewed exactly as often as somebody remembered
+ * to click.
+ *
+ * Global rather than per user, like the UX audit and for the same reason: skills
+ * are platform-wide, and `runSkillOptimiser` already says so in its own doc.
+ *
+ * **Off by default**, which is the difference between this and its siblings. The
+ * others were on before anyone had an opinion; this one starts costing money the
+ * day it is switched on, and skills change rarely enough that a weekly model call
+ * on them is a decision rather than an obvious default.
+ */
+export interface SkillOptimiserSettings {
+	enabled: boolean;
+	/** 168 = weekly, matching the UX audit above. */
+	intervalHours: number;
+}
+
+export const DEFAULT_SKILL_OPTIMISER: SkillOptimiserSettings = {
+	enabled: false,
+	intervalHours: 168
+};
+
 export interface RetentionSettings {
 	/**
 	 * Days of Observatory history to keep. Events are the fastest-growing table

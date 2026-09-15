@@ -103,7 +103,7 @@ async function explore(ctx: ExploreContext, question: string, hint: string): Pro
 		throw new Error('The spend cap has been reached — answer with what you already know.');
 	}
 	const cfg = getTaskConfig('subagent');
-	const choice = pickModel(cfg?.primaryModelId ?? null);
+	const choice = pickModel(cfg?.primaryModelId ?? null, 'subagent');
 	if (!choice) throw new Error('No model configured for sub-agents');
 	if (!choice.model.supportsTools) {
 		throw new Error(`${choice.model.displayName} cannot call tools — pick another in Admin → Tasks`);

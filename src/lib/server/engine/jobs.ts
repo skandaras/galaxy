@@ -4,6 +4,7 @@ import type { SearchResultRow } from '$lib/run-timeline';
 import { db } from '$lib/server/db';
 import { jobs } from '$lib/server/db/schema';
 import { notify } from '$lib/server/notifications';
+import { emitEvent } from './events';
 // Type-only, so the cycle with loop.ts (which imports this module's functions)
 // is erased at build time.
 import type { StopReason } from './loop';
@@ -286,6 +287,49 @@ function persistFinal(job: LiveJob, error: string | null): void {
 
 export function getLiveJob(id: string): LiveJob | null {
 	return live.get(id) ?? null;
+}
+
+/**
+ * Close out runs the previous process was still holding, at boot.
+ *
+ * `live` is in memory, so a restart loses every AbortController, subscriber and
+ * chunk buffer — while the `jobs` row stays exactly as it was, at 'running',
+ * with nothing that will ever revisit it. The watchdog above cannot: it walks
+ * `live`, and the job is not in it. This app updates itself, so a restart
+ * mid-turn is an ordinary event here rather than an exotic one.
+ *
+ * What the ghost row cost: `previousRunNote` takes the newest run that is *not*
+ * running, so it skipped these forever and the next turn on that chat was never
+ * told the last attempt had died — it read as though nothing had been asked. A
+ * turn parked on `ask_user` was worse. The question is sitting in somebody's
+ * browser, the job it has to be answered through no longer exists, so the POST
+ * 404s and the sheet has nothing that will ever close it.
+ *
+ * Marked 'error' rather than 'cancelled' because nobody chose this.
+ */
+export function closeAbandonedJobs(): number {
+	const abandoned = db.select().from(jobs).where(eq(jobs.status, 'running')).all();
+	if (!abandoned.length) return 0;
+	db.update(jobs)
+		.set({
+			status: 'error',
+			error: 'The server restarted while this run was going, so it never finished.',
+			finishedAt: new Date()
+		})
+		.where(eq(jobs.status, 'running'))
+		.run();
+	for (const job of abandoned) {
+		emitEvent({
+			userId: job.userId ?? undefined,
+			chatId: job.chatId ?? undefined,
+			task: job.task,
+			type: 'job',
+			name: 'job.abandoned',
+			status: 'error',
+			detail: { reason: 'server restarted mid-run' }
+		});
+	}
+	return abandoned.length;
 }
 
 /**

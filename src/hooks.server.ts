@@ -11,6 +11,7 @@ import {
 } from '$lib/server/bootstrap';
 import { ensureSkillsRepo } from '$lib/server/skills';
 import { typstAvailable } from '$lib/server/pdf';
+import { closeAbandonedJobs } from '$lib/server/engine/jobs';
 import { startScheduler } from '$lib/server/engine/scheduler';
 import { isTrustedProxy, parseAuthHeaders, isAdminFromGroups } from '$lib/server/auth';
 import { provisionUser } from '$lib/server/users';
@@ -25,6 +26,10 @@ seedTaskConfigs();
 migrateTaskPrompts();
 ensureSkillsRepo();
 seedSkills();
+// Before the scheduler, and before any request can read a chat: the live job
+// map does not survive a restart but the rows do, and a row left at 'running'
+// is one nothing will ever revisit. See closeAbandonedJobs.
+closeAbandonedJobs();
 startScheduler();
 // Settle "can this instance make PDFs?" now, so assembling a toolset — which is
 // synchronous — can just read the answer.

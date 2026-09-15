@@ -82,7 +82,7 @@ export async function summariseLeg(opts: {
 
 	if (getBudgetStatus().blocked) return skip('budget cap reached');
 	const cfg = getTaskConfig('run-summary');
-	const choice = pickModel(cfg?.primaryModelId ?? null);
+	const choice = pickModel(cfg?.primaryModelId ?? null, 'run-summary');
 	if (!choice) return skip('no model configured');
 
 	const started = Date.now();

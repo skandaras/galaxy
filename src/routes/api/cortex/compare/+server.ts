@@ -29,7 +29,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	if (getBudgetStatus().blocked) error(429, 'Budget cap reached');
 
 	const cfg = getTaskConfig('chat');
-	const choice = pickModel(cfg?.primaryModelId ?? null);
+	const choice = pickModel(cfg?.primaryModelId ?? null, 'chat');
 	if (!choice) error(503, 'No model configured for the chat task');
 
 	// Scoped like every other Cortex read: their own concepts plus what is shared.

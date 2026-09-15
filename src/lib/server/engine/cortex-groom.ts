@@ -1942,7 +1942,7 @@ export async function runCortexGroom(
 	}
 
 	const taskCfg = getTaskConfig('cortex-groom');
-	const choice = pickModel(taskCfg?.primaryModelId ?? null);
+	const choice = pickModel(taskCfg?.primaryModelId ?? null, 'cortex-groom');
 	if (!choice) {
 		emitEvent({
 			task: 'cortex-groom',

@@ -22,8 +22,28 @@
 
 	let { refreshKey = 0 }: { refreshKey?: number } = $props();
 
+	/**
+	 * Whether the list below has been fetched yet, and whether that worked.
+	 *
+	 * The table rendered "No models — sync a provider first" for all three of
+	 * loading, genuinely empty, and the request having failed — so a slow or
+	 * broken response told an admin to go and reconfigure a provider that was
+	 * very likely fine. An empty state has to know which of the three it is
+	 * before it is allowed to give advice.
+	 */
+	let loaded = $state(false);
+	let failed = $state(false);
+
 	async function load() {
-		models = await (await fetch('/api/admin/models')).json();
+		const res = await fetch('/api/admin/models').catch(() => null);
+		if (!res?.ok) {
+			failed = true;
+			loaded = true;
+			return;
+		}
+		models = await res.json();
+		failed = false;
+		loaded = true;
 	}
 	$effect(() => {
 		void refreshKey;
@@ -152,7 +172,19 @@
 					</td>
 				</tr>
 			{:else}
-				<tr><td colspan="8" class="empty">No models — sync a provider first.</td></tr>
+				<tr>
+					<td colspan="8" class="empty">
+						{#if !loaded}
+							Loading…
+						{:else if failed}
+							Could not load the model list.
+						{:else if models.length}
+							No models match that filter.
+						{:else}
+							No models — sync a provider first.
+						{/if}
+					</td>
+				</tr>
 			{/each}
 		</tbody>
 	</table>

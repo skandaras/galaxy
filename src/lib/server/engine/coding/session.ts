@@ -233,7 +233,7 @@ export function startCodingTurn(opts: {
 	assertBudget(opts.userId, 'coding');
 
 	const cfg = getTaskConfig('coding');
-	const choice = pickModel(opts.modelId ?? cfg?.primaryModelId ?? null);
+	const choice = pickModel(opts.modelId ?? cfg?.primaryModelId ?? null, 'coding');
 	if (!choice) throw new EngineError('No usable model — configure one in admin');
 	if (!choice.model.supportsTools) {
 		throw new EngineError(
