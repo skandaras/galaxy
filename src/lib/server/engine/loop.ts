@@ -857,6 +857,18 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	// until the conversation is re-read. Safe to append: a fallback only happens
 	// when assistantText is empty, so the client's buffer is empty too.
 	if (usedFallback) pushChunk(job, { type: 'delta', text: finalText });
+	// The model called nothing and wrote nothing, so there is no fallback text to
+	// stand in and nothing was ever streamed: the turn simply ends blank. It is a
+	// real answer — an empty one — so the saved message is left exactly as it is,
+	// and `lastReplyWasEmpty` still tells the *next* turn what happened. This is
+	// for the person who watched it happen, who until now got a spinner that
+	// stopped and no reason at all.
+	else if (!finalText.trim()) {
+		pushChunk(job, {
+			type: 'notice',
+			text: 'The model returned an empty reply. Nothing was saved — try again, or rephrase.'
+		});
+	}
 	// No usage write here any more: every call wrote its own row as it finished,
 	// so a throw out of onDone can no longer take the accounting with it — it used
 	// to sit immediately after this line, and a failure saving the reply meant the
@@ -982,7 +994,18 @@ async function executeToolCall(
 
 	if (!tool) {
 		emit('error', 'unknown tool');
-		return { output: JSON.stringify({ error: `Unknown tool: ${call.name}` }), ok: false };
+		// Naming what does exist, the way boards.ts does for a card or lane it
+		// cannot find. The bare version echoed the model's own invented name back
+		// at it and said nothing else, which is the one response it cannot act on:
+		// a hallucinated or stale name is precisely the case where the model's
+		// idea of the toolset is what is wrong.
+		return {
+			output: JSON.stringify({
+				error: `Unknown tool: ${call.name}`,
+				available: opts.tools.map((t) => t.def.name)
+			}),
+			ok: false
+		};
 	}
 	let meta: Record<string, unknown> = {};
 	let display: ToolDisplay | undefined;

@@ -7,13 +7,20 @@
 	interface Props {
 		prompt: string;
 		options?: string[];
-		/** Answering resolves the waiting tool call server-side. */
-		onanswer: (answer: string) => void;
+		/**
+		 * Answering resolves the waiting tool call server-side. Resolves false
+		 * when the answer did not get there and it is still this person's turn —
+		 * which is the difference between a sheet that can be retried and the one
+		 * this used to be, stuck on "Sent" with every control disabled after a
+		 * single dropped request.
+		 */
+		onanswer: (answer: string) => Promise<boolean>;
 	}
 	let { prompt, options = [], onanswer }: Props = $props();
 
 	let text = $state('');
 	let sending = $state(false);
+	let failed = $state(false);
 	let field = $state<HTMLTextAreaElement | null>(null);
 
 	// The sheet appears without warning mid-run, so put the cursor where the
@@ -22,11 +29,18 @@
 		field?.focus();
 	});
 
-	function send(answer: string) {
+	async function send(answer: string) {
 		const value = answer.trim();
 		if (!value || sending) return;
 		sending = true;
-		onanswer(value);
+		failed = false;
+		// `sending` used to be set and never cleared, over a caller that swallowed
+		// its own errors — so one failed request left the textarea and every
+		// option button disabled for good, with nothing said and no way out of the
+		// sheet except stopping the whole run.
+		if (await onanswer(value)) return;
+		sending = false;
+		failed = true;
 	}
 
 	function onkeydown(e: KeyboardEvent) {
@@ -64,6 +78,11 @@
 				{sending ? 'Sent' : 'Answer'}
 			</button>
 		</div>
+		{#if failed}
+			<p class="failed" role="alert">
+				That did not reach the run. Your answer is still here — try again.
+			</p>
+		{/if}
 		<p class="hint">
 			The run is parked until you answer, for as long as that takes. It carries on the moment
 			you do — or stop the run to abandon it.
@@ -152,6 +171,11 @@
 		margin: 0.4rem 0 0;
 		font-size: var(--text-sm);
 		color: var(--fg-dim);
+	}
+	.failed {
+		margin: 0.4rem 0 0;
+		font-size: var(--text-sm);
+		color: var(--danger);
 	}
 	.btn {
 		background: var(--border);

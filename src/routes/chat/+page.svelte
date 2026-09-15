@@ -64,6 +64,8 @@
 		attachments: AttachmentRef[] | null;
 		/** What the agent did to produce this reply, when it used tools. */
 		trace?: MessageTrace | null;
+		/** What this person thought of it, where they said. Null is the normal case. */
+		feedback?: 'up' | 'down' | null;
 	}
 	interface ModelOption {
 		id: string;
@@ -243,11 +245,19 @@
 	);
 
 	onMount(async () => {
+		// Three bare fetches under a Promise.all with nothing catching it: one
+		// refused request rejected the whole onMount, which reaches the layout's
+		// error boundary and takes down a page whose composer would otherwise
+		// still work perfectly well.
 		const [chatsRes, archivedRes, modelsRes] = await Promise.all([
-			fetch('/api/chats'),
-			fetch('/api/chats?archived=1'),
-			fetch('/api/models')
+			fetch('/api/chats').catch(() => null),
+			fetch('/api/chats?archived=1').catch(() => null),
+			fetch('/api/models').catch(() => null)
 		]);
+		if (!chatsRes?.ok || !archivedRes?.ok || !modelsRes?.ok) {
+			errorBanner = 'Could not load your chats. Reload to try again.';
+			return;
+		}
 		chats = filterChatMode(await chatsRes.json());
 		archived = filterChatMode(await archivedRes.json());
 		const m = await modelsRes.json();
@@ -873,13 +883,52 @@
 	 * server pushes back, not here — so what the screen shows is what the run
 	 * actually received.
 	 */
-	async function answerQuestion(answer: string) {
-		if (!activeJobId || !question) return;
-		await fetch(`/api/jobs/${activeJobId}/answer`, {
+	async function answerQuestion(answer: string): Promise<boolean> {
+		if (!activeJobId || !question) return false;
+		const res = await fetch(`/api/jobs/${activeJobId}/answer`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ questionId: question.id, answer })
-		}).catch(() => {});
+		}).catch(() => null);
+		if (res?.ok) return true;
+		// A 404 is the run itself being gone — the server restarted under it, or
+		// it aged out — so there is nothing left that could ever accept this. The
+		// sheet closes on a chunk from that run, which is never coming, so take it
+		// down here and say why rather than leaving an unanswerable question up.
+		if (res?.status === 404) {
+			question = null;
+			errorBanner = 'That run has ended, so its question can no longer be answered.';
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Rate a reply, or take the rating back by pressing the same thumb again.
+	 *
+	 * Applied locally first so the thumb responds immediately, and put back if
+	 * the server refuses — the alternative is a control that does nothing for a
+	 * round trip, on the one affordance whose whole job is being trivial to use.
+	 */
+	async function rate(msg: Msg, value: 'up' | 'down') {
+		const chat = currentChat;
+		// A hidden chat is never written to the database, so there is no row to
+		// carry an opinion and nothing on the server that would accept one.
+		if (!chat || chat.hidden) return;
+		const next = msg.feedback === value ? null : value;
+		const previous = msg.feedback ?? null;
+		msg.feedback = next;
+		messages = [...messages];
+		const res = await fetch(`/api/chats/${chat.id}/messages/${msg.id}`, {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ feedback: next })
+		}).catch(() => null);
+		if (!res?.ok) {
+			msg.feedback = previous;
+			messages = [...messages];
+			errorBanner = 'Could not record that.';
+		}
 	}
 
 	async function saveToLibrary(msg: Msg) {
@@ -1232,7 +1281,7 @@
 			<ListPill bind:open={listOpen} label="Chats" count={chats.length} />
 		</div>
 		{#if errorBanner}
-			<div class="banner error">
+			<div class="banner error" role="alert">
 				{errorBanner}
 				{#if blockingJobId}
 					<button class="banner-action" onclick={stopBlockingRun}>Stop it</button>
@@ -1265,6 +1314,30 @@
 								<button class="save-doc" title="Save to Library" onclick={() => saveToLibrary(msg)}>
 									{savedDocId === msg.id ? '✓ saved' : '⌘ save to library'}
 								</button>
+								<!-- Not offered on a hidden chat: it is never written to the
+								     database, so there is no row to hold an opinion. Pressing the
+								     same thumb again clears it — a rating somebody changed their
+								     mind about is worth less than no rating, and this is the only
+								     honest signal the platform has about whether an answer was
+								     any good. -->
+								{#if !isHidden}
+								<button
+									class="rate"
+									class:on={msg.feedback === 'up'}
+									aria-pressed={msg.feedback === 'up'}
+									aria-label="Mark this reply good"
+									title="Good reply"
+									onclick={() => rate(msg, 'up')}>▲</button
+								>
+								<button
+									class="rate"
+									class:on={msg.feedback === 'down'}
+									aria-pressed={msg.feedback === 'down'}
+									aria-label="Mark this reply bad"
+									title="Not a good reply"
+									onclick={() => rate(msg, 'down')}>▼</button
+								>
+								{/if}
 							</span>
 						{:else}
 							<p class="user-text">{msg.content}</p>
@@ -1728,6 +1801,32 @@
 	.save-doc:hover {
 		color: var(--accent);
 	}
+	/* Sized like save-doc and revealed with it, except once a thumb is set:
+	   a rating that vanished when the pointer left would be a control with no
+	   way to see its own state. */
+	.rate {
+		background: none;
+		border: none;
+		color: var(--fg-dim);
+		font-family: inherit;
+		font-size: var(--text-xs);
+		cursor: pointer;
+		padding: 0 0.15rem;
+		opacity: 0;
+		transition: opacity 0.15s;
+		min-width: var(--tap-min, 0);
+	}
+	.msg.assistant:hover .rate,
+	.rate:focus-visible,
+	.rate.on {
+		opacity: 1;
+	}
+	.rate:hover {
+		color: var(--accent);
+	}
+	.rate.on {
+		color: var(--accent);
+	}
 	.stages {
 		display: flex;
 		align-items: center;
@@ -1950,7 +2049,8 @@
 		.row-actions {
 			display: inline-flex;
 		}
-		.save-doc {
+		.save-doc,
+		.rate {
 			opacity: 1;
 		}
 	}

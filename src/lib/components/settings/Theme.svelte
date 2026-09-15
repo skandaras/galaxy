@@ -19,26 +19,51 @@
 		})();
 	});
 
-	// Live preview: apply the draft to the document as it changes.
+	/**
+	 * Live preview: apply the draft to the document as it changes.
+	 *
+	 * The teardown is the whole point of the shape here. These are inline styles
+	 * on the root element, so they outrank the stylesheet the layout writes from
+	 * the *saved* theme — and this component is mounted only while the Theme tab
+	 * is open (settings/+page.svelte renders it behind an `{#if}`). Without a
+	 * cleanup, nudging one colour and switching to another tab left the unsaved
+	 * draft applied to every page for the rest of the session, and a reload was
+	 * the only way back to the theme actually saved.
+	 *
+	 * Written as one map rather than sixteen calls so the set and the unset
+	 * cannot drift: a property added to one list and forgotten in the other is
+	 * exactly the bug this is fixing, one property at a time.
+	 */
 	$effect(() => {
 		if (!draft) return;
 		const root = document.documentElement;
-		root.style.setProperty('--bg', draft.bg);
-		root.style.setProperty('--bg-pane', draft.bgPane);
-		root.style.setProperty('--fg', draft.fg);
-		root.style.setProperty('--fg-dim', draft.fgDim);
-		root.style.setProperty('--heading', draft.heading);
-		root.style.setProperty('--label', draft.label);
-		root.style.setProperty('--galaxy', draft.galaxyColor);
-		root.style.setProperty('--accent', draft.accent);
-		root.style.setProperty('--border', draft.border);
-		root.style.setProperty('--danger', draft.danger);
-		root.style.setProperty('--font-ui', fontStack(draft.fontUi, 'ui'));
-		root.style.setProperty('--font-mono', fontStack(draft.fontMono, 'mono'));
-		root.style.setProperty('--radius', draft.radius);
-		root.style.setProperty('--glow', draft.glow);
-		root.style.setProperty('--glow-size', draft.glowStrength);
+		const vars: Record<string, string> = {
+			'--bg': draft.bg,
+			'--bg-pane': draft.bgPane,
+			'--fg': draft.fg,
+			'--fg-dim': draft.fgDim,
+			'--heading': draft.heading,
+			'--label': draft.label,
+			'--galaxy': draft.galaxyColor,
+			'--accent': draft.accent,
+			'--border': draft.border,
+			'--danger': draft.danger,
+			'--font-ui': fontStack(draft.fontUi, 'ui'),
+			'--font-mono': fontStack(draft.fontMono, 'mono'),
+			'--radius': draft.radius,
+			'--glow': draft.glow,
+			'--glow-size': draft.glowStrength
+		};
+		for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
+		// Restored rather than cleared: the layout's viewport effect owns nothing
+		// here, but a future one might, and putting back what was there is the
+		// only version of this that stays correct if it does.
+		const previousFontSize = root.style.fontSize;
 		root.style.fontSize = draft.baseFont;
+		return () => {
+			for (const name of Object.keys(vars)) root.style.removeProperty(name);
+			root.style.fontSize = previousFontSize;
+		};
 	});
 
 	/**

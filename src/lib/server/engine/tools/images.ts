@@ -80,17 +80,30 @@ export function imageTools(chatId: string, userId: string): LoopTool[] {
 					}
 				];
 
-				const res = await choice.adapter.complete(
-					{
-						modelKey: choice.model.modelKey,
-						messages,
-						// The whole point of the call: without this an image model
-						// replies with a paragraph about the picture it would have drawn.
-						modalities: ['image', 'text'],
-						maxTokens: IMAGE_MAX_TOKENS
-					},
-					AbortSignal.timeout(IMAGE_TIMEOUT_MS)
-				);
+				let res;
+				try {
+					res = await choice.adapter.complete(
+						{
+							modelKey: choice.model.modelKey,
+							messages,
+							// The whole point of the call: without this an image model
+							// replies with a paragraph about the picture it would have drawn.
+							modalities: ['image', 'text'],
+							maxTokens: IMAGE_MAX_TOKENS
+						},
+						AbortSignal.timeout(IMAGE_TIMEOUT_MS)
+					);
+				} catch (err) {
+					// Logged before rethrowing, the same way vision.ts does it and for
+					// the same reason: a call that reached the provider and then timed
+					// out at IMAGE_TIMEOUT_MS has still been generated and still been
+					// billed. This was the one model call in the platform that wrote no
+					// row on the failure path, so that spend was invisible to
+					// getBudgetStatus and to the usage dashboard alike — which is
+					// exactly what usage.ts exists to prevent.
+					logUsage({ task: 'visual', choice, usage: null, status: 'error', userId });
+					throw err;
+				}
 				logUsage({ task: 'visual', choice, usage: res.usage, status: 'ok', userId });
 
 				const images = res.images ?? [];

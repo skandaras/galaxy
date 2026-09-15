@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { taskConfigs } from '$lib/server/db/schema';
-import { appendMessage, getChat, getMessages, updateChat } from '$lib/server/chats';
+import { appendMessage, getChat, getMessages, listAttachments, updateChat } from '$lib/server/chats';
 import {
 	listEnabledModels,
 	resolveModel,
@@ -20,6 +20,7 @@ import { buildContext } from './context';
 import { houseStyle, PROSE_TASKS } from './voice';
 import { maybeCompact } from './compaction';
 import { maybeTitleChat, nameThisChatNote, setChatTitleTool } from './chat-title';
+import { emitEvent } from './events';
 import { createJob, failJob, type LiveJob } from './jobs';
 import { chatMaxSteps } from './limits';
 import { runAgentLoop, type LoopTool } from './loop';
@@ -83,13 +84,84 @@ export function systemPromptFor(task: string, supplementTask?: string | null): s
 	return PROSE_TASKS.has(task) ? stored + houseStyle() : stored;
 }
 
-export function pickModel(modelId: string | null): ModelChoice | null {
+/**
+ * The model a task should run on, falling back to any enabled one.
+ *
+ * The fallback is worth keeping — a background agent whose model was disabled
+ * is better off running on something than not running at all — but it used to
+ * be completely silent, and `listEnabledModels()` has no ORDER BY, so
+ * "something" is whatever SQLite happened to return first. Disable the model
+ * the memory job was pointed at and it carries on against an arbitrary
+ * substitute: no capability check, no event, and output that quietly gets worse
+ * for a reason nothing records. cortex-groom.ts already names this in a comment
+ * about why it prints the model it used.
+ *
+ * So a substitution now says so. `task` is only a label for that event; passing
+ * nothing still works and still reports. A task with no stored preference at
+ * all is not a substitution — that is an unconfigured task, not a broken one —
+ * and stays quiet.
+ */
+export function pickModel(modelId: string | null, task?: string): ModelChoice | null {
 	if (modelId) {
 		const direct = resolveModel(modelId);
 		if (direct) return direct;
 	}
 	const first = listEnabledModels()[0];
-	return first ? resolveModel(first.id) : null;
+	const choice = first ? resolveModel(first.id) : null;
+	if (modelId && choice) {
+		emitEvent({
+			task,
+			type: 'failover',
+			name: `${modelId} → ${choice.model.modelKey}`,
+			status: 'error',
+			detail: {
+				reason: 'the configured model is missing or disabled; used the first enabled one'
+			}
+		});
+	}
+	return choice;
+}
+
+/**
+ * Append links for anything the turn made and the reply never mentioned.
+ *
+ * `addAttachment` stores against the chat and carries no message id, and
+ * `listAttachments` is reachable only from the agent's own tools — no route
+ * renders it, no component asks for it. So the single route a person has to a
+ * generated image or PDF is the markdown link the tool hands back with
+ * "put this in your reply".
+ *
+ * Which held exactly as long as the model got to write one. A turn that ends
+ * `exhausted`, `budget` or `cancelled` saves its last step label instead, so the
+ * file was drawn, paid for, written to disk — and unreachable from anywhere in
+ * the interface, permanently. The same happens to a model that simply forgets,
+ * which is why this checks the text rather than the stop reason.
+ *
+ * Matching on the id is what makes it reliable: both `linkFor` and the PDF tool
+ * put it in the URL, so a reply that references the file in any form already
+ * contains it.
+ *
+ * Exported for tests.
+ */
+export function withUnlinkedAttachments(
+	chatId: string,
+	text: string,
+	before: Set<string>
+): string {
+	const orphans = listAttachments(chatId).filter((a) => !before.has(a.id) && !text.includes(a.id));
+	if (!orphans.length) return text;
+	const links = orphans.map((a) =>
+		a.kind === 'image'
+			? `![${a.name}](/api/chats/${chatId}/attachments/${a.id})`
+			: `[${a.name}](/api/chats/${chatId}/attachments/${a.id})`
+	);
+	return [
+		text.trim(),
+		`_Made during this turn${text.trim() ? ' and not linked above' : ''}:_`,
+		...links
+	]
+		.filter(Boolean)
+		.join('\n\n');
 }
 
 /**
@@ -102,7 +174,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	assertBudget(opts.userId, 'chat');
 
 	const cfg = getTaskConfig('chat');
-	const choice = pickModel(opts.modelId ?? cfg?.primaryModelId ?? null);
+	const choice = pickModel(opts.modelId ?? cfg?.primaryModelId ?? null, 'chat');
 	if (!choice) {
 		throw new EngineError('No usable model — add a provider and enable a model in admin');
 	}
@@ -182,6 +254,9 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	// it invalidated the cacheable prefix behind it (see buildContext).
 	const priorRun = previousRunNote(chat.id);
 	const activeTools = applyToolPolicy([...tools, ...mcpLoopTools('chat')], 'chat');
+	// Everything already on this chat, so anything the run makes can be told
+	// apart from it afterwards. See the back-stop in onDone.
+	const attachmentsBefore = new Set(listAttachments(chat.id).map((a) => a.id));
 
 	void runAgentLoop({
 		job,
@@ -213,9 +288,10 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 				tail: priorRun
 			}),
 		onDone: (text, _usage, usedChoice, summary) => {
+			const content = withUnlinkedAttachments(chat.id, text, attachmentsBefore);
 			const saved = appendMessage(chat.id, {
 				role: 'assistant',
-				content: text,
+				content,
 				modelKey: usedChoice.model.modelKey,
 				// Kept with the reply, so a turn that searched and read three pages
 				// still says so when it is scrolled back to.
@@ -228,7 +304,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 			// down, and baking one into edge weights is writing it down.
 			if (persist) {
 				try {
-					learnFromReply(chat.id, text);
+					learnFromReply(chat.id, content);
 				} catch {
 					// Learning is a nicety. A turn must never fail because of it.
 				}

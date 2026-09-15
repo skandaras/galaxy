@@ -75,6 +75,9 @@
 	let newCardLane = $state<string | null>(null);
 	let newCardTitle = $state('');
 	let error = $state<string | null>(null);
+	/** Whether the board list has arrived, and whether it arrived at all. */
+	let boardsLoaded = $state(false);
+	let boardsFailed = $state(false);
 	let running = $state(false);
 
 	onMount(loadBoards);
@@ -88,7 +91,19 @@
 	onDestroy(detach);
 
 	async function loadBoards() {
-		boards = await (await fetch('/api/boards')).json();
+		const res = await fetch('/api/boards').catch(() => null);
+		// "No boards yet" invited somebody to create one while the request was
+		// still in flight — and said the same thing when it had failed, which on a
+		// page whose whole content is the list is the least useful moment to be
+		// confidently wrong.
+		if (!res?.ok) {
+			boardsFailed = true;
+			boardsLoaded = true;
+			return;
+		}
+		boards = await res.json();
+		boardsFailed = false;
+		boardsLoaded = true;
 		if (!boards.length) return;
 		if (!selectedId || !boards.some((b) => b.id === selectedId)) selectedId = boards[0].id;
 		await loadBoard();
@@ -417,7 +432,7 @@
 		{/if}
 	</header>
 
-	{#if error}<p class="error">{error}</p>{/if}
+	{#if error}<p class="error" role="alert">{error}</p>{/if}
 
 	{#if view && (view.projects.length || view.members.length > 1)}
 		<div class="filters">
@@ -469,7 +484,14 @@
 		</div>
 	{/if}
 
-	{#if !boards.length}
+	{#if !boardsLoaded}
+		<div class="empty-state"><h2>Loading…</h2></div>
+	{:else if boardsFailed}
+		<div class="empty-state">
+			<h2>Could not load your boards</h2>
+			<p>Something went wrong reaching the server. Reload to try again.</p>
+		</div>
+	{:else if !boards.length}
 		<div class="empty-state">
 			<h2>No boards yet</h2>
 			<p>

@@ -139,6 +139,20 @@ export const messages = sqliteTable(
 		 * the run finished.
 		 */
 		trace: text('trace', { mode: 'json' }).$type<MessageTrace | null>(),
+		/**
+		 * What the person thought of this reply, where they said.
+		 *
+		 * The one judgement that matters most and the only one the platform could
+		 * not see. Across every other table the signals are indirect — the UX audit
+		 * infers friction from retries and cancels, cortex-learn reinforces whatever
+		 * concepts a reply happened to mention — so "that answer was wrong" was a
+		 * thing a person could know and nothing could record.
+		 *
+		 * Null is the ordinary case and means nothing was said, not that the reply
+		 * was fine. Only ever set on an assistant message; a hidden chat is never
+		 * written here at all, so its replies cannot carry one by construction.
+		 */
+		feedback: text('feedback', { enum: ['up', 'down'] }),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 	},
 	// Every turn reads a whole chat in seq order, so the sort rides the index.

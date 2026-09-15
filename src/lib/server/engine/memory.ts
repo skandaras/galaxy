@@ -395,7 +395,7 @@ export async function runMemory(
 	}
 
 	const cfg = getTaskConfig('memory');
-	const choice = pickModel(cfg?.primaryModelId ?? null);
+	const choice = pickModel(cfg?.primaryModelId ?? null, 'memory');
 	if (!choice) {
 		emitEvent({
 			userId,
@@ -753,7 +753,7 @@ export async function consolidateMemory(
 	if (getBudgetStatus().blocked) return { ran: false, reason: 'budget cap reached' };
 
 	const cfg = getTaskConfig('memory');
-	const choice = pickModel(cfg?.primaryModelId ?? null);
+	const choice = pickModel(cfg?.primaryModelId ?? null, 'memory');
 	if (!choice) return { ran: false, reason: 'no model configured' };
 
 	// Indices, not ids: shorter to emit, and a model cannot invent one that maps
@@ -955,12 +955,33 @@ export function applyConsolidation(
 export async function runSkillOptimiser(
 	adminUserId?: string
 ): Promise<{ ran: boolean; reason?: string; candidates?: number }> {
+	/**
+	 * Say why a run did not happen.
+	 *
+	 * All three of these returned in silence, which was survivable while the only
+	 * caller was a button somebody was watching — the reason went back in the
+	 * response. Now that a schedule can call it, a silent return is an agent that
+	 * looks like it ran and did nothing worth reporting. The UX audit already
+	 * announces its skips this way.
+	 */
+	const skip = (reason: string) => {
+		emitEvent({
+			userId: adminUserId,
+			task: 'skill-optimiser',
+			type: 'job',
+			name: 'optimise.run',
+			status: 'error',
+			detail: { skipped: true, reason }
+		});
+		return { ran: false, reason };
+	};
+
 	const enabled = listSkills().filter((s) => s.enabled);
-	if (!enabled.length) return { ran: false, reason: 'no skills to optimise' };
-	if (getBudgetStatus().blocked) return { ran: false, reason: 'budget cap reached' };
+	if (!enabled.length) return skip('no skills to optimise');
+	if (getBudgetStatus().blocked) return skip('budget cap reached');
 	const cfg = getTaskConfig('skill-optimiser');
-	const choice = pickModel(cfg?.primaryModelId ?? null);
-	if (!choice) return { ran: false, reason: 'no model configured' };
+	const choice = pickModel(cfg?.primaryModelId ?? null, 'skill-optimiser');
+	if (!choice) return skip('no model configured');
 
 	const skillDump = enabled
 		.map((s) => `### ${s.name} (${s.category}) v${s.version}\n${s.description}\ntriggers: ${s.triggers}`)
