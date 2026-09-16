@@ -4,7 +4,7 @@ import type { ModelChoice } from '$lib/server/providers/registry';
 import type { ChatRequest, StreamEvent, ToolCall } from '$lib/server/providers/types';
 import { goDeeperTool } from './answer-first';
 import { createJob } from './jobs';
-import { runAgentLoop, type LoopTool } from './loop';
+import { runAgentLoop, turnBudgetNote, type LoopTool } from './loop';
 
 /**
  * That a chat turn answers before it goes looking.
@@ -147,5 +147,33 @@ describe('the opening leg of a chat turn', () => {
 		// if an admin disables the gate in Admin → Tools.
 		const { seen } = await run({ legs: [{ text: 'Answer.' }] });
 		expect(namesOffered(seen[0])).toEqual(['generate_image', 'web_search']);
+	});
+});
+
+describe('the answer-first line in the turn-budget note', () => {
+	/**
+	 * Said in the note rather than the task prompt because this is the loudest
+	 * place in the prompt by this codebase's own measurement — the comment beside
+	 * it records the batching line beating both a tool description and the task
+	 * prompt on the same question. Removing the looking-up tools was not enough on
+	 * its own: a reasoning model thinks, calls the gate and writes no content at
+	 * all, and reasoning can never become the reply.
+	 */
+	it('asks for an answer before the gate is called', () => {
+		const note = turnBudgetNote(12, true, true);
+		expect(note).toContain('Write something before you go looking');
+		expect(note).toContain('look_into_it');
+	});
+
+	it('says nothing of the sort when there is no gate', () => {
+		// The coding agent shares this loop, and its honest first move is reading
+		// the repository. Telling it to answer from memory first would be wrong.
+		const note = turnBudgetNote(50, false, false);
+		expect(note).not.toContain('Write something before you go looking');
+		expect(note).toContain('Turn budget');
+	});
+
+	it('defaults to no gate, so an existing caller cannot acquire one', () => {
+		expect(turnBudgetNote(12)).not.toContain('Write something before you go looking');
 	});
 });

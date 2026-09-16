@@ -33,10 +33,20 @@ import type { LoopTool } from './loop';
  * worse turn than the one being fixed. Which tools count is declared per tool
  * (`LoopTool.lookup`), so the next one added is classified where it is written.
  *
- * The cost of the shape, accepted deliberately: a model that reaches straight
- * for this without writing anything gives no immediate answer. That is no worse
- * than today, and refusing the call until prose exists would spend a wasted
- * round-trip every time it happened.
+ * That was not enough on its own. Removing the looking-up tools was meant to
+ * leave answering as the only other move, and on a reasoning model it does not:
+ * it thinks, calls this, and emits no `content` at all. Reasoning is routed to
+ * the thinking note and must never become the saved reply, so `iterationText` is
+ * empty, nothing is kept, and the first thing the person sees is still a search.
+ * Confirmed from a live Observatory trace: the first model call was this tool,
+ * with no prose before it.
+ *
+ * Hence the description below opening with the instruction rather than assuming
+ * it, and the matching line in `turnBudgetNote` — which is the loudest place in
+ * the prompt by this codebase's own measurement. Asking rather than enforcing is
+ * deliberate: the enforcing versions (make the answer a required argument and
+ * promote it into the reply, or refuse this call until prose exists) are both
+ * still available if asking turns out not to win.
  */
 export function goDeeperTool(): LoopTool {
 	return {
@@ -46,6 +56,8 @@ export function goDeeperTool(): LoopTool {
 		def: {
 			name: 'look_into_it',
 			description:
+				'Write your answer first, then call this. In the same turn, before this call, say ' +
+				'what you already know.\n\n' +
 				'Ask to go and look something up. Web search, reading a page, this person’s ' +
 				'lattice, their Library and their boards, and what earlier runs on this ' +
 				'conversation did are all behind this — say what you need and they become ' +
@@ -53,9 +65,9 @@ export function goDeeperTool(): LoopTool {
 				'Everything else you can do is already available: answering, drawing, writing a ' +
 				'document, filing a card, asking them a question. This is only for going and ' +
 				'finding out.\n\n' +
-				'You have just told them what you know. Call this when that was not enough, not to ' +
-				'double-check something you are confident about. Most questions end without it, ' +
-				'which is the normal outcome rather than a failure.',
+				'Call this when what you know was not enough, not to double-check something you are ' +
+				'confident about. Most questions end without it, which is the normal outcome ' +
+				'rather than a failure.',
 			parameters: {
 				type: 'object',
 				properties: {
