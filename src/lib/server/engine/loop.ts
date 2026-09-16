@@ -225,10 +225,36 @@ const WRAP_UP_AT = 2;
  * budget on a handful of pages and stopped with nothing to show. Saying it is
  * worth more than raising the cap.
  */
-export function turnBudgetNote(maxIterations: number, hasSearch = false): string {
+export function turnBudgetNote(
+	maxIterations: number,
+	hasSearch = false,
+	hasGate = false
+): string {
 	return [
 		'',
 		`[Turn budget: this reply may take up to ${maxIterations} model turns]`,
+		// First, because it is about the first thing the turn does.
+		//
+		// The gate made the looking-up tools unreachable on the opening leg, which
+		// was supposed to leave answering as the only other move. It did not: a
+		// reasoning model thinks, calls the gate, and emits no `content` at all —
+		// `iterationText` is empty, nothing is kept, and the first thing the person
+		// sees is a search. Reasoning is routed to the thinking note and must never
+		// become the reply, so there was genuinely nothing to show.
+		//
+		// Said here rather than in the task prompt because this note is what the
+		// model demonstrably reads: the comment below records the batching line
+		// beating both a tool description and the prompt on the same question. It
+		// is also composed at call time, so it reaches every install without the
+		// stored-prompt migration `migrateTaskPrompts` would otherwise need.
+		//
+		// Only where there is a gate to say it about. The coding agent shares this
+		// loop and its honest first move is reading the repository.
+		...(hasGate
+			? [
+					'Write something before you go looking. If you can say anything useful from what you already know, say it in this turn. Only then call look_into_it.'
+				]
+			: []),
 		'One turn can call several tools at once, and they all run before you are asked again. Batch independent calls — every URL you need, every file you want to read — into a single turn rather than spending a turn on each.',
 		// Said only where there is a web_search to say it about, and said here
 		// because this note is what the model actually reads: the tool
@@ -584,7 +610,8 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 				messages[0].content +
 				turnBudgetNote(
 					opts.maxIterations,
-					opts.tools.some((t) => t.def.name === 'web_search')
+					opts.tools.some((t) => t.def.name === 'web_search'),
+					Boolean(opts.openingTools?.some((t) => t.opensToolset))
 				)
 		};
 	}
