@@ -55,6 +55,7 @@ export function fetchUrlTool(cfg: FetchSettings, deps: FetchToolDeps = {}): Loop
 	let used = 0;
 
 	return {
+		lookup: true,
 		def: fetchUrlToolDef,
 		describe: (args) => String(args.url ?? ''),
 		execute: async (args, report) => {

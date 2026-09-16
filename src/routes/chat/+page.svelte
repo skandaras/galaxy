@@ -1327,16 +1327,26 @@
 									aria-pressed={msg.feedback === 'up'}
 									aria-label="Mark this reply good"
 									title="Good reply"
-									onclick={() => rate(msg, 'up')}>▲</button
+									onclick={() => rate(msg, 'up')}
 								>
+									<svg viewBox="0 0 16 14" aria-hidden="true">
+										<path class="ring" d="M8 3 14 11 2 11Z" />
+										<path class="mark" d="M8 3 14 11 2 11Z" />
+									</svg>
+								</button>
 								<button
 									class="rate"
 									class:on={msg.feedback === 'down'}
 									aria-pressed={msg.feedback === 'down'}
 									aria-label="Mark this reply bad"
 									title="Not a good reply"
-									onclick={() => rate(msg, 'down')}>▼</button
+									onclick={() => rate(msg, 'down')}
 								>
+									<svg viewBox="0 0 16 14" aria-hidden="true">
+										<path class="ring" d="M8 11 2 3 14 3Z" />
+										<path class="mark" d="M8 11 2 3 14 3Z" />
+									</svg>
+								</button>
 								{/if}
 							</span>
 						{:else}
@@ -1801,31 +1811,81 @@
 	.save-doc:hover {
 		color: var(--accent);
 	}
-	/* Sized like save-doc and revealed with it, except once a thumb is set:
-	   a rating that vanished when the pointer left would be a control with no
-	   way to see its own state. */
+	/* Revealed with save-doc, except once a thumb is set: a rating that vanished
+	   when the pointer left would be a control with no way to see its own state. */
 	.rate {
 		background: none;
 		border: none;
-		color: var(--fg-dim);
-		font-family: inherit;
-		font-size: var(--text-xs);
 		cursor: pointer;
-		padding: 0 0.15rem;
+		padding: 0.15rem 0.2rem;
+		line-height: 0;
 		opacity: 0;
 		transition: opacity 0.15s;
-		min-width: var(--tap-min, 0);
+	}
+	/* A drawn triangle rather than the ▲ glyph, so the mark is a shape this
+	   stylesheet controls instead of whatever the interface font thinks an arrow
+	   is — which is what lets hover and focus follow the arrow rather than box
+	   it. The viewBox is larger than the path on every side, leaving room for the
+	   focus stroke to sit outside the fill without being clipped. */
+	.rate svg {
+		display: block;
+		width: 0.72rem;
+		height: 0.63rem;
+		overflow: visible;
+	}
+	.rate .mark {
+		fill: var(--fg-dim);
+		stroke-linejoin: round;
+		transition: fill 0.12s;
+	}
+	.rate:hover .mark,
+	.rate.on .mark {
+		fill: var(--accent);
+	}
+	/* themeCss gives every button a hover glow as a box-shadow, and a box-shadow
+	   follows the border box — a rounded rectangle, most of which around a
+	   triangle is the empty corners either side of it. That square was the whole
+	   complaint. `drop-shadow` is the same glow taken from the rendered shape's
+	   own alpha, so it traces the arrow. */
+	.rate:not(:disabled):hover {
+		box-shadow: none;
+	}
+	.rate:hover svg {
+		filter: drop-shadow(0 0 var(--glow-size) var(--glow));
 	}
 	.msg.assistant:hover .rate,
 	.rate:focus-visible,
 	.rate.on {
 		opacity: 1;
 	}
-	.rate:hover {
-		color: var(--accent);
+	/* The one rule in themeCss draws a 2px rectangle with a 2px offset, which
+	   around a triangle is mostly the empty corners either side of it. Overridden
+	   deliberately and with something visible put back, which is what
+	   docs/ACCESSIBILITY.md asks of a component wanting its own focus style —
+	   same accent, same width, traced around the arrow.
+	   A second, scaled copy of the path rather than a stroke on the mark itself:
+	   the mark is already accent when hovered or set, and an accent stroke on an
+	   accent fill is no focus indicator at all — a keyboard user tabbing onto a
+	   thumb they had already pressed would have seen nothing.
+	   `fill-box` scales it about its own centre, so the ring stays centred on the
+	   arrow without either triangle's coordinates being worked out by hand, and
+	   `non-scaling-stroke` keeps the line the width it says it is. */
+	.rate:focus-visible {
+		outline: none;
 	}
-	.rate.on {
-		color: var(--accent);
+	.rate .ring {
+		fill: none;
+		stroke: var(--accent);
+		stroke-width: 1.5;
+		stroke-linejoin: round;
+		vector-effect: non-scaling-stroke;
+		transform-box: fill-box;
+		transform-origin: center;
+		transform: scale(1.45);
+		opacity: 0;
+	}
+	.rate:focus-visible .ring {
+		opacity: 1;
 	}
 	.stages {
 		display: flex;
@@ -2052,6 +2112,11 @@
 		.save-doc,
 		.rate {
 			opacity: 1;
+		}
+		/* A thumb needs more than a 12px triangle to land on, and these sit in a
+		   row with nothing beside them to hit by mistake. */
+		.rate {
+			padding: 0.4rem 0.45rem;
 		}
 	}
 </style>

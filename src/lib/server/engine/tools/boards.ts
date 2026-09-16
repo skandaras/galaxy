@@ -112,6 +112,7 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 	const read: LoopTool[] = [
 		{
 			parallelSafe: true,
+			lookup: true,
 			def: {
 				name: 'board_read',
 				description:
@@ -164,6 +165,7 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 		},
 		{
 			parallelSafe: true,
+			lookup: true,
 			def: {
 				name: 'card_read',
 				description:

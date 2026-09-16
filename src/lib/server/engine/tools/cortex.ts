@@ -44,6 +44,7 @@ export function cortexTools(
 	const tools: LoopTool[] = [
 		{
 			parallelSafe: true,
+			lookup: true,
 			def: {
 				name: 'cortex_query',
 				description:
