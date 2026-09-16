@@ -381,6 +381,7 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 	let used = 0;
 
 	return {
+		lookup: true,
 		// The ration is configurable, so it is stated per instance rather than in
 		// the static definition — a description that says "one" under a setting of
 		// two is the same class of bug as the batching advice this rule exists to

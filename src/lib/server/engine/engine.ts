@@ -25,6 +25,7 @@ import { createJob, failJob, type LiveJob } from './jobs';
 import { chatMaxSteps } from './limits';
 import { runAgentLoop, type LoopTool } from './loop';
 import { previousRunNote, runHistoryTool } from './run-history';
+import { goDeeperTool } from './answer-first';
 import { askUserTool } from './ask-user';
 import { attachmentTools } from './tools/attachments';
 import { boardTools } from './tools/boards';
@@ -254,6 +255,27 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	// it invalidated the cacheable prefix behind it (see buildContext).
 	const priorRun = previousRunNote(chat.id);
 	const activeTools = applyToolPolicy([...tools, ...mcpLoopTools('chat')], 'chat');
+	/**
+	 * What the first leg may call: everything that does not go and look something
+	 * up, plus the gate that asks for the ones that do. See answer-first.ts.
+	 *
+	 * The first cut of this offered the gate *alone*, and the end-to-end smoke
+	 * rejected it — "draw me a spiral galaxy" could no longer reach
+	 * `generate_image` on the leg that wanted to. It was right to: the complaint
+	 * this feature exists for is the agent researching before answering, not the
+	 * agent doing what it was asked. Blocking the acting tools made an image, a
+	 * PDF, a card write or a clarifying question each pay a full extra round-trip
+	 * to announce an intention, and put `set_chat_title` out of reach on the one
+	 * leg the naming design runs in.
+	 *
+	 * Run through the tool policy like everything else, so an admin can switch the
+	 * gate off in Admin → Tools. When they have, `opening` is the non-lookup tools
+	 * with no way to ask for the rest — so it falls back to the whole toolset,
+	 * which is how chat behaved before any of this existed. An opening leg that
+	 * can neither look things up nor ask to is a dead end, not a guarantee.
+	 */
+	const gate = applyToolPolicy([goDeeperTool()], 'chat');
+	const opening = gate.length ? [...activeTools.filter((t) => !t.lookup), ...gate] : [];
 	// Everything already on this chat, so anything the run makes can be told
 	// apart from it afterwards. See the back-stop in onDone.
 	const attachmentsBefore = new Set(listAttachments(chat.id).map((a) => a.id));
@@ -267,6 +289,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		primary: choice,
 		backup,
 		tools: activeTools,
+		openingTools: opening,
 		maxIterations: chatMaxSteps(),
 		// The turn a person is sitting and watching, so it asks for the floor.
 		// Chat asked for nothing, and on a reasoning model "nothing" means the

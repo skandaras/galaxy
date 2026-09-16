@@ -68,6 +68,7 @@ export function knowledgeTools(userId: string): LoopTool[] {
 		},
 		{
 			parallelSafe: true,
+			lookup: true,
 			def: {
 				name: 'library_search',
 				description:
@@ -89,6 +90,7 @@ export function knowledgeTools(userId: string): LoopTool[] {
 		},
 		{
 			parallelSafe: true,
+			lookup: true,
 			def: {
 				name: 'library_read',
 				description: 'Read a Library document by title or id.',

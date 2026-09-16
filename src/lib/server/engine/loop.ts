@@ -67,6 +67,30 @@ export interface LoopTool {
 	 */
 	parallelSafe?: boolean;
 	/**
+	 * This tool goes and finds something out, rather than doing what was asked.
+	 *
+	 * Opt-in like `parallelSafe` above, and declared here rather than as a list of
+	 * names somewhere central for the same reason: the next person to add a tool
+	 * writes it beside the tool, not in a file they have no reason to open.
+	 *
+	 * Read by `openingTools` — a chat turn's first leg is offered everything that
+	 * is *not* one of these, so answering or acting are the moves available and
+	 * going looking is the one that has to be asked for. Reading something the
+	 * person already handed over (an attachment, an image on the message) is not
+	 * a lookup by this definition: it is part of the question.
+	 */
+	lookup?: boolean;
+	/**
+	 * This tool does no work of its own: calling it only asks for the rest of the
+	 * toolset. The gate in answer-first.ts is the one that sets it.
+	 *
+	 * The loop needs to know because a leg whose only call was this one has
+	 * written its answer, not a lead-in — see the narration rule below. Matching
+	 * a flag rather than the name keeps the loop from having to know what the
+	 * gate is called.
+	 */
+	opensToolset?: boolean;
+	/**
 	 * Called once before each model round-trip's calls are executed, so a tool
 	 * can reset state scoped to one round-trip rather than to the whole turn.
 	 *
@@ -126,6 +150,22 @@ export interface LoopOptions {
 	backup: ModelChoice | null;
 	buildMessages: () => ProviderMessage[];
 	tools: LoopTool[];
+	/**
+	 * What the *first* leg may call, when it should not be the whole toolset.
+	 *
+	 * This is how a turn is made to answer before it goes looking. Chat passes a
+	 * single gate here (see answer-first.ts): with nothing else on the table,
+	 * answering is the only other move, and calling the gate opens `tools` from
+	 * the next leg onward. Left undefined every leg gets `tools`, which is what
+	 * the coding paths still want — their honest first move is to read the
+	 * repository, and nobody is watching one stream.
+	 *
+	 * Deliberately not a flag: the loop does not know what a good gate says, and
+	 * a tool is the one kind of instruction a model cannot talk itself out of —
+	 * see the note on `turnBudgetNote` about which of two disagreeing
+	 * instructions wins.
+	 */
+	openingTools?: LoopTool[];
 	maxIterations: number;
 	/**
 	 * How hard the model should think on each leg of this turn.
@@ -517,7 +557,22 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	pushChunk(job, { type: 'meta', model: choice.model.displayName });
 
 	const toolDefs: ToolDef[] = choice.model.supportsTools ? opts.tools.map((t) => t.def) : [];
-	const toolByName = new Map(opts.tools.map((t) => [t.def.name, t]));
+	/**
+	 * What the opening leg is offered, where that differs — see
+	 * `LoopOptions.openingTools`. Null means every leg gets the full set.
+	 *
+	 * A model that cannot take tools at all is left alone: narrowing an empty
+	 * list to a narrower empty list would be a gate it could never open, and the
+	 * turn would end on the first leg with no way to go further.
+	 */
+	const openingDefs: ToolDef[] | null =
+		choice.model.supportsTools && opts.openingTools?.length
+			? opts.openingTools.map((t) => t.def)
+			: null;
+	// Both sets, so the gate's own call can be executed on the leg that made it.
+	const toolByName = new Map(
+		[...opts.tools, ...(opts.openingTools ?? [])].map((t) => [t.def.name, t])
+	);
 	const messages = opts.buildMessages();
 	// Appended here rather than by each caller: the loop owns the budget, so it
 	// is the only thing that can describe it accurately. Only worth saying when
@@ -614,7 +669,11 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 				{
 						modelKey: choice.model.modelKey,
 						messages,
-						tools: toolDefs,
+						// The opening leg's narrower set, where the caller asked for one.
+						// Only the first leg: once the gate has been opened the run is
+						// an ordinary one, and a gate offered twice is a turn that can
+						// announce it is going further without ever doing so.
+						tools: iteration === 0 && openingDefs ? openingDefs : toolDefs,
 						cacheMode: choice.model.cacheMode,
 						// Resolved per call rather than per turn: failover can land on a
 						// different model, and whether the field may be sent at all is
@@ -726,7 +785,19 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		// for the user — it stays in the reply and the step is named after what
 		// it actually called. Either way the model still sees the text: the
 		// `messages.push` below is untouched.
-		const consumedText = isNarration(iterationText);
+		// ...except on a leg whose only call was the gate. There the prose *is* the
+		// answer: the gate does no work, so there is nothing for a lead-in to lead
+		// into, and a short answer read as a label was dropped from the reply —
+		// which is the immediate answer the whole shape exists to deliver.
+		// Caught by answer-first.test.ts before it shipped: "Short answer first."
+		// is exactly the length isNarration calls a label.
+		//
+		// Scoped to the gate rather than to the first leg, because the first leg
+		// can now act as well as answer, and "Drawing that now" before a
+		// generate_image call genuinely is a step label.
+		const openedGateOnly =
+			toolCalls.length === 1 && toolByName.get(toolCalls[0].name)?.opensToolset === true;
+		const consumedText = openedGateOnly ? false : isNarration(iterationText);
 		const label = consumedText
 			? stepLabel(iterationText, describeBatch(toolCalls, toolByName))
 			: describeBatch(toolCalls, toolByName);

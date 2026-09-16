@@ -231,6 +231,7 @@ export function runHistoryTool(chatId: string): LoopTool {
 	return {
 		def: runHistoryToolDef,
 		parallelSafe: true,
+		lookup: true,
 		describe: () => 'recent runs',
 		execute: async (args) => {
 			const limit = Math.max(1, Math.min(Number(args.limit) || 3, MAX_RUNS));
