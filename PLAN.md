@@ -156,6 +156,16 @@ Internet ─► Proxy ──┤
   schedule, and three importance tiers whose admission is gated in code rather than by
   the prompt. Designed, not built.
 - **Multi-agent orchestration** — *partly shipped*: the coding agent can dispatch a read-only `explore` sub-agent (its own model and step budget under the `subagent` task, no recursion, usage broken out in Admin → Usage). Still outstanding: sub-agents that can write, and pipelines (research → draft → review).
+- **Forge — an epic that builds itself** (`docs/FORGE.md`): a charter, sprints beneath
+  it and tasks beneath those, each one closing only when a list of commands returns exit
+  0 rather than when the agent says it is finished. Checks are frozen before the code
+  exists and are proved red against the tree first, so a run cannot write itself a check
+  it cannot fail. The epic is a row and each unit of work is a short job, because
+  `closeAbandonedJobs()` ends anything that tries to be a long one. The admin sets steps
+  per tick and a spend ceiling and nothing else. Designed, not built. It answers the
+  "pipelines" half of multi-agent orchestration above, and needs the Library to grow a
+  document tree first — one line per subtree in the digest, so documenting every task
+  costs nothing on every other turn in the app.
 - **Voice** — dictation input and TTS replies, mobile-first.
 - **Per-user spending caps** and model-access policies.
 - **Skill eval harness** — A/B test skill versions; pairs naturally with the skill-optimiser agent.
