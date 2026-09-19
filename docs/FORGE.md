@@ -895,9 +895,13 @@ asked for anything, so it should show what they are actually agreeing to.
   at all, and everything after it depends on documenting a leaf being free.
 - **G1 — The spine.** Forge schema and migration, `forge.ts` with ownership in
   the SQL predicate, `forge-gate.ts` with the red-green rule, the pure
-  `nextStep`, `ForgeSettings`, the `CORE_TASKS` and `PROSE_TASKS` additions. No
-  agent, no sweep, no UI. The gate arithmetic and the state machine are the
-  risky parts and both test with nothing else built.
+  `nextStep`, `ForgeSettings`. No agent, no sweep, no UI. The gate arithmetic and
+  the state machine are the risky parts and both test with nothing else built.
+
+  The `CORE_TASKS` and `PROSE_TASKS` additions sit in G2 instead, with the runs
+  that read them. `seedTaskConfigs()` creates a row per core task at boot, so
+  landing them here would put three model pickers and three editable prompts in
+  Admin → Tasks that drive nothing in a shipped image.
 - **G2 — The runs.** `forge-charter.ts`, `forge-sprint.ts`, the task runner over
   `startCodingTurn`, `forge-review.ts`, the three prompts, the `forge` toolset,
   and the manual step route. Driven by hand, output inspected in the database.
