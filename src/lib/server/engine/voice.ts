@@ -74,6 +74,9 @@ export const HOUSE_VOICE =
  *   stronger, subject-specific version of these rules.
  * - `board` — it arrives as a supplement to `chat`, which is in the set, so
  *   listing it here would compose the block twice.
+ * - `forge-sprint` — JSON, like memory and cortex-groom. Its siblings
+ *   `forge-charter` and `forge-review` write documents a person reads months
+ *   later, so both are in.
  */
 export const PROSE_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[number]>([
 	'chat',
@@ -82,7 +85,9 @@ export const PROSE_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[numb
 	'subagent',
 	'ux-audit',
 	'skill-optimiser',
-	'alignment-synthesis'
+	'alignment-synthesis',
+	'forge-charter',
+	'forge-review'
 ]);
 
 /**

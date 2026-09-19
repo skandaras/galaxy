@@ -713,6 +713,90 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
+		// --- Forge -----------------------------------------------------------
+		// The three planning voices. None of them carries "PLAN mode" or
+		// "IMPLEMENT mode" in its system prompt, so they never collide with the
+		// scripted coding agent below — a Forge *task* is an ordinary coding turn
+		// and takes that path instead.
+
+		// The charter: one tool call carrying the structure, then the prose.
+		if (offered('forge_charter_write')) {
+			const wrote = parsed.messages.some(
+				(m) =>
+					Array.isArray(m.tool_calls) &&
+					m.tool_calls.some((tc) => tc.function?.name === 'forge_charter_write')
+			);
+			if (!wrote) {
+				delta(res, {
+					tool_calls: [
+						{
+							index: 0,
+							id: 'call_charter',
+							function: {
+								name: 'forge_charter_write',
+								arguments: JSON.stringify({
+									sprints: [{ title: 'Describe the repo', goal: 'the README says what this is' }],
+									standingChecks: [{ name: 'tests', command: 'true' }],
+									gateChecks: [{ name: 'smoke', command: 'true' }],
+									acceptance: ['the README describes the project']
+								})
+							}
+						}
+					]
+				});
+				delta(res, {}, 'tool_calls');
+			} else {
+				delta(res, {
+					content:
+						'# Charter\n\nThis build gives the repository a README that says what it is. ' +
+						'It is deliberately not a rewrite of anything else.'
+				});
+				delta(res, {}, 'stop');
+			}
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
+		// Sprint planning, including the vacuous-check refusal: the first proposal
+		// is a check that cannot fail, and only the retry gives a real one. That is
+		// the rule Forge exists to enforce, so the smoke has to see it happen.
+		if (system.includes('turn one sprint of a charter')) {
+			const retry = textOf(last?.content).includes('they do not describe any work');
+			delta(res, {
+				content: JSON.stringify({
+					tasks: [
+						{
+							title: 'Describe the project in the README',
+							intent: 'Add a line to README.md saying what this repository is.',
+							acceptance: 'The README names the project.',
+							checks: [
+								retry
+									? { name: 'described', command: "grep -q 'improved by the Galaxy' README.md" }
+									: { name: 'described', command: 'true' }
+							]
+						}
+					]
+				})
+			});
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
+		if (system.includes('record of a sprint')) {
+			delta(res, {
+				content:
+					'## What landed\n\nThe README now describes the project. Nothing else changed, and the ' +
+					'task carried a check that failed before the work and passes after it.'
+			});
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
 		// Scripted coding agent: sequence driven by how many tool results have
 		// accumulated in this turn.
 		if (system.includes('PLAN mode') || system.includes('IMPLEMENT mode')) {

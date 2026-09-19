@@ -117,8 +117,20 @@ export interface CreatedWorkspace {
 	workBranch: string;
 }
 
-/** Clone the repo into a fresh workspace and create the session's work branch. */
-export async function createWorkspace(repoUrl: string): Promise<CreatedWorkspace> {
+/**
+ * Clone the repo into a fresh workspace and create the session's work branch.
+ *
+ * `from` cuts the work branch off a branch other than the remote's default, and
+ * reports it as the base — which is what makes a session's diff and its later
+ * merge target the same thing. A branch that is not on the remote yet is not an
+ * error: Forge's integration branch does not exist until the first green task
+ * pushes it, and every clone before that legitimately starts from the default
+ * head.
+ */
+export async function createWorkspace(
+	repoUrl: string,
+	opts: { from?: string } = {}
+): Promise<CreatedWorkspace> {
 	const executor = getExecutor();
 	const id = randomUUID().slice(0, 8);
 	const workspaceRel = `${WORKSPACES_REL}/${id}`;
@@ -137,11 +149,24 @@ export async function createWorkspace(repoUrl: string): Promise<CreatedWorkspace
 	}
 
 	const head = await run(executor, workspaceRel, 'git rev-parse --abbrev-ref HEAD');
-	const baseBranch = head.stdout.trim() || 'main';
+	let baseBranch = head.stdout.trim() || 'main';
 	const workBranch = `galaxy/session-${id}`;
-	const branch = await run(executor, workspaceRel, `git checkout -b ${shellQuote(workBranch)}`);
-	if (branch.code !== 0) {
-		throw new Error(`Branch creation failed: ${scrubSecrets(branch.stderr)}`);
+
+	if (opts.from && opts.from !== baseBranch && (await remoteHas(workspaceRel, opts.from))) {
+		const start = await run(
+			executor,
+			workspaceRel,
+			`git checkout -B ${shellQuote(workBranch)} ${shellQuote(`origin/${opts.from}`)}`
+		);
+		if (start.code !== 0) {
+			throw new Error(`Could not start from ${opts.from}: ${scrubSecrets(start.stderr)}`);
+		}
+		baseBranch = opts.from;
+	} else {
+		const branch = await run(executor, workspaceRel, `git checkout -b ${shellQuote(workBranch)}`);
+		if (branch.code !== 0) {
+			throw new Error(`Branch creation failed: ${scrubSecrets(branch.stderr)}`);
+		}
 	}
 	await run(
 		executor,
@@ -154,6 +179,89 @@ export async function createWorkspace(repoUrl: string): Promise<CreatedWorkspace
 export function destroyWorkspace(workspaceRel: string): void {
 	if (!workspaceRel.startsWith(`${WORKSPACES_REL}/`)) return;
 	rmSync(workspaceAbs(workspaceRel), { recursive: true, force: true });
+}
+
+/** Whether the remote carries this branch. Used to decide where to start from. */
+async function remoteHas(workspaceRel: string, branch: string): Promise<boolean> {
+	const probe = await run(
+		getExecutor(),
+		workspaceRel,
+		`git rev-parse --verify --quiet ${shellQuote(`refs/remotes/origin/${branch}`)}`
+	);
+	return probe.code === 0;
+}
+
+export interface MergeResult {
+	ok: boolean;
+	/** Why it did not merge, or what it pushed. Already scrubbed. */
+	output: string;
+}
+
+/**
+ * Merge a branch into `target` and push the result.
+ *
+ * Forge's integration branch is why this exists: a task that goes green has to
+ * land somewhere the next task can clone from, and a task that goes red must
+ * leave that branch exactly as it was. Nothing else in the codebase merges, so
+ * the whole sequence — fetch, check out, merge, push — lives here rather than
+ * as shell strings in a driver.
+ *
+ * A conflict comes back as `ok: false`, not a throw. A task whose merge
+ * conflicts parks like a task whose tests failed; it is an outcome, and the
+ * caller already knows what to do with one.
+ */
+export async function mergeIntoBranch(
+	workspaceRel: string,
+	repoUrl: string,
+	opts: { target: string; source: string; baseBranch: string }
+): Promise<MergeResult> {
+	const executor = getExecutor();
+	const auth = gitAuthArgs(repoUrl);
+	const target = shellQuote(opts.target);
+
+	// Whatever the remote has now, not what it had when this workspace was
+	// cloned — another task may have landed in between.
+	await run(executor, workspaceRel, `git ${auth} fetch origin`, 120_000);
+
+	// The first task of an epic finds no integration branch and starts it from
+	// the base; every later one continues the branch that is already there.
+	const start = (await remoteHas(workspaceRel, opts.target))
+		? `origin/${opts.target}`
+		: `origin/${opts.baseBranch}`;
+	const checkout = await run(
+		executor,
+		workspaceRel,
+		`git checkout -B ${target} ${shellQuote(start)}`
+	);
+	if (checkout.code !== 0) {
+		return { ok: false, output: scrubSecrets(checkout.stderr || checkout.stdout) };
+	}
+
+	// --no-ff so the branch reads as a sequence of tasks rather than one flat
+	// line of commits nobody can attribute.
+	const merge = await run(
+		executor,
+		workspaceRel,
+		`git merge --no-ff --no-edit ${shellQuote(opts.source)}`,
+		120_000
+	);
+	if (merge.code !== 0) {
+		// Leave the tree as it was found. A half-merged workspace is the one state
+		// from which nothing sensible can be done next.
+		await run(executor, workspaceRel, 'git merge --abort');
+		return { ok: false, output: scrubSecrets(merge.stdout || merge.stderr) };
+	}
+
+	const push = await run(
+		executor,
+		workspaceRel,
+		`git ${auth} push -u origin ${target}`,
+		120_000
+	);
+	if (push.code !== 0) {
+		return { ok: false, output: scrubSecrets(push.stderr || push.stdout) };
+	}
+	return { ok: true, output: scrubSecrets(merge.stdout) };
 }
 
 async function run(

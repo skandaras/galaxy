@@ -284,6 +284,15 @@ export function countAttempt(id: string): number {
 	return attempts;
 }
 
+/** Count an attempt against a sprint's gate. Parking is the caller's decision. */
+export function countSprintAttempt(id: string): number {
+	const row = db.select().from(forgeSprints).where(eq(forgeSprints.id, id)).get();
+	if (!row) return 0;
+	const attempts = row.attempts + 1;
+	db.update(forgeSprints).set({ attempts }).where(eq(forgeSprints.id, id)).run();
+	return attempts;
+}
+
 export function recordGateRun(opts: {
 	epicId: string;
 	scope: 'task' | 'sprint' | 'epic';

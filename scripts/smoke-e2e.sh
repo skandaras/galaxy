@@ -410,6 +410,65 @@ check "coding pushed to origin" "$(git -C $ORIGIN.git log --all --oneline)" "Add
 # which is why a verbose model's run read as a wall of glued-together prose.
 check "a long lead-in names its step" "$CSTREAM" '"label":"Reading the README before I touch it'
 check "and is kept in full on the step" "$CSTREAM" 'commit afterwards has something honest to say'
+
+# ---------------------------------------------------------------------------
+# Forge: an epic planned, gated and landed on its integration branch.
+#
+# The whole point is that nothing here trusts the model's account of its own
+# work. The task's check is proved to fail before the work starts, the gate
+# reads an exit code afterwards, and only then does anything merge.
+# ---------------------------------------------------------------------------
+for t in forge-charter forge-sprint forge-review; do
+  api -X PUT $B/api/admin/task-configs -d "{\"task\":\"$t\",\"primaryModelId\":\"$MODEL_ID\"}" > /dev/null
+done
+FORIGIN=$DATA/origin-forge
+git init -q -b main "$FORIGIN" && echo "# origin" > "$FORIGIN/README.md"
+git -C "$FORIGIN" add -A && git -C "$FORIGIN" -c user.email=t@t -c user.name=t commit -qm init
+git clone -q --bare "$FORIGIN" "$FORIGIN.git"
+
+EPIC_JSON=$(api -X POST $B/api/forge -d "{\"title\":\"Describe the repo\",\"brief\":\"say what this is\",\"repoUrl\":\"$FORIGIN.git\",\"repoName\":\"local/forge\"}")
+EPIC=$(echo "$EPIC_JSON" | jqn .epic.id)
+BRANCH=$(echo "$EPIC_JSON" | jqn .epic.integrationBranch)
+check "the charter run outlines the build" "$EPIC_JSON" '"sprints":1'
+check "and writes a document to read it in" "$(api $B/api/library)" 'Describe the repo'
+check "the epic waits for its checks to be confirmed" \
+  "$(api $B/api/forge/$EPIC | jqn .epic.state)" 'awaiting-approval'
+check "nothing is frozen before approval" "$(api $B/api/forge/$EPIC | jqn '.epic.standingChecks')" 'null'
+
+api -X POST $B/api/forge/$EPIC/approve -d '{"standingChecks":[{"name":"ok","command":"true"}]}' > /dev/null
+check "approving freezes the checks and starts it" "$(api $B/api/forge/$EPIC | jqn .epic.state)" 'running'
+check "a second approval cannot change them" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+     -d '{"standingChecks":[{"name":"ok","command":"true"}]}' $B/api/forge/$EPIC/approve)" "409"
+
+# Planning. The mock proposes a check that passes before any work, which is
+# exactly what the baseline exists to refuse; only the retry gives a real one.
+PLAN=$(api -X POST $B/api/forge/$EPIC/step)
+check "the first step plans the sprint" "$PLAN" '"step":"plan-sprint"'
+check "a check that cannot fail is refused" "$PLAN" '"vacuous":1'
+check "and the task opens with the one that can" \
+  "$(api $B/api/forge/$EPIC)" 'improved by the Galaxy'
+
+# The task itself is an ordinary coding turn, so it comes back as a job to watch.
+TSTEP=$(api -X POST $B/api/forge/$EPIC/step)
+check "the next step starts the task" "$TSTEP" '"step":"run-task"'
+TJOB=$(echo "$TSTEP" | jqn .started.jobId)
+curl -sN --max-time 120 $B/api/jobs/$TJOB/stream > /dev/null
+check "the task waits for its gate once the turn ends" \
+  "$(api $B/api/forge/$EPIC | jqn '.sprints[0].tasks[0].state')" 'gating'
+
+GSTEP=$(api -X POST $B/api/forge/$EPIC/step)
+check "the gate passes on the work that was done" "$GSTEP" '"passed":true'
+check "and only then does it reach the integration branch" \
+  "$(git -C $FORIGIN.git log --oneline $BRANCH)" 'Add project description'
+check "the task is finished" "$(api $B/api/forge/$EPIC | jqn '.sprints[0].tasks[0].state')" 'done'
+
+check "closing the sprint gates the branch" "$(api -X POST $B/api/forge/$EPIC/step)" '"step":"close-sprint"'
+check "the sprint record hangs off the charter" "$(api $B/api/library)" 'sprint 1'
+check "and the epic finishes" "$(api -X POST $B/api/forge/$EPIC/step)" '"step":"close-epic"'
+check "with nothing left to do" "$(api -X POST $B/api/forge/$EPIC/step | jqn .step)" 'none'
+check "spending is attributed to the build" \
+  "$(api "$B/api/admin/usage?days=1")" 'forge-charter'
 check "and the browser is told to take it out of the reply" "$CSTREAM" '"consumedText":true'
 CREPLY=$(api $B/api/code/sessions/$SID | jqn '.messages.at(-1).content')
 check_absent "so it is not in the saved reply" "$CREPLY" 'Reading the README before I touch it'
@@ -913,6 +972,15 @@ check "and it is listed" "$(as alice $M/api/push/subscriptions | jqn '.devices.l
 check "re-registering the same browser does not duplicate it" \
   "$(as alice -X POST $M/api/push/subscriptions -d '{"endpoint":"https://example.invalid/x","keys":{"p256dh":"a","auth":"b"}}' > /dev/null; as alice $M/api/push/subscriptions | jqn '.devices.length')" "1"
 check "bob sees none of alice's devices" "$(as bob $M/api/push/subscriptions | jqn '.devices.length')" "0"
+
+# An epic names somebody's repository, so it is theirs alone.
+MEPIC=$(as alice -X POST $M/api/forge -d '{"title":"Alice build","repoUrl":"https://example.invalid/none.git"}' \
+  | jqn .epic.id 2>/dev/null || echo none)
+check "bob cannot read alice's build" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/forge/$MEPIC)" "404"
+check "bob cannot step it either" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' $M/api/forge/$MEPIC/step)" "403"
+check "and it is absent from his list" "$(as bob $M/api/forge)" '[]'
 
 # ---------------------------------------------------------------------------
 # A coding turn that runs out of steps must not just stop mid-task. Needs a
