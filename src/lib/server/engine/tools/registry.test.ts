@@ -22,6 +22,7 @@ const EXPECTED = [
 	// knowledge
 	'skill_load',
 	'library_search',
+	'library_tree',
 	'library_read',
 	'library_write',
 	// cortex

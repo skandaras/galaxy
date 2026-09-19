@@ -6,6 +6,7 @@
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import ListPill from '$lib/components/ListPill.svelte';
 	import { SEARCH_DEBOUNCE_MS, SEARCH_LIMIT } from '$lib/library-search';
+	import { buildShelf, flattenTree, parentOptions, UNFILED } from '$lib/library-tree';
 
 	interface Doc {
 		id: string;
@@ -15,13 +16,13 @@
 		/** Null on docs that predate ownership — those stay visible to everyone. */
 		ownerId: string | null;
 		visibility: 'personal' | 'shared';
-		/** Cosmetic grouping; '' means unfiled. */
+		/** Cosmetic grouping for a top-level doc; '' means unfiled. */
 		folder: string;
+		/** Null is a top-level doc. Anything else hangs under that doc. */
+		parentId: string | null;
 		updatedAt: number;
 		match?: string;
 	}
-
-	const UNFILED = 'Unfiled';
 
 	let docs = $state<Doc[]>([]);
 	let query = $state('');
@@ -29,46 +30,40 @@
 	let title = $state('');
 	let body = $state('');
 	let folder = $state('');
+	/** '' is top level, which is what the server reads an empty string as. */
+	let parentId = $state('');
 	let visibility = $state<'personal' | 'shared'>('personal');
 	/**
-	 * Per-folder overrides on top of the default, which is shut for everything
-	 * except Unfiled — a shelf that opens with every folder expanded is a wall
-	 * of documents, and Unfiled is the overflow people actually browse.
+	 * Per-section and per-node overrides on top of the default, which is shut for
+	 * everything except Unfiled — a shelf that opens with every folder expanded
+	 * is a wall of documents, and Unfiled is the overflow people actually browse.
+	 * A tree node starts shut for the same reason, and more so: a subtree is the
+	 * thing whose whole point is that it does not have to be on screen.
 	 *
 	 * Deliberately not remembered between visits: "collapsed on arrival" is the
 	 * point, and a persisted expansion would quietly undo it.
 	 */
 	let collapsed = $state<Record<string, boolean>>({});
-	const isShut = (name: string) => collapsed[name] ?? name !== UNFILED;
+	const isShut = (key: string) => collapsed[key] ?? key !== `folder:${UNFILED}`;
 
-	/**
-	 * The shelf, grouped. Unfiled sits last: it is the overflow, not the
-	 * headline, and putting it first buries the folders someone made on purpose.
-	 */
-	const grouped = $derived.by(() => {
-		const by = new Map<string, Doc[]>();
-		for (const doc of docs) {
-			const key = doc.folder || UNFILED;
-			by.set(key, [...(by.get(key) ?? []), doc]);
-		}
-		return [...by.entries()].sort(([a], [b]) =>
-			a === UNFILED ? 1 : b === UNFILED ? -1 : a.localeCompare(b)
-		);
-	});
+	const sections = $derived(buildShelf(docs));
 
 	/** Existing folder names, so the picker suggests rather than demands. */
 	const folders = $derived([...new Set(docs.map((d) => d.folder).filter(Boolean))].sort());
 
+	/** Where this doc may be filed, excluding itself and everything under it. */
+	const parents = $derived(parentOptions(docs, currentId));
+
 	/** Shut everything, or open everything once it already is. */
-	const allShut = $derived(grouped.every(([name]) => isShut(name)));
+	const allShut = $derived(sections.every((s) => isShut(s.key)));
 
 	/**
-	 * Written as an explicit entry per folder rather than by clearing the map:
-	 * the default is per-name, so "open all" has to say so for each one or
+	 * Written as an explicit entry per section rather than by clearing the map:
+	 * the default is per-key, so "open all" has to say so for each one or
 	 * Unfiled would be the only thing that moved.
 	 */
 	function setAllCollapsed(shut: boolean) {
-		collapsed = Object.fromEntries(grouped.map(([name]) => [name, shut]));
+		collapsed = Object.fromEntries(sections.map((s) => [s.key, shut]));
 	}
 
 	/** False for someone else's shared doc: readable, not editable. */
@@ -149,18 +144,23 @@
 		title = doc.meta.title;
 		visibility = doc.meta.visibility;
 		folder = doc.meta.folder ?? '';
+		parentId = doc.meta.parentId ?? '';
 		editable = doc.canEdit !== false;
 		body = doc.body;
 		preview = false;
 		listOpen = false;
 	}
 
-	/** `into` pre-files a doc created from a folder's own + button. */
-	function startNew(into = '') {
+	/**
+	 * `into` pre-files a doc created from a section's own + button: a folder name
+	 * for a folder heading, a doc id for a node in a tree.
+	 */
+	function startNew(into: { folder?: string; parentId?: string } = {}) {
 		currentId = null;
 		title = '';
 		body = '';
-		folder = into;
+		folder = into.folder ?? '';
+		parentId = into.parentId ?? '';
 		// New docs start personal; sharing is a deliberate act.
 		visibility = 'personal';
 		editable = true;
@@ -170,7 +170,9 @@
 
 	async function save() {
 		if (!title.trim()) return;
-		const payload = JSON.stringify({ title, content: body, visibility, folder });
+		// Always explicit: the editor shows both controls, so what they say is what
+		// the person means — an omitted field would mean "leave it where it was".
+		const payload = JSON.stringify({ title, content: body, visibility, folder, parentId });
 		const init = { headers: { 'content-type': 'application/json' }, body: payload };
 		const res = await (currentId
 			? fetch(`/api/library/${currentId}`, { method: 'PUT', ...init })
@@ -248,11 +250,11 @@
 			</label>
 			<!-- Only ever useful when there is grouping to act on, and search
 			     replaces the folders with a flat ranked list. -->
-			{#if !query.trim() && grouped.length > 1}
+			{#if !query.trim() && sections.length > 1}
 				<button
 					class="collapse-all"
-					title={allShut ? 'Expand all folders' : 'Collapse all folders'}
-					aria-label={allShut ? 'Expand all folders' : 'Collapse all folders'}
+					title={allShut ? 'Expand everything' : 'Collapse everything'}
+					aria-label={allShut ? 'Expand everything' : 'Collapse everything'}
 					onclick={() => setAllCollapsed(!allShut)}
 				>
 					{allShut ? '⊞' : '⊟'}
@@ -265,9 +267,20 @@
 				<button class="clear" aria-label="Clear search" onclick={clearSearch}>✕</button>
 			{/if}
 		</div>
-		{#snippet docRow(doc: Doc)}
-			<li class:selected={currentId === doc.id}>
-				<button class="row" onclick={() => open(doc.id)}>
+		{#snippet docRow(doc: Doc, depth: number, hasChildren: boolean)}
+			<li class:selected={currentId === doc.id} style={`--depth:${depth}`}>
+				{#if hasChildren}
+					<button
+						class="node-caret"
+						aria-expanded={!isShut(doc.id)}
+						title={isShut(doc.id) ? `Show what is under ${doc.title}` : `Hide what is under ${doc.title}`}
+						aria-label={isShut(doc.id) ? `Show what is under ${doc.title}` : `Hide what is under ${doc.title}`}
+						onclick={() => (collapsed = { ...collapsed, [doc.id]: !isShut(doc.id) })}
+					>
+						{isShut(doc.id) ? '▸' : '▾'}
+					</button>
+				{/if}
+				<button class="row" class:nested={depth > 0} onclick={() => open(doc.id)}>
 					<span class="doc-title">
 						{doc.title}
 						{#if doc.author === 'agent'}<span class="agent-badge">agent</span>{/if}
@@ -275,6 +288,12 @@
 					</span>
 					<span class="doc-snippet">{doc.match ?? doc.snippet}</span>
 				</button>
+				<button
+					class="icon node-add"
+					title="New doc under {doc.title}"
+					aria-label="New doc under {doc.title}"
+					onclick={() => startNew({ parentId: doc.id })}>+</button
+				>
 			</li>
 		{/snippet}
 
@@ -296,34 +315,45 @@
 		{:else if query.trim()}
 			<!-- Results are ranked by relevance; folders would fight that ordering. -->
 			<ul>
-				{#each docs as doc (doc.id)}{@render docRow(doc)}{/each}
+				{#each docs as doc (doc.id)}{@render docRow(doc, 0, false)}{/each}
 			</ul>
 		{:else}
-			{#each grouped as [name, items] (name)}
+			{#each sections as section (section.key)}
 				<section class="folder">
-					<div class="folder-head">
-						<button
-							class="folder-name"
-							aria-expanded={!isShut(name)}
-							onclick={() => (collapsed = { ...collapsed, [name]: !isShut(name) })}
-						>
-							<span class="caret">{isShut(name) ? '▸' : '▾'}</span>
-							{name}
-							<span class="count">{items.length}</span>
-						</button>
-						{#if name !== UNFILED}
-							<button
-								class="icon"
-								title="New doc in {name}"
-								aria-label="New doc in {name}"
-								onclick={() => startNew(name)}>+</button
-							>
-						{/if}
-					</div>
-					{#if !isShut(name)}
+					{#if section.kind === 'tree'}
+						<!-- No heading: a tree's root is a document you can open, so it is a
+						     row with a caret rather than a label above the rows. -->
 						<ul>
-							{#each items as doc (doc.id)}{@render docRow(doc)}{/each}
+							{#each flattenTree(section.nodes, isShut) as row (row.doc.id)}
+								{@render docRow(row.doc, row.depth, row.hasChildren)}
+							{/each}
 						</ul>
+					{:else}
+						<div class="folder-head">
+							<button
+								class="folder-name"
+								aria-expanded={!isShut(section.key)}
+								onclick={() =>
+									(collapsed = { ...collapsed, [section.key]: !isShut(section.key) })}
+							>
+								<span class="caret">{isShut(section.key) ? '▸' : '▾'}</span>
+								{section.name}
+								<span class="count">{section.count}</span>
+							</button>
+							{#if section.name !== UNFILED}
+								<button
+									class="icon"
+									title="New doc in {section.name}"
+									aria-label="New doc in {section.name}"
+									onclick={() => startNew({ folder: section.name })}>+</button
+								>
+							{/if}
+						</div>
+						{#if !isShut(section.key)}
+							<ul>
+								{#each section.docs as doc (doc.id)}{@render docRow(doc, 0, false)}{/each}
+							</ul>
+						{/if}
 					{/if}
 				</section>
 			{/each}
@@ -343,17 +373,31 @@
 		</div>
 		<header>
 			<input class="title" placeholder="Document title" bind:value={title} />
-			<input
-				class="folder-input"
-				list="library-folders"
-				placeholder="Folder"
-				title="Group this doc on the shelf. Type a new name or pick an existing one; leave it empty to keep it unfiled."
+			<select
+				class="folder-input parent-input"
+				title="File this doc under another one. A doc inside a tree costs the agents' index nothing; a new top-level doc costs it a line on every turn."
+				aria-label="Filed under"
 				disabled={!editable}
-				bind:value={folder}
-			/>
-			<datalist id="library-folders">
-				{#each folders as f (f)}<option value={f}></option>{/each}
-			</datalist>
+				bind:value={parentId}
+			>
+				<option value="">Top level</option>
+				{#each parents as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
+			</select>
+			<!-- Only a top-level doc has a shelf label: inside a tree its place is
+			     its parent, and showing both would be two answers to one question. -->
+			{#if !parentId}
+				<input
+					class="folder-input"
+					list="library-folders"
+					placeholder="Folder"
+					title="Group this doc on the shelf. Type a new name or pick an existing one; leave it empty to keep it unfiled."
+					disabled={!editable}
+					bind:value={folder}
+				/>
+				<datalist id="library-folders">
+					{#each folders as f (f)}<option value={f}></option>{/each}
+				</datalist>
+			{/if}
 			<div class="actions">
 				<button
 					class="chip"
@@ -453,6 +497,43 @@
 		margin: 0;
 		padding: 0;
 	}
+	/* Depth shows as indentation alone: a tree row is a document like any other,
+	   and giving nested rows their own chrome made the shelf read as two lists. */
+	.doc-list li {
+		position: relative;
+	}
+	.doc-list li .row.nested {
+		padding-left: calc(0.75rem + var(--depth, 0) * 0.85rem);
+	}
+	.node-caret {
+		position: absolute;
+		left: calc(var(--depth, 0) * 0.85rem - 0.1rem);
+		top: 0.5rem;
+		z-index: 1;
+		padding: 0 0.15rem;
+		border: 0;
+		background: none;
+		color: var(--muted);
+		font-size: 0.7rem;
+		line-height: 1;
+		cursor: pointer;
+	}
+	.node-caret:hover {
+		color: var(--fg);
+	}
+	/* Same treatment as the folder heading's + button, which is also hover-only
+	   on a pointer and always present on a touch screen. */
+	.node-add {
+		position: absolute;
+		right: 0.35rem;
+		top: 0.45rem;
+		opacity: 0;
+	}
+	.doc-list li:hover .node-add,
+	.node-add:focus-visible {
+		opacity: 1;
+	}
+
 	/* Grouping only — a folder holds no permission and nests nowhere. */
 	.folder + .folder {
 		margin-top: 0.35rem;

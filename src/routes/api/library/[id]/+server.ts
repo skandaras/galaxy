@@ -1,14 +1,22 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
-import { canEdit, deleteDoc, getDoc, saveDoc, setVisibility } from '$lib/server/library';
+import {
+	canEdit,
+	deleteDoc,
+	docPath,
+	getDoc,
+	LibraryTreeError,
+	saveDoc,
+	setVisibility
+} from '$lib/server/library';
 
 export const GET: RequestHandler = ({ locals, params }) => {
 	const user = requireUser(locals);
 	// A doc you cannot see is indistinguishable from one that isn't there.
 	const doc = getDoc(params.id, user.id);
 	if (!doc) error(404, 'Document not found');
-	return json({ ...doc, canEdit: canEdit(doc.meta, user.id) });
+	return json({ ...doc, canEdit: canEdit(doc.meta, user.id), path: docPath(doc.meta.id, user.id) });
 };
 
 export const PUT: RequestHandler = async ({ locals, params, request }) => {
@@ -24,17 +32,25 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
 			error(403, 'This document belongs to another user');
 		}
 	}
-	const doc = saveDoc({
-		id: params.id,
-		title:
-			typeof body.title === 'string' && body.title.trim() ? body.title.trim() : existing.meta.title,
-		body: typeof body.content === 'string' ? body.content : existing.body,
-		author: existing.meta.author,
-		ownerId: user.id,
-		// Undefined leaves it filed where it was; '' is a deliberate unfiling.
-		folder: typeof body.folder === 'string' ? body.folder : undefined
-	});
-	return json(doc);
+	try {
+		const doc = saveDoc({
+			id: params.id,
+			title:
+				typeof body.title === 'string' && body.title.trim()
+					? body.title.trim()
+					: existing.meta.title,
+			body: typeof body.content === 'string' ? body.content : existing.body,
+			author: existing.meta.author,
+			ownerId: user.id,
+			// Undefined leaves it filed where it was; '' is a deliberate unfiling.
+			folder: typeof body.folder === 'string' ? body.folder : undefined,
+			parentId: typeof body.parentId === 'string' ? body.parentId || null : undefined
+		});
+		return json(doc);
+	} catch (err) {
+		if (err instanceof LibraryTreeError) error(400, err.message);
+		throw err;
+	}
 };
 
 export const DELETE: RequestHandler = ({ locals, params }) => {

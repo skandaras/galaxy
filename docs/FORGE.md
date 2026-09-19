@@ -356,11 +356,22 @@ But the forward-compatibility rule forbids dropping a column in the same release
 as the code that stops using it, so this is expand-migrate-contract, the pattern
 `cortexNodes.ownerId` and `memoryItems.ownerId` already follow:
 
-1. **Expand.** `parentId` lands. A document with a `folder` label and no parent
-   is read as a child of a root document carrying that title, created lazily the
-   first time something writes into it. `folder` keeps being populated.
+1. **Expand.** `parentId` lands. A document that is a root and has nothing under
+   it groups by its `folder` label exactly as it always did — a *virtual* group
+   in the shelf and the digest, with no row behind it. `folder` keeps being
+   populated.
 2. **Migrate.** The shelf writes `parentId`. Existing rows convert on edit.
 3. **Contract.** A later release drops `folder` and `cleanFolder` with it.
+
+The first draft of this had the label read as a lazily created root document
+instead. That would make a read path that writes, and the read in question is
+the digest — which runs on every chat and coding turn in the app. The virtual
+group costs a `Map` and no rows at all.
+
+The fallback is not only compatibility. After the backfill every existing
+document is a root of its own, so grouping by root alone would take a shelf from
+a handful of folder headings to one heading per document — the exact opposite of
+what this change is for.
 
 ### The digest counts roots
 
@@ -369,10 +380,12 @@ line per group, an "…and N more" tail, the closing line that names the tools �
 and changes what a group is and what goes inside it:
 
 - the window is the newest **roots**, not the newest documents;
-- a root with more than a handful of descendants shows a **count by depth**
-  rather than a list of titles;
+- a root with more than a handful of descendants shows a **count** rather than a
+  list of titles — `Galaxy mobile: 201 documents beneath it`;
 - a root with two or three children still lists them, because a count is worse
-  than two titles.
+  than two titles;
+- a root nobody can see folds into Unfiled, because visibility stays per
+  document and `visibleTo` still scopes every read.
 
 A 200-document epic then costs one line, and the person's own unfiled notes stop
 being evicted by an agent's paperwork.
@@ -882,9 +895,13 @@ asked for anything, so it should show what they are actually agreeing to.
   at all, and everything after it depends on documenting a leaf being free.
 - **G1 — The spine.** Forge schema and migration, `forge.ts` with ownership in
   the SQL predicate, `forge-gate.ts` with the red-green rule, the pure
-  `nextStep`, `ForgeSettings`, the `CORE_TASKS` and `PROSE_TASKS` additions. No
-  agent, no sweep, no UI. The gate arithmetic and the state machine are the
-  risky parts and both test with nothing else built.
+  `nextStep`, `ForgeSettings`. No agent, no sweep, no UI. The gate arithmetic and
+  the state machine are the risky parts and both test with nothing else built.
+
+  The `CORE_TASKS` and `PROSE_TASKS` additions sit in G2 instead, with the runs
+  that read them. `seedTaskConfigs()` creates a row per core task at boot, so
+  landing them here would put three model pickers and three editable prompts in
+  Admin → Tasks that drive nothing in a shipped image.
 - **G2 — The runs.** `forge-charter.ts`, `forge-sprint.ts`, the task runner over
   `startCodingTurn`, `forge-review.ts`, the three prompts, the `forge` toolset,
   and the manual step route. Driven by hand, output inspected in the database.
