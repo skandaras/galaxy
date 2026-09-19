@@ -518,6 +518,28 @@ check "budget status reports pricing gaps" "$BUD" '"unpricedCalls"'
 # library + skills + memory
 api -X POST $B/api/library -d '{"title":"Smoke Doc","content":"The smoke marker is LANTERN-9"}' > /dev/null
 check "library search" "$(api "$B/api/library?q=LANTERN")" 'Smoke Doc'
+
+# The version check the editor's autosave leans on. saveDoc replaces the whole
+# body, and the editor now writes about once a second, so two writers flattening
+# each other stopped being a remote case — a PUT carrying the version it read is
+# refused once the stored row has moved on.
+SDOC=$(api $B/api/library | jqn ".find(d=>d.title==='Smoke Doc').id")
+SVER=$(api $B/api/library/$SDOC | jqn '.meta.updatedAt')
+# Somebody else writes in between. The sleep is so the two saves land in
+# different milliseconds; updatedAt is what the guard compares.
+sleep 0.05
+api -X PUT $B/api/library/$SDOC -d '{"content":"a second writer got here first"}' > /dev/null
+check "a write against a stale version is refused" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' \
+     -d "{\"content\":\"mine\",\"baseUpdatedAt\":\"$SVER\"}" $B/api/library/$SDOC)" "409"
+check "and the refused write changed nothing" "$(api $B/api/library/$SDOC)" 'a second writer got here first'
+SVER2=$(api $B/api/library/$SDOC | jqn '.meta.updatedAt')
+check "a write against the current version lands" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' \
+     -d "{\"content\":\"mine now\",\"baseUpdatedAt\":\"$SVER2\"}" $B/api/library/$SDOC)" "200"
+check "a write that names no version still lands" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' \
+     -d '{"content":"no version named"}' $B/api/library/$SDOC)" "200"
 api -X POST $B/api/skills -d '{"name":"smoke-skill","description":"smoke","body":"body"}' > /dev/null
 MEM=$(api -X POST $B/api/memory/run)
 check "memory run" "$MEM" '"ran":true'
