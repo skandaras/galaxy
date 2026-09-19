@@ -7,6 +7,13 @@
 	import ListPill from '$lib/components/ListPill.svelte';
 	import { SEARCH_DEBOUNCE_MS, SEARCH_LIMIT } from '$lib/library-search';
 	import { buildShelf, flattenTree, parentOptions, UNFILED } from '$lib/library-tree';
+	import {
+		AUTOSAVE_IDLE_MS,
+		AUTOSAVE_MAX_MS,
+		hasContent,
+		retryDelay,
+		titleForNew
+	} from '$lib/library-autosave';
 
 	interface Doc {
 		id: string;
@@ -69,8 +76,69 @@
 	/** False for someone else's shared doc: readable, not editable. */
 	let editable = $state(true);
 	let preview = $state(false);
-	let saved = $state(false);
 	let listOpen = $state(false);
+
+	/**
+	 * Autosave.
+	 *
+	 * There was a Save button, and a document editor with a Save button loses
+	 * work — someone types for ten minutes, closes the tab, and the text was only
+	 * ever in the browser. Nothing else in this app autosaved, so the shape here
+	 * is the one the search box already uses (debounce, and a sequence number so
+	 * a slow answer cannot overwrite a newer one) with three additions: a ceiling
+	 * for somebody who never pauses, a single-flight guard so two creations
+	 * cannot race, and a version check so two writers cannot flatten each other.
+	 */
+	type SaveState = 'idle' | 'saving' | 'saved' | 'failed' | 'conflict';
+	let saveState = $state<SaveState>('idle');
+	/** What the server currently holds, as the same string a change produces. */
+	let savedSnapshot = $state('');
+	/** Kept so clearing the title field cannot rename a document to its own id. */
+	let savedTitle = $state('');
+	/** The row version this editor is working from; sent back to detect a clash. */
+	let baseUpdatedAt = $state<string | null>(null);
+	let failures = 0;
+	let saveSeq = 0;
+	let inFlight = false;
+	let queued = false;
+	let idleTimer: ReturnType<typeof setTimeout> | undefined;
+	let ceilingTimer: ReturnType<typeof setTimeout> | undefined;
+	let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+	/**
+	 * The title a save would actually send.
+	 *
+	 * Clearing the field on a document that exists means "leave it called what it
+	 * is called", so the snapshot has to read it the same way the request does —
+	 * otherwise emptying the box makes the editor permanently dirty against a
+	 * name the server already holds.
+	 */
+	const effectiveTitle = () => (currentId ? title.trim() || savedTitle : title.trim());
+
+	/** Everything a save writes. A change to any of it is a change. */
+	const snapshotOf = () =>
+		JSON.stringify({ title: effectiveTitle(), body, folder, parentId, visibility });
+	const dirty = $derived(snapshotOf() !== savedSnapshot);
+
+	/**
+	 * Deliberately quiet. "Unsaved" while someone types is a flicker that resolves
+	 * itself a second later, so the resting state stays put until a request is
+	 * actually in the air — which is what Google Docs does and why it reads as
+	 * calm rather than nervous.
+	 */
+	const statusText = $derived(
+		!editable
+			? ''
+			: saveState === 'saving'
+				? 'Saving…'
+				: saveState === 'conflict'
+					? 'Changed elsewhere'
+					: saveState === 'failed'
+						? 'Couldn’t save — retrying'
+						: currentId
+							? 'Saved'
+							: ''
+	);
 	/** Anything the server refused — this page had nowhere at all to say so. */
 	let error = $state<string | null>(null);
 	/**
@@ -94,7 +162,39 @@
 		initial: 290
 	});
 
-	onMount(load);
+	onMount(() => {
+		void load();
+
+		const onKey = (e: KeyboardEvent) => {
+			// People press this reflexively in anything shaped like a document, and
+			// the browser's own Save dialog is a bad answer to it. It flushes rather
+			// than doing anything a plain wait would not.
+			if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+				e.preventDefault();
+				void flush();
+			}
+		};
+		/**
+		 * The last resort, and the only one that survives a tab closing mid-word.
+		 *
+		 * `keepalive` is what lets the request outlive the page — an ordinary fetch
+		 * started here is cancelled with everything else. `pagehide` rather than
+		 * `beforeunload`, which a phone browser may never fire at all.
+		 */
+		const onHide = () => {
+			if (!editable || !dirty || saveState === 'conflict') return;
+			if (!currentId && !hasContent(title, body)) return;
+			const { url, init } = buildRequest();
+			void fetch(url, { ...init, keepalive: true }).catch(() => {});
+		};
+		window.addEventListener('keydown', onKey);
+		window.addEventListener('pagehide', onHide);
+		return () => {
+			window.removeEventListener('keydown', onKey);
+			window.removeEventListener('pagehide', onHide);
+			clearTimers();
+		};
+	});
 
 	/** Bumped per request, so a stale answer can recognise itself. */
 	let searchSeq = 0;
@@ -137,6 +237,8 @@
 	const capped = $derived(query.trim() !== '' && docs.length >= SEARCH_LIMIT);
 
 	async function open(id: string) {
+		// The outgoing document's last edit has to land before its state is gone.
+		await flush();
 		const res = await fetch(`/api/library/${id}`);
 		if (!res.ok) return;
 		const doc = await res.json();
@@ -149,13 +251,28 @@
 		body = doc.body;
 		preview = false;
 		listOpen = false;
+		settle(doc.meta.title, doc.meta.updatedAt ?? null);
+	}
+
+	/** Take what is on screen as what the server holds, and stop any pending write. */
+	function settle(name: string, version: string | null) {
+		clearTimers();
+		saveSeq += 1;
+		queued = false;
+		failures = 0;
+		savedSnapshot = snapshotOf();
+		savedTitle = name;
+		baseUpdatedAt = version;
+		saveState = 'idle';
+		error = null;
 	}
 
 	/**
 	 * `into` pre-files a doc created from a section's own + button: a folder name
 	 * for a folder heading, a doc id for a node in a tree.
 	 */
-	function startNew(into: { folder?: string; parentId?: string } = {}) {
+	async function startNew(into: { folder?: string; parentId?: string } = {}) {
+		await flush();
 		currentId = null;
 		title = '';
 		body = '';
@@ -166,35 +283,157 @@
 		editable = true;
 		preview = false;
 		listOpen = false;
+		// Empty is exactly what the server holds for a document that does not
+		// exist, so nothing is dirty and nothing will be written until something
+		// is typed — which is what stops New leaving a shell behind.
+		settle('', null);
 	}
 
-	async function save() {
-		if (!title.trim()) return;
-		// Always explicit: the editor shows both controls, so what they say is what
-		// the person means — an omitted field would mean "leave it where it was".
-		const payload = JSON.stringify({ title, content: body, visibility, folder, parentId });
-		const init = { headers: { 'content-type': 'application/json' }, body: payload };
-		const res = await (currentId
-			? fetch(`/api/library/${currentId}`, { method: 'PUT', ...init })
-			: fetch('/api/library', { method: 'POST', ...init })
-		).catch(() => null);
-		// A failed save used to be indistinguishable from a successful one: the
-		// button simply went back to reading "Save". In the app's document editor
-		// that means somebody keeps typing against a copy the server never took.
-		if (!res?.ok) {
-			error = 'Could not save this document. Your text is still here — try again.';
+	function clearTimers() {
+		clearTimeout(idleTimer);
+		clearTimeout(ceilingTimer);
+		clearTimeout(retryTimer);
+		idleTimer = ceilingTimer = retryTimer = undefined;
+	}
+
+	/** Called from every editable field. Typing is not a request; this arms one. */
+	function touch() {
+		if (!editable || saveState === 'conflict') return;
+		clearTimeout(idleTimer);
+		idleTimer = setTimeout(() => void flush(), AUTOSAVE_IDLE_MS);
+		// Armed once per unsaved stretch rather than per keystroke: re-arming it
+		// each time would make it a second idle timer with a bigger number, and
+		// someone typing without pause — the person with most to lose — would
+		// never reach either.
+		if (ceilingTimer === undefined) {
+			ceilingTimer = setTimeout(() => void flush(), AUTOSAVE_MAX_MS);
+		}
+	}
+
+	/** The request a save makes, shared so the page-exit path cannot drift from it. */
+	function buildRequest(): { url: string; init: RequestInit; name: string; sending: string } {
+		const creating = !currentId;
+		// An empty title on a document that exists means "leave it called what it
+		// is called" — never the id, which is what the server would fall back to.
+		const name = creating
+			? titleForNew(title, body, docs.map((d) => d.title))
+			: title.trim() || savedTitle;
+		return {
+			url: creating ? '/api/library' : `/api/library/${currentId}`,
+			init: {
+				method: creating ? 'POST' : 'PUT',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					title: name,
+					content: body,
+					visibility,
+					folder,
+					parentId,
+					...(creating ? {} : { baseUpdatedAt })
+				})
+			},
+			name,
+			// Built from the resolved name rather than the field, so that marking the
+			// editor clean afterwards compares like with like — including the first
+			// save of a document whose title was derived rather than typed.
+			sending: JSON.stringify({ title: name, body, folder, parentId, visibility })
+		};
+	}
+
+	/**
+	 * Write once, if there is anything to write.
+	 *
+	 * Single-flight: a save asked for while one is in the air queues instead of
+	 * starting, because two concurrent POSTs would each create a document and the
+	 * second would inherit none of the first one's id.
+	 */
+	async function flush(): Promise<void> {
+		clearTimers();
+		if (!editable || saveState === 'conflict' || !dirty) return;
+		// A document that does not exist yet has to have earned one. Pressing New,
+		// or New under something, must not leave an empty shell on the shelf.
+		if (!currentId && !hasContent(title, body)) return;
+		if (inFlight) {
+			queued = true;
 			return;
 		}
-		error = null;
-		const doc = await res.json();
+		inFlight = true;
+		try {
+			await writeOnce();
+		} finally {
+			inFlight = false;
+		}
+		if (queued) {
+			queued = false;
+			await flush();
+		}
+	}
+
+	async function writeOnce(): Promise<void> {
+		const seq = ++saveSeq;
+		const { url, init, name, sending } = buildRequest();
+		saveState = 'saving';
+		const res = await fetch(url, init).catch(() => null);
+		// Switching documents mid-request must not write this answer into the one
+		// now on screen — the same rule the search box follows for its replies.
+		if (seq !== saveSeq) return;
+
+		if (res?.status === 409) {
+			saveState = 'conflict';
+			error =
+				'This document changed somewhere else since you opened it. Your text is still here — reloading replaces it with the saved version.';
+			return;
+		}
+		if (!res?.ok) {
+			// A failed save used to be indistinguishable from a successful one: the
+			// button simply went back to reading "Save". In a document editor that
+			// means somebody keeps typing against a copy the server never took.
+			failures += 1;
+			saveState = 'failed';
+			retryTimer = setTimeout(() => void flush(), retryDelay(failures - 1));
+			return;
+		}
+
+		const doc = await res.json().catch(() => null);
+		// A 200 carrying something that is not a document is not a save. Treating
+		// it as one would mark the editor clean against a row that may not exist.
+		if (!doc?.id) {
+			failures += 1;
+			saveState = 'failed';
+			retryTimer = setTimeout(() => void flush(), retryDelay(failures - 1));
+			return;
+		}
+		if (seq !== saveSeq) return;
 		currentId = doc.id;
-		saved = true;
-		setTimeout(() => (saved = false), 1500);
-		await load();
+		savedSnapshot = sending;
+		savedTitle = name;
+		baseUpdatedAt = doc.updatedAt ?? null;
+		failures = 0;
+		error = null;
+		saveState = 'saved';
+		// Patched in place rather than reloading the list: at one save a second a
+		// second round trip per burst is most of the cost of autosaving at all.
+		// Skipped while searching, where the order is relevance and moving the
+		// edited row to the front would fight it.
+		if (!query.trim()) docs = [doc, ...docs.filter((d: Doc) => d.id !== doc.id)];
+	}
+
+	/** Discard what is on screen and take the version that won. */
+	async function reloadConflicted() {
+		if (!currentId) return;
+		const id = currentId;
+		saveState = 'idle';
+		error = null;
+		savedSnapshot = snapshotOf();
+		await open(id);
 	}
 
 	async function remove() {
 		if (!currentId || !confirm(`Delete "${title}"?`)) return;
+		// Nothing pending may re-create what is about to be deleted.
+		clearTimers();
+		saveSeq += 1;
+		queued = false;
 		const res = await fetch(`/api/library/${currentId}`, { method: 'DELETE' }).catch(
 			() => null
 		);
@@ -203,7 +442,7 @@
 			return;
 		}
 		error = null;
-		startNew();
+		await startNew();
 		await load();
 	}
 
@@ -280,7 +519,7 @@
 						{isShut(doc.id) ? '▸' : '▾'}
 					</button>
 				{/if}
-				<button class="row" class:nested={depth > 0} onclick={() => open(doc.id)}>
+				<button class="row" onclick={() => open(doc.id)}>
 					<span class="doc-title">
 						{doc.title}
 						{#if doc.author === 'agent'}<span class="agent-badge">agent</span>{/if}
@@ -319,7 +558,7 @@
 			</ul>
 		{:else}
 			{#each sections as section (section.key)}
-				<section class="folder">
+				<section class="folder" class:tree={section.kind === 'tree'}>
 					{#if section.kind === 'tree'}
 						<!-- No heading: a tree's root is a document you can open, so it is a
 						     row with a caret rather than a label above the rows. -->
@@ -372,13 +611,26 @@
 			</label>
 		</div>
 		<header>
-			<input class="title" placeholder="Document title" bind:value={title} />
+			<input
+				class="title"
+				placeholder="Document title"
+				disabled={!editable}
+				bind:value={title}
+				oninput={touch}
+				onblur={() => {
+					// A document that exists is never nameless: clearing the field and
+					// walking away would otherwise leave the shelf showing one name and
+					// the editor showing none.
+					if (currentId && !title.trim()) title = savedTitle;
+				}}
+			/>
 			<select
 				class="folder-input parent-input"
 				title="File this doc under another one. A doc inside a tree costs the agents' index nothing; a new top-level doc costs it a line on every turn."
 				aria-label="Filed under"
 				disabled={!editable}
 				bind:value={parentId}
+				onchange={touch}
 			>
 				<option value="">Top level</option>
 				{#each parents as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
@@ -393,6 +645,7 @@
 					title="Group this doc on the shelf. Type a new name or pick an existing one; leave it empty to keep it unfiled."
 					disabled={!editable}
 					bind:value={folder}
+					oninput={touch}
 				/>
 				<datalist id="library-folders">
 					{#each folders as f (f)}<option value={f}></option>{/each}
@@ -406,22 +659,38 @@
 					title={editable
 						? 'Shared docs appear in every user\u2019s library and feed their agents\u2019 context'
 						: 'This document belongs to another user'}
-					onclick={() => (visibility = visibility === 'shared' ? 'personal' : 'shared')}
+					onclick={() => {
+						visibility = visibility === 'shared' ? 'personal' : 'shared';
+						touch();
+					}}
 				>
 					{visibility === 'shared' ? '\u25c9 Widely viewable' : '\u25cc Personal'}
 				</button>
 				<button class="chip" class:on={preview} onclick={() => (preview = !preview)}>
 					{preview ? 'edit' : 'preview'}
 				</button>
-				<button class="btn primary" disabled={!editable} onclick={save}>
-					{saved ? 'Saved \u2713' : 'Save'}
-				</button>
+				<!-- No Save button: the editor writes as you type. The status is quiet
+				     on purpose, and only ever says something that is true right now. -->
+				{#if statusText}
+					<span
+						class="save-state"
+						class:alarm={saveState === 'failed' || saveState === 'conflict'}
+						aria-live="polite">{statusText}</span
+					>
+				{/if}
 				{#if currentId}
 					<button class="btn danger" disabled={!editable} onclick={remove}>Delete</button>
 				{/if}
 			</div>
 		</header>
-		{#if error}<p class="error" role="alert">{error}</p>{/if}
+		{#if error}
+			<p class="error" role="alert">
+				{error}
+				{#if saveState === 'conflict'}
+					<button class="chip" onclick={reloadConflicted}>Discard mine and reload</button>
+				{/if}
+			</p>
+		{/if}
 		{#if preview}
 			<div class="preview"><Markdown text={body} /></div>
 		{:else}
@@ -431,6 +700,7 @@
 					: 'Markdown content… yours alone, and only your agents see it.'}
 				readonly={!editable}
 				bind:value={body}
+				oninput={touch}
 			></textarea>
 		{/if}
 	</section>
@@ -502,31 +772,61 @@
 	.doc-list li {
 		position: relative;
 	}
-	.doc-list li .row.nested {
-		padding-left: calc(0.75rem + var(--depth, 0) * 0.85rem);
+	/* The caret's gutter, reserved on every row in a tree so titles line up
+	   whether or not a row has children. Scoped to trees: under a folder heading
+	   nothing ever has a caret, and indenting those rows for one would spend a
+	   sixth of a 290px pane on empty space. */
+	.tree .row {
+		padding-left: calc(1.5rem + var(--depth, 0) * 0.9rem);
 	}
-	.node-caret {
+	.node-caret,
+	.node-add {
 		position: absolute;
-		left: calc(var(--depth, 0) * 0.85rem - 0.1rem);
-		top: 0.5rem;
+		/* Stretched to the row rather than offset into it: a row is two lines when
+		   it has a snippet and one when it does not, so any fixed `top` is centred
+		   for one of them and wrong for the other. */
+		top: 0;
+		bottom: 0;
 		z-index: 1;
-		padding: 0 0.15rem;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 0;
 		border: 0;
 		background: none;
-		color: var(--muted);
-		font-size: 0.7rem;
+		color: var(--fg-dim);
+		font-family: inherit;
 		line-height: 1;
 		cursor: pointer;
 	}
-	.node-caret:hover {
-		color: var(--fg);
+	/*
+	 * The glow goes on the glyph, not around it.
+	 *
+	 * themeCss gives every button a hover glow as a box-shadow, and a box-shadow
+	 * follows the border box — so on a bare `+` it draws a glowing rectangle with
+	 * nothing in it but the corners. That box was the complaint. Same fix as the
+	 * chat page's rate buttons, which trade it for a drop-shadow off the SVG's
+	 * own alpha; for a text glyph the equivalent is text-shadow.
+	 */
+	.node-caret:hover,
+	.node-add:hover {
+		box-shadow: none;
+		color: var(--accent);
+		text-shadow: 0 0 var(--glow-size) var(--glow);
 	}
-	/* Same treatment as the folder heading's + button, which is also hover-only
-	   on a pointer and always present on a touch screen. */
+	.node-caret {
+		left: calc(var(--depth, 0) * 0.9rem);
+		/* Height comes from the row and clears --tap comfortably. Width does not,
+		   and deliberately: the caret lives in an indent gutter in a pane that
+		   starts at 290px, and the chat sidebar already settled this trade — tall
+		   to the floor, not wide to it, where the horizontal room is not there. */
+		width: 1.5rem;
+		font-size: var(--text-md);
+	}
 	.node-add {
-		position: absolute;
-		right: 0.35rem;
-		top: 0.45rem;
+		right: 0;
+		width: var(--tap);
+		font-size: var(--text-xl);
 		opacity: 0;
 	}
 	.doc-list li:hover .node-add,
@@ -572,6 +872,18 @@
 	}
 	.clear:hover {
 		color: var(--fg);
+	}
+	.save-state {
+		align-self: center;
+		color: var(--fg-dim);
+		font-size: var(--text-sm);
+		/* Enough to hold "Saving…" and "Saved" at the same width, so the resting
+		   state does not nudge the buttons beside it on every keystroke burst. */
+		min-width: 4.5rem;
+		text-align: right;
+	}
+	.save-state.alarm {
+		color: var(--danger);
 	}
 	.capped {
 		margin: 0 0 0.5rem;
@@ -640,9 +952,13 @@
 	.folder-input:disabled {
 		opacity: 0.5;
 	}
-	/* No hover on a touch screen to reveal the per-folder add button. */
+	/* Reveal-on-hover hides a control permanently on a touch screen, where there
+	   is no hover to reveal it with — the same reason CodeBlock and the chat row
+	   actions unhide theirs here. The per-row + shipped without this block and
+	   was unreachable on a phone. */
 	@media (hover: none) {
-		.folder-head .icon {
+		.folder-head .icon,
+		.node-add {
 			opacity: 1;
 		}
 	}
@@ -659,7 +975,9 @@
 		color: var(--fg);
 		font-family: inherit;
 		text-align: left;
-		padding: 0.45rem 0.5rem;
+		/* Right side reserved for the + that overlays it, so a long title
+		   ellipsises before it reaches the button rather than under it. */
+		padding: 0.45rem var(--tap) 0.45rem 0.5rem;
 		cursor: pointer;
 	}
 	.doc-title {

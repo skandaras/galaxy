@@ -114,6 +114,13 @@ That split is the general rule in this interface: **width decides layout,
 capability decides size**. A control sized off a `max-width` query has mixed the
 two.
 
+Height is the axis that gets it when both cannot. The chat sidebar's row icons
+take `--tap` vertically and 1.5rem horizontally, because four of them at 44px
+would take 176px of a 292px drawer and leave the chat's name nowhere to go; the
+Library's tree carets do the same, sitting in an indent gutter in a pane that
+starts at 290px. Height is where a thumb misses in a list, so height is what is
+held to the floor. Anything wider than a gutter takes both.
+
 ## Open — worth doing next
 
 Not fixed here, in rough priority order.
