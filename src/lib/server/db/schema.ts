@@ -353,14 +353,44 @@ export const libraryDocs = sqliteTable(
 		 * Cosmetic grouping for the shelf — a flat label, not a path, and no part
 		 * of who may see a doc. Empty means unfiled, which is where everything
 		 * starts and most things stay.
+		 *
+		 * Superseded by `parentId`, and kept for one release because the old image
+		 * still reads it. A doc with a label and no parent groups under that label
+		 * as a virtual root; saving it under a real parent is what migrates it.
 		 */
 		folder: text('folder').notNull().default(''),
+		/**
+		 * The doc this one sits under. Null is a root.
+		 *
+		 * There is no folder object: a doc is both the thing you read and the
+		 * thing others hang off, because an epic charter *is* the parent of its
+		 * sprint records and splitting that across a container row and a content
+		 * row means two rows to keep in step for no gain.
+		 */
+		parentId: text('parent_id'),
+		/**
+		 * The top of this doc's tree — its own id when it is a root.
+		 *
+		 * Denormalised because the digest's only question is "roots, and how many
+		 * docs under each", and that runs on every chat and coding turn. A
+		 * recursive CTE on the hot path is how a change meant to *cut* per-turn
+		 * cost ends up adding to it. Reads still COALESCE to the id: a rollback,
+		 * rows written by the old image, then an upgrade leaves nulls behind that
+		 * the backfill has already run past.
+		 */
+		rootId: text('root_id'),
 		sizeBytes: integer('size_bytes').notNull().default(0),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 		updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
 	},
 	// Every list is "what may this user see", which is owner or shared.
-	(t) => [index('library_docs_owner_idx').on(t.ownerId, t.visibility)]
+	(t) => [
+		index('library_docs_owner_idx').on(t.ownerId, t.visibility),
+		// The tree view's read: one node's children.
+		index('library_docs_parent_idx').on(t.parentId),
+		// The digest's read: every visible doc grouped by the tree it belongs to.
+		index('library_docs_root_idx').on(t.rootId)
+	]
 );
 
 // Skill index; the SKILL.md body lives on disk at

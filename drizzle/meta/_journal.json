@@ -239,6 +239,13 @@
       "when": 1789475617698,
       "tag": "0033_magenta_captain_cross",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1789784581585,
+      "tag": "0034_supreme_mandroid",
+      "breakpoints": true
     }
   ]
 }
