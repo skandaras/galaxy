@@ -1,17 +1,18 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
-import { libraryDocs } from '$lib/server/db/schema';
+import { libraryDocs, libraryFolders } from '$lib/server/db/schema';
 import {
 	canPlace,
+	createFolder,
 	deleteDoc,
 	docPath,
 	getDoc,
 	libraryDigest,
 	LibraryTreeError,
 	listChildren,
+	fileDoc,
 	MAX_DEPTH,
-	moveDoc,
 	saveDoc,
 	subtreeCounts
 } from './library';
@@ -25,6 +26,7 @@ beforeAll(() => {
 
 beforeEach(() => {
 	db.delete(libraryDocs).run();
+	db.delete(libraryFolders).run();
 	db.run(sql`DELETE FROM library_fts`);
 });
 
@@ -73,7 +75,7 @@ describe('placing a doc', () => {
 		expect(canPlace(root, child)).toEqual({ ok: false, reason: 'cycle' });
 		// Two hops up, which is the one a single self-check would miss.
 		expect(canPlace(root, grandchild)).toEqual({ ok: false, reason: 'cycle' });
-		expect(moveDoc(root, ALICE, grandchild)).toEqual({ ok: false, reason: 'cycle' });
+		expect(fileDoc(root, ALICE, { parentId: grandchild })).toEqual({ ok: false, reason: 'cycle' });
 	});
 
 	it('refuses to nest past the depth cap', () => {
@@ -96,7 +98,10 @@ describe('placing a doc', () => {
 			visibility: 'personal'
 		});
 		const mine = write('Mine');
-		expect(moveDoc(mine.id, ALICE, hidden.id)).toEqual({ ok: false, reason: 'no-parent' });
+		expect(fileDoc(mine.id, ALICE, { parentId: hidden.id })).toEqual({
+			ok: false,
+			reason: 'no-parent'
+		});
 	});
 });
 
@@ -105,7 +110,7 @@ describe('moving a subtree', () => {
 		const [root, child, grandchild] = chain(3);
 		const other = write('Another epic');
 
-		expect(moveDoc(child, ALICE, other.id).ok).toBe(true);
+		expect(fileDoc(child, ALICE, { parentId: other.id }).ok).toBe(true);
 		// The whole point: a move that only repointed the moved row would leave
 		// the grandchild claiming a tree it is no longer in, and the digest counts
 		// that column.
@@ -113,12 +118,33 @@ describe('moving a subtree', () => {
 		expect(getDoc(root, ALICE)?.meta.rootId).toBe(root);
 	});
 
-	it('makes a doc a root again when moved to the top', () => {
+	it('makes a doc a root again when filed straight into a folder', () => {
 		const [, child, grandchild] = chain(3);
-		expect(moveDoc(child, ALICE, null).ok).toBe(true);
+		expect(fileDoc(child, ALICE, { folder: 'Recipes' }).ok).toBe(true);
 		expect(getDoc(child, ALICE)?.meta.parentId).toBeNull();
 		expect(getDoc(child, ALICE)?.meta.rootId).toBe(child);
 		expect(getDoc(grandchild, ALICE)?.meta.rootId).toBe(child);
+		// It took its descendants into the folder with it: a subtree sits in one
+		// folder, and the shelf draws it under that heading.
+		expect(getDoc(grandchild, ALICE)?.meta.folder).toBe('Recipes');
+	});
+
+	it('takes the folder of the doc it is filed under', () => {
+		const epic = write('Epic', { folder: 'Epics' });
+		const [, child, grandchild] = chain(3);
+
+		expect(fileDoc(child, ALICE, { parentId: epic.id }).ok).toBe(true);
+		// Filing a doc inside another answers "which folder" on its own — asking
+		// the person a second time is two answers to one question, and letting a
+		// subtree straddle two headings is a tree with two homes on one shelf.
+		expect(getDoc(child, ALICE)?.meta.folder).toBe('Epics');
+		expect(getDoc(grandchild, ALICE)?.meta.folder).toBe('Epics');
+	});
+
+	it('ignores a folder asked for on a doc that is nested', () => {
+		const epic = write('Epic', { folder: 'Epics' });
+		const child = write('Sprint 1', { parentId: epic.id, folder: 'Somewhere else' });
+		expect(child.folder).toBe('Epics');
 	});
 
 	it('moves through saveDoc too, descendants included', () => {
@@ -147,7 +173,10 @@ describe('moving a subtree', () => {
 	it('refuses to move someone else’s doc', () => {
 		const theirs = saveDoc({ title: 'Theirs', body: 'x', author: 'user', ownerId: BOB });
 		const mine = write('Mine');
-		expect(moveDoc(theirs.id, ALICE, mine.id)).toEqual({ ok: false, reason: 'forbidden' });
+		expect(fileDoc(theirs.id, ALICE, { parentId: mine.id })).toEqual({
+			ok: false,
+			reason: 'forbidden'
+		});
 	});
 });
 
@@ -168,6 +197,15 @@ describe('deleting', () => {
 		expect(getDoc(child, ALICE)?.meta.parentId).toBeNull();
 		expect(getDoc(child, ALICE)?.meta.rootId).toBe(child);
 		expect(getDoc(grandchild, ALICE)?.meta.rootId).toBe(child);
+	});
+
+	it('leaves promoted children in the folder their parent was in', () => {
+		const root = write('Epic', { folder: 'Epics' });
+		const child = write('Sprint 1', { parentId: root.id });
+		expect(deleteDoc(root.id, ALICE)).toBe(true);
+		// Promotion must not also re-file: deleting a finished epic should leave
+		// its records where somebody filed them, not tip them into Unfiled.
+		expect(getDoc(child.id, ALICE)?.meta.folder).toBe('Epics');
 	});
 });
 
@@ -216,32 +254,39 @@ describe('reading the tree', () => {
 });
 
 describe('the digest', () => {
-	it('spends one line on a subtree however big it is', () => {
-		const root = write('Galaxy mobile');
+	it('spends one line on a folder, whatever is nested inside it', () => {
+		const root = write('Galaxy mobile', { folder: 'Epics' });
 		const sprint = write('Sprint 1', { parentId: root.id });
 		for (let i = 0; i < 200; i++) write(`Task ${i}`, { parentId: sprint.id });
 
 		const digest = libraryDigest(ALICE);
 		const lines = digest.split('\n').filter((l) => l.startsWith('- '));
 		expect(lines).toHaveLength(1);
-		expect(lines[0]).toContain('Galaxy mobile');
-		expect(lines[0]).toContain('201 documents beneath it');
+		expect(lines[0].startsWith('- Epics:')).toBe(true);
+		expect(lines[0]).toContain('Galaxy mobile (201 beneath)');
 		// The thing the whole change is for: no leaf reaches the block that every
 		// chat and coding turn in the app pays for.
 		expect(digest).not.toContain('Task 7');
+		expect(digest).not.toContain('Sprint 1');
 	});
 
-	it('names a small tree’s children rather than counting them', () => {
-		const root = write('Small epic');
+	it('names the top of a folder and counts everything under it', () => {
+		// Even two children stay a count. An agent that wants them asks
+		// library_tree; the index is what exists, at one line per folder.
+		const root = write('Small epic', { folder: 'Epics' });
 		write('Sprint 1', { parentId: root.id });
 		write('Sprint 2', { parentId: root.id });
 		const digest = libraryDigest(ALICE);
-		expect(digest).toContain('Sprint 1');
-		expect(digest).toContain('Sprint 2');
-		expect(digest).not.toContain('documents beneath it');
+		expect(digest).toContain('Small epic (2 beneath)');
+		expect(digest).not.toContain('Sprint 1');
 	});
 
-	it('still groups loose docs by folder, as a shelf with no trees always did', () => {
+	it('names a folder with nothing in it, so it can be filed into', () => {
+		createFolder(ALICE, 'Plans');
+		expect(libraryDigest(ALICE)).toContain('- Plans: (empty)');
+	});
+
+	it('groups loose docs by folder, as a shelf with no trees always did', () => {
 		write('Roast potatoes', { folder: 'Recipes' });
 		write('Bread', { folder: 'Recipes' });
 		write('Odd note');

@@ -145,18 +145,35 @@ for (const name of ['Kitchen', 'Garage']) {
 }
 
 // Library docs in two folders plus one unfiled, which is what the shelf's
-// collapse behaviour is about.
-for (const [title, folder] of [
-	['Boiler manual', 'House'],
-	['Fuse box', 'House'],
-	['Loft plans', 'Projects'],
-	['Scratch note', '']
+// collapse behaviour is about. Two of them are shared and their titles are
+// very different lengths, which is what the badge alignment check needs.
+const libraryDocs = {};
+for (const [title, folder, shared] of [
+	['Boiler manual', 'House', true],
+	['Fuse box for the whole of the downstairs and the loft', 'House', true],
+	['Loft plans', 'Projects', false],
+	['Scratch note', '', false]
 ]) {
-	await as(ALICE, '/api/library', {
+	libraryDocs[title] = await as(ALICE, '/api/library', {
 		method: 'POST',
-		body: JSON.stringify({ title, content: `Body of ${title}`, folder })
+		body: JSON.stringify({
+			title,
+			content: `Body of ${title}`,
+			folder,
+			visibility: shared ? 'shared' : 'personal'
+		})
 	});
 }
+// One document nested inside another, inside a folder — the shape the shelf
+// used to draw as a section of its own at the top level.
+await as(ALICE, '/api/library', {
+	method: 'POST',
+	body: JSON.stringify({
+		title: 'Service history',
+		content: 'Serviced in March.',
+		parentId: libraryDocs['Boiler manual'].id
+	})
+});
 
 const bobsBoard = await as(BOB, '/api/boards', {
 	method: 'POST',
@@ -582,8 +599,9 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 	await page.waitForTimeout(300);
 }
 
-// 4d. The Library shelf. Folders arrive shut so the pane is a list of folders
-//     rather than a wall of documents, and one control opens or closes the lot.
+// 4d. The Library shelf. Every top-level thing is a folder, folders arrive shut
+//     so the pane is a list of folders rather than a wall of documents, and one
+//     control opens or closes the lot.
 {
 	await page.goto(`${B}/library`);
 	await page.locator('.folder').first().waitFor();
@@ -595,12 +613,26 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 	check('every named folder starts shut', await page.locator('.folder-name[aria-expanded="false"]').count(), 2);
 	check('unfiled starts open, being the overflow people browse', await openFolders(), 1);
 	check('so only the unfiled document is listed', await rows(), 1);
+	// The complaint this shape answers: a document with children used to be a
+	// section of its own beside the folders, belonging to none of them.
+	check('nothing sits above a folder', await page.locator('.doc-list > ul').count(), 0);
 
 	// hasText, not the rendered label: the heading is uppercased by CSS, so the
 	// DOM still says "House".
 	await page.locator('.folder-name', { hasText: 'House' }).click();
 	await page.waitForTimeout(200);
-	check('a folder opens when clicked', await rows(), 3);
+	check('a folder opens to the documents at the top of it', await rows(), 3);
+	check('and what is nested stays shut until asked for', await page.locator('.node-caret').count(), 1);
+
+	await page.locator('.node-caret').first().click();
+	await page.waitForTimeout(200);
+	check('a document opens to what is filed under it', await rows(), 4);
+
+	// The tags line up down the pane whatever the title beside them is doing.
+	const badges = await page.locator('.doc-list .badge').evaluateAll((els) =>
+		els.map((el) => Math.round(el.getBoundingClientRect().right))
+	);
+	check('shared tags are flush right, however long the title', new Set(badges).size, 1);
 
 	await page.locator('.collapse-all').click();
 	await page.waitForTimeout(200);
@@ -610,8 +642,90 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 	await page.locator('.collapse-all').click();
 	await page.waitForTimeout(200);
 	check('the same control opens them all again', await openFolders(), 3);
-	check('and every document is listed', await rows(), 4);
+	check('and every document at the top of a folder is listed', await rows(), 4);
+
+	// A folder is made in the list, named, and has to survive with nothing in it.
+	await page.locator('.list-actions .btn.ghost', { hasText: '+ Folder' }).click();
+	await page.locator('.folder-new input').fill('Plans');
+	await page.locator('.folder-new .btn.primary').click();
+	await page.waitForTimeout(300);
+	check('a new folder appears on the shelf', await page.locator('.folder-name', { hasText: 'Plans' }).count(), 1);
+	await page.reload();
+	await page.waitForTimeout(400);
+	check(
+		'and is still there with nothing in it',
+		await page.locator('.folder-name', { hasText: 'Plans' }).count(),
+		1
+	);
 	await shot('library-folders');
+}
+
+// 4e. A document opens as the thing it is, not as its source.
+{
+	await page.locator('.folder-name', { hasText: 'Projects' }).click();
+	await page.waitForTimeout(200);
+	await page.locator('.doc-list .row', { hasText: 'Loft plans' }).click();
+	await page.waitForTimeout(400);
+	check('a document opens formatted', await page.locator('.editor .preview').count(), 1);
+	check('with no editor in the way', await page.locator('.editor textarea').count(), 0);
+
+	await page.locator('.editor .chip', { hasText: 'Edit' }).click();
+	await page.waitForTimeout(200);
+	check('editing is one click away', await page.locator('.editor textarea').count(), 1);
+
+	// Private and Shared are the two ends of one switch, not one button whose
+	// label was whichever state it was already in.
+	const vis = page.locator('.editor [role="switch"]');
+	check('a personal document reads as private', await vis.getAttribute('aria-checked'), 'false');
+	await vis.click();
+	await page.waitForTimeout(400);
+	check('and the switch moves to shared', await vis.getAttribute('aria-checked'), 'true');
+	await shot('library-preview');
+}
+
+// 4f. Dragging a document to re-file it. Press and hold rather than the
+//     browser's own drag, which never fires for a finger — so this is a mouse
+//     standing in for one, at the same timings.
+{
+	const filedIn = async (title) =>
+		(await as(ALICE, '/api/library')).find((d) => d.title === title)?.folder;
+	const parentOf = async (title) =>
+		(await as(ALICE, '/api/library')).find((d) => d.title === title)?.parentId;
+
+	const dragOnto = async (from, onto) => {
+		const a = await from.boundingBox();
+		const b = await onto.boundingBox();
+		await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+		await page.mouse.down();
+		// Past the hold, which is what separates a drag from a tap and lets a
+		// scroll get away before the gesture commits.
+		await page.waitForTimeout(320);
+		await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 });
+		await page.waitForTimeout(120);
+		await page.mouse.up();
+		await page.waitForTimeout(600);
+	};
+
+	await dragOnto(
+		page.locator('.doc-list .row', { hasText: 'Loft plans' }),
+		page.locator('.folder-name', { hasText: 'Plans' })
+	);
+	check('a document dragged onto a folder is filed there', await filedIn('Loft plans'), 'Plans');
+
+	await page.locator('.folder-name', { hasText: 'House' }).click();
+	await page.waitForTimeout(300);
+	await dragOnto(
+		page.locator('.doc-list .row', { hasText: 'Loft plans' }),
+		page.locator('.doc-list .row', { hasText: 'Boiler manual' })
+	);
+	check(
+		'and dragged onto a document, nests under it',
+		await parentOf('Loft plans'),
+		libraryDocs['Boiler manual'].id
+	);
+	// A subtree sits in one folder, so it came out of Plans with its new parent.
+	check('taking its parent’s folder with it', await filedIn('Loft plans'), 'House');
+	await shot('library-drag');
 }
 
 // 5. Alignment. Four tabs that each fetch on mount, a constellation drawn from

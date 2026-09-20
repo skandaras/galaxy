@@ -6,10 +6,13 @@ import {
 	getDoc,
 	libraryDigest,
 	listChildren,
+	listFolderCounts,
+	listFolderRoots,
 	saveDoc,
 	searchDocs,
 	subtreeCounts
 } from '$lib/server/library';
+import { UNFILED } from '$lib/library-tree';
 import { toolResultMaxChars } from '../limits';
 import { cortexDigest } from '$lib/server/cortex';
 import { memoryDigest } from '../memory';
@@ -26,7 +29,7 @@ export function bootstrapContext(userId: string): string {
 		'[Available skills — load the full instructions with skill_load when one applies]',
 		skillIndexText(),
 		'',
-		'[Library index — the top of each tree, never its leaves. These are the docs you can see: your own plus anything shared. A line saying "N documents beneath it" is a whole subtree collapsed to one line: open it with library_tree to see what is in there. This is a catalogue, not their contents: search inside them with library_search, read one with library_read, save durable knowledge with library_write]',
+		'[Library index — a line per folder, naming what sits at the top of it and nothing nested inside that. These are the docs you can see: your own plus anything shared. A "(N beneath)" is a whole subtree collapsed to one number: open it with library_tree. This is a catalogue, not their contents: search inside them with library_search, read one with library_read, save durable knowledge with library_write — filed inside an existing document wherever it belongs under one, which costs this block nothing]',
 		libraryDigest(userId),
 		'',
 		'[Task boards — yours plus any shared with you. Read them with board_read, one card in full with card_read]',
@@ -97,35 +100,51 @@ export function knowledgeTools(userId: string): LoopTool[] {
 			def: {
 				name: 'library_tree',
 				description:
-					'List what sits directly under a Library document, one line each. Called with no ' +
-					'id it lists the tops of every tree. This is how you open a subtree the index ' +
-					'collapsed to a count — the index deliberately carries roots rather than every ' +
-					'document, so a deep tree costs one line there and is expanded here on demand.',
+					'Open one level of the Library. With no arguments it lists the folders, which is ' +
+					'the top of the shelf — there is nothing above a folder and no document sits ' +
+					'outside one. With a folder it lists the documents at the top of that folder; ' +
+					'with a document id, what is filed under that document. This is how you open a ' +
+					'subtree the index collapsed to a count: the index carries a line per folder, so ' +
+					'a deep tree costs nothing there and is expanded here on demand.',
 				parameters: {
 					type: 'object',
 					properties: {
-						id: { type: 'string', description: 'Document id. Omit to list the tops.' }
+						folder: { type: 'string', description: 'Folder name, to list the documents in it.' },
+						id: { type: 'string', description: 'Document id, to list what is filed under it.' }
 					},
 					required: []
 				}
 			},
-			describe: (a) => String(a.id ?? '(top level)'),
+			describe: (a) => String(a.id ?? a.folder ?? '(folders)'),
 			execute: async (a) => {
-				const parentId = String(a.id ?? '').trim() || null;
-				if (parentId && !getDoc(parentId, userId)) throw new Error(`No Library doc with id "${parentId}"`);
-				const children = listChildren(parentId, userId);
-				if (!children.length) return parentId ? 'Nothing is filed under it.' : '(library is empty)';
+				const parentId = String(a.id ?? '').trim();
+				const folder = String(a.folder ?? '').trim();
 				const counts = subtreeCounts(userId);
-				return children
-					.map((c) => {
-						// A child's own subtree count needs its root, and a child is only a
-						// root when it has no parent — so anything listed here reports what
-						// is under *it* by asking for its own id, which the map only holds
-						// for roots. Below the top level the count is the child listing.
-						const under = (counts.get(c.id) ?? 1) - 1;
-						const tail = under > 0 ? ` — ${under} beneath it` : '';
-						return `- ${c.title} (id: ${c.id})${c.author === 'agent' ? ' [agent]' : ''}${tail}`;
-					})
+				const line = (d: { id: string; title: string; author: string }) => {
+					// A document's own subtree count needs its root, and a document is
+					// only a root when it has no parent — so the map only holds a count
+					// for the roots. Below the top of a folder the count is the listing.
+					const under = (counts.get(d.id) ?? 1) - 1;
+					return `- ${d.title} (id: ${d.id})${d.author === 'agent' ? ' [agent]' : ''}${
+						under > 0 ? ` — ${under} beneath it` : ''
+					}`;
+				};
+
+				if (parentId) {
+					if (!getDoc(parentId, userId)) throw new Error(`No Library doc with id "${parentId}"`);
+					const children = listChildren(parentId, userId);
+					return children.length ? children.map(line).join('\n') : 'Nothing is filed under it.';
+				}
+				if (folder) {
+					// Unfiled is the empty label on the row; the name is what a person
+					// and this tool's own listing both call it.
+					const roots = listFolderRoots(folder === UNFILED ? '' : folder, userId);
+					return roots.length ? roots.map(line).join('\n') : 'That folder is empty.';
+				}
+				const folders = listFolderCounts(userId);
+				if (!folders.length) return '(library is empty)';
+				return folders
+					.map((f) => `- ${f.name} (folder) — ${f.count} document${f.count === 1 ? '' : 's'}`)
 					.join('\n');
 			}
 		},
@@ -168,8 +187,8 @@ export function knowledgeTools(userId: string): LoopTool[] {
 				description:
 					'Create or update a Library document (markdown). Use for durable knowledge worth ' +
 					'keeping across conversations, not scratch notes. Filing it under a parent is what ' +
-					'keeps the index cheap: a document inside a tree costs the index nothing, where a ' +
-					'new top-level document costs it a line on every turn.',
+					'keeps the index cheap: a document nested inside another costs the index nothing, ' +
+					'where one more at the top of a folder is named on every turn.',
 				parameters: {
 					type: 'object',
 					properties: {
@@ -177,9 +196,15 @@ export function knowledgeTools(userId: string): LoopTool[] {
 						content: { type: 'string', description: 'Full markdown body' },
 						parentId: {
 							type: 'string',
-							description: 'Id of the document this one belongs under. Omit for a top-level document.'
+							description:
+								'Id of the document this one belongs under. Omit to leave it at the top of a folder.'
 						},
-						folder: { type: 'string', description: 'Shelf label for a top-level document.' }
+						folder: {
+							type: 'string',
+							description:
+								'Folder it sits in, when it is not inside another document. A parent decides ' +
+								'the folder on its own, so this is ignored alongside parentId.'
+						}
 					},
 					required: ['title', 'content']
 				}

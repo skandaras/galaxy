@@ -122,6 +122,38 @@ own delete semantics and a join on every read.
 It also means there is no such thing as an empty folder, which removes a whole
 category of tidying.
 
+#### Amended: the top level is folders again
+
+That last paragraph turned out to be the cost, not the saving, and the section
+above stands as what was tried rather than as what is there now.
+
+With no folder object, the top of the shelf held both kinds of thing at once: a
+folder heading, and beside it a document that had grown children and become a
+heading too. The complaint was exact — *"it looks like it should be a file but
+it's not sitting in unfiled"*. It was a document, so it read as something to
+open; it was a container, so it sat where folders sit; and it was in no folder
+at all, which is the one thing every other document on the shelf could say for
+itself.
+
+So folders came back, **for the top level only**:
+
+- Every top-level object is a folder. Every document is inside one, Unfiled
+  being where a document goes when nobody says otherwise.
+- Documents still nest inside documents. An epic charter is still the parent of
+  its sprint records; that part of the model was right and is untouched.
+- A folder is a row in `library_folders`, keyed by name per owner, and the
+  document keeps carrying its folder as a label. The row exists for exactly the
+  thing this section called a benefit — an empty folder — because *New folder*
+  has to leave something behind that survives a reload.
+- A nested document inherits its root's folder, written across the subtree by
+  the same bounded walk that rewrites `rootId`. A subtree that straddled two
+  folder headings would be a tree with two homes on one shelf.
+
+The "smaller change" argument was sound and is now paid: a table, its CRUD, its
+ownership predicate and its delete semantics — which drop a folder's documents
+into Unfiled rather than deleting them, the same answer `deleteDoc` gives its
+children. What it buys is a shelf with one kind of thing at the top of it.
+
 ### Renames were never the problem; moves and orphans are
 
 `cleanFolder` strips slashes on purpose and says why: *"a slash is just a
@@ -361,7 +393,12 @@ as the code that stops using it, so this is expand-migrate-contract, the pattern
    in the shelf and the digest, with no row behind it. `folder` keeps being
    populated.
 2. **Migrate.** The shelf writes `parentId`. Existing rows convert on edit.
-3. **Contract.** A later release drops `folder` and `cleanFolder` with it.
+3. ~~**Contract.** A later release drops `folder` and `cleanFolder` with it.~~
+   **Cancelled.** `folder` is the label a folder is keyed by, not a legacy
+   column waiting to be removed — see the amendment above. `cleanFolder` tidies
+   the name on the way into `library_folders` as well as onto a document, which
+   is why folder names still hold no slashes: a folder groups the top of a
+   shelf, and nesting below that is what a document's own `parentId` is for.
 
 The first draft of this had the label read as a lazily created root document
 instead. That would make a read path that writes, and the read in question is
@@ -374,6 +411,12 @@ a handful of folder headings to one heading per document — the exact opposite 
 what this change is for.
 
 ### The digest counts roots
+
+*Amended with the section above: a group is a folder, and what goes inside it is
+the documents at the top of that folder — never what is nested under those. Two
+sprints beneath an epic are a `(2 beneath)`, not two names. The window, the tail
+and the closing line are as described here, and the cost argument below is the
+reason the amendment kept them.*
 
 The change that makes the rest of it pay. `libraryDigest` keeps its shape — one
 line per group, an "…and N more" tail, the closing line that names the tools —

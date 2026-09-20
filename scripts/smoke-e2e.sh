@@ -599,6 +599,42 @@ check "a write against the current version lands" \
 check "a write that names no version still lands" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' \
      -d '{"content":"no version named"}' $B/api/library/$SDOC)" "200"
+# Folders, which the shelf's whole top level is made of. They are addressed by
+# name rather than by row id, so a folder that only exists as a label on a
+# document can be renamed too.
+check "a folder can be made" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+     -d '{"name":"Smoke Folder"}' $B/api/library/folders)" "201"
+check "and appears with nothing in it" "$(api $B/api/library/folders)" 'Smoke Folder'
+check "a second folder of the same name is refused" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+     -d '{"name":"Smoke Folder"}' $B/api/library/folders)" "409"
+check "Unfiled is not a folder anyone may make" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+     -d '{"name":"Unfiled"}' $B/api/library/folders)" "400"
+
+# Re-filing: its own route, because a drag has no business sending the body
+# back. The body on disk is what proves it did not.
+api -X POST $B/api/library/$SDOC/move -d '{"folder":"Smoke Folder"}' > /dev/null
+check "a document moves into a folder" "$(api $B/api/library/$SDOC)" '"folder":"Smoke Folder"'
+check "and a move leaves the body alone" "$(api $B/api/library/$SDOC)" 'no version named'
+
+KID=$(api -X POST $B/api/library -d '{"title":"Smoke Child","content":"underneath"}' | jqn .id)
+api -X POST $B/api/library/$KID/move -d "{\"parentId\":\"$SDOC\"}" > /dev/null
+KIDROW=$(api $B/api/library/$KID)
+check "a document nests under another" "$KIDROW" "\"parentId\":\"$SDOC\""
+# A subtree sits in one folder: the child takes the parent's, whatever it had.
+check "and takes its parent's folder with it" "$KIDROW" '"folder":"Smoke Folder"'
+check "filing a document under itself is refused" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+     -d "{\"parentId\":\"$KID\"}" $B/api/library/$KID/move)" "400"
+
+api -X PUT $B/api/library/folders/Smoke%20Folder -d '{"name":"Smoke Renamed"}' > /dev/null
+check "renaming a folder takes its documents with it" "$(api $B/api/library/$KID)" '"folder":"Smoke Renamed"'
+api -X DELETE $B/api/library/folders/Smoke%20Renamed > /dev/null
+check "deleting a folder drops its documents into Unfiled" "$(api $B/api/library/$KID)" '"folder":""'
+check "rather than deleting them" "$(api $B/api/library/$KID)" 'Smoke Child'
+
 api -X POST $B/api/skills -d '{"name":"smoke-skill","description":"smoke","body":"body"}' > /dev/null
 MEM=$(api -X POST $B/api/memory/run)
 check "memory run" "$MEM" '"ran":true'
