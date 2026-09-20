@@ -85,8 +85,15 @@ export async function createSession(opts: {
 	repoUrl: string;
 	repoName: string;
 	mode: 'plan' | 'implement';
+	/**
+	 * Branch to cut the work branch from, and the base its diff is measured
+	 * against. Forge builds on an integration branch rather than the default
+	 * head, so each of its tasks starts from what the last one landed. Absent —
+	 * which is every interactive session — means the remote's default.
+	 */
+	from?: string;
 }): Promise<CodeSession> {
-	const ws = await createWorkspace(opts.repoUrl);
+	const ws = await createWorkspace(opts.repoUrl, opts.from ? { from: opts.from } : {});
 	const chat = createChat({ userId: opts.userId, mode: 'code', title: opts.repoName });
 	const row: CodeSession = {
 		chatId: chat.id,

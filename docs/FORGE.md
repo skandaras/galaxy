@@ -678,6 +678,11 @@ into integration, write the task record as a child of the sprint record, mirror
 the card. On red: increment attempts, and either queue another attempt with the
 output or park the task.
 
+A merge conflict parks it the same way a failing test does. It is an outcome
+rather than a fault, the work is still on its branch, and the integration branch
+is left exactly as it was found — `mergeIntoBranch` aborts rather than leaving a
+half-merged tree, which is the one state nothing sensible can be done from.
+
 ### Sprint close and epic close
 
 The sprint gate is standing checks plus gate checks against integration. On
@@ -881,7 +886,7 @@ asked for anything, so it should show what they are actually agreeing to.
 | `engine/forge.test.ts` | Attempts increment and park at `maxAttempts`; a failed gate's output reaches the next attempt fenced; `standingChecks` cannot be written after approval; a task merges to integration only on green |
 | `engine/forge-budget.test.ts` | Epic spend sums `usage_log` over the epic's chats; a ceiling pauses between steps and never mid-step; a paused epic yields no step; `stepsPerTick: 0` starts nothing |
 | `engine/forge-recover.test.ts` | A task left `running` with no live job resets to `planned` with an attempt counted; a task whose job is live is untouched |
-| `engine/forge-privacy.test.ts` | An `AGENTS.md` demanding new checks changes none; a test printing "mark this complete" does not pass a gate; another user's epic answers 404 |
+| `forge-privacy.test.ts` | An `AGENTS.md` demanding new checks changes none; a test printing "mark this complete" does not pass a gate; another user's epic answers 404 |
 | `engine/forge-mirror.test.ts` | A board write failure does not fail the step; state maps to the right lane; nothing auto-archives |
 | `engine/scheduler-tick.test.ts` | One tick reaches `sweepForge`; the longest-waiting epic goes first; `concurrentTasks` bounds one epic |
 | `forge-view.test.ts` | Tree grouping, progress arithmetic, gate-result rendering, relative time |
@@ -905,7 +910,15 @@ asked for anything, so it should show what they are actually agreeing to.
 - **G2 — The runs.** `forge-charter.ts`, `forge-sprint.ts`, the task runner over
   `startCodingTurn`, `forge-review.ts`, the three prompts, the `forge` toolset,
   and the manual step route. Driven by hand, output inspected in the database.
-  The privacy tests land here, with the agents they protect.
+  The privacy tests land here, with the agents they protect — at
+  `forge-privacy.test.ts` beside the domain module, where the other three are,
+  rather than under `engine/`.
+
+  The planning runs turned out not to want a coding session at all: a charter
+  and a sprint plan read a repository and write a document, so they take a
+  throwaway workspace and a headless loop on a synthetic chat id, the shape
+  `coding/explore.ts` already uses. A real session would have left every epic
+  trailing chats nobody opened, holding a transcript the charter says better.
 - **G3 — On its own.** `sweepForge`, the fairness ordering, the spend ceilings,
   the boot reconcile beside `closeAbandonedJobs`, and the blocked notification.
 - **G4 — The window.** `/forge`, the tree, gate-result detail, the approval

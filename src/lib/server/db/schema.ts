@@ -285,7 +285,13 @@ export const CORE_TASKS = [
 	'board',
 	'alignment',
 	'alignment-synthesis',
-	'cortex-groom'
+	'cortex-groom',
+	// Forge's three planning voices. Task *execution* deliberately reuses
+	// 'coding': a Forge task is a coding task, and a second coding prompt is two
+	// places for a repository's conventions to drift apart.
+	'forge-charter',
+	'forge-sprint',
+	'forge-review'
 ] as const;
 export type CoreTask = (typeof CORE_TASKS)[number];
 
@@ -756,7 +762,11 @@ export const NOTIFICATION_KINDS = [
 	'card-assigned',
 	'board-shared',
 	'card-done',
-	'turn-failed'
+	'turn-failed',
+	// A Forge task that ran out of attempts. The driver subscribes to its own
+	// coding job, and failJob only rings the bell when nothing is watching — so
+	// without this a parked task would be announced by nothing at all.
+	'forge-blocked'
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 

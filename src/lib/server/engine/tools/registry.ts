@@ -25,6 +25,13 @@ export type ToolSource = 'builtin' | 'mcp';
  * research runs a hardcoded pipeline, and the visual/memory/skill-optimiser
  * tasks never build a LoopTool array — offering those as scope options would be
  * a control that does nothing. Keep in step with the applyToolPolicy call sites.
+ *
+ * Forge's three planning tasks assemble a toolset and are deliberately still
+ * not here, for the same reason the coding sub-agent is not: their toolset is
+ * fixed, and a switch that could remove `forge_charter_write` would break the
+ * charter run with nothing to say why. The cost is the honest one — an admin
+ * who disables `grep_files` still has it inside a forge run. See
+ * `engine/tools/forge.ts`.
  */
 export const TOOL_TASKS = ['chat', 'coding'] as const;
 export type ToolTask = (typeof TOOL_TASKS)[number];
