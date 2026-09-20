@@ -73,6 +73,13 @@ export function forgeSystemPrompt(task: string, ws: CreatedWorkspace): string {
 export async function runHeadless(opts: {
 	userId: string;
 	task: string;
+	/**
+	 * The epic this run is spending against, carried in the synthetic chat id so
+	 * `forgeSpend` can find it. Without it a charter, a sprint plan and every
+	 * sprint review are spend the epic's ceiling cannot see, which is most of the
+	 * planning bill.
+	 */
+	epicId?: string;
 	system: string;
 	user: string;
 	tools: LoopTool[];
@@ -90,9 +97,13 @@ export async function runHeadless(opts: {
 
 	// Its own id, never a real chat's: findRunningJobForChat scans live jobs by
 	// chat id, and nothing here should ever be reported as holding a
-	// conversation somebody is looking at.
+	// conversation somebody is looking at. The epic id sits inside it so the
+	// usage rows this run writes can still be summed back to the epic paying for
+	// them — see forgeSpend, which matches on the prefix.
 	const job = createJob({
-		chatId: `forge#${opts.task}-${randomUUID().slice(0, 8)}`,
+		chatId: opts.epicId
+			? `forge#${opts.epicId}#${opts.task}-${randomUUID().slice(0, 8)}`
+			: `forge#${opts.task}-${randomUUID().slice(0, 8)}`,
 		userId: opts.userId,
 		task: opts.task,
 		persist: false

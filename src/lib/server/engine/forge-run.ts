@@ -162,7 +162,8 @@ async function startTask(epic: ForgeEpic, task: ForgeTask, userId: string): Prom
 		session,
 		userId,
 		content: taskBrief(epic, task),
-		webSearch: false
+		webSearch: false,
+		maxSteps: settings().maxStepsPerTask
 	});
 	setTaskState(task.id, 'running', { chatId: session.chatId, branch: session.workBranch });
 

@@ -1,8 +1,10 @@
 # Forge — an epic that builds itself, one gated unit at a time
 
-> Status: **designed, not built.** This document is the design; no code for it
-> exists yet. Phases G0–G4 below are the intended landing order, and G0 is a
-> change to the Library that stands on its own.
+> Status: **G0–G3 shipped; G4 is the window.** Everything below describes the
+> design; the phases at the end say what has landed. The Library tree, the
+> schema and the gate, the three agent runs, and the driver that runs an epic
+> unattended are all in. What is left is `/forge` — the page — so today an epic
+> is created, approved and watched through the API and the Observatory.
 
 The coding agent is good at one turn. You hand it a task, it works in a runner
 container, it commits, it pushes. Everything above that turn is you: deciding
@@ -289,9 +291,22 @@ ordering logic is where this feature is most likely to be wrong, and a pure
 function tests with no model, no container and no clock.
 
 A boot reconcile sits beside `closeAbandonedJobs()` in `hooks.server.ts`: any
-task left `running` or `gating` with no live job goes back to `planned` with an
-attempt counted against it. Counting the attempt is deliberate — a task that
-reliably crashes the process should eventually park rather than restart forever.
+task left `running` with no live job goes back to `planned` with an attempt
+counted against it. Counting the attempt is deliberate — a task that reliably
+crashes the process should eventually park rather than restart forever.
+
+`gating` is **not** reset, which this document originally said it would be.
+`code_sessions` is a table and the workspace is a directory, so the work a gate
+judges survives the restart that interrupted it, and `nextStep` already picks a
+gate up before anything else. Resetting it would throw away a finished attempt
+and charge an attempt for the privilege.
+
+A sprint left at `planning` goes back to `outlined`, and this one matters more
+than the task case: `nextStep` returns null on a planning sprint by design, so
+left alone it is not a stalled task but an epic that has silently stopped. No
+attempt is counted against it — a sprint's attempts are its gate's currency, and
+spending one here would park it early for a reason that had nothing to do with
+its code.
 
 ### Human gates are states, never parked jobs
 
@@ -334,6 +349,17 @@ never a counter on the epic row. `getBudgetStatus()` is derived for the same
 reason: a counter drifts the first time a write is missed, and then the number
 that governs whether an agent may keep spending money is a number nobody can
 audit.
+
+Two joins rather than one, because an epic spends in two places. A task's model
+calls run in that task's chat. The charter, the sprint plans and the reviews are
+headless and have no chat at all, so `runHeadless` writes their usage against a
+synthetic id carrying the epic (`forge#<epicId>#<task>-<rand>`) and the sum
+matches that prefix too. Joining on task chats alone left every planning run out,
+which is most of what an epic spends before its first task even opens.
+
+One thing the sum cannot see: deleting a coding chat nulls `usage_log.chat_id`,
+so a task's spend leaves the epic's total when its chat is purged. The
+platform-wide cap still counts the money; only the attribution goes.
 
 ---
 
@@ -927,11 +953,11 @@ asked for anything, so it should show what they are actually agreeing to.
 | `engine/forge-gate.test.ts` | A check that passes at baseline is rejected as vacuous; a non-zero exit fails whatever the reply said; a timeout fails rather than passing; every check runs after the first failure; the failing tail survives bounding; secrets are scrubbed from stored output |
 | `engine/forge-step.test.ts` | `nextStep` across every state combination; a blocked task does not stall its sprint but does stop it closing; sprint N+1 waits for N; an epic at `awaiting-approval` yields no step |
 | `engine/forge.test.ts` | Attempts increment and park at `maxAttempts`; a failed gate's output reaches the next attempt fenced; `standingChecks` cannot be written after approval; a task merges to integration only on green |
-| `engine/forge-budget.test.ts` | Epic spend sums `usage_log` over the epic's chats; a ceiling pauses between steps and never mid-step; a paused epic yields no step; `stepsPerTick: 0` starts nothing |
-| `engine/forge-recover.test.ts` | A task left `running` with no live job resets to `planned` with an attempt counted; a task whose job is live is untouched |
+| `engine/forge-budget.test.ts` | Epic spend sums `usage_log` over the epic's chats *and* its headless runs; a ceiling pauses between steps and never mid-step; the bell rings once rather than once a tick; an override raises the instance ceiling and 0 inherits it; the daily ceiling stops the whole sweep; a paused epic yields no step; `stepsPerTick: 0` starts nothing |
+| `engine/forge-recover.test.ts` | A task left `running` with no live job resets to `planned` with an attempt counted; a task whose job is live is untouched; `gating` is left alone; a sprint left `planning` returns to `outlined` with no attempt spent |
 | `forge-privacy.test.ts` | An `AGENTS.md` demanding new checks changes none; a test printing "mark this complete" does not pass a gate; another user's epic answers 404 |
 | `engine/forge-mirror.test.ts` | A board write failure does not fail the step; state maps to the right lane; nothing auto-archives |
-| `engine/scheduler-tick.test.ts` | One tick reaches `sweepForge`; the longest-waiting epic goes first; `concurrentTasks` bounds one epic |
+| `engine/scheduler-tick.test.ts` | One tick reaches `sweepForge`; the longest-waiting epic goes first; `concurrentTasks` bounds one epic; `concurrentEpics` bounds how many open a front; one epic failing does not spend the tick |
 | `forge-view.test.ts` | Tree grouping, progress arithmetic, gate-result rendering, relative time |
 
 ## Phases
@@ -964,8 +990,24 @@ asked for anything, so it should show what they are actually agreeing to.
   trailing chats nobody opened, holding a transcript the charter says better.
 - **G3 — On its own.** `sweepForge`, the fairness ordering, the spend ceilings,
   the boot reconcile beside `closeAbandonedJobs`, and the blocked notification.
+
+  Three settings that G1 declared and nothing read landed with it, because a dial
+  that governs unattended spend and drives nothing is worse than no dial:
+  `maxStepsPerTask` became an optional `maxSteps` on `startCodingTurn`, and
+  `maxUsdOverride` became a field on the existing PATCH — an epic that paused on
+  its ceiling is resumed by raising it, and two calls would let the next tick
+  pause it again in between.
+
+  `concurrentEpics` is read as *how many epics are being worked on at all*, not
+  how many run a coding turn in parallel. The sweep is sequential, so the looser
+  reading would leave the setting meaning nothing.
 - **G4 — The window.** `/forge`, the tree, gate-result detail, the approval
   screen, the board mirror, `admin/Forge.svelte`.
+
+  This is what is left. Until it lands, Forge has no page and no admin form: an
+  epic is created and approved through the API, and the notifications it raises
+  carry no link, because one pointing at a page that answers 404 is worse than
+  one that simply says what happened.
 
 ## Verification
 

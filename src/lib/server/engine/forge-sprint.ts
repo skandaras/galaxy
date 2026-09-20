@@ -62,6 +62,7 @@ export async function runSprintPlan(
 				runHeadless({
 					userId,
 					task: 'forge-sprint',
+					epicId: epic.id,
 					system,
 					user: [
 						forgeTreeText(epic),

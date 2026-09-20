@@ -233,6 +233,13 @@ export function startCodingTurn(opts: {
 	attachments?: AttachmentRef[];
 	modelId?: string;
 	webSearch?: boolean;
+	/**
+	 * Model round-trips one leg may take, overriding CODING_MAX_STEPS. Forge
+	 * sets it from `maxStepsPerTask`, because a task nobody is watching wants a
+	 * ceiling an admin can move without an environment variable and a redeploy.
+	 * Absent — which is every interactive turn — means the env value.
+	 */
+	maxSteps?: number;
 }): LiveJob {
 	const { session } = opts;
 	const chat = getChat(session.chatId, opts.userId);
@@ -340,7 +347,7 @@ export function startCodingTurn(opts: {
 			primary: choice,
 			backup,
 			tools,
-			maxIterations: codingMaxSteps(),
+			maxIterations: opts.maxSteps ?? codingMaxSteps(),
 			budgetBlocked: () => getBudgetStatus().blocked,
 			// Legs share one job, so the driver below closes it once at the end.
 			autoComplete: false,

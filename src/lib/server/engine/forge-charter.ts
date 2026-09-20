@@ -54,6 +54,7 @@ export async function runCharter(epic: ForgeEpic, userId: string): Promise<Chart
 			return runHeadless({
 				userId,
 				task: 'forge-charter',
+				epicId: epic.id,
 				system: forgeSystemPrompt('forge-charter', ws),
 				user: [
 					`Repository: ${epic.repoName || epic.repoUrl}`,

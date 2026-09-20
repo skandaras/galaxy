@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, like, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import {
 	forgeEpics,
@@ -120,6 +120,17 @@ export function setEpicState(
 		})
 		.where(eq(forgeEpics.id, id))
 		.run();
+}
+
+/**
+ * Raise or drop what one epic may spend, overriding the instance ceiling.
+ *
+ * 0 inherits it, as `feed_topics.intervalHours` does — which is why this is the
+ * one epic column a running build may see change under it. Nothing else here is
+ * editable after approval, and deliberately so.
+ */
+export function setEpicOverride(id: string, maxUsdOverride: number): void {
+	db.update(forgeEpics).set({ maxUsdOverride }).where(eq(forgeEpics.id, id)).run();
 }
 
 export function markStepped(id: string): void {
@@ -342,23 +353,91 @@ export function snapshot(epicId: string, userId: string): ForgeSnapshot | null {
  * the first time a write is missed, and then the number governing whether an
  * agent may keep spending money is one nobody can audit.
  *
- * Every model call a task makes runs in that task's chat, so the epic's chats
- * are the join. Tens of tasks make a short IN list; an epic large enough for
- * that to matter has bigger problems.
+ * Two joins, because an epic spends in two places. Every model call a task
+ * makes runs in that task's chat. The charter, the sprint plans and the sprint
+ * reviews are headless and have no chat at all, so `runHeadless` writes their
+ * usage against a synthetic id carrying the epic — matching that prefix is what
+ * stops the ceiling bounding only the coding half of the bill. An epic id is a
+ * UUID, so the pattern brings no wildcard of its own.
+ *
+ * One thing it cannot see: deleting a coding chat nulls `usage_log.chat_id`
+ * (see `chats.ts`), so a task's spend leaves this sum when its chat is purged.
+ * The platform-wide cap still counts the money; only the attribution goes.
  */
 export function forgeSpend(epicId: string): number {
-	const chatIds = db
-		.select({ chatId: forgeTasks.chatId })
-		.from(forgeTasks)
-		.where(eq(forgeTasks.epicId, epicId))
-		.all()
-		.map((r) => r.chatId)
-		.filter((id): id is string => !!id);
-	if (!chatIds.length) return 0;
+	return sumCost(
+		or(inTaskChatsOf(eq(forgeTasks.epicId, epicId)), like(usageLog.chatId, `forge#${epicId}#%`))
+	);
+}
+
+/**
+ * What every epic has cost since `sinceMs`, in USD — what `maxUsdPerDay` reads.
+ *
+ * A rolling window rather than a calendar day, unlike `getBudgetStatus`: the cap
+ * it enforces is on an agent that runs for days unattended, and a calendar day
+ * would let one reset at midnight and spend the same again before anybody was
+ * awake to see it.
+ */
+export function forgeSpendSince(sinceMs: number): number {
+	return sumCost(
+		and(
+			gte(usageLog.ts, new Date(sinceMs)),
+			or(inTaskChatsOf(), like(usageLog.chatId, 'forge#%'))
+		)
+	);
+}
+
+/**
+ * Usage rows belonging to Forge task chats, as a subquery rather than a list.
+ *
+ * Pulling the ids into JS first was fine for one epic — tens of tasks make a
+ * short IN list — and not for the daily sum, which spans every epic the install
+ * has ever run and would have grown an IN list without bound.
+ */
+function inTaskChatsOf(where?: SQL): SQL {
+	const scope = where ? sql` AND ${where}` : sql``;
+	return sql`${usageLog.chatId} IN (SELECT ${forgeTasks.chatId} FROM ${forgeTasks} WHERE ${forgeTasks.chatId} IS NOT NULL${scope})`;
+}
+
+function sumCost(where: SQL | undefined): number {
 	const row = db
 		.select({ total: sql<number | null>`SUM(${usageLog.costUsd})` })
 		.from(usageLog)
-		.where(inArray(usageLog.chatId, chatIds))
+		.where(where)
 		.get();
 	return row?.total ?? 0;
+}
+
+/**
+ * Tasks of one epic with a coding job against them — what `concurrentTasks`
+ * bounds, because `nextStep` deliberately does not.
+ *
+ * `gating` is not in flight. That task's job has ended; its gate is a step the
+ * driver has still to run, and `nextStep` already puts it before anything else.
+ * Counting it would stop an epic picking up the very work it is waiting on.
+ */
+export function tasksInFlight(epicId: string): number {
+	const row = db
+		.select({ n: sql<number>`COUNT(*)` })
+		.from(forgeTasks)
+		.where(and(eq(forgeTasks.epicId, epicId), eq(forgeTasks.state, 'running')))
+		.get();
+	return row?.n ?? 0;
+}
+
+/**
+ * Live epics with work in flight — what `concurrentEpics` bounds.
+ *
+ * Joined against the epic's own state so a paused or abandoned epic holding a
+ * stranded task does not spend one of the fronts. The boot reconcile clears
+ * those, but it only runs at boot.
+ */
+export function epicsInFlight(): number {
+	const row = db
+		.select({ n: sql<number>`COUNT(DISTINCT ${forgeTasks.epicId})` })
+		.from(forgeTasks)
+		.innerJoin(forgeEpics, eq(forgeEpics.id, forgeTasks.epicId))
+		.where(and(eq(forgeTasks.state, 'running'), eq(forgeEpics.state, 'running')))
+		.get();
+	return row?.n ?? 0;
 }

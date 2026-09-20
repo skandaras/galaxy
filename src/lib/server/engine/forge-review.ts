@@ -43,6 +43,7 @@ export async function runSprintReview(
 			const { text } = await runHeadless({
 				userId,
 				task: 'forge-review',
+				epicId: epic.id,
 				system: forgeSystemPrompt('forge-review', ws),
 				user: [
 					`Sprint ${sprint.position + 1}: ${sprint.title}`,

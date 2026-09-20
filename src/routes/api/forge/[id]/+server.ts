@@ -6,6 +6,7 @@ import {
 	getEpic,
 	listSprints,
 	listTasks,
+	setEpicOverride,
 	setEpicState
 } from '$lib/server/forge';
 
@@ -33,13 +34,39 @@ export const GET: RequestHandler = ({ locals, params }) => {
 
 const STATES = { pause: 'paused', resume: 'running', abandon: 'abandoned' } as const;
 
-/** Stop, restart or give up on a build. */
+/**
+ * Stop, restart or give up on a build, and set what it may spend.
+ *
+ * The override travels with the state change rather than in a route of its own,
+ * because the two are almost always the same request: an epic that paused on
+ * its ceiling is resumed by raising the ceiling, and doing that in two calls
+ * means the next tick can pause it again in between.
+ */
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	const user = requireCoder(locals);
 	const epic = getEpic(params.id, user.id);
 	if (!epic) error(404, 'Epic not found');
 
 	const body = await request.json().catch(() => ({}));
+	const setsCeiling = body.maxUsdOverride !== undefined;
+
+	// Before the state change, not after: `{ action: 'resume', maxUsdOverride }`
+	// has to raise the ceiling first or the next tick pauses the epic again on
+	// the cap it was just resumed past.
+	//
+	// Clamped here as well as wherever a form asks for it, for the reason
+	// normaliseForgeSettings gives — a min/max does not survive a raw API call,
+	// and this number decides how much an unattended agent may spend. Not
+	// floored: a £12.50 ceiling has to survive the round trip.
+	if (setsCeiling) {
+		const usd = Number(body.maxUsdOverride);
+		if (!Number.isFinite(usd) || usd < 0) error(400, 'maxUsdOverride must be 0 or more');
+		setEpicOverride(epic.id, Math.min(10_000, usd));
+	}
+	// A ceiling on its own is a whole request: lowering one to stop a build after
+	// whatever it is doing now is as reasonable as raising one to let it carry on.
+	if (setsCeiling && body.action === undefined) return json(getEpic(epic.id, user.id));
+
 	const action = body.action as keyof typeof STATES;
 	if (!(action in STATES)) {
 		error(400, `Unknown action. Try one of: ${Object.keys(STATES).join(', ')}`);

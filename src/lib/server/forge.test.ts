@@ -7,6 +7,7 @@ import {
 	countAttempt,
 	createEpic,
 	dueEpics,
+	epicsInFlight,
 	forgeSpend,
 	gateRunsFor,
 	getEpic,
@@ -17,8 +18,10 @@ import {
 	openTask,
 	recordGateRun,
 	setEpicState,
+	setSprintState,
 	setTaskState,
-	snapshot
+	snapshot,
+	tasksInFlight
 } from './forge';
 
 const ALICE = 'user-alice';
@@ -186,22 +189,22 @@ describe('gate runs', () => {
 	});
 });
 
-describe('forgeSpend', () => {
-	const spend = (chatId: string, costUsd: number) =>
-		db
-			.insert(usageLog)
-			.values({
-				id: `${chatId}-${costUsd}-${Math.random()}`,
-				ts: new Date(),
-				userId: ALICE,
-				chatId,
-				task: 'coding',
-				modelKey: 'm',
-				costUsd,
-				status: 'ok'
-			})
-			.run();
+const spend = (chatId: string, costUsd: number) =>
+	db
+		.insert(usageLog)
+		.values({
+			id: `${chatId}-${costUsd}-${Math.random()}`,
+			ts: new Date(),
+			userId: ALICE,
+			chatId,
+			task: 'coding',
+			modelKey: 'm',
+			costUsd,
+			status: 'ok'
+		})
+		.run();
 
+describe('forgeSpend', () => {
 	it('sums only the chats belonging to this epic', () => {
 		const e = newEpic();
 		const other = newEpic();
@@ -223,6 +226,61 @@ describe('forgeSpend', () => {
 	it('is zero before any task has a chat', () => {
 		const e = newEpic();
 		expect(forgeSpend(e.id)).toBe(0);
+	});
+
+	it('counts the planning runs, which never had a chat', () => {
+		// The charter, the sprint plans and the reviews run headless on a synthetic
+		// id. Joining on task chats alone left every one of them out, so a ceiling
+		// bounded the coding half of the bill and nothing else.
+		const e = newEpic();
+		spend(`forge#${e.id}#forge-charter-abcd1234`, 0.4);
+		spend(`forge#${e.id}#forge-sprint-beef5678`, 0.6);
+		spend('forge#forge-charter-nobodys', 50);
+
+		expect(forgeSpend(e.id)).toBeCloseTo(1);
+	});
+});
+
+describe('what the pace settings count', () => {
+	it('counts running tasks only, because a gate is not work in flight', () => {
+		// nextStep puts a gating task before everything else, so counting it would
+		// stop the epic picking up the very work it is waiting on.
+		const e = newEpic();
+		const s = addSprint({ epicId: e.id, title: 'Sprint 1' });
+		const a = openTask({ epicId: e.id, sprintId: s.id, title: 'A', checks: CHECKS });
+		const b = openTask({ epicId: e.id, sprintId: s.id, title: 'B', checks: CHECKS });
+		expect(tasksInFlight(e.id)).toBe(0);
+
+		setTaskState(a.id, 'running', { chatId: 'chat-1' });
+		setTaskState(b.id, 'gating', { chatId: 'chat-2' });
+		expect(tasksInFlight(e.id)).toBe(1);
+	});
+
+	it('counts an epic once however many tasks it has running', () => {
+		const e = newEpic();
+		approveEpic(e.id, ALICE, { standingChecks: CHECKS });
+		const s = addSprint({ epicId: e.id, title: 'Sprint 1' });
+		setSprintState(s.id, 'running');
+		const a = openTask({ epicId: e.id, sprintId: s.id, title: 'A', checks: CHECKS });
+		const b = openTask({ epicId: e.id, sprintId: s.id, title: 'B', checks: CHECKS });
+		setTaskState(a.id, 'running', { chatId: 'chat-1' });
+		setTaskState(b.id, 'running', { chatId: 'chat-2' });
+
+		expect(epicsInFlight()).toBe(1);
+	});
+
+	it('does not let a paused epic hold a front open', () => {
+		// A stranded task on a paused epic would otherwise spend one of the fronts
+		// for ever. The boot reconcile clears those, but it only runs at boot.
+		const e = newEpic();
+		approveEpic(e.id, ALICE, { standingChecks: CHECKS });
+		const s = addSprint({ epicId: e.id, title: 'Sprint 1' });
+		const t = openTask({ epicId: e.id, sprintId: s.id, title: 'A', checks: CHECKS });
+		setTaskState(t.id, 'running', { chatId: 'chat-1' });
+		expect(epicsInFlight()).toBe(1);
+
+		setEpicState(e.id, 'paused', 'spend ceiling');
+		expect(epicsInFlight()).toBe(0);
 	});
 });
 

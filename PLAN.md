@@ -162,10 +162,14 @@ Internet ─► Proxy ──┤
   exists and are proved red against the tree first, so a run cannot write itself a check
   it cannot fail. The epic is a row and each unit of work is a short job, because
   `closeAbandonedJobs()` ends anything that tries to be a long one. The admin sets steps
-  per tick and a spend ceiling and nothing else. Designed, not built. It answers the
-  "pipelines" half of multi-agent orchestration above, and needs the Library to grow a
-  document tree first — one line per subtree in the digest, so documenting every task
-  costs nothing on every other turn in the app.
+  per tick and a spend ceiling and nothing else. *Partly shipped*: the Library tree, the
+  schema and the gate, the charter and sprint runs, and the scheduler sweep that drives an
+  epic unattended are all in (G0–G3). What is outstanding is `/forge` itself — the page,
+  the approval screen and the board mirror — so today a build is started and watched
+  through the API and the Observatory. It answers the "pipelines" half of multi-agent
+  orchestration above, and needed the Library to grow a document tree first — one line per
+  subtree in the digest, so documenting every task costs nothing on every other turn in
+  the app.
 - **Voice** — dictation input and TTS replies, mobile-first.
 - **Per-user spending caps** and model-access policies.
 - **Skill eval harness** — A/B test skill versions; pairs naturally with the skill-optimiser agent.
