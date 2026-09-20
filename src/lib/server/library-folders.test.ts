@@ -1,8 +1,19 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
-import { libraryDocs } from '$lib/server/db/schema';
-import { cleanFolder, getDoc, libraryDigest, listFolders, saveDoc, searchDocs } from './library';
+import { libraryDocs, libraryFolders } from '$lib/server/db/schema';
+import {
+	cleanFolder,
+	createFolder,
+	deleteDoc,
+	deleteFolder,
+	getDoc,
+	libraryDigest,
+	listFolders,
+	renameFolder,
+	saveDoc,
+	searchDocs
+} from './library';
 
 const ALICE = 'user-alice';
 const BOB = 'user-bob';
@@ -13,6 +24,7 @@ beforeAll(() => {
 
 beforeEach(() => {
 	db.delete(libraryDocs).run();
+	db.delete(libraryFolders).run();
 	db.run(sql`DELETE FROM library_fts`);
 });
 
@@ -129,5 +141,112 @@ describe('listFolders', () => {
 		write('Bobs thing', 'Bob Only', BOB);
 		expect(listFolders(ALICE)).toEqual([]);
 		expect(listFolders(BOB)).toEqual(['Bob Only']);
+	});
+
+	it('keeps a folder nothing is filed in', () => {
+		// The whole reason folders became rows: a name you just typed has to
+		// still be there after a reload, before anything is in it.
+		createFolder(ALICE, 'Plans');
+		expect(listFolders(ALICE)).toEqual(['Plans']);
+		expect(listFolders(BOB)).toEqual([]);
+	});
+});
+
+describe('making a folder', () => {
+	it('refuses a name already on the shelf, whatever it came from', () => {
+		write('One', 'Recipes');
+		expect(createFolder(ALICE, 'Recipes')).toEqual({ ok: false, reason: 'exists' });
+		expect(createFolder(ALICE, 'Plans').ok).toBe(true);
+		expect(createFolder(ALICE, 'Plans')).toEqual({ ok: false, reason: 'exists' });
+		// Someone else's shelf is not yours, so the same name is free there.
+		expect(createFolder(BOB, 'Plans').ok).toBe(true);
+	});
+
+	it('refuses Unfiled, which every shelf already has', () => {
+		expect(createFolder(ALICE, 'Unfiled')).toEqual({ ok: false, reason: 'reserved' });
+		expect(createFolder(ALICE, 'unfiled')).toEqual({ ok: false, reason: 'reserved' });
+	});
+
+	it('refuses a name that is only whitespace', () => {
+		expect(createFolder(ALICE, '   ')).toEqual({ ok: false, reason: 'empty' });
+	});
+
+	it('tidies the name the same way a label is tidied', () => {
+		const made = createFolder(ALICE, '  Home/Kitchen  ');
+		expect(made.ok && made.folder.name).toBe('Home Kitchen');
+	});
+});
+
+describe('renaming a folder', () => {
+	it('takes its documents with it', () => {
+		createFolder(ALICE, 'Recipes');
+		const doc = write('Roast potatoes', 'Recipes');
+		expect(renameFolder(ALICE, 'Recipes', 'Cooking').ok).toBe(true);
+		expect(getDoc(doc.id, ALICE)?.meta.folder).toBe('Cooking');
+		expect(listFolders(ALICE)).toEqual(['Cooking']);
+	});
+
+	it('leaves another person’s documents where they are', () => {
+		createFolder(ALICE, 'Recipes');
+		const theirs = saveDoc({
+			title: 'Their bread',
+			body: 'x',
+			author: 'user',
+			ownerId: BOB,
+			visibility: 'shared',
+			folder: 'Recipes'
+		});
+		expect(renameFolder(ALICE, 'Recipes', 'Cooking').ok).toBe(true);
+		// Their shared doc is on their shelf too, under the name they filed it
+		// under. Renaming your folder is not permission to re-file it.
+		expect(getDoc(theirs.id, BOB)?.meta.folder).toBe('Recipes');
+	});
+
+	it('refuses someone else’s folder, and a name already taken', () => {
+		createFolder(ALICE, 'Recipes');
+		createFolder(ALICE, 'Admin');
+		expect(renameFolder(BOB, 'Recipes', 'Theirs')).toEqual({ ok: false, reason: 'forbidden' });
+		expect(renameFolder(ALICE, 'Recipes', 'Admin')).toEqual({ ok: false, reason: 'exists' });
+		// Renaming a folder to what it is already called is not a clash.
+		expect(renameFolder(ALICE, 'Recipes', 'Recipes').ok).toBe(true);
+	});
+
+	it('renames a folder that is only a label, with no row behind it', () => {
+		// Docs filed before folders were rows, and folders that only exist
+		// because a shared doc carries the label, both land here.
+		const doc = write('Boiler manual', 'House');
+		expect(renameFolder(ALICE, 'House', 'Home').ok).toBe(true);
+		expect(getDoc(doc.id, ALICE)?.meta.folder).toBe('Home');
+		expect(listFolders(ALICE)).toEqual(['Home']);
+		// And it is a row now, so emptying it does not make it disappear.
+		expect(deleteDoc(doc.id, ALICE)).toBe(true);
+		expect(listFolders(ALICE)).toEqual(['Home']);
+	});
+
+	it('moves a doc that predates ownership, which is everyone’s', () => {
+		const doc = saveDoc({ title: 'Ancient', body: 'x', author: 'user', ownerId: ALICE, folder: 'Old' });
+		db.update(libraryDocs).set({ ownerId: null }).where(eq(libraryDocs.id, doc.id)).run();
+		expect(renameFolder(ALICE, 'Old', 'New').ok).toBe(true);
+		// canEdit says an ownerless doc is anyone's to change; the predicate the
+		// rename uses has to give the same answer.
+		expect(getDoc(doc.id, ALICE)?.meta.folder).toBe('New');
+	});
+});
+
+describe('deleting a folder', () => {
+	it('drops its documents into Unfiled rather than deleting them', () => {
+		createFolder(ALICE, 'Recipes');
+		const doc = write('Roast potatoes', 'Recipes');
+		expect(deleteFolder(ALICE, 'Recipes')).toBe(true);
+		// The same answer deleteDoc gives its children: of refuse, cascade and
+		// promote, only one cannot lose a document to a click on the wrong row.
+		expect(getDoc(doc.id, ALICE)?.meta.folder).toBe('');
+		expect(listFolders(ALICE)).toEqual([]);
+	});
+
+	it('refuses someone else’s folder', () => {
+		createFolder(ALICE, 'Recipes');
+		expect(deleteFolder(BOB, 'Recipes')).toBe(false);
+		expect(listFolders(ALICE)).toEqual(['Recipes']);
 	});
 });

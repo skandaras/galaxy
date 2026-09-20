@@ -1,4 +1,12 @@
-import { sqliteTable, text, integer, real, primaryKey, index } from 'drizzle-orm/sqlite-core';
+import {
+	sqliteTable,
+	text,
+	integer,
+	real,
+	primaryKey,
+	index,
+	uniqueIndex
+} from 'drizzle-orm/sqlite-core';
 import type { MessageTrace } from '$lib/run-timeline';
 
 export const users = sqliteTable('users', {
@@ -397,6 +405,33 @@ export const libraryDocs = sqliteTable(
 		// The digest's read: every visible doc grouped by the tree it belongs to.
 		index('library_docs_root_idx').on(t.rootId)
 	]
+);
+
+/**
+ * The folders the shelf is made of, keyed by name.
+ *
+ * The tree shipped with no folder object at all — a doc with children *was* the
+ * container — and the top of the shelf then held documents and folders side by
+ * side, where a document that was also a heading belonged to neither. Folders
+ * came back for the top level only: every doc now sits in one, and nesting
+ * below that is still doc-under-doc.
+ *
+ * Name-keyed rather than a `folder_id` on `library_docs`, because the label on
+ * the doc is already the grouping every read path uses — the shelf, the digest
+ * on every turn, and an image rolled back to before this table. This row only
+ * has to make a folder exist while it is empty, which is the one thing a label
+ * on a document cannot do and the reason `New folder` needs it.
+ */
+export const libraryFolders = sqliteTable(
+	'library_folders',
+	{
+		id: text('id').primaryKey(),
+		name: text('name').notNull(),
+		ownerId: text('owner_id').notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	// Two folders of one name on one shelf are the same folder drawn twice.
+	(t) => [uniqueIndex('library_folders_owner_name_idx').on(t.ownerId, t.name)]
 );
 
 // Skill index; the SKILL.md body lives on disk at

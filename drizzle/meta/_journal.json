@@ -253,6 +253,13 @@
       "when": 1789785505792,
       "tag": "0035_gifted_mephistopheles",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1789876680972,
+      "tag": "0036_futuristic_warhawk",
+      "breakpoints": true
     }
   ]
 }

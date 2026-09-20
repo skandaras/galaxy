@@ -2,8 +2,9 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node
 import { join } from 'node:path';
 import { and, desc, eq, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { db, dataDir } from '$lib/server/db';
-import { libraryDocs } from '$lib/server/db/schema';
+import { libraryDocs, libraryFolders } from '$lib/server/db/schema';
 import { SEARCH_LIMIT } from '$lib/library-search';
+import { UNFILED } from '$lib/library-tree';
 
 export type LibraryDoc = typeof libraryDocs.$inferSelect;
 
@@ -31,11 +32,128 @@ export function cleanFolder(raw: string): string {
 	return raw.replace(/[\\/]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_FOLDER);
 }
 
-/** Folder labels in use, for the picker. Only ones this user can see. */
+export type LibraryFolder = typeof libraryFolders.$inferSelect;
+
+export type FolderResult =
+	| { ok: true; folder: LibraryFolder }
+	| { ok: false; reason: 'empty' | 'reserved' | 'exists' | 'forbidden' };
+
+/**
+ * Every folder on this user's shelf: the ones they made, and the labels their
+ * visible docs are filed under.
+ *
+ * The union is the point. A shared doc carries its own label, and that label is
+ * a folder on your shelf whether or not you have a row for it — which is how
+ * the shelf worked when a label was all a folder ever was. The rows only have
+ * to make a folder exist while nothing is filed in it.
+ */
 export function listFolders(userId: string): string[] {
-	return [...new Set(listDocs(userId).map((d) => d.folder).filter(Boolean))].sort((a, b) =>
-		a.localeCompare(b)
-	);
+	const own = db
+		.select({ name: libraryFolders.name })
+		.from(libraryFolders)
+		.where(eq(libraryFolders.ownerId, userId))
+		.all()
+		.map((r) => r.name);
+	const used = listDocs(userId).map((d) => d.folder);
+	return [...new Set([...own, ...used].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Folders are addressed by name, not by row id.
+ *
+ * The label on the document is the join, so a folder can exist with no row
+ * behind it — one an older release filed docs into, or one that is only a
+ * label on somebody's shared doc. Addressing by id would leave those two
+ * unrenameable for no reason a person could see.
+ */
+const folderRow = (name: string, userId: string) =>
+	db
+		.select()
+		.from(libraryFolders)
+		.where(and(eq(libraryFolders.name, name), eq(libraryFolders.ownerId, userId)))
+		.get();
+
+/** Whether this user has anything filed under a label, row or no row. */
+const folderInUse = (name: string, userId: string) =>
+	!!db
+		.select({ id: libraryDocs.id })
+		.from(libraryDocs)
+		.where(and(eq(libraryDocs.folder, name), ownedBy(userId)))
+		.get();
+
+/** Unfiled is the overflow every shelf has and nobody owns, so nobody may name one. */
+const isReserved = (name: string) => name.toLowerCase() === UNFILED.toLowerCase();
+
+function insertFolder(userId: string, name: string): LibraryFolder {
+	const folder: LibraryFolder = {
+		id: uniqueSlug(slugify(name), folderIdTaken),
+		name,
+		ownerId: userId,
+		createdAt: new Date()
+	};
+	db.insert(libraryFolders).values(folder).run();
+	return folder;
+}
+
+export function createFolder(userId: string, rawName: string): FolderResult {
+	const name = cleanFolder(rawName);
+	if (!name) return { ok: false, reason: 'empty' };
+	if (isReserved(name)) return { ok: false, reason: 'reserved' };
+	// Against the union rather than the table: a label already in use by a
+	// visible doc is a folder you can see, and a second row of that name would
+	// draw it twice.
+	if (listFolders(userId).includes(name)) return { ok: false, reason: 'exists' };
+	return { ok: true, folder: insertFolder(userId, name) };
+}
+
+/**
+ * Rename a folder, and the docs filed under it.
+ *
+ * Only this user's docs move: someone else's shared doc under the same label
+ * sits on their shelf too, and renaming your folder is not permission to
+ * re-file it.
+ *
+ * Deliberately does not touch `updatedAt` on the docs it moves. The shelf and
+ * the digest are both ordered by it, and a rename that shoved every doc in a
+ * folder to the top of the list would read as a fortnight of edits nobody made.
+ */
+export function renameFolder(userId: string, from: string, rawName: string): FolderResult {
+	const row = folderRow(from, userId);
+	if (!row && !folderInUse(from, userId)) return { ok: false, reason: 'forbidden' };
+	const name = cleanFolder(rawName);
+	if (!name) return { ok: false, reason: 'empty' };
+	if (isReserved(name)) return { ok: false, reason: 'reserved' };
+	if (name !== from && listFolders(userId).includes(name)) return { ok: false, reason: 'exists' };
+	db.update(libraryDocs)
+		.set({ folder: name })
+		.where(and(eq(libraryDocs.folder, from), ownedBy(userId)))
+		.run();
+	if (row) {
+		db.update(libraryFolders).set({ name }).where(eq(libraryFolders.id, row.id)).run();
+		return { ok: true, folder: { ...row, name } };
+	}
+	// A folder that was only a label gets a row on first rename, the way
+	// setVisibility claims a legacy doc the first time somebody changes it —
+	// otherwise emptying it later would make the folder vanish mid-tidy. Not
+	// through createFolder, which would refuse: the docs already carry the name.
+	return { ok: true, folder: insertFolder(userId, name) };
+}
+
+/**
+ * Drop a folder. Its docs fall back to Unfiled rather than being deleted.
+ *
+ * The same answer `deleteDoc` gives its children: of the three options it is
+ * the only one that cannot lose a document to one click on the wrong row.
+ */
+export function deleteFolder(userId: string, name: string): boolean {
+	const row = folderRow(name, userId);
+	if (!row && !folderInUse(name, userId)) return false;
+	db.update(libraryDocs)
+		.set({ folder: '' })
+		.where(and(eq(libraryDocs.folder, name), ownedBy(userId)))
+		.run();
+	if (row) db.delete(libraryFolders).where(eq(libraryFolders.id, row.id)).run();
+	return true;
 }
 
 /** Crude markdown-stripped preview used in listings and the agent digest. */
@@ -71,6 +189,17 @@ export function visibleTo(userId: string): SQL {
 /** True when this user may change or delete the doc — owners and legacy only. */
 export function canEdit(doc: Pick<LibraryDoc, 'ownerId'>, userId: string): boolean {
 	return doc.ownerId === null || doc.ownerId === userId;
+}
+
+/**
+ * `canEdit` as a predicate, for the writes that act on a set of rows.
+ *
+ * A folder rename moves documents, so it needs the same answer in SQL that
+ * `canEdit` gives one row at a time — including the ownerless rows that
+ * predate ownership, which are everyone's to change.
+ */
+export function ownedBy(userId: string): SQL {
+	return or(eq(libraryDocs.ownerId, userId), isNull(libraryDocs.ownerId))!;
 }
 
 export function listDocs(userId: string): LibraryDoc[] {
@@ -140,12 +269,20 @@ export function canPlace(docId: string | null, parentId: string | null): PlaceRe
 	return { ok: false, reason: 'depth' };
 }
 
-/** Rewrite `rootId` across a subtree. Bounded by MAX_DEPTH, so it cannot spin. */
-function repointSubtree(id: string, rootId: string): void {
+/**
+ * Rewrite `rootId` and `folder` across a subtree. Bounded by MAX_DEPTH, so it
+ * cannot spin.
+ *
+ * The folder rides along because a subtree belongs to exactly one folder — the
+ * one its root is filed in. Without it, moving an epic to another folder left
+ * its sprint records claiming the old one, and deleting a root promoted its
+ * children into a folder heading that had nothing to do with them.
+ */
+function repointSubtree(id: string, rootId: string, folder: string): void {
 	let level = [id];
 	for (let depth = 0; depth < MAX_DEPTH && level.length; depth++) {
 		db.update(libraryDocs)
-			.set({ rootId })
+			.set({ rootId, folder })
 			.where(inArray(libraryDocs.id, level))
 			.run();
 		level = db
@@ -161,37 +298,51 @@ export type MoveResult =
 	| { ok: true; doc: LibraryDoc }
 	| { ok: false; reason: 'cycle' | 'depth' | 'no-parent' | 'forbidden' };
 
+/** Where a doc is being filed: inside another doc, or loose in a folder. */
+export type FilingDest = { parentId: string } | { folder: string };
+
 /**
- * Re-file a doc under a different parent, or at the top with null.
+ * Re-file a doc — under another doc, or as a root of a folder.
  *
  * Its own function rather than a `saveDoc` argument because moving through
  * `saveDoc` would mean handing it the whole body again to change one pointer —
  * and the body is on disk, so that is a read and a write of the file for a
- * column update.
+ * column update. Dragging a row does this once per drop, which is the case that
+ * makes the difference.
+ *
+ * There is no "top level" destination any more. Everything a person can drop a
+ * doc on is a folder or another doc, because the shelf has nothing else on it.
  */
-export function moveDoc(id: string, userId: string, parentId: string | null): MoveResult {
+export function fileDoc(id: string, userId: string, dest: FilingDest): MoveResult {
 	const doc = rowById(id);
 	if (!doc || !canEdit(doc, userId)) return { ok: false, reason: 'forbidden' };
-	if (parentId) {
+
+	let parentId: string | null = null;
+	let rootId = id;
+	let folder: string;
+	if ('parentId' in dest) {
 		// Filing under something you cannot see would put your doc in a tree whose
 		// shape you have no way to inspect.
 		const parent = db
 			.select()
 			.from(libraryDocs)
-			.where(and(eq(libraryDocs.id, parentId), visibleTo(userId)))
+			.where(and(eq(libraryDocs.id, dest.parentId), visibleTo(userId)))
 			.get();
 		if (!parent) return { ok: false, reason: 'no-parent' };
+		const placed = canPlace(id, dest.parentId);
+		if (!placed.ok) return placed;
+		parentId = dest.parentId;
+		rootId = rootOf(parent);
+		folder = parent.folder;
+	} else {
+		folder = cleanFolder(dest.folder);
 	}
-	const placed = canPlace(id, parentId);
-	if (!placed.ok) return placed;
 
-	const parent = parentId ? rowById(parentId) : null;
-	const rootId = parent ? rootOf(parent) : id;
 	db.update(libraryDocs)
-		.set({ parentId, rootId, updatedAt: new Date() })
+		.set({ parentId, rootId, folder, updatedAt: new Date() })
 		.where(eq(libraryDocs.id, id))
 		.run();
-	repointSubtree(id, rootId);
+	repointSubtree(id, rootId, folder);
 	return { ok: true, doc: rowById(id)! };
 }
 
@@ -212,6 +363,46 @@ export function docPath(id: string, userId: string): string[] {
 		cursor = row.parentId;
 	}
 	return path;
+}
+
+/**
+ * Each folder and how many visible documents are in it.
+ *
+ * One grouped read: this answers `library_tree` called with nothing, which is
+ * now the top of the shelf rather than a list of every root.
+ */
+export function listFolderCounts(userId: string): { name: string; count: number }[] {
+	const rows = db.all<{ folder: string; n: number }>(
+		sql`SELECT folder, COUNT(*) AS n FROM library_docs
+		    WHERE ${visibleTo(userId)} GROUP BY folder`
+	);
+	const counts = new Map(rows.filter((r) => r.folder).map((r) => [r.folder, r.n]));
+	for (const name of db
+		.select({ name: libraryFolders.name })
+		.from(libraryFolders)
+		.where(eq(libraryFolders.ownerId, userId))
+		.all()) {
+		if (!counts.has(name.name)) counts.set(name.name, 0);
+	}
+	const loose = rows.find((r) => !r.folder)?.n ?? 0;
+	return [
+		...[...counts.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) => ({ name, count })),
+		// Unfiled is drawn only when something is loose in it: it is the overflow,
+		// and an empty one is a line about nothing.
+		...(loose ? [{ name: UNFILED, count: loose }] : [])
+	];
+}
+
+/** The documents at the top of a folder — its roots, newest first. */
+export function listFolderRoots(folder: string, userId: string): LibraryDoc[] {
+	return db
+		.select()
+		.from(libraryDocs)
+		.where(
+			and(visibleTo(userId), isNull(libraryDocs.parentId), eq(libraryDocs.folder, folder))
+		)
+		.orderBy(desc(libraryDocs.updatedAt))
+		.all();
 }
 
 /** One node's children, newest first. Null lists the roots. */
@@ -243,7 +434,7 @@ export function subtreeCounts(userId: string): Map<string, number> {
 /**
  * Thrown by saveDoc, which returns a row rather than a result object.
  *
- * `moveDoc` answers with a result instead, because re-filing is a thing a person
+ * `fileDoc` answers with a result instead, because re-filing is a thing a person
  * does and a refusal is a message on a form. A bad parent reaching saveDoc is a
  * caller that built one, and its routes turn this into a 400.
  */
@@ -262,7 +453,7 @@ export function saveDoc(opts: {
 	ownerId: string;
 	/** New docs start personal; sharing is a deliberate act. */
 	visibility?: 'personal' | 'shared';
-	/** Cosmetic grouping. Omitted leaves an existing doc where it was filed. */
+	/** Which folder a root sits in. Ignored when parentId names a parent. */
 	folder?: string;
 	/** Where in the tree. Omitted leaves an existing doc where it sits. */
 	parentId?: string | null;
@@ -272,19 +463,14 @@ export function saveDoc(opts: {
 	const existing = opts.id
 		? db.select().from(libraryDocs).where(eq(libraryDocs.id, opts.id)).get()
 		: null;
-	const id = existing?.id ?? uniqueSlug(slugify(opts.title));
+	const id = existing?.id ?? uniqueSlug(slugify(opts.title), docIdTaken);
 	const snippet = makeSnippet(opts.body);
 
 	writeFileSync(join(libraryDir(), `${id}.md`), opts.body);
 
-	// An omitted folder means "leave it where it is", so that saving a doc from
-	// anywhere that doesn't know about folders cannot quietly unfile it.
-	const folder =
-		opts.folder === undefined ? (existing?.folder ?? '') : cleanFolder(opts.folder);
-
-	// Same rule as folder, and for the same reason: a save from somewhere with no
-	// notion of the tree — the memory job, a plain edit — must not lift a doc out
-	// of it.
+	// An omitted parent means "leave it where it sits", so that a save from
+	// somewhere with no notion of the tree — the memory job, a plain edit — does
+	// not lift a doc out of it.
 	const parentId = opts.parentId === undefined ? (existing?.parentId ?? null) : opts.parentId;
 	if (parentId && parentId !== existing?.parentId) {
 		const placed = canPlace(existing?.id ?? id, parentId);
@@ -293,6 +479,17 @@ export function saveDoc(opts: {
 	const parent = parentId ? rowById(parentId) : null;
 	// A root's rootId is its own id, never null — the digest groups on it.
 	const rootId = parent ? rootOf(parent) : id;
+
+	// The parent's folder wins over anything the caller asked for: a doc nested
+	// inside another is in that doc's folder by definition, and a subtree that
+	// straddles two headings is a tree with two homes on one shelf. Only a root
+	// carries a label of its own, and an omitted one leaves it where it was
+	// filed rather than quietly unfiling it.
+	const folder = parent
+		? parent.folder
+		: opts.folder === undefined
+			? (existing?.folder ?? '')
+			: cleanFolder(opts.folder);
 
 	const row: LibraryDoc = {
 		id,
@@ -322,8 +519,14 @@ export function saveDoc(opts: {
 			.where(eq(libraryDocs.id, id))
 			.run();
 		// Moving by save is legal, and its descendants have to come along — see
-		// moveDoc, which is the same write without the body round trip.
-		if (existing.parentId !== parentId || existing.rootId !== rootId) repointSubtree(id, rootId);
+		// fileDoc, which is the same write without the body round trip.
+		if (
+			existing.parentId !== parentId ||
+			existing.rootId !== rootId ||
+			existing.folder !== folder
+		) {
+			repointSubtree(id, rootId, folder);
+		}
 	} else {
 		db.insert(libraryDocs).values(row).run();
 	}
@@ -373,8 +576,9 @@ export function deleteDoc(id: string, userId: string): boolean {
 			.where(eq(libraryDocs.parentId, id))
 			.run();
 		// Only a deleted *root* changes which tree its children are in: promoted
-		// into a parent, they stay where they were.
-		if (!meta.parentId) for (const o of orphans) repointSubtree(o.id, o.id);
+		// into a parent, they stay where they were. Either way they keep the
+		// folder they were in, which is the one the deleted doc was filed under.
+		if (!meta.parentId) for (const o of orphans) repointSubtree(o.id, o.id, meta.folder);
 	}
 
 	db.delete(libraryDocs).where(eq(libraryDocs.id, id)).run();
@@ -444,9 +648,15 @@ export function ftsQuery(q: string, match: 'all' | 'any' = 'all'): string {
 		.join(match === 'any' ? ' OR ' : ' ');
 }
 
-function uniqueSlug(base: string): string {
+const docIdTaken = (id: string) =>
+	!!db.select().from(libraryDocs).where(eq(libraryDocs.id, id)).get();
+const folderIdTaken = (id: string) =>
+	!!db.select().from(libraryFolders).where(eq(libraryFolders.id, id)).get();
+
+/** `taken` rather than one hard-coded table: folders are slugged the same way. */
+function uniqueSlug(base: string, taken: (id: string) => boolean): string {
 	let candidate = base;
-	for (let i = 2; db.select().from(libraryDocs).where(eq(libraryDocs.id, candidate)).get(); i++) {
+	for (let i = 2; taken(candidate); i++) {
 		candidate = `${base}-${i}`;
 	}
 	return candidate;
@@ -465,15 +675,13 @@ function uniqueSlug(base: string): string {
  * the content properly, matching on title and body, and returns only the
  * matching fragments.
  */
-/** Below this, naming a tree's children beats counting them. */
-const LIST_CHILDREN_UPTO = 3;
-
+/** Agent-written docs are marked, wherever an agent reads a list of them. */
 const authored = (title: string, author: string) => `${title}${author === 'agent' ? ' [agent]' : ''}`;
 
 export function libraryDigest(userId: string, maxRoots = 40): string {
 	// The window is roots rather than documents, which is the whole point: a
 	// subtree costs one line whether it holds five documents or five hundred, so
-	// filing every task of an epic no longer evicts somebody's own notes from
+	// filing every task of a build no longer evicts somebody's own notes from
 	// the block that every turn in the app pays for.
 	const roots = db
 		.select({
@@ -487,49 +695,39 @@ export function libraryDigest(userId: string, maxRoots = 40): string {
 		.orderBy(desc(libraryDocs.updatedAt))
 		.limit(maxRoots)
 		.all();
-	if (!roots.length) return '(library is empty)';
+	// Folders with nothing in them, which the roots cannot name. Read straight
+	// off the table rather than through listFolders, which reads every visible
+	// document to build its union — too much for a block on the hot path.
+	const empty = db
+		.select({ name: libraryFolders.name })
+		.from(libraryFolders)
+		.where(eq(libraryFolders.ownerId, userId))
+		.all()
+		.map((r) => r.name);
+	if (!roots.length && !empty.length) return '(library is empty)';
 	const counts = subtreeCounts(userId);
 
-	// A root with nothing under it is a document, not a tree, so it groups by its
-	// folder label exactly as it did before there were trees. Without this every
-	// existing shelf — where each document is its own root — would go from a
-	// handful of folder lines to one line per document, which is the opposite of
-	// what this change is for.
-	const trees = roots.filter((r) => (counts.get(r.id) ?? 1) > 1);
-	const loose = roots.filter((r) => (counts.get(r.id) ?? 1) <= 1);
-
-	const small = trees.filter((t) => (counts.get(t.id) ?? 1) <= LIST_CHILDREN_UPTO + 1);
-	const childTitles = new Map<string, string[]>();
-	if (small.length) {
-		for (const c of db
-			.select({ parentId: libraryDocs.parentId, title: libraryDocs.title, author: libraryDocs.author })
-			.from(libraryDocs)
-			.where(and(visibleTo(userId), inArray(libraryDocs.parentId, small.map((t) => t.id))))
-			.all()) {
-			const key = c.parentId!;
-			childTitles.set(key, [...(childTitles.get(key) ?? []), authored(c.title, c.author)]);
-		}
-	}
-
-	const lines = trees.map((t) => {
-		const named = childTitles.get(t.id);
-		const under = (counts.get(t.id) ?? 1) - 1;
-		const body = named?.length
-			? named.join(' · ')
-			: `${under} document${under === 1 ? '' : 's'} beneath it`;
-		return `- ${authored(t.title, t.author)}: ${body}`;
-	});
-
+	/**
+	 * A folder, and what sits at the top of it — never what is nested inside
+	 * that.
+	 *
+	 * This used to name a small tree's children, which meant an agent reading
+	 * the index saw two shapes: folders, and documents that were somehow also
+	 * folders. It is one shape now, matching what a person sees on the shelf,
+	 * and a nested document costs nothing at all — which is the whole argument
+	 * for nesting rather than adding another line to every turn in the app.
+	 */
 	const byFolder = new Map<string, string[]>();
-	for (const d of loose) {
-		const key = d.folder || '';
-		byFolder.set(key, [...(byFolder.get(key) ?? []), authored(d.title, d.author)]);
+	for (const name of empty) byFolder.set(name, []);
+	for (const r of roots) {
+		const under = (counts.get(r.id) ?? 1) - 1;
+		const line = `${authored(r.title, r.author)}${under > 0 ? ` (${under} beneath)` : ''}`;
+		byFolder.set(r.folder, [...(byFolder.get(r.folder) ?? []), line]);
 	}
-	lines.push(
-		...[...byFolder.entries()]
-			.sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
-			.map(([folder, titles]) => `- ${folder || 'Unfiled'}: ${titles.join(' · ')}`)
-	);
+
+	const lines = [...byFolder.entries()]
+		.sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
+		.map(([folder, titles]) => `- ${folder || UNFILED}: ${titles.join(' · ') || '(empty)'}`);
 
 	if (roots.length === maxRoots) {
 		const total =
@@ -540,7 +738,7 @@ export function libraryDigest(userId: string, maxRoots = 40): string {
 		if (total > roots.length) lines.push(`…and ${total - roots.length} more.`);
 	}
 	lines.push(
-		'Use library_tree to open one, library_search to search their contents, library_read to read one.'
+		'Use library_tree to open a folder or a document, library_search to search their contents, library_read to read one.'
 	);
 	return lines.join('\n');
 }
