@@ -1212,16 +1212,29 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 
 	await page.locator('button:text-is("New build")').click();
 	await page.locator('form.new').waitFor();
-	// The brief is the one field with no sensible default, and the repository is
-	// the one the whole thing is pointed at; neither may be optional.
+	// The name is the one field with no sensible default; the repository is the
+	// one the whole thing is pointed at. Neither may be optional.
 	check(
-		'it asks for a name and a repository, and will not submit without them',
+		'it asks for a name, and will not submit without one',
 		await page.locator('form.new input[required]').count(),
-		2
+		1
+	);
+	// A dropdown, not a URL box: a build clones, branches and opens a pull
+	// request against whatever is named here, so "any address you like" was
+	// never the right question to ask.
+	check(
+		'the repository is chosen from the ones already added',
+		await page.locator('form.new select[required]').count(),
+		1
+	);
+	check(
+		'and says so when there is no GitHub connection to list',
+		await page.locator('form.new select option').first().textContent(),
+		'No GitHub connection'
 	);
 	check(
 		'the branch is filled in rather than left blank',
-		await page.locator('form.new input').nth(2).inputValue(),
+		await page.locator('form.new input').nth(1).inputValue(),
 		'main'
 	);
 	check(

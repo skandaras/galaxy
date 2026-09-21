@@ -9,8 +9,18 @@ import {
 	setEpicOverride,
 	setEpicState
 } from '$lib/server/forge';
+import { describeStep, nextStep } from '$lib/server/engine/forge-step';
+import { forgeSettings } from '$lib/server/settings';
 
-/** The whole tree, with the latest gate against each unit. */
+/**
+ * The whole tree, with the latest gate against each unit — and what happens
+ * next.
+ *
+ * `next` is the same pure `nextStep` the driver asks, put in words. The page
+ * polls this while a build is live, so this one read has to answer both "where
+ * has it got to" and "what is it about to do"; a button labelled *run one step
+ * now* answered neither.
+ */
 export const GET: RequestHandler = ({ locals, params }) => {
 	const user = requireUser(locals);
 	// Scoped in the SQL predicate: an epic that is not yours is one that does
@@ -18,11 +28,17 @@ export const GET: RequestHandler = ({ locals, params }) => {
 	const epic = getEpic(params.id, user.id);
 	if (!epic) error(404, 'Epic not found');
 
+	const sprints = listSprints(epic.id);
 	const tasks = listTasks(epic.id);
 	const latest = (id: string) => gateRunsFor(id, 1).find((r) => !r.baseline) ?? null;
+	const snap = { epic, sprints, tasks };
+	const step = nextStep(snap);
+	const cfg = forgeSettings();
 	return json({
 		epic,
-		sprints: listSprints(epic.id).map((sprint) => ({
+		driver: { enabled: cfg.enabled, stepsPerTick: cfg.stepsPerTick },
+		next: step ? { kind: step.kind, says: describeStep(step, snap) } : null,
+		sprints: sprints.map((sprint) => ({
 			...sprint,
 			gate: latest(sprint.id),
 			tasks: tasks

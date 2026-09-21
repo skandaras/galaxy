@@ -6,12 +6,24 @@ import { runCharter } from '$lib/server/engine/forge-charter';
 import { ensureEpicBoard } from '$lib/server/engine/forge-mirror';
 import { BudgetExceededError } from '$lib/server/engine/budget';
 import { EngineError } from '$lib/server/engine/engine';
+import { forgeSettings } from '$lib/server/settings';
 
-/** Every epic the caller owns, with enough counts to render a list. */
+/**
+ * Every epic the caller owns, with enough counts to render a list — and whether
+ * the driver is switched on at all.
+ *
+ * The driver's two dials travel with the list because without them a build that
+ * will never move looks exactly like one that is about to. `running` with Forge
+ * disabled is the most confusing state the page can be in, and it is the page
+ * that has to say so. Two fields, not the settings row: somebody looking at
+ * their own build is not thereby an admin.
+ */
 export const GET: RequestHandler = ({ locals }) => {
 	const user = requireUser(locals);
-	return json(
-		listEpics(user.id).map((epic) => {
+	const cfg = forgeSettings();
+	return json({
+		driver: { enabled: cfg.enabled, stepsPerTick: cfg.stepsPerTick },
+		epics: listEpics(user.id).map((epic) => {
 			const tasks = listTasks(epic.id);
 			return {
 				...epic,
@@ -21,7 +33,7 @@ export const GET: RequestHandler = ({ locals }) => {
 				blocked: tasks.filter((t) => t.state === 'blocked').length
 			};
 		})
-	);
+	});
 };
 
 /**

@@ -192,6 +192,19 @@ export function addSprint(opts: {
 	return row;
 }
 
+/**
+ * Throw away an epic's outline so a re-planned charter can write a fresh one.
+ *
+ * Only ever reachable before approval, where there are no tasks and nothing has
+ * run — the charter is the one thing that can be asked for twice. After
+ * approval the outline is what the driver is working through, and rewriting it
+ * would be changing the plan underneath a build already following it.
+ */
+export function clearOutline(epicId: string): void {
+	db.delete(forgeTasks).where(eq(forgeTasks.epicId, epicId)).run();
+	db.delete(forgeSprints).where(eq(forgeSprints.epicId, epicId)).run();
+}
+
 export function listSprints(epicId: string): ForgeSprint[] {
 	return db
 		.select()
@@ -284,6 +297,54 @@ export function setTaskState(
 		})
 		.where(eq(forgeTasks.id, id))
 		.run();
+}
+
+/** One task, scoped through its epic's owner. Never reachable across accounts. */
+export function getTask(id: string, userId: string): ForgeTask | null {
+	const row = db
+		.select({ task: forgeTasks })
+		.from(forgeTasks)
+		.innerJoin(forgeEpics, eq(forgeEpics.id, forgeTasks.epicId))
+		.where(and(eq(forgeTasks.id, id), eq(forgeEpics.ownerId, userId)))
+		.get();
+	return row?.task ?? null;
+}
+
+export type AmendResult =
+	| { ok: true; task: ForgeTask }
+	| { ok: false; reason: 'not-found' | 'not-blocked' | 'empty' };
+
+/**
+ * Give a parked task a different contract, and put it back in the queue.
+ *
+ * The one place a task's frozen checks may change, and only for a task that has
+ * already stopped. The red-green rule exists to stop a *run* writing itself a
+ * check it cannot fail; a person editing a task that ran out of attempts is the
+ * case that rule was never about, and without this the only way out of a bad
+ * check is to abandon the build. `couldNotRun` still applies at the route — a
+ * person cannot freeze a sentence either.
+ *
+ * Attempts go back to nought deliberately. What parked was a task judged by a
+ * different command, so counting its failures against this one would park the
+ * new contract before it had been tried.
+ */
+export function amendTask(
+	id: string,
+	userId: string,
+	opts: { checks?: ForgeCheck[]; noCheckReason?: string }
+): AmendResult {
+	const task = getTask(id, userId);
+	if (!task) return { ok: false, reason: 'not-found' };
+	if (task.state !== 'blocked') return { ok: false, reason: 'not-blocked' };
+	const checks = opts.checks ?? [];
+	const noCheckReason = opts.noCheckReason?.trim() ?? '';
+	if (!checks.length && !noCheckReason) return { ok: false, reason: 'empty' };
+
+	db.update(forgeTasks)
+		.set({ checks, noCheckReason, attempts: 0, state: 'planned', finishedAt: null })
+		.where(eq(forgeTasks.id, id))
+		.run();
+	return { ok: true, task: getTask(id, userId) as ForgeTask };
 }
 
 /** Count an attempt against a task. Parking is the caller's decision. */

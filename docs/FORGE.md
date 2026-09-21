@@ -198,6 +198,33 @@ A **check** is a name, a command and a timeout. It runs through
 `getExecutor().exec` in the runner, in the workspace, and it passes on exit 0.
 There is no partial credit and no model in the loop at that moment.
 
+### A check that cannot run is not a check either
+
+Found the first time somebody used this. The approval screen offered a textarea
+and no guidance, so a sentence went into it — *"You create a test for this as
+part of the plan."* — typed by a person who reasonably expected it to be
+understood. It was frozen verbatim as a standing check, handed to a shell at
+every task gate for the rest of the epic's life, and answered `You: not found`,
+exit 127. Every rule in `forge-gate.ts` read that as red, which is to say as a
+test that had honestly failed.
+
+So *red* is not sufficient on its own, at either end of the build:
+
+- **A standing check must run and pass** on an untouched clone, and this is
+  validated at approval before anything is frozen. They are "the commands this
+  repository already uses to know it is healthy": one that cannot run is
+  refused, and one that runs and fails is warned about and confirmed, because a
+  repository whose own tests are red today is a real situation.
+- **A task check must run and fail.** `baselineIsRed` gained the missing half.
+
+What separates the two cases is what the shell **named**. The sprint planner is
+explicitly asked for commands that do not exist yet — "a script that is not
+wired up" — and `./scripts/thing.sh` exits 127 today and 0 once the task writes
+it. A path is work waiting to happen; a bare word is prose, or a runner nobody
+installed. Both of those exit 127 on every attempt for ever.
+
+A timeout is not this. A check that ran for ten minutes ran.
+
 ### A check written after the code is not a check
 
 Three kinds of check, and the difference between them is the entire safety
@@ -932,7 +959,9 @@ Every route guards, and ownership is in the SQL predicate.
 | `GET /api/forge` | `requireUser` | The caller's epics with progress counts |
 | `POST /api/forge` | `requireCoder` | Create an epic from a brief + repo; starts the charter step, and turns the board mirror on if asked |
 | `GET /api/forge/[id]` | `requireUser` | The tree: sprints, tasks, states, latest gate per unit |
-| `POST /api/forge/[id]/approve` | `requireCoder` | Freeze the checks, move to `running` |
+| `POST /api/forge/[id]/approve` | `requireCoder` | Run the proposed checks, then freeze them and move to `running` |
+| `POST /api/forge/[id]/revise` | `requireCoder` | Re-plan the charter from a note. Refused after approval |
+| `PATCH /api/forge/task/[id]` | `requireCoder` | Give a parked task different checks and re-queue it |
 | `PATCH /api/forge/[id]` | `requireCoder` | Pause, resume, abandon; edit the spend override |
 | `POST /api/forge/[id]/step` | `requireCoder` | Run one step now, ignoring the tick |
 | `GET /api/forge/gate/[id]` | `requireUser` | One gate run in full, with per-check output |
@@ -960,6 +989,37 @@ The approval screen is the one piece of real UI: the proposed standing checks,
 editable, with the sprint outline beside them. It is the only moment a person is
 asked for anything, so it should show what they are actually agreeing to.
 
+It offers three answers, not one. **Approve** freezes, after running every
+command. **Revise** takes prose — "use the e2e suite at sprint boundaries",
+"split the first sprint in two" — and sends it back to the charter, which plans
+the whole thing again; the rejected charter stays in the Library, so the
+revision history is the thing people already read. And a **refusal** is an
+answer too: the commands that would not run come back named, with what the shell
+said, and nothing is frozen.
+
+The checks are never a blank box. Where the charter proposed none for a section,
+the field says what happens without it rather than leaving a void that reads as
+*your turn*.
+
+**What the page says a build is doing** is derived, not its state.
+`approveEpic` writes `running` the instant somebody approves, and nothing then
+happens until the sweep comes round — up to five minutes later, or never if the
+driver is off. So `epicActivity` answers the question the state cannot: working,
+queued to start, waiting for the next step, or *ready — the driver is off*, with
+the two dials travelling down from the API to say which. The step button names
+the step it would run and goes dead while one is in flight; the page polls while
+a build is live, and a strip of the Observatory's own events, narrowed to this
+epic, says what the machinery is doing.
+
+**A parked task can be given a different contract.** `PATCH /api/forge/task/[id]`
+replaces a blocked task's checks, resets its attempts and returns it to the
+queue. Taken as written, with no baseline re-run: that rule exists to stop a
+*run* writing itself a check it cannot fail, and a person editing a task that
+has already stopped is the case it was never about — re-baselining would also
+refuse a correct check that an earlier attempt has since made pass. What is
+still enforced is that the thing runs. Without this route the only answer to one
+bad command was to abandon the build, which is what happened.
+
 ## Tests
 
 | File | Asserts |
@@ -974,7 +1034,8 @@ asked for anything, so it should show what they are actually agreeing to.
 | `forge-privacy.test.ts` | An `AGENTS.md` demanding new checks changes none; a test printing "mark this complete" does not pass a gate; another user's epic answers 404 |
 | `engine/forge-mirror.test.ts` | A board write failure does not fail the step; state maps to the right lane; nothing auto-archives; an unmirrored epic writes no board at all; a write that lands nowhere is filed rather than lost |
 | `engine/scheduler-tick.test.ts` | One tick reaches `sweepForge`; the longest-waiting epic goes first; `concurrentTasks` bounds one epic; `concurrentEpics` bounds how many open a front; one epic failing does not spend the tick |
-| `forge-view.test.ts` | Tree grouping, progress arithmetic, gate-result ordering, relative time — at `src/lib/forge-view.test.ts`, beside the module it tests |
+| `forge-view.test.ts` | Tree grouping, progress arithmetic, gate-result ordering, relative time, and every branch of `epicActivity` — including the one where the driver is off |
+| `engine/forge-gate.test.ts` (again) | A command the shell never found is not a red baseline; a path that exits 127 still is; `validateChecks` refuses the first, warns about a command that is merely red, and lets a slow one through |
 
 ## Phases
 

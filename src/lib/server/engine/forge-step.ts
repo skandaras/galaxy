@@ -78,3 +78,32 @@ export function nextStep(snap: ForgeSnapshot): ForgeStep | null {
 
 	return { kind: 'close-sprint', sprintId: sprint.id };
 }
+
+/**
+ * What a step would do, in words.
+ *
+ * So a button can say what it is about to do rather than "run one step now" —
+ * which told somebody staring at a build that had not moved for five minutes
+ * precisely nothing, and looked pressable while a task was already running.
+ */
+export function describeStep(step: ForgeStep | null, snap: ForgeSnapshot): string {
+	if (!step) return '';
+	const sprint = (id: string) => snap.sprints.find((s) => s.id === id);
+	const task = (id: string) => snap.tasks.find((t) => t.id === id);
+	const named = (title: string | undefined, fallback: string) =>
+		title ? `“${title}”` : fallback;
+
+	switch (step.kind) {
+		case 'plan-sprint':
+			return `plan ${named(sprint(step.sprintId)?.title, 'the next sprint')}`;
+		case 'run-task':
+			return `start ${named(task(step.taskId)?.title, 'the next task')}`;
+		case 'gate-task':
+			return `check ${named(task(step.taskId)?.title, 'the task that just finished')}`;
+		case 'gate-sprint':
+		case 'close-sprint':
+			return `close ${named(sprint(step.sprintId)?.title, 'the current sprint')}`;
+		case 'close-epic':
+			return 'run the final gate and open the pull request';
+	}
+}

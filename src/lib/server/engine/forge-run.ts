@@ -17,7 +17,7 @@ import {
 } from '$lib/server/forge';
 import { saveDoc } from '$lib/server/library';
 import { notify } from '$lib/server/notifications';
-import { DEFAULT_FORGE, getSetting, type ForgeSettings } from '$lib/server/settings';
+import { forgeSettings as settings } from '$lib/server/settings';
 import { emitEvent } from './events';
 import { nextStep, type ForgeStep } from './forge-step';
 import { gateReport, runGate } from './forge-gate';
@@ -50,11 +50,6 @@ export interface StepOutcome {
 	started?: { chatId: string; jobId: string };
 	detail?: Record<string, unknown>;
 }
-
-const settings = (): ForgeSettings => ({
-	...DEFAULT_FORGE,
-	...getSetting<Partial<ForgeSettings>>('forge', {})
-});
 
 export async function runStep(epic: ForgeEpic, userId: string): Promise<StepOutcome> {
 	const snap = snapshot(epic.id, userId);

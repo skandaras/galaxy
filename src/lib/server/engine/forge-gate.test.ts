@@ -3,9 +3,12 @@ import type { ForgeCheck, ForgeCheckResult } from '$lib/server/db/schema';
 import {
 	baselineIsRed,
 	boundOutput,
+	couldNotRun,
 	gateReport,
 	runGate,
+	unrunnableChecks,
 	vacuousChecks,
+	validateChecks,
 	type Exec
 } from './forge-gate';
 
@@ -180,5 +183,131 @@ describe('gateReport', () => {
 
 	it('says nothing when everything passed', () => {
 		expect(gateReport([{ ...failing, exitCode: 0 }])).toBe('');
+	});
+});
+
+/** A result of the shape runGate produces, without going through it. */
+const resultOf = (
+	command: string,
+	exitCode: number,
+	output = '',
+	timedOut = false
+): ForgeCheckResult => ({
+	name: command,
+	command,
+	exitCode,
+	durationMs: 10,
+	output,
+	timedOut
+});
+
+describe('a check that never ran', () => {
+	it('is not a red check, however non-zero it exits', () => {
+		// The sentence somebody typed into the checks box. The shell answered
+		// `You: not found` and exited 127, every rule here read that as red, and
+		// it was frozen as a standing check that failed every gate in the build.
+		const prose = resultOf(
+			'You create a test for this as part of the plan.',
+			127,
+			'sh: 1: You: not found'
+		);
+		expect(couldNotRun(prose)).toBe(true);
+		expect(baselineIsRed([prose])).toBe(false);
+	});
+
+	it('does not catch a script the task has yet to write', () => {
+		// Which the sprint planner is explicitly asked for: "a script that is not
+		// wired up" exits 127 today and 0 once the work lands. The test is what
+		// the shell named — a path is work waiting, a bare word is not.
+		const script = resultOf(
+			'./scripts/check-new-thing.sh',
+			127,
+			'sh: 1: ./scripts/check-new-thing.sh: not found'
+		);
+		expect(couldNotRun(script)).toBe(false);
+		expect(baselineIsRed([script])).toBe(true);
+	});
+
+	it('catches a runner nobody installed, which never passes either', () => {
+		const missing = resultOf('pytest tests/new_thing.py', 127, 'sh: 1: pytest: not found');
+		expect(couldNotRun(missing)).toBe(true);
+	});
+
+	it('judges by the command when the message did not survive bounding', () => {
+		expect(couldNotRun(resultOf('Rename the heading', 127, '…[dropped]…'))).toBe(true);
+		expect(couldNotRun(resultOf('./bin/thing', 127, '…[dropped]…'))).toBe(false);
+	});
+
+	it('does not mistake a slow check for an absent one', () => {
+		// A suite that ran for ten minutes ran. Refusing it would refuse exactly
+		// the checks worth having.
+		expect(couldNotRun(resultOf('npm test', 127, 'timed out', true))).toBe(false);
+	});
+
+	it('is told apart from a check that passed, so a refusal can say which', () => {
+		const results = [
+			resultOf('true', 0),
+			resultOf('Do the thing.', 127, 'sh: 1: Do: not found'),
+			resultOf('npm test', 1, 'AssertionError')
+		];
+		expect(vacuousChecks(results)).toEqual(['true']);
+		expect(unrunnableChecks(results)).toEqual(['Do the thing.']);
+	});
+
+	it('spoils a baseline even when every other check is honestly red', () => {
+		const results = [
+			resultOf('npm test', 1, 'AssertionError'),
+			resultOf('Write a test for this.', 127, 'sh: 1: Write: not found')
+		];
+		expect(baselineIsRed(results)).toBe(false);
+	});
+});
+
+describe('validateChecks', () => {
+	it('refuses a sentence and says what the shell made of it', async () => {
+		const v = await validateChecks({
+			checks: [check('prose', 'You create a test for this as part of the plan.')],
+			workspaceRel: 'workspaces/x',
+			exec: execWith({
+				'You create a test for this as part of the plan.': {
+					code: 127,
+					stderr: 'sh: 1: You: not found'
+				}
+			})
+		});
+		expect(v.refused.map((r) => r.name)).toEqual(['prose']);
+		expect(v.refused[0].said).toContain('not found');
+		expect(v.red).toEqual([]);
+	});
+
+	it('warns about a real command that is red, rather than refusing it', async () => {
+		// A repository whose own tests are red today is a real situation, and the
+		// person approving may know exactly why. Refusing would be us deciding.
+		const v = await validateChecks({
+			checks: [check('test', 'npm test')],
+			workspaceRel: 'workspaces/x',
+			exec: execWith({ 'npm test': { code: 1, stdout: '2 failing' } })
+		});
+		expect(v.refused).toEqual([]);
+		expect(v.red.map((r) => r.name)).toEqual(['test']);
+	});
+
+	it('says nothing at all when the repository is healthy by its own commands', async () => {
+		const v = await validateChecks({
+			checks: [check('lint', 'npm run lint'), check('test', 'npm test')],
+			workspaceRel: 'workspaces/x',
+			exec: execWith({ 'npm run lint': { code: 0 }, 'npm test': { code: 0 } })
+		});
+		expect(v).toEqual({ refused: [], red: [] });
+	});
+
+	it('lets a command that outran the bound through — slow is not absent', async () => {
+		const v = await validateChecks({
+			checks: [check('suite', 'npm test')],
+			workspaceRel: 'workspaces/x',
+			exec: execWith({ 'npm test': new Error('Command timed out after 90000ms') })
+		});
+		expect(v.refused).toEqual([]);
+		expect(v.red.map((r) => r.name)).toEqual(['suite']);
 	});
 });
