@@ -156,6 +156,71 @@ export function ago(ts: number | string | null | undefined, now = Date.now()): s
 	return hrs < 24 ? `${hrs}h ago` : `${Math.round(hrs / 24)}d ago`;
 }
 
+export interface Driver {
+	enabled: boolean;
+	stepsPerTick: number;
+}
+
+export interface Activity {
+	label: string;
+	tone: Tone;
+	/** One line under the label, where the answer is not simply the label. */
+	detail: string;
+}
+
+/**
+ * What a build is actually doing, which is not the same as its state.
+ *
+ * `approveEpic` writes `running` the instant somebody approves, and then
+ * nothing happens until the sweep comes round — up to five minutes later, or
+ * never if Forge is switched off. So the first real build sat reading "running"
+ * while doing nothing at all, and the only way to find out was to press the
+ * step button and watch the Observatory.
+ *
+ * A state is what the driver reads; this is what is true right now, and the two
+ * genuinely differ. Deriving it rather than adding an epic state keeps one
+ * writer for the rows the driver depends on — and an extra state would need
+ * every `state !== 'running'` test in `nextStep` revisiting.
+ */
+export function epicActivity(
+	epic: { state: ForgeEpicState; stateReason: string; lastStepAt?: number | string | null },
+	sprints: SprintView[],
+	driver?: Driver
+): Activity {
+	if (epic.state !== 'running') {
+		return { label: say(epic.state), tone: epicTone(epic.state), detail: epic.stateReason };
+	}
+
+	const inFlight =
+		sprints.some((s) => s.state === 'planning' || s.state === 'gating') ||
+		sprints.some((s) => s.tasks.some((t) => t.state === 'running' || t.state === 'gating'));
+	if (inFlight) return { label: 'working', tone: 'good', detail: '' };
+
+	if (driver && (!driver.enabled || driver.stepsPerTick < 1)) {
+		return {
+			label: 'ready — the driver is off',
+			tone: 'warn',
+			detail: driver.enabled
+				? 'Steps per tick is 0, so nothing starts on its own. Run a step by hand, or raise it in Admin → Forge.'
+				: 'Forge is switched off, so nothing starts on its own. Run a step by hand, or switch it on in Admin → Forge.'
+		};
+	}
+
+	if (!epic.lastStepAt) {
+		return { label: 'queued to start', tone: 'idle', detail: 'Waiting for the driver to pick it up.' };
+	}
+	return { label: 'waiting for the next step', tone: 'idle', detail: '' };
+}
+
+/** "3 of 12 · 25%", or what to say instead before there is anything to count. */
+export function progressLine(p: Progress): string {
+	if (!p.total) return 'no tasks planned yet';
+	const parts = [`${p.done} of ${p.total} tasks · ${p.percent}%`];
+	if (p.blocked) parts.push(`${p.blocked} stuck`);
+	if (p.running) parts.push(`${p.running} working`);
+	return parts.join(' · ');
+}
+
 /**
  * Whether an epic is waiting on a person rather than on the driver.
  *

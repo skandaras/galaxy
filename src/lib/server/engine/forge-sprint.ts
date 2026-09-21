@@ -10,7 +10,13 @@ import { extractJson } from './json';
 import { forgeSystemPrompt, runHeadless, withWorkspace } from './forge-agent';
 import { forgeReadTools, forgeTreeText, readTasks, type TaskProposal } from './tools/forge';
 import { readOnlyCodingTools } from './coding/tools';
-import { baselineIsRed, runGate, vacuousChecks, DEFAULT_CHECK_TIMEOUT_MS } from './forge-gate';
+import {
+	baselineIsRed,
+	runGate,
+	unrunnableChecks,
+	vacuousChecks,
+	DEFAULT_CHECK_TIMEOUT_MS
+} from './forge-gate';
 
 /**
  * Turning one sprint of a charter into tasks, and proving their checks can fail.
@@ -83,20 +89,34 @@ export async function runSprintPlan(
 			let baselines = await baselineAll(proposals, ws.workspaceRel);
 			const failedFirst = baselines.filter((b) => b.vacuous).length;
 
-			// One retry round for every vacuous check at once, rather than one call
+			// One retry round for every refused check at once, rather than one call
 			// per task: a second chance is worth having and a third is a planner
 			// that has not understood the rule.
 			if (failedFirst) {
+				const passed = baselines.filter((b) => b.passing.length);
+				const absent = baselines.filter((b) => b.unrunnable.length);
 				const retry = parse(
 					(
 						await ask(
 							[
 								'',
-								'These checks were run against the repository as it stands and they PASSED, which means they do not describe any work:',
-								...baselines
-									.filter((b) => b.vacuous)
-									.map((b) => `- ${b.proposal.title}: ${b.passing.join(', ')}`),
-								'',
+								...(passed.length
+									? [
+											'These checks were run against the repository as it stands and they PASSED, which means they do not describe any work:',
+											...passed.map((b) => `- ${b.proposal.title}: ${b.passing.join(', ')}`),
+											''
+										]
+									: []),
+								// Named separately, because "it passed" and "the shell could
+								// not find it" ask for opposite corrections and a planner told
+								// the wrong one will make the wrong change.
+								...(absent.length
+									? [
+											'These could not be run at all — the shell found no such command. A check is a command, never an instruction addressed to a person:',
+											...absent.map((b) => `- ${b.proposal.title}: ${b.unrunnable.join(', ')}`),
+											''
+										]
+									: []),
 								'Propose the whole sprint again. For those tasks give a command that fails today — a test file that does not exist, a script that is not wired up, a build that currently breaks. Where the work genuinely has no such command, set noCheckReason and leave checks empty.'
 							].join('\n')
 						)
@@ -117,9 +137,11 @@ export async function runSprintPlan(
 				const reason = keep.length
 					? ''
 					: b.proposal.noCheckReason ||
-						(b.vacuous
-							? `the planner could not express a check that fails first (it proposed: ${b.passing.join(', ')})`
-							: 'no check was proposed');
+						(b.unrunnable.length
+							? `nothing could run the check it proposed (${b.unrunnable.join(', ')})`
+							: b.vacuous
+								? `the planner could not express a check that fails first (it proposed: ${b.passing.join(', ')})`
+								: 'no check was proposed');
 				if (!keep.length) uncheckable += 1;
 				const task = openTask({
 					epicId: epic.id,
@@ -196,6 +218,8 @@ interface Baseline {
 	proposal: TaskProposal;
 	/** Checks that passed before any work — the ones that make it vacuous. */
 	passing: string[];
+	/** Checks nothing could run, which are red for ever and prove nothing. */
+	unrunnable: string[];
 	vacuous: boolean;
 	results: Awaited<ReturnType<typeof runGate>>['results'];
 }
@@ -204,7 +228,7 @@ async function baselineAll(proposals: TaskProposal[], workspaceRel: string): Pro
 	const out: Baseline[] = [];
 	for (const proposal of proposals) {
 		if (!proposal.checks.length) {
-			out.push({ proposal, passing: [], vacuous: false, results: [] });
+			out.push({ proposal, passing: [], unrunnable: [], vacuous: false, results: [] });
 			continue;
 		}
 		const checks = proposal.checks.map((c) => ({ ...c, timeoutMs: DEFAULT_CHECK_TIMEOUT_MS }));
@@ -212,6 +236,7 @@ async function baselineAll(proposals: TaskProposal[], workspaceRel: string): Pro
 		out.push({
 			proposal: { ...proposal, checks },
 			passing: vacuousChecks(results),
+			unrunnable: unrunnableChecks(results),
 			vacuous: !baselineIsRed(results),
 			results
 		});

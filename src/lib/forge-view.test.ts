@@ -4,10 +4,12 @@ import {
 	ago,
 	checksInReadingOrder,
 	duration,
+	epicActivity,
 	epicProgress,
 	epicTone,
 	gateSummary,
 	progress,
+	progressLine,
 	say,
 	sprintsInOrder,
 	taskTone,
@@ -229,5 +231,106 @@ describe('how a state is said out loud', () => {
 		expect(epicTone('paused')).toBe('idle');
 		expect(taskTone('blocked')).toBe('warn');
 		expect(taskTone('planned')).toBe('idle');
+	});
+});
+
+const sprintOf = (state: SprintView['state'], tasks: TaskView[] = []): SprintView => ({
+	id: 's1',
+	title: 'One',
+	goal: '',
+	state,
+	position: 0,
+	tasks
+});
+
+describe('what a build is actually doing', () => {
+	const live = { state: 'running' as const, stateReason: '', lastStepAt: Date.now() };
+	const on = { enabled: true, stepsPerTick: 1 };
+
+	it('says working only when something really is in flight', () => {
+		expect(epicActivity(live, [sprintOf('running', [task('a', 'running')])], on).label).toBe(
+			'working'
+		);
+		expect(epicActivity(live, [sprintOf('planning')], on).label).toBe('working');
+		expect(epicActivity(live, [sprintOf('running', [task('a', 'gating')])], on).label).toBe(
+			'working'
+		);
+	});
+
+	it('does not say running when nothing is going to run', () => {
+		// The report this exists for: approve writes `running` at once, and with
+		// the driver off it then sat there for ever saying so.
+		const off = epicActivity(live, [sprintOf('running', [task('a', 'planned')])], {
+			enabled: false,
+			stepsPerTick: 1
+		});
+		expect(off.label).toBe('ready — the driver is off');
+		expect(off.tone).toBe('warn');
+		expect(off.detail).toContain('Admin → Forge');
+	});
+
+	it('tells a paused driver apart from a switched-off one', () => {
+		const paused = epicActivity(live, [sprintOf('running')], { enabled: true, stepsPerTick: 0 });
+		expect(paused.label).toBe('ready — the driver is off');
+		expect(paused.detail).toContain('Steps per tick is 0');
+	});
+
+	it('says queued between approval and the first step', () => {
+		// The five minutes that read as "running" and were not.
+		const fresh = epicActivity(
+			{ state: 'running', stateReason: '', lastStepAt: null },
+			[sprintOf('outlined')],
+			on
+		);
+		expect(fresh.label).toBe('queued to start');
+		expect(fresh.tone).toBe('idle');
+	});
+
+	it('says waiting once it has stepped before', () => {
+		expect(epicActivity(live, [sprintOf('running', [task('a', 'planned')])], on).label).toBe(
+			'waiting for the next step'
+		);
+	});
+
+	it('leaves every other state to say itself, with its reason', () => {
+		const blocked = epicActivity(
+			{ state: 'blocked', stateReason: 'sprint "One" cannot pass its gate', lastStepAt: 1 },
+			[],
+			on
+		);
+		expect(blocked.label).toBe('blocked');
+		expect(blocked.tone).toBe('warn');
+		expect(blocked.detail).toContain('cannot pass its gate');
+
+		expect(epicActivity({ state: 'awaiting-approval', stateReason: '' }, [], on).label).toBe(
+			'waiting for you'
+		);
+	});
+
+	it('works with no driver information at all', () => {
+		// The list view has it; a caller that does not must not get a wrong answer.
+		expect(epicActivity(live, [sprintOf('running', [task('a', 'running')])]).label).toBe('working');
+	});
+});
+
+describe('the progress line', () => {
+	it('counts, with a percentage', () => {
+		expect(progressLine(progress([task('a', 'done'), task('b', 'planned')]))).toBe(
+			'1 of 2 tasks · 50%'
+		);
+	});
+
+	it('names what is stuck and what is moving', () => {
+		const line = progressLine(
+			progress([task('a', 'done'), task('b', 'blocked'), task('c', 'running')])
+		);
+		expect(line).toContain('1 stuck');
+		expect(line).toContain('1 working');
+	});
+
+	it('says something rather than 0% before anything is planned', () => {
+		// Which is what the first screenshot showed: a bar at nought against a
+		// track the same colour as the rule above it, reading as a divider.
+		expect(progressLine(progress([]))).toBe('no tasks planned yet');
 	});
 });

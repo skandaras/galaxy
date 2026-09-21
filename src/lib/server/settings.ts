@@ -468,6 +468,18 @@ export const DEFAULT_FORGE: ForgeSettings = {
 };
 
 /**
+ * Forge's settings, with every default filled in.
+ *
+ * A merge rather than `getSetting('forge', DEFAULT_FORGE)`: a stored row
+ * written before a field existed would otherwise hand back an object missing
+ * it, and the fields here decide how much an unattended agent may spend.
+ */
+export const forgeSettings = (): ForgeSettings => ({
+	...DEFAULT_FORGE,
+	...getSetting<Partial<ForgeSettings>>('forge', {})
+});
+
+/**
  * Clamped on the way out as well as in: the admin form's min/max do not survive
  * a raw API call, and these numbers decide how much an unattended agent may
  * spend.

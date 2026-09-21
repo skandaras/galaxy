@@ -5,11 +5,11 @@ import { cortexChangeLog, events, jobs, usageLog, users, uxIdeas } from '$lib/se
 import {
 	ALIGNMENT_ENABLED_KEY,
 	DEFAULT_ALIGNMENT,
-	DEFAULT_FORGE,
 	DEFAULT_MEMORY,
 	DEFAULT_RETENTION,
 	DEFAULT_SKILL_OPTIMISER,
 	DEFAULT_UX_AUDIT,
+	forgeSettings,
 	getSetting,
 	setSetting,
 	type AlignmentSettings,
@@ -314,10 +314,7 @@ async function sweepSkillOptimiser(): Promise<void> {
  * Exported for its tests, as `prune` and `runSweep` are.
  */
 export async function sweepForge(): Promise<void> {
-	const cfg: ForgeSettings = {
-		...DEFAULT_FORGE,
-		...getSetting<Partial<ForgeSettings>>('forge', {})
-	};
+	const cfg: ForgeSettings = forgeSettings();
 	// 0 pauses everything, and because it is a settings row rather than a flag in
 	// a process the pause survives a restart — which is the only kind of pause
 	// worth having for something that runs for days.

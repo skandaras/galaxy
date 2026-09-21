@@ -435,8 +435,24 @@ check "the epic waits for its checks to be confirmed" \
   "$(api $B/api/forge/$EPIC | jqn .epic.state)" 'awaiting-approval'
 check "nothing is frozen before approval" "$(api $B/api/forge/$EPIC | jqn '.epic.standingChecks')" 'null'
 
+# A sentence in the checks box. This is what a real first build was approved
+# with, and it was frozen verbatim: the shell answered `You: not found`, exit
+# 127, and every task gate in that epic failed on it for ever. Freezing is
+# permanent, so the commands are run before any of it happens.
+# curl without -f here on purpose: the refusal is a 422, and the body is the
+# whole point of it.
+PROSE=$(curl -s -X POST -H 'content-type: application/json' \
+  -d '{"standingChecks":[{"name":"plan","command":"You create a test for this as part of the plan."}]}' \
+  $B/api/forge/$EPIC/approve)
+check "a sentence is refused rather than frozen" "$PROSE" '"refused"'
+check "and the refusal quotes what the shell made of it" "$PROSE" 'not found'
+check "so nothing was frozen by it" "$(api $B/api/forge/$EPIC | jqn '.epic.standingChecks')" 'null'
+check "and the epic is still waiting" "$(api $B/api/forge/$EPIC | jqn .epic.state)" 'awaiting-approval'
+
 api -X POST $B/api/forge/$EPIC/approve -d '{"standingChecks":[{"name":"ok","command":"true"}]}' > /dev/null
 check "approving freezes the checks and starts it" "$(api $B/api/forge/$EPIC | jqn .epic.state)" 'running'
+check "and the driver says whether it is switched on" "$(api $B/api/forge/$EPIC)" '"driver"'
+check "and what it would do next" "$(api $B/api/forge/$EPIC | jqn .next.kind)" 'plan-sprint'
 check "a second approval cannot change them" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
      -d '{"standingChecks":[{"name":"ok","command":"true"}]}' $B/api/forge/$EPIC/approve)" "409"

@@ -3,6 +3,7 @@ import { db, runMigrations } from '$lib/server/db';
 import { forgeEpics, forgeGateRuns, forgeSprints, forgeTasks, usageLog } from '$lib/server/db/schema';
 import {
 	addSprint,
+	amendTask,
 	approveEpic,
 	countAttempt,
 	createEpic,
@@ -17,6 +18,7 @@ import {
 	markStepped,
 	openTask,
 	recordGateRun,
+	getTask,
 	setEpicState,
 	setSprintState,
 	setTaskState,
@@ -295,5 +297,67 @@ describe('the snapshot nextStep reads', () => {
 		expect(snap.epic.state).toBe('running');
 		expect(snap.sprints).toHaveLength(1);
 		expect(snap.tasks).toHaveLength(1);
+	});
+});
+
+describe('giving a parked task a different contract', () => {
+	const parked = () => {
+		const e = newEpic();
+		const s = addSprint({ epicId: e.id, title: 'Sprint 1' });
+		const t = openTask({ epicId: e.id, sprintId: s.id, title: 'A', checks: CHECKS });
+		countAttempt(t.id);
+		countAttempt(t.id);
+		setTaskState(t.id, 'blocked');
+		return { epic: e, task: t };
+	};
+
+	it('replaces its checks and puts it back in the queue', () => {
+		const { task } = parked();
+		const result = amendTask(task.id, ALICE, {
+			checks: [{ name: 'real', command: 'npm test', timeoutMs: 1000 }]
+		});
+
+		expect(result.ok).toBe(true);
+		const after = getTask(task.id, ALICE)!;
+		expect(after.state).toBe('planned');
+		expect(after.checks?.[0].command).toBe('npm test');
+		// Nought, not two: what parked was a task judged by a different command,
+		// so counting its failures against this one would park the new contract
+		// before it had been tried.
+		expect(after.attempts).toBe(0);
+	});
+
+	it('takes a stated reason instead of checks', () => {
+		const { task } = parked();
+		expect(amendTask(task.id, ALICE, { noCheckReason: 'a rename; read the diff' }).ok).toBe(true);
+		expect(getTask(task.id, ALICE)!.noCheckReason).toBe('a rename; read the diff');
+	});
+
+	it('refuses a task with neither', () => {
+		const { task } = parked();
+		expect(amendTask(task.id, ALICE, {})).toMatchObject({ ok: false, reason: 'empty' });
+	});
+
+	it('refuses a task that has not stopped', () => {
+		// Changing the contract under a task that is running would judge work
+		// already done by a command nobody told it about.
+		const e = newEpic();
+		const s = addSprint({ epicId: e.id, title: 'Sprint 1' });
+		const t = openTask({ epicId: e.id, sprintId: s.id, title: 'A', checks: CHECKS });
+		expect(amendTask(t.id, ALICE, { checks: CHECKS })).toMatchObject({
+			ok: false,
+			reason: 'not-blocked'
+		});
+	});
+
+	it('is not reachable across accounts', () => {
+		const { task } = parked();
+		expect(getTask(task.id, BOB)).toBeNull();
+		expect(amendTask(task.id, BOB, { checks: CHECKS })).toMatchObject({
+			ok: false,
+			reason: 'not-found'
+		});
+		// And Alice's task is untouched by Bob having asked.
+		expect(getTask(task.id, ALICE)!.state).toBe('blocked');
 	});
 });
