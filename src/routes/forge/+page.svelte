@@ -399,14 +399,11 @@
 			</button>
 		</header>
 		<p class="hint">
-			A brief and a repository. Forge writes a charter, plans a sprint against the repository as it
-			stands, and works down the tree — nothing closes on its own opinion of its work, only on a
-			list of commands returning exit 0.
+			A brief and the cascade of tasks. Begin here and monitor in code and tasks.
 		</p>
 		{#if !driver.enabled}
 			<p class="warn-line">
-				The driver is switched off, so a build only advances when you run a step by hand. Admin →
-				Forge turns it on.
+				Autobuild is off.
 			</p>
 		{/if}
 
