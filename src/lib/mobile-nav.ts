@@ -32,6 +32,11 @@ const PRIORITY = [
 	'/code',
 	'/boards',
 	'/library',
+	// Below the four the bar has been showing since it shipped, deliberately.
+	// Forge arrives for everybody who already had the coding grant, and ranking
+	// it any higher would take Library out from under their thumb on the day
+	// they updated — which is the exact thing this ordering exists to prevent.
+	'/forge',
 	'/cortex',
 	'/alignment',
 	'/settings',
@@ -65,6 +70,7 @@ export function splitNav(links: NavLink[]): NavSplit {
 const GLYPHS: Record<string, string> = {
 	'/chat': '◈',
 	'/code': '❯',
+	'/forge': '⬡',
 	'/boards': '▦',
 	'/library': '▤',
 	'/cortex': '✧',

@@ -1194,6 +1194,44 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 	await shot('cortex-map');
 }
 
+// 8b. Forge. The one page in the tree with no fixture behind it — no epic is
+//     created here, because a charter run needs a repository and a model, and
+//     what this covers is the page rendering at all and the form a person fills
+//     in to start one.
+{
+	await page.goto(`${B}/forge`);
+	await page.locator('.forge').waitFor();
+
+	check(
+		'an empty Forge says so rather than showing an empty frame',
+		await page.locator('.empty').textContent(),
+		'No builds yet.'
+	);
+	check('and nothing is listed', await page.locator('.epic-row').count(), 0);
+	check('the new-build form is shut until asked for', await page.locator('form.new').count(), 0);
+
+	await page.locator('button:text-is("New build")').click();
+	await page.locator('form.new').waitFor();
+	// The brief is the one field with no sensible default, and the repository is
+	// the one the whole thing is pointed at; neither may be optional.
+	check(
+		'it asks for a name and a repository, and will not submit without them',
+		await page.locator('form.new input[required]').count(),
+		2
+	);
+	check(
+		'the branch is filled in rather than left blank',
+		await page.locator('form.new input').nth(2).inputValue(),
+		'main'
+	);
+	check(
+		'the board mirror is off unless asked for',
+		await page.locator('form.new input[type="checkbox"]').isChecked(),
+		false
+	);
+	await shot('forge');
+}
+
 // --- 9. the phone ---------------------------------------------------------
 // A second context rather than a resize: hasTouch decides which events fire at
 // all and whether (pointer: coarse) matches, and a narrow desktop window is a
@@ -1680,6 +1718,32 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 	}
 
 	{
+		// Forge is only reachable on a phone through More, so this is both halves
+		// of the same claim: that the destination can be got to, and that the page
+		// behind it is usable once you are there.
+		await phone.goto(`${B}/forge`);
+		await phone.locator('.forge').waitFor();
+		await phone.locator('button:text-is("New build")').tap();
+		await phone.locator('form.new').waitFor();
+
+		check('every Forge control is a thumb tall', await undersized(phone, '.forge button'), []);
+		// The checkbox itself is excluded because a browser draws that box at 13px
+		// whatever the CSS asks: its label is the tap target, so that is what is
+		// measured.
+		check(
+			'and so is every field',
+			await undersized(phone, '.forge input:not([type="checkbox"]), .forge textarea'),
+			[]
+		);
+		check('a checkbox is tapped by its whole row', await undersized(phone, '.forge label.check'), []);
+		const wide = await phone.evaluate(
+			() => document.documentElement.scrollWidth - document.documentElement.clientWidth
+		);
+		check('the page does not scroll sideways', wide <= 1);
+		await phoneShot('forge');
+	}
+
+	{
 		await phone.goto(`${B}/chat`);
 		await phone.locator('nav.tabbar .tab.more').tap();
 		await phone.locator('.more-sheet').waitFor();
@@ -1689,7 +1753,10 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 		// Observatory is in here because its only other link is the docked feed,
 		// which is display:none at this width — so the full view has been
 		// unreachable on a phone.
+		// Forge is first: it ranks below the four the bar has always shown, so a
+		// coder gaining it does not lose Library from under their thumb.
 		check('More holds everything the bar could not', items, [
+			'⬡ Forge',
 			'✧ Cortex',
 			'◉ Alignment',
 			'⚙ Settings',

@@ -29,7 +29,17 @@ describe('splitNav', () => {
 	it('gives Code a tab when the grant is there, and Cortex the seat it took', () => {
 		const { tabs, more } = splitNav(withCode);
 		expect(hrefs(tabs)).toEqual(['/chat', '/code', '/boards', '/library']);
-		expect(more.some((l) => l.href === '/cortex')).toBe(true);
+		expect(hrefs(more)).toEqual(['/cortex', '/settings', '/observatory']);
+	});
+
+	it('does not move a taught tab when a new destination arrives', () => {
+		// The regression the browser caught and this file did not: Forge was ranked
+		// third, which took Library out of the bar for every coder the moment they
+		// updated. A destination added later goes below the ones people have
+		// already learned, however important it is.
+		const { tabs, more } = splitNav([...withCode, { href: '/forge', label: 'Forge' }]);
+		expect(hrefs(tabs)).toEqual(['/chat', '/code', '/boards', '/library']);
+		expect(hrefs(more)).toContain('/forge');
 	});
 
 	it('does not move a single tab when someone is made an admin', () => {

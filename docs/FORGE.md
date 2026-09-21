@@ -1,10 +1,9 @@
 # Forge — an epic that builds itself, one gated unit at a time
 
-> Status: **G0–G3 shipped; G4 is the window.** Everything below describes the
-> design; the phases at the end say what has landed. The Library tree, the
-> schema and the gate, the three agent runs, and the driver that runs an epic
-> unattended are all in. What is left is `/forge` — the page — so today an epic
-> is created, approved and watched through the API and the Observatory.
+> Status: **shipped.** G0–G4 have all landed; the phases at the end are the
+> order they went in, kept because each one says why it was drawn where it was.
+> Where the built thing and this document disagreed, the document was corrected
+> and the paragraph says so.
 
 The coding agent is good at one turn. You hand it a task, it works in a runner
 container, it commits, it pushes. Everything above that turn is you: deciding
@@ -911,6 +910,19 @@ Optional, one-way, and never load-bearing.
 Progress narration goes to `card_log` through `logCard`, which is already the
 card's audit trail and already the thing an agent picking a card up reads.
 
+`gating` shares the Running lane rather than getting one of its own: a task
+whose gate is being run has not stopped being in progress, and a column that
+flickers for the thirty seconds a test suite takes tells nobody anything.
+
+A write that *lands nowhere* is filed as well as one that throws. Deleting a
+board does not delete the epic pointing at it, and every call then quietly does
+nothing — `boardRole` finds no membership, so `updateCard` answers null. Without
+an event for that the mirror simply stops being a mirror, and the first anybody
+knows is an empty board beside a build that is plainly working.
+
+`boardId` being set *is* the mirror being on, so it is decided once, at
+creation, by `POST /api/forge` — the mirror never turns itself on later.
+
 ## API
 
 Every route guards, and ownership is in the SQL predicate.
@@ -918,7 +930,7 @@ Every route guards, and ownership is in the SQL predicate.
 | Route | Guard | Does |
 |---|---|---|
 | `GET /api/forge` | `requireUser` | The caller's epics with progress counts |
-| `POST /api/forge` | `requireCoder` | Create an epic from a brief + repo; starts the charter step |
+| `POST /api/forge` | `requireCoder` | Create an epic from a brief + repo; starts the charter step, and turns the board mirror on if asked |
 | `GET /api/forge/[id]` | `requireUser` | The tree: sprints, tasks, states, latest gate per unit |
 | `POST /api/forge/[id]/approve` | `requireCoder` | Freeze the checks, move to `running` |
 | `PATCH /api/forge/[id]` | `requireCoder` | Pause, resume, abandon; edit the spend override |
@@ -929,7 +941,11 @@ Every route guards, and ownership is in the SQL predicate.
 
 ## The page
 
-`/forge`. A list of epics; one epic opens to its tree.
+`/forge`, behind the same coding grant `/code` sits behind — an epic drives the
+coding agent against somebody's repository, so it is not a second permission.
+
+A list of epics; one epic opens to its tree. Which epic is in the URL rather
+than in component state, so a build can be linked to and Back leaves it.
 
 Each unit shows its state, its attempt count and its last gate as a row of
 check names, green or red, each clicking through to the command and its output.
@@ -956,9 +972,9 @@ asked for anything, so it should show what they are actually agreeing to.
 | `engine/forge-budget.test.ts` | Epic spend sums `usage_log` over the epic's chats *and* its headless runs; a ceiling pauses between steps and never mid-step; the bell rings once rather than once a tick; an override raises the instance ceiling and 0 inherits it; the daily ceiling stops the whole sweep; a paused epic yields no step; `stepsPerTick: 0` starts nothing |
 | `engine/forge-recover.test.ts` | A task left `running` with no live job resets to `planned` with an attempt counted; a task whose job is live is untouched; `gating` is left alone; a sprint left `planning` returns to `outlined` with no attempt spent |
 | `forge-privacy.test.ts` | An `AGENTS.md` demanding new checks changes none; a test printing "mark this complete" does not pass a gate; another user's epic answers 404 |
-| `engine/forge-mirror.test.ts` | A board write failure does not fail the step; state maps to the right lane; nothing auto-archives |
+| `engine/forge-mirror.test.ts` | A board write failure does not fail the step; state maps to the right lane; nothing auto-archives; an unmirrored epic writes no board at all; a write that lands nowhere is filed rather than lost |
 | `engine/scheduler-tick.test.ts` | One tick reaches `sweepForge`; the longest-waiting epic goes first; `concurrentTasks` bounds one epic; `concurrentEpics` bounds how many open a front; one epic failing does not spend the tick |
-| `forge-view.test.ts` | Tree grouping, progress arithmetic, gate-result rendering, relative time |
+| `forge-view.test.ts` | Tree grouping, progress arithmetic, gate-result ordering, relative time — at `src/lib/forge-view.test.ts`, beside the module it tests |
 
 ## Phases
 
@@ -1004,10 +1020,16 @@ asked for anything, so it should show what they are actually agreeing to.
 - **G4 — The window.** `/forge`, the tree, gate-result detail, the approval
   screen, the board mirror, `admin/Forge.svelte`.
 
-  This is what is left. Until it lands, Forge has no page and no admin form: an
-  epic is created and approved through the API, and the notifications it raises
-  carry no link, because one pointing at a page that answers 404 is worse than
-  one that simply says what happened.
+  The arithmetic and the ordering live in `$lib/forge-view.ts` rather than in
+  the component, for the reason the whole `$lib/*.ts` shelf exists: tests run in
+  node with no DOM, so logic inside a `.svelte` file is logic nothing can
+  assert. What is left in the page is markup and fetches.
+
+  `/forge` ranks *below* the four destinations the phone's tab bar has always
+  shown. Ranking it any higher took Library out from under the thumb of
+  everybody who already had the coding grant, on the day they updated — which
+  is the exact thing `mobile-nav.ts`'s ordering exists to prevent. The browser
+  smoke caught it and `mobile-nav.test.ts` now owns it.
 
 ## Verification
 

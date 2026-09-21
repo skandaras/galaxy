@@ -339,6 +339,24 @@ export function gateRunsFor(targetId: string, limit = 20): ForgeGateRun[] {
 		.all();
 }
 
+/**
+ * One gate run in full, or nothing.
+ *
+ * Joined to the epic rather than filtered after the fact, so a gate run
+ * belonging to somebody else's build is indistinguishable from one that does
+ * not exist — a gate's stored output is the repository's own test output, which
+ * is the last thing to hand to a stranger who guessed an id.
+ */
+export function getGateRun(id: string, userId: string): ForgeGateRun | null {
+	const row = db
+		.select({ run: forgeGateRuns })
+		.from(forgeGateRuns)
+		.innerJoin(forgeEpics, eq(forgeEpics.id, forgeGateRuns.epicId))
+		.where(and(eq(forgeGateRuns.id, id), eq(forgeEpics.ownerId, userId)))
+		.get();
+	return row?.run ?? null;
+}
+
 export function snapshot(epicId: string, userId: string): ForgeSnapshot | null {
 	const epic = getEpic(epicId, userId);
 	if (!epic) return null;

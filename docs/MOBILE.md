@@ -86,7 +86,9 @@ installed app and the browser.
 
 - Navigation moves to a **bottom tab bar** — four destinations plus **More**,
   which holds the rest. It is where a thumb already is, and it does not move
-  when your account gains Code or Admin. Tapping the tab you are already on
+  when your account gains Code or Admin, nor when a new destination is added —
+  Forge shipped below the four the bar has always shown for exactly that reason,
+  and is reached through **More**. Tapping the tab you are already on
   opens that page's own list (chats, coding sessions, documents); a labelled
   pill at the top of the page does the same. That tap only ever *opens* — it
   used to toggle, which made tapping a tab twice mean "show me the list" from

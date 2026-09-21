@@ -1,8 +1,9 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireCoder, requireUser } from '$lib/server/api';
-import { createEpic, listEpics, listSprints, listTasks } from '$lib/server/forge';
+import { createEpic, getEpic, listEpics, listSprints, listTasks } from '$lib/server/forge';
 import { runCharter } from '$lib/server/engine/forge-charter';
+import { ensureEpicBoard } from '$lib/server/engine/forge-mirror';
 import { BudgetExceededError } from '$lib/server/engine/budget';
 import { EngineError } from '$lib/server/engine/engine';
 
@@ -48,8 +49,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			repoName: typeof body.repoName === 'string' ? body.repoName : '',
 			baseBranch: typeof body.baseBranch === 'string' ? body.baseBranch : ''
 		});
+		// Before the charter rather than after: the board is what somebody watches
+		// the build on, and the charter run is the first minutes of it. `boardId`
+		// being set *is* the mirror being on, so this is the one place it is
+		// decided — the mirror never turns itself on later.
+		if (body.mirror === true) ensureEpicBoard(epic, user.id);
 		const charter = await runCharter(epic, user.id);
-		return json({ epic, charter }, { status: 201 });
+		return json({ epic: getEpic(epic.id, user.id) ?? epic, charter }, { status: 201 });
 	} catch (err) {
 		if (err instanceof BudgetExceededError) error(402, err.message);
 		if (err instanceof EngineError) error(400, err.message);
