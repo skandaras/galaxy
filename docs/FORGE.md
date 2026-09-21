@@ -1,8 +1,9 @@
 # Forge — an epic that builds itself, one gated unit at a time
 
-> Status: **designed, not built.** This document is the design; no code for it
-> exists yet. Phases G0–G4 below are the intended landing order, and G0 is a
-> change to the Library that stands on its own.
+> Status: **shipped.** G0–G4 have all landed; the phases at the end are the
+> order they went in, kept because each one says why it was drawn where it was.
+> Where the built thing and this document disagreed, the document was corrected
+> and the paragraph says so.
 
 The coding agent is good at one turn. You hand it a task, it works in a runner
 container, it commits, it pushes. Everything above that turn is you: deciding
@@ -289,9 +290,22 @@ ordering logic is where this feature is most likely to be wrong, and a pure
 function tests with no model, no container and no clock.
 
 A boot reconcile sits beside `closeAbandonedJobs()` in `hooks.server.ts`: any
-task left `running` or `gating` with no live job goes back to `planned` with an
-attempt counted against it. Counting the attempt is deliberate — a task that
-reliably crashes the process should eventually park rather than restart forever.
+task left `running` with no live job goes back to `planned` with an attempt
+counted against it. Counting the attempt is deliberate — a task that reliably
+crashes the process should eventually park rather than restart forever.
+
+`gating` is **not** reset, which this document originally said it would be.
+`code_sessions` is a table and the workspace is a directory, so the work a gate
+judges survives the restart that interrupted it, and `nextStep` already picks a
+gate up before anything else. Resetting it would throw away a finished attempt
+and charge an attempt for the privilege.
+
+A sprint left at `planning` goes back to `outlined`, and this one matters more
+than the task case: `nextStep` returns null on a planning sprint by design, so
+left alone it is not a stalled task but an epic that has silently stopped. No
+attempt is counted against it — a sprint's attempts are its gate's currency, and
+spending one here would park it early for a reason that had nothing to do with
+its code.
 
 ### Human gates are states, never parked jobs
 
@@ -334,6 +348,17 @@ never a counter on the epic row. `getBudgetStatus()` is derived for the same
 reason: a counter drifts the first time a write is missed, and then the number
 that governs whether an agent may keep spending money is a number nobody can
 audit.
+
+Two joins rather than one, because an epic spends in two places. A task's model
+calls run in that task's chat. The charter, the sprint plans and the reviews are
+headless and have no chat at all, so `runHeadless` writes their usage against a
+synthetic id carrying the epic (`forge#<epicId>#<task>-<rand>`) and the sum
+matches that prefix too. Joining on task chats alone left every planning run out,
+which is most of what an epic spends before its first task even opens.
+
+One thing the sum cannot see: deleting a coding chat nulls `usage_log.chat_id`,
+so a task's spend leaves the epic's total when its chat is purged. The
+platform-wide cap still counts the money; only the attribution goes.
 
 ---
 
@@ -885,6 +910,19 @@ Optional, one-way, and never load-bearing.
 Progress narration goes to `card_log` through `logCard`, which is already the
 card's audit trail and already the thing an agent picking a card up reads.
 
+`gating` shares the Running lane rather than getting one of its own: a task
+whose gate is being run has not stopped being in progress, and a column that
+flickers for the thirty seconds a test suite takes tells nobody anything.
+
+A write that *lands nowhere* is filed as well as one that throws. Deleting a
+board does not delete the epic pointing at it, and every call then quietly does
+nothing — `boardRole` finds no membership, so `updateCard` answers null. Without
+an event for that the mirror simply stops being a mirror, and the first anybody
+knows is an empty board beside a build that is plainly working.
+
+`boardId` being set *is* the mirror being on, so it is decided once, at
+creation, by `POST /api/forge` — the mirror never turns itself on later.
+
 ## API
 
 Every route guards, and ownership is in the SQL predicate.
@@ -892,7 +930,7 @@ Every route guards, and ownership is in the SQL predicate.
 | Route | Guard | Does |
 |---|---|---|
 | `GET /api/forge` | `requireUser` | The caller's epics with progress counts |
-| `POST /api/forge` | `requireCoder` | Create an epic from a brief + repo; starts the charter step |
+| `POST /api/forge` | `requireCoder` | Create an epic from a brief + repo; starts the charter step, and turns the board mirror on if asked |
 | `GET /api/forge/[id]` | `requireUser` | The tree: sprints, tasks, states, latest gate per unit |
 | `POST /api/forge/[id]/approve` | `requireCoder` | Freeze the checks, move to `running` |
 | `PATCH /api/forge/[id]` | `requireCoder` | Pause, resume, abandon; edit the spend override |
@@ -903,7 +941,11 @@ Every route guards, and ownership is in the SQL predicate.
 
 ## The page
 
-`/forge`. A list of epics; one epic opens to its tree.
+`/forge`, behind the same coding grant `/code` sits behind — an epic drives the
+coding agent against somebody's repository, so it is not a second permission.
+
+A list of epics; one epic opens to its tree. Which epic is in the URL rather
+than in component state, so a build can be linked to and Back leaves it.
 
 Each unit shows its state, its attempt count and its last gate as a row of
 check names, green or red, each clicking through to the command and its output.
@@ -927,12 +969,12 @@ asked for anything, so it should show what they are actually agreeing to.
 | `engine/forge-gate.test.ts` | A check that passes at baseline is rejected as vacuous; a non-zero exit fails whatever the reply said; a timeout fails rather than passing; every check runs after the first failure; the failing tail survives bounding; secrets are scrubbed from stored output |
 | `engine/forge-step.test.ts` | `nextStep` across every state combination; a blocked task does not stall its sprint but does stop it closing; sprint N+1 waits for N; an epic at `awaiting-approval` yields no step |
 | `engine/forge.test.ts` | Attempts increment and park at `maxAttempts`; a failed gate's output reaches the next attempt fenced; `standingChecks` cannot be written after approval; a task merges to integration only on green |
-| `engine/forge-budget.test.ts` | Epic spend sums `usage_log` over the epic's chats; a ceiling pauses between steps and never mid-step; a paused epic yields no step; `stepsPerTick: 0` starts nothing |
-| `engine/forge-recover.test.ts` | A task left `running` with no live job resets to `planned` with an attempt counted; a task whose job is live is untouched |
+| `engine/forge-budget.test.ts` | Epic spend sums `usage_log` over the epic's chats *and* its headless runs; a ceiling pauses between steps and never mid-step; the bell rings once rather than once a tick; an override raises the instance ceiling and 0 inherits it; the daily ceiling stops the whole sweep; a paused epic yields no step; `stepsPerTick: 0` starts nothing |
+| `engine/forge-recover.test.ts` | A task left `running` with no live job resets to `planned` with an attempt counted; a task whose job is live is untouched; `gating` is left alone; a sprint left `planning` returns to `outlined` with no attempt spent |
 | `forge-privacy.test.ts` | An `AGENTS.md` demanding new checks changes none; a test printing "mark this complete" does not pass a gate; another user's epic answers 404 |
-| `engine/forge-mirror.test.ts` | A board write failure does not fail the step; state maps to the right lane; nothing auto-archives |
-| `engine/scheduler-tick.test.ts` | One tick reaches `sweepForge`; the longest-waiting epic goes first; `concurrentTasks` bounds one epic |
-| `forge-view.test.ts` | Tree grouping, progress arithmetic, gate-result rendering, relative time |
+| `engine/forge-mirror.test.ts` | A board write failure does not fail the step; state maps to the right lane; nothing auto-archives; an unmirrored epic writes no board at all; a write that lands nowhere is filed rather than lost |
+| `engine/scheduler-tick.test.ts` | One tick reaches `sweepForge`; the longest-waiting epic goes first; `concurrentTasks` bounds one epic; `concurrentEpics` bounds how many open a front; one epic failing does not spend the tick |
+| `forge-view.test.ts` | Tree grouping, progress arithmetic, gate-result ordering, relative time — at `src/lib/forge-view.test.ts`, beside the module it tests |
 
 ## Phases
 
@@ -964,8 +1006,30 @@ asked for anything, so it should show what they are actually agreeing to.
   trailing chats nobody opened, holding a transcript the charter says better.
 - **G3 — On its own.** `sweepForge`, the fairness ordering, the spend ceilings,
   the boot reconcile beside `closeAbandonedJobs`, and the blocked notification.
+
+  Three settings that G1 declared and nothing read landed with it, because a dial
+  that governs unattended spend and drives nothing is worse than no dial:
+  `maxStepsPerTask` became an optional `maxSteps` on `startCodingTurn`, and
+  `maxUsdOverride` became a field on the existing PATCH — an epic that paused on
+  its ceiling is resumed by raising it, and two calls would let the next tick
+  pause it again in between.
+
+  `concurrentEpics` is read as *how many epics are being worked on at all*, not
+  how many run a coding turn in parallel. The sweep is sequential, so the looser
+  reading would leave the setting meaning nothing.
 - **G4 — The window.** `/forge`, the tree, gate-result detail, the approval
   screen, the board mirror, `admin/Forge.svelte`.
+
+  The arithmetic and the ordering live in `$lib/forge-view.ts` rather than in
+  the component, for the reason the whole `$lib/*.ts` shelf exists: tests run in
+  node with no DOM, so logic inside a `.svelte` file is logic nothing can
+  assert. What is left in the page is markup and fetches.
+
+  `/forge` ranks *below* the four destinations the phone's tab bar has always
+  shown. Ranking it any higher took Library out from under the thumb of
+  everybody who already had the coding grant, on the day they updated — which
+  is the exact thing `mobile-nav.ts`'s ordering exists to prevent. The browser
+  smoke caught it and `mobile-nav.test.ts` now owns it.
 
 ## Verification
 

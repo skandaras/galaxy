@@ -100,6 +100,8 @@ Internet ─► Proxy ──┤
 
 15. **Alignment** — a private place to state what you actually hold (values, principles, beliefs, roles, known failure modes, aspirations, each with examples of keeping and breaking it, a weight for collisions and a conviction for how settled it is), a reflection journal, and an agent that reads an entry back against it. Off by default and switched on per user in Settings. Judgment is against *your* constitution and nothing else, every score must quote your own words verbatim or it is dropped, and "not enough here to say" is a first-class answer. The rubric is a versioned, fully readable code module drawn from Frankfurt, Aristotle, the Stoics, Sartre, MacIntyre, Confucian role ethics, Deci & Ryan, Schwartz, Bandura, Festinger, Fonagy and Neff. Assessments anchor to the constitution version live at the time, so revising a value never re-judges the past; a bounded re-assessment shows old and new side by side when you want the difference. Rumination and distress divert to a care path that drops the rubric entirely. Nothing here reaches the memory agent, the context bootstrap, the Library or the Observatory's stored detail — asserted in tests, not just intended.
 
+17. **Forge** — a build that runs itself, one gated unit at a time (`docs/FORGE.md`). A brief and a repository become a **charter**, sprints beneath it and tasks beneath those, each documented in the Library as it goes. Nothing closes on the agent's own view of its work: every unit carries a list of commands and the exit codes decide, and a task's checks are written *before* its code exists and proved red against the tree as it stands — a check that passes before the work has not described the work. The commands are frozen at one approval by a person and are never writable again, by a run or by anything a repository says about itself. An epic is a **row** and each unit of work is a short job, because `closeAbandonedJobs()` ends anything trying to be a two-day process; a scheduler sweep asks each live build what it should do next and starts that one thing, so a restart mid-build loses at most one step. The admin sets steps per tick and a spend ceiling and nothing else — spend is derived from `usage_log` rather than counted, and both ceilings are read between steps so stopping leaves a coherent tree rather than a half-written file. Optionally mirrored one-way onto a board, where the tree stays the truth and the board is a view of it.
+
 16. **Mobile** — responsive layout from day one + **PWA** (manifest + service worker) so it installs to a phone home screen immediately; **TWA APK** via `scripts/build-twa.sh` for de-Googled Android, where a WebAPK cannot be minted at all. Capacitor stays out — a native project to maintain buys nothing the TWA does not already give.
 
 ---
@@ -162,10 +164,12 @@ Internet ─► Proxy ──┤
   exists and are proved red against the tree first, so a run cannot write itself a check
   it cannot fail. The epic is a row and each unit of work is a short job, because
   `closeAbandonedJobs()` ends anything that tries to be a long one. The admin sets steps
-  per tick and a spend ceiling and nothing else. Designed, not built. It answers the
-  "pipelines" half of multi-agent orchestration above, and needs the Library to grow a
-  document tree first — one line per subtree in the digest, so documenting every task
-  costs nothing on every other turn in the app.
+  per tick and a spend ceiling and nothing else. **Shipped** (G0–G4): the Library tree, the
+  schema and the gate, the charter and sprint runs, the scheduler sweep that drives a build
+  unattended, and `/forge` with its approval screen and optional one-way board mirror. It
+  answers the "pipelines" half of multi-agent orchestration above, and needed the Library
+  to grow a document tree first — one line per subtree in the digest, so documenting every
+  task costs nothing on every other turn in the app.
 - **Voice** — dictation input and TTS replies, mobile-first.
 - **Per-user spending caps** and model-access policies.
 - **Skill eval harness** — A/B test skill versions; pairs naturally with the skill-optimiser agent.

@@ -24,6 +24,7 @@ import { gateReport, runGate } from './forge-gate';
 import { runSprintPlan } from './forge-sprint';
 import { runSprintReview } from './forge-review';
 import { withWorkspace } from './forge-agent';
+import { mirrorSprint, mirrorTask, mirrorTaskState } from './forge-mirror';
 import { createSession, destroySession, getSession, startCodingTurn } from './coding/session';
 import { mergeIntoBranch, scrubSecrets, shellQuote } from './coding/workspace';
 import { getExecutor } from './coding/executor';
@@ -108,6 +109,14 @@ async function dispatch(
 			const sprint = find(sprints, step.sprintId);
 			if (!sprint) return { step: step.kind, reason: 'sprint vanished' };
 			const out = await runSprintPlan(epic, sprint, userId);
+			// After the tree, never instead of it: the board is a view, so it is
+			// written from rows that already exist rather than alongside them.
+			if (out.ran) {
+				mirrorSprint(epic, sprint, userId);
+				for (const t of listTasks(epic.id).filter((t) => t.sprintId === sprint.id)) {
+					mirrorTask(epic, sprint, t, userId);
+				}
+			}
 			return { step: step.kind, reason: out.reason, detail: { ...out } };
 		}
 		case 'run-task': {
@@ -162,9 +171,11 @@ async function startTask(epic: ForgeEpic, task: ForgeTask, userId: string): Prom
 		session,
 		userId,
 		content: taskBrief(epic, task),
-		webSearch: false
+		webSearch: false,
+		maxSteps: settings().maxStepsPerTask
 	});
 	setTaskState(task.id, 'running', { chatId: session.chatId, branch: session.workBranch });
+	mirrorTaskState(epic, { ...task, state: 'running' }, userId, `attempt ${task.attempts + 1}`);
 
 	/**
 	 * `subscribeJob` replays history synchronously before it returns, so a job
@@ -265,6 +276,12 @@ async function gateTask(epic: ForgeEpic, task: ForgeTask, userId: string): Promi
 		// Back to planned: the next step starts a fresh attempt, and taskBrief
 		// hands it the failure above.
 		setTaskState(task.id, 'planned');
+		mirrorTaskState(
+			epic,
+			{ ...task, state: 'planned' },
+			userId,
+			`gate failed on ${results.filter((r) => r.exitCode !== 0).map((r) => r.name).join(', ')}; retrying`
+		);
 		return {
 			step: 'gate-task',
 			detail: { taskId: task.id, passed: false, attempt, willRetry: true }
@@ -285,6 +302,12 @@ async function gateTask(epic: ForgeEpic, task: ForgeTask, userId: string): Promi
 
 	const doc = writeTaskRecord(epic, task, userId, results.map((r) => r.name));
 	setTaskState(task.id, 'done', { ...(doc ? { recordDocId: doc } : {}) });
+	mirrorTaskState(
+		epic,
+		{ ...task, state: 'done' },
+		userId,
+		`merged into ${epic.integrationBranch} after ${attempt} attempt${attempt === 1 ? '' : 's'}`
+	);
 	destroySession(session);
 	return { step: 'gate-task', detail: { taskId: task.id, passed: true, attempt } };
 }
@@ -297,6 +320,7 @@ function park(
 	reason: string
 ): StepOutcome {
 	setTaskState(task.id, 'blocked');
+	mirrorTaskState(epic, { ...task, state: 'blocked' }, userId, reason);
 	notify({
 		userId,
 		kind: 'forge-blocked',
