@@ -46,7 +46,7 @@ export function buildContext(opts: {
 	if (tail) {
 		const note: ProviderMessage = {
 			role: 'user',
-			content: `[Notes for this turn — context, not a new request. Answer the message that follows.]\n${tail}`
+			content: `[Notes for this turn: context, not a new request. Answer the message that follows.]\n${tail}`
 		};
 		// Slipped in *before* the person's own message rather than after it. The
 		// last message is the one a model weighs most heavily, and that place
@@ -80,7 +80,7 @@ export function messageContent(m: StoredMessage, supportsVision: boolean): Messa
 		// can see it — so the note carries the ids that tool needs, the way the
 		// document block above carries them for read_attachment.
 		const names = images.map((a) => `${a.name} (id="${a.id}")`).join(', ');
-		return `${text}\n\n[Attached image${images.length > 1 ? 's' : ''}: ${names} — the selected model cannot view images. Call view_image with the id and what you need to know, and a vision model will answer for you.]`;
+		return `${text}\n\n[Attached image${images.length > 1 ? 's' : ''}: ${names}. The selected model cannot view images. Call view_image with the id and what you need to know, and a vision model will answer for you.]`;
 	}
 
 	const parts: MessageContent = [{ type: 'text', text }];
@@ -116,12 +116,12 @@ function isImage(att: { mime: string; kind?: string }): boolean {
 
 function documentBlock(chatId: string, attId: string, name: string, mime: string): string {
 	const text = attachmentText(chatId, attId);
-	if (!text) return `[Attached file: ${name} (${mime}) — contents unavailable]`;
+	if (!text) return `[Attached file: ${name} (${mime}): contents unavailable]`;
 	const header = `[Attached file: ${name} (${mime}, ${text.length.toLocaleString('en-US')} chars)]`;
 	if (text.length <= INLINE_DOC_CHARS) return `${header}\n${text}`;
 	return [
 		header,
 		text.slice(0, INLINE_DOC_CHARS),
-		`…(truncated — call read_attachment with id="${attId}" and offset=${INLINE_DOC_CHARS} for the rest)`
+		`…(truncated: call read_attachment with id="${attId}" and offset=${INLINE_DOC_CHARS} for the rest)`
 	].join('\n');
 }

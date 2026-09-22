@@ -9,10 +9,10 @@ export const fetchUrlToolDef: ToolDef = {
 	name: 'fetch_url',
 	description:
 		'Read the contents of a specific web address. Use this whenever a URL is given to you or ' +
-		'appears in something you have read — never search for a page whose address you already ' +
+		'appears in something you have read. Never search for a page whose address you already ' +
 		'have, and never guess at what is on it. Handles HTML (reduced to readable text), ' +
 		'markdown, JSON and plain text. GitHub links resolve to their real contents: a file URL ' +
-		'returns that file, and a repository URL returns its README — or, if it has none, whatever ' +
+		'returns that file, and a repository URL returns its README, or, if it has none, whatever ' +
 		'introductory document is at its root. When that is not enough, ask for a specific file ' +
 		'URL rather than assuming a layout.',
 	parameters: {
@@ -55,7 +55,6 @@ export function fetchUrlTool(cfg: FetchSettings, deps: FetchToolDeps = {}): Loop
 	let used = 0;
 
 	return {
-		lookup: true,
 		def: fetchUrlToolDef,
 		describe: (args) => String(args.url ?? ''),
 		execute: async (args, report) => {
@@ -66,7 +65,7 @@ export function fetchUrlTool(cfg: FetchSettings, deps: FetchToolDeps = {}): Loop
 			const cached = memo.get(target.href);
 			if (cached !== undefined) {
 				report?.({ cached: true, fetchesUsed: used });
-				return `(already read ${target.href} this turn — same contents below)\n${cached}`;
+				return `(already read ${target.href} this turn, same contents below)\n${cached}`;
 			}
 			if (used >= budget) {
 				report?.({ budgetExhausted: true, fetchesUsed: used });
@@ -122,7 +121,7 @@ export function fetchUrlTool(cfg: FetchSettings, deps: FetchToolDeps = {}): Loop
 					const alt = await get(found.url);
 					if (alt.ok) {
 						usedUrl = found.url;
-						via = `${found.name} — this repository has no README`;
+						via = `${found.name}, because this repository has no README`;
 						res = alt;
 					}
 				}
@@ -133,9 +132,9 @@ export function fetchUrlTool(cfg: FetchSettings, deps: FetchToolDeps = {}): Loop
 				report?.({ url: shownUrl, status: res.status, fetchesUsed: used });
 				// Returned rather than thrown: a 404 is information the model can act
 				// on (try another path, tell the user), not a reason to end the turn.
-				return `Could not read ${shownUrl} — HTTP ${res.status} ${res.statusText}.${
+				return `Could not read ${shownUrl}: HTTP ${res.status} ${res.statusText}.${
 					resolved?.discover
-						? ' No README or other document was found at the root of this repository. It may be private, or it may simply have no documentation — try a specific file URL (github.com/owner/repo/blob/BRANCH/path) if you know one, and otherwise say what you could not read rather than guessing at the contents.'
+						? ' No README or other document was found at the root of this repository. It may be private, or it may simply have no documentation. Try a specific file URL (github.com/owner/repo/blob/BRANCH/path) if you know one, and otherwise say what you could not read rather than guessing at the contents.'
 						: res.status === 404 && resolved
 							? ' The file may be private, or the branch name may differ.'
 							: ''
@@ -173,7 +172,7 @@ export function fetchUrlTool(cfg: FetchSettings, deps: FetchToolDeps = {}): Loop
 				shown,
 				'--- END CONTENT ---',
 				...(clipped || truncatedBytes
-					? [`(truncated at ${shown.length} characters — the page continues)`]
+					? [`(truncated at ${shown.length} characters, and the page continues)`]
 					: [])
 			].join('\n');
 

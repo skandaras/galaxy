@@ -145,7 +145,7 @@ describe('forge_read', () => {
 			title: 'Tidy a comment',
 			noCheckReason: 'a comment'
 		});
-		expect(forgeTreeText(epic)).toContain('no check — a comment');
+		expect(forgeTreeText(epic)).toContain('no check, a comment');
 	});
 
 	it('is scoped to the acting user', async () => {

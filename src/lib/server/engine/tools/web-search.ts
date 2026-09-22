@@ -219,9 +219,9 @@ export const webSearchToolDef: ToolDef = {
 		'Work in stages: open with a broad query, read the titles and domains it returns to see ' +
 		'how the subject is actually covered, then search again aimed at what they revealed. A ' +
 		'second, better-aimed query is usually worth more than a first, longer one. ' +
-		'Searches are rationed per turn as well as per request — a query past that ration is not ' +
+		'Searches are rationed per turn as well as per request: a query past that ration is not ' +
 		'run, and asking for one costs you the turn you could have spent reading. ' +
-		'Snippets are short by design — they are for choosing what to open, not for answering from. ' +
+		'Snippets are short by design: they are for choosing what to open, not for answering from. ' +
 		'Use fetch_url to read anything a claim will rest on; unlike searching, those can be ' +
 		'batched, so ask for every page you want in one turn. ' +
 		'Searches per request are limited, and repeating a query already run returns the same ' +
@@ -287,14 +287,14 @@ export function formatSearchResults(
 	// model reads the off-language results as the tool having ignored it.
 	const note =
 		outcome?.language && outcome.languageApplied === false
-			? `\n(${outcome.provider} cannot filter by language, so these results are unfiltered — the wording of the query is what steers them. Write the query in ${outcome.language} if you have not already.)`
+			? `\n(${outcome.provider} cannot filter by language, so these results are unfiltered, so the wording of the query is what steers them. Write the query in ${outcome.language} if you have not already.)`
 			: '';
 
 	// Engines that did not answer. Stated wherever it happened, because thin
 	// results from a half-working provider read exactly like thin results from
 	// a thin subject.
 	const degraded = outcome?.degraded
-		? `\n(Some search engines did not answer: ${outcome.degraded.engines.join(', ')}. These results are therefore incomplete — treat them as a partial view, not as everything that exists.)`
+		? `\n(Some search engines did not answer: ${outcome.degraded.engines.join(', ')}. These results are therefore incomplete, so treat them as a partial view, not as everything that exists.)`
 		: '';
 
 	if (!results.length) {
@@ -306,7 +306,7 @@ export function formatSearchResults(
 		if (outcome?.degraded) {
 			return `No results for "${query}", but the search did not work properly: ${outcome.degraded.engines.join(', ')} did not answer. This is a tooling failure, not evidence that nothing exists. Say so rather than concluding the subject has no coverage; the same query is worth trying again.`;
 		}
-		return `No results for "${query}". The search worked — there is simply nothing indexed for these terms. Try broader or different wording, or answer from what you already know and say the search found nothing. Do not repeat this query.${note}`;
+		return `No results for "${query}". The search worked, and there is simply nothing indexed for these terms. Try broader or different wording, or answer from what you already know and say the search found nothing. Do not repeat this query.${note}`;
 	}
 	const snippetChars = renderSnippetChars(results.length);
 	return (
@@ -381,16 +381,12 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 	let used = 0;
 
 	return {
-		lookup: true,
-		// The ration is configurable, so it is stated per instance rather than in
-		// the static definition — a description that says "one" under a setting of
-		// two is the same class of bug as the batching advice this rule exists to
-		// undo. `webSearchToolDef` stays canonical for the admin tool list, which
-		// has no settings to read.
-		def: {
-			...webSearchToolDef,
-			description: `${webSearchToolDef.description} You may run ${perStep === 1 ? 'one search' : `${perStep} searches`} per turn.`
-		},
+		// One definition, unmutated. The ration used to be appended here as well,
+		// which made this the fourth place one rule was stated: the task prompt,
+		// the turn-budget note, this description and the refusal string below all
+		// said it, and only the counter changed what a model did. The refusal is
+		// the one that lands, because it arrives at the moment it applies.
+		def: webSearchToolDef,
 		beginStep: () => {
 			usedThisStep = 0;
 		},
@@ -417,7 +413,7 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 					// empty row: the results are the same, and saying so is the point.
 					display: { results: cached.rows }
 				});
-				return `(already searched "${query}" this ${scope} — unchanged results below)\n${cached.text}`;
+				return `(already searched "${query}" this ${scope}, unchanged results below)\n${cached.text}`;
 			}
 
 			// After the memo, before the budget. A repeat is free and worth replaying
@@ -430,7 +426,7 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 				// many round-trips are left, and on the last one this search is
 				// simply lost. "If it still matters" is true either way.
 				return (
-					`Not run: "${query}". You have already used ${perStep === 1 ? 'this turn\'s search' : `all ${perStep} of this turn's searches`} and the results are above — read them first, and open anything a claim will rest on with fetch_url. ` +
+					`Not run: "${query}". You have already used ${perStep === 1 ? 'this turn\'s search' : `all ${perStep} of this turn's searches`} and the results are above. Read them first, and open anything a claim will rest on with fetch_url. ` +
 					`A query written before the last one came back is a guess; the one you write after reading is usually a different and better query. ` +
 					`Nothing was spent (${budget - used} of ${budget} searches still available this ${scope}), so if it still matters once you have read these, search again.`
 				);
@@ -897,7 +893,7 @@ async function searchWith(
 			if (!rows.length && down.length) {
 				throw new SearchProviderError(
 					provider,
-					`every engine failed — ${down.join(', ')}. Ask the instance directly to see why: \`docker compose exec searxng python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/search?q=test&format=json',timeout=20).read()[:800])"\`. CAPTCHA and rate-limit reasons mean the engines are refusing us; DNS or connection errors mean the container cannot reach the internet`,
+					`every engine failed: ${down.join(', ')}. Ask the instance directly to see why: \`docker compose exec searxng python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/search?q=test&format=json',timeout=20).read()[:800])"\`. CAPTCHA and rate-limit reasons mean the engines are refusing us; DNS or connection errors mean the container cannot reach the internet`,
 					res.status
 				);
 			}
@@ -916,7 +912,7 @@ async function searchWith(
 		default:
 			throw new SearchProviderError(
 				provider,
-				'web search is not configured — set a provider in admin settings'
+				'web search is not configured: set a provider in admin settings'
 			);
 	}
 }
@@ -996,7 +992,7 @@ async function parseJsonOrThrow(
 		// An HTML body here usually means a login/consent/error page, not JSON.
 		throw new SearchProviderError(
 			provider,
-			`expected JSON, got ${text.trim().startsWith('<') ? 'HTML' : 'unparseable text'}${hint ? ` — ${hint}` : ''}`,
+			`expected JSON, got ${text.trim().startsWith('<') ? 'HTML' : 'unparseable text'}${hint ? `: ${hint}` : ''}`,
 			res.status,
 			text.length
 		);
@@ -1027,7 +1023,7 @@ export function assertLooksLikeDuckDuckGoResults(html: string, status?: number):
 	throw new SearchProviderError(
 		'duckduckgo',
 		marker
-			? `blocked by DuckDuckGo (matched "${marker}") — datacenter IPs are commonly rate-limited; consider SearXNG`
+			? `blocked by DuckDuckGo (matched "${marker}"). Datacenter IPs are commonly rate-limited; consider SearXNG`
 			: 'response contained no recognisable results markup (the page layout may have changed, or the request was blocked)',
 		status,
 		html.length

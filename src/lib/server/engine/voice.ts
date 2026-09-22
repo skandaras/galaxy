@@ -20,7 +20,7 @@ import { styleSettings } from '$lib/server/settings';
  * files reads as a sentence with six clauses.
  */
 export const OUTPUT_FORMAT =
-	'Format your replies to be read on a screen, not parsed out of a paragraph. Use short paragraphs of two or three sentences, separated by a blank line. Use a bulleted list whenever you are reporting more than one thing — files changed, options considered, problems found — one item per line, never as a run-on sentence. Give each bullet or section a short bold lead-in naming what it is about, so the reply can be skimmed. Use a heading only when the reply has genuinely distinct sections. Never answer with a single long paragraph.';
+	'Format your replies to be read on a screen, not parsed out of a paragraph. Use short paragraphs of two or three sentences, separated by a blank line. Use a bulleted list whenever you are reporting more than one thing, such as files changed, options considered or problems found: one item per line, never as a run-on sentence. Give each bullet or section a short bold lead-in naming what it is about, so the reply can be skimmed. Use a heading only when the reply has genuinely distinct sections. Never answer with a single long paragraph.';
 
 /**
  * How the agents sound, as against how their replies are shaped.
@@ -40,20 +40,61 @@ export const OUTPUT_FORMAT =
  * **Diction only, deliberately — no layout rules.** That is what makes it safe
  * to hand to the agents whose answer is a JSON object (`ux-audit`,
  * `skill-optimiser`), where a paragraphs-and-bullets instruction would fight
- * the reply contract. Layout stays OUTPUT_FORMAT's job, and the moment a rule
- * about shape appears here, PROSE_TASKS below has to shrink.
+ * the reply contract. Layout is LAYOUT_TASKS' job, and the moment a rule about
+ * shape appears here, that set has to shrink.
+ *
+ * Split into three exported constants below, and that is not decoration.
+ * AGENTS.md sends contributors to this file instead of restating the rules, so
+ * the prose the coding agent writes into the repository and the prose the
+ * product speaks are held to one list. Two copies diverge on the first
+ * addition, which is the failure this whole file is being reorganised around.
  */
-export const HOUSE_VOICE =
-	'Cut straight to the answer. Do not waste time affirming the input with "Great question" or "I\'d be happy to help", "Let me take a look", etc ' +
-	'Do not restate the question before answering it. No flattery. "Good catch", "you\'re absolutely right", "that\'s a really interesting point" — noise ' +
-	'when true and a lie the rest of the time. Agreement is shown by acting on what was said.\n\n' +
-	'Hedge only where the doubt is warranted and describe why. Avoid sentence structures that frame "It is not just X — it is Y"' +
-	'Avoid em dash unless it is for a real aside or a turn in the sentence. Be aware that em  dashes are a tell of something being written by an AI, which we want to avoid.' +
-	'Prefer the plain word. Avoid "honest", "silently", "delve", "leverage", "utilise", "robust", "seamless", "landscape", "realm", ' +
-	'"navigate the complexities of", "it is worth noting that" — these are padding wherever they appear.\n\n' +
-	'Stop when the answer stops. Do not close by summarising the reply that was just read, do not offer ' +
-	'further help, and do not ask whether they would like you to continue — if there is an obvious next ' +
-	'step, take it or name it in one line.';
+
+/** Words that read as machine-written wherever they appear. */
+export const BANNED_WORDS =
+	'Prefer the plain word. Avoid "stated plainly", "honest", "honestly", "earn", "earned", ' +
+	'"silently", "silent", "delve", "tapestry", "nuanced", "vibrant", "resonate", "underscore", ' +
+	'"underscored", "robust", "seamless", "embark", "leverage", "utilise", "landscape", "realm", ' +
+	'"navigate the complexities of", "it is worth noting that". These are padding wherever they appear.';
+
+/**
+ * Sentence shapes that promise a contrast and deliver a restatement.
+ *
+ * Written as templates rather than described, for the same reason the word list
+ * is a list: a model can check a draft against a pattern it can match, and
+ * cannot check it against "avoid formulaic phrasing".
+ */
+export const BANNED_FRAMINGS =
+	'Do not use these sentence shapes: "It is not X, it is Y"; "Not just X, Y"; ' +
+	'"What sets X apart is"; "At its core, X is"; "Whether you are X or Y"; ' +
+	'"X is not just about Y, it is about Z".';
+
+/**
+ * Stepping back to tell the reader that a thing has a name.
+ *
+ * Separate from the framings above because the sentence is well formed. What
+ * gives it away is the stop to announce the label rather than use it.
+ */
+export const BANNED_NAMING =
+	'Do not stop to name a concept for the reader: "the term was coined to describe", ' +
+	'"it names something we have all felt", "the key word is", "none of this is about". ' +
+	'Let the idea arrive in context, or attribute it to its source and carry on.';
+
+export const HOUSE_VOICE = [
+	'Cut straight to the answer. Do not affirm the input with "Great question", "I would be happy to ' +
+		'help" or "Let me take a look". Do not restate the question before answering it. No flattery: ' +
+		'"Good catch", "you are absolutely right" and "that is a really interesting point" are noise ' +
+		'when true and a lie the rest of the time. Agreement is shown by acting on what was said.',
+	'Hedge only where the doubt is warranted, and say what the doubt is.',
+	'Avoid the em dash unless it marks a real aside or a turn in the sentence. It reads as a tell of ' +
+		'machine-written prose.',
+	BANNED_WORDS,
+	BANNED_FRAMINGS,
+	BANNED_NAMING,
+	'Stop when the answer stops. Do not close by summarising the reply that was just read, do not ' +
+		'offer further help, and do not ask whether they would like you to continue. If there is an ' +
+		'obvious next step, take it or name it in one line.'
+].join('\n\n');
 
 /**
  * The tasks whose output a person reads as prose, and the only ones the house
@@ -91,6 +132,34 @@ export const PROSE_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[numb
 ]);
 
 /**
+ * The subset of PROSE_TASKS that also gets the layout rules.
+ *
+ * OUTPUT_FORMAT used to be inlined into `DEFAULT_PROMPTS.chat` and `.coding`,
+ * which meant it was seeded into a database row and froze at install time: the
+ * one constant described as "kept as one constant so the two prompts cannot
+ * drift apart" was reachable only through the mechanism that makes prompts
+ * drift. Composed here it reaches every install, and a reworded rule ships with
+ * no migration, which is what `houseStyle` has always done for diction.
+ *
+ * Narrower than PROSE_TASKS, because three of those answer with a JSON object
+ * (`ux-audit`, `skill-optimiser`, `alignment-synthesis`) and a
+ * paragraphs-and-bullets instruction would fight the reply contract. `subagent`
+ * is out for a different reason: it answers another agent in a few sentences,
+ * and headings and bold lead-ins on that are cost with no reader.
+ *
+ * `deep-research` is out because research.ts injects OUTPUT_FORMAT at its
+ * synthesis call instead. Four other phases of that pipeline share the
+ * `deep-research` prompt and answer in JSON, so the task is the wrong unit
+ * there. See the comment at that call site.
+ */
+export const LAYOUT_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[number]>([
+	'chat',
+	'coding',
+	'forge-charter',
+	'forge-review'
+]);
+
+/**
  * The house style block, as it reaches the model.
  *
  * Framed as rules, which is the deliberate opposite of the memory digest's
@@ -102,14 +171,17 @@ export const PROSE_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[numb
  * The owner's half comes last and is told to win, so someone who writes "I like
  * em dashes, use them freely" is not silently overruled by the constant above.
  */
-export function houseStyle(): string {
+export function houseStyle(task: string): string {
 	const own = styleSettings().text.trim();
 	const out = [
 		'',
 		'',
-		'[House style — how to write, not what to say. These are rules, and they apply to every reply.]',
+		'[House style: how to write, not what to say. These are rules, and they apply to every reply.]',
 		HOUSE_VOICE
 	];
+	// After the diction and before the owner, so a task that answers in prose
+	// gets shape as well as sentences and the owner still overrides both.
+	if (LAYOUT_TASKS.has(task)) out.push('', OUTPUT_FORMAT);
 	if (own) {
 		out.push(
 			'',

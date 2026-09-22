@@ -1,15 +1,11 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
-import { taskConfigs } from '$lib/server/db/schema';
-import {
-	DEFAULT_PROMPTS,
-	SUPERSEDED_PROMPTS,
-	migrateSettings,
-	migrateTaskPrompts,
-	seedTaskConfigs
-} from './bootstrap';
+import { taskConfigs, CORE_TASKS } from '$lib/server/db/schema';
+import { migrateSettings, migrateToPromptOverrides, seedTaskConfigs } from './bootstrap';
+import { DEFAULT_PROMPTS } from './engine/prompts';
 import { OUTPUT_FORMAT } from './engine/voice';
+import { taskPrompt } from './engine/engine';
 import {
 	deleteSetting,
 	getSetting,
@@ -19,21 +15,29 @@ import {
 } from './settings';
 
 /**
- * That improving a shipped prompt actually reaches an install that already
- * exists — and that it never treads on one somebody has made their own.
+ * That a shipped prompt reaches an install that already exists, and that it
+ * never treads on one somebody has made their own.
  *
- * `seedTaskConfigs` writes a task's prompt once and never again, which is right:
- * a prompt you edited in Admin -> Tasks is yours. The consequence nobody had
- * accounted for is that changing a default reaches only installs that have never
- * booted, i.e. none of them — so a rewritten prompt shipped as dead text while
- * the behaviour it was written to fix carried on unchanged.
+ * Defaults used to be seeded into `system_prompt` at first boot, so changing one
+ * reached only installs that had never booted, which is none of them. They
+ * resolve from DEFAULT_PROMPTS now, and the column holds only what an owner
+ * wrote. These cover the one-shot that moves an existing install across.
  */
 
-const prompt = (task: string) =>
+/** What a turn would actually run on. */
+const prompt = (task: string) => taskPrompt(task);
+
+/** What the rollback column holds, which is not what a turn reads. */
+const stored = (task: string) =>
 	db.select().from(taskConfigs).where(eq(taskConfigs.task, task)).get()?.systemPrompt ?? '';
+
+const override = (task: string) =>
+	db.select().from(taskConfigs).where(eq(taskConfigs.task, task)).get()?.promptOverride ?? null;
 
 const OLD_MEMORY =
 	'You are the memory agent of Galaxy. Audit recent activity for durable patterns, preferences and candidate skills. Extract only what is clearly supported.';
+
+const OVERRIDE_KEY = 'tasks.promptOverrideVersion';
 
 beforeAll(() => {
 	runMigrations();
@@ -41,49 +45,32 @@ beforeAll(() => {
 
 beforeEach(() => {
 	db.delete(taskConfigs).run();
+	deleteSetting(OVERRIDE_KEY);
 	seedTaskConfigs();
 });
 
-describe('bringing a stored prompt up to date', () => {
-	it('replaces one that is still the shipped default', () => {
+describe('resolving a task prompt', () => {
+	it('uses the shipped default when nobody has overridden it', () => {
+		expect(override('memory')).toBeNull();
+		expect(prompt('memory')).toBe(DEFAULT_PROMPTS.memory);
+	});
+
+	it('uses the override when there is one', () => {
+		const mine = 'You are the memory agent. Only ever record things about cheese.';
 		db.update(taskConfigs)
-			.set({ systemPrompt: OLD_MEMORY })
+			.set({ promptOverride: mine })
 			.where(eq(taskConfigs.task, 'memory'))
 			.run();
-
-		migrateTaskPrompts();
-		expect(prompt('memory')).not.toBe(OLD_MEMORY);
-		// The point of the rewrite: a test the model can fail, and the class of
-		// thing it should stop recording.
-		expect(prompt('memory')).toContain('six months');
-		expect(prompt('memory')).toContain('asked about');
+		expect(prompt('memory')).toBe(mine);
 	});
 
-	it.each(Object.entries(SUPERSEDED_PROMPTS))('upgrades every superseded %s prompt', (task, olds) => {
-		// Generic on purpose. An entry that no longer matches anything the app ever
-		// shipped, or one for a task with no current default, is dead text that
-		// looks exactly like a working migration — and the only symptom is that
-		// nothing improves.
-		for (const old of olds) {
-			db.update(taskConfigs).set({ systemPrompt: old }).where(eq(taskConfigs.task, task)).run();
-			migrateTaskPrompts();
-			expect(prompt(task), `${task} did not move off a superseded prompt`).not.toBe(old);
-			expect(prompt(task).length).toBeGreaterThan(0);
-		}
-	});
-
-	it('holds the superseded chat prompt as a literal, not as a live constant', () => {
-		// The entry used to end in `+ OUTPUT_FORMAT`. A superseded entry is a
-		// snapshot of what an install actually stored, so composing one from a
-		// constant means that editing the constant changes the snapshot too — it
-		// stops matching the database, the migration silently no-ops, and the
-		// symptom is indistinguishable from an owner having edited their prompt.
-		//
-		// The generic it.each above cannot catch that: it writes the stored value
-		// *from* this table, so it is self-consistent whatever the table says. This
-		// one compares the table against the constant, and goes red the day someone
-		// edits OUTPUT_FORMAT without first freezing the old text here.
-		expect(SUPERSEDED_PROMPTS.chat[0]).toContain(OUTPUT_FORMAT);
+	it('tracks a reworded default without any migration at all', () => {
+		// The whole point of the column. An unedited install reads the constant,
+		// so changing the constant is the entire delivery mechanism: no snapshot
+		// of the old text, no matching, nothing to keep in step.
+		expect(prompt('chat')).toBe(DEFAULT_PROMPTS.chat);
+		expect(prompt('chat')).not.toContain('one query at a time');
+		expect(prompt('chat')).toContain('fetch_url');
 	});
 
 	it('ships no default with the house style baked in', () => {
@@ -91,47 +78,110 @@ describe('bringing a stored prompt up to date', () => {
 		// that also contained it would hand the model two copies.
 		for (const [task, text] of Object.entries(DEFAULT_PROMPTS)) {
 			expect(text, `${task} embeds the injected style block`).not.toContain('[House style');
+			expect(text, `${task} embeds the layout block`).not.toContain(OUTPUT_FORMAT);
 		}
 	});
+});
 
-	it('carries the method into the two prompts this release rewrote', () => {
-		// The chat prompt already asked for a deliberate search and was losing to
-		// the loop's batching advice; research was one sentence naming the job and
-		// nothing about how to do it.
-		expect(prompt('chat')).toContain('one query at a time');
-		expect(prompt('chat')).toContain('fetch_url');
-		expect(prompt('deep-research')).toContain('rounds');
-		expect(prompt('deep-research')).toContain('guess');
-	});
-
-	it('leaves a prompt somebody has edited exactly alone', () => {
+describe('moving an install onto overrides', () => {
+	it('keeps a prompt somebody edited', () => {
 		const mine = 'You are the memory agent. Only ever record things about cheese.';
 		db.update(taskConfigs)
-			.set({ systemPrompt: mine })
+			.set({ systemPrompt: mine, promptOverride: null })
 			.where(eq(taskConfigs.task, 'memory'))
 			.run();
 
-		migrateTaskPrompts();
+		migrateToPromptOverrides();
+		expect(override('memory')).toBe(mine);
 		expect(prompt('memory')).toBe(mine);
 	});
 
-	it('runs on every boot and changes nothing after the first', () => {
+	it('claims nothing for a row still holding the current default', () => {
+		migrateToPromptOverrides();
+		expect(override('memory')).toBeNull();
+		expect(prompt('memory')).toBe(DEFAULT_PROMPTS.memory);
+	});
+
+	it('claims nothing for a row holding a default an older release shipped', () => {
+		// The case the old SUPERSEDED_PROMPTS table existed for, and the only
+		// reason this function carries a frozen list at all. Getting it wrong
+		// would pin every long-running install to a prompt from two rewrites ago,
+		// looking exactly like an owner's edit.
 		db.update(taskConfigs)
-			.set({ systemPrompt: OLD_MEMORY })
+			.set({ systemPrompt: OLD_MEMORY, promptOverride: null })
 			.where(eq(taskConfigs.task, 'memory'))
 			.run();
 
-		migrateTaskPrompts();
-		const after = prompt('memory');
-		migrateTaskPrompts();
-		migrateTaskPrompts();
-		expect(prompt('memory')).toBe(after);
+		migrateToPromptOverrides();
+		expect(override('memory')).toBeNull();
+		expect(prompt('memory')).toBe(DEFAULT_PROMPTS.memory);
+		expect(prompt('memory')).toContain('six months');
 	});
 
-	it('does nothing for a task that is not there', () => {
+	it('runs on one boot and never again', () => {
+		migrateToPromptOverrides();
+		const mine = 'Written after the migration had already run.';
+		db.update(taskConfigs)
+			.set({ systemPrompt: mine, promptOverride: null })
+			.where(eq(taskConfigs.task, 'memory'))
+			.run();
+
+		migrateToPromptOverrides();
+		expect(override('memory')).toBeNull();
+	});
+
+	it('survives a table with nothing in it', () => {
 		db.delete(taskConfigs).run();
-		expect(() => migrateTaskPrompts()).not.toThrow();
-		expect(prompt('memory')).toBe('');
+		expect(() => migrateToPromptOverrides()).not.toThrow();
+	});
+});
+
+describe('the rollback copy', () => {
+	it('is never empty for any task', () => {
+		// The rollback hazard in one assertion. The previous image reads this
+		// column and has no default to fall back on, so a task left holding ''
+		// is an agent booting with no system prompt at all.
+		for (const task of CORE_TASKS) {
+			expect(stored(task).length, `${task} would roll back onto an empty prompt`).toBeGreaterThan(
+				0
+			);
+		}
+	});
+
+	it('is rewritten on every boot, so the previous image reads real text', () => {
+		// AGENTS.md: this app can be rolled back to the previous image, and that
+		// image reads `system_prompt` directly. A task left holding text this
+		// release stopped shipping is an agent running on a prompt nobody chose.
+		db.update(taskConfigs)
+			.set({ systemPrompt: 'stale' })
+			.where(eq(taskConfigs.task, 'memory'))
+			.run();
+
+		seedTaskConfigs();
+		expect(stored('memory')).toBe(DEFAULT_PROMPTS.memory);
+	});
+
+	it('follows the override rather than the default', () => {
+		const mine = 'Only ever record things about cheese.';
+		db.update(taskConfigs)
+			.set({ promptOverride: mine })
+			.where(eq(taskConfigs.task, 'memory'))
+			.run();
+
+		seedTaskConfigs();
+		expect(stored('memory')).toBe(mine);
+	});
+
+	it('never clears an override', () => {
+		const mine = 'Only ever record things about cheese.';
+		db.update(taskConfigs)
+			.set({ promptOverride: mine })
+			.where(eq(taskConfigs.task, 'memory'))
+			.run();
+
+		seedTaskConfigs();
+		seedTaskConfigs();
+		expect(override('memory')).toBe(mine);
 	});
 });
 

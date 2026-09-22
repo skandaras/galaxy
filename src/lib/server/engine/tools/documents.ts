@@ -9,10 +9,10 @@ export const createPdfToolDef = {
 	name: 'create_pdf',
 	description:
 		'Typeset a PDF from Typst markup and attach it to this conversation. Use it whenever the ' +
-		'user wants a document to keep, print or send — a report, a letter, a summary, an invoice, ' +
+		'user wants a document to keep, print or send: a report, a letter, a summary, an invoice, ' +
 		'a one-pager. Load the "typst" skill first for the syntax; it is close to Markdown but not ' +
 		'the same. Returns a link: include it in your reply or the user has no way to open the ' +
-		"file. If the compile fails you get the compiler's own errors back — fix the markup and " +
+		"file. If the compile fails you get the compiler's own errors back, so fix the markup and " +
 		'call it again.',
 	parameters: {
 		type: 'object',
@@ -48,7 +48,7 @@ export function documentTools(chatId: string): LoopTool[] {
 				if (!source.trim()) throw new Error('source is required');
 				if (source.length > MAX_SOURCE_CHARS) {
 					throw new Error(
-						`The document is ${source.length} characters — the limit is ${MAX_SOURCE_CHARS}.`
+						`The document is ${source.length} characters; the limit is ${MAX_SOURCE_CHARS}.`
 					);
 				}
 

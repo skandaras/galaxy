@@ -26,7 +26,12 @@ vi.mock('./engine', async (importOriginal) => {
 		...actual,
 		getTaskConfig: (task: string) =>
 			task === 'memory'
-				? { task, systemPrompt: 'you remember', primaryModelId: 'm-mem' }
+				? {
+						task,
+						systemPrompt: 'you remember',
+						promptOverride: 'you remember',
+						primaryModelId: 'm-mem'
+					}
 				: actual.getTaskConfig(task),
 		pickModel: () => ({
 			model: {

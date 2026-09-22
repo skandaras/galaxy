@@ -103,6 +103,35 @@ is a tested constraint, not a preference: `theme.test.ts` asserts AA for every p
 
 A leading underscore means deliberately unused, and the linter is configured to agree.
 
+## Writing prose
+
+Comments, commit messages, docs, prompt text and anything a person reads are all held to
+one list, and that list lives in `src/lib/server/engine/voice.ts` as `BANNED_WORDS`,
+`BANNED_FRAMINGS` and `BANNED_NAMING`. Read it before writing prose here. It is one file
+rather than a copy in each place because the rules the coding agent writes to and the
+rules the product speaks in are the same rules, and two copies diverge on the first
+addition.
+
+The short version, so you know what you are looking for:
+
+- **Words that are padding wherever they appear** — *stated plainly, honest, earn, silently,
+  delve, tapestry, nuanced, vibrant, resonate, underscore, robust, seamless, embark,
+  leverage, utilise, landscape, realm*, and the full list in the file.
+- **Sentence shapes that promise a contrast and deliver a restatement** — "It is not X, it
+  is Y", "Not just X, Y", "What sets X apart is", "At its core, X is".
+- **Stopping to name a concept for the reader** — "the term was coined to describe", "the
+  key word is", "none of this is about". Let the idea arrive in context, or attribute it to
+  its source and carry on.
+- **The em dash**, unless it marks a real aside or a turn in the sentence.
+
+Adding a rule means editing `voice.ts`, not this section. Anything here is a summary of
+what is there.
+
+The one exception is the prompt corpus this file has already been applied to. `voice.ts`,
+`engine/prompts.ts`, the tool descriptions and the injected digests are text a model reads
+and imitates, so a rule broken there is demonstrated rather than stated. Comments and
+markdown are governed going forward, not retro-edited.
+
 ## Dependencies
 
 Nine runtime dependencies, deliberately. Adding one needs a reason better than convenience,

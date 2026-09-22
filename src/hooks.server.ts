@@ -6,7 +6,7 @@ import {
 	seedTaskConfigs,
 	seedSkills,
 	migrateSettings,
-	migrateTaskPrompts,
+	migrateToPromptOverrides,
 	migrateChats
 } from '$lib/server/bootstrap';
 import { ensureSkillsRepo } from '$lib/server/skills';
@@ -20,11 +20,11 @@ import { provisionUser } from '$lib/server/users';
 runMigrations();
 migrateSettings();
 migrateChats();
+// Before the seed, which rewrites `system_prompt` from the override and would
+// otherwise erase the edit this reads. Prompts resolve from DEFAULT_PROMPTS now,
+// so the only thing left to rescue is text somebody wrote themselves.
+migrateToPromptOverrides();
 seedTaskConfigs();
-// After the seed, so a task that has just been created is already current, and
-// before anything can run: a stored prompt that is still the shipped default is
-// one nobody has claimed, so an improvement to it should actually arrive.
-migrateTaskPrompts();
 ensureSkillsRepo();
 seedSkills();
 // Before the scheduler, and before any request can read a chat: the live job

@@ -17,6 +17,7 @@ import {
 import { typstReady } from '$lib/server/pdf';
 import { assertBudget, getBudgetStatus } from './budget';
 import { buildContext } from './context';
+import { DEFAULT_PROMPTS } from './prompts';
 import { houseStyle, PROSE_TASKS } from './voice';
 import { maybeCompact } from './compaction';
 import { maybeTitleChat, nameThisChatNote, setChatTitleTool } from './chat-title';
@@ -25,7 +26,6 @@ import { createJob, failJob, type LiveJob } from './jobs';
 import { chatMaxSteps } from './limits';
 import { runAgentLoop, type LoopTool } from './loop';
 import { previousRunNote, runHistoryTool } from './run-history';
-import { goDeeperTool } from './answer-first';
 import { askUserTool } from './ask-user';
 import { attachmentTools } from './tools/attachments';
 import { boardTools } from './tools/boards';
@@ -57,18 +57,32 @@ export function getTaskConfig(task: string) {
 }
 
 /**
- * The stored system prompt for a task, plus the house style where the task
- * writes prose a person reads.
+ * A task's prompt: the owner's override where they wrote one, otherwise the
+ * default this release ships.
  *
- * The style is composed here rather than seeded into `DEFAULT_PROMPTS`, and the
- * difference matters. A seeded default reaches only installs whose stored prompt
- * still byte-equals a shipped one, so the owner most likely to want a house
- * style — the one who has been editing prompts — is exactly the one who would
- * never get it. It would also need the previous composed text frozen into
- * SUPERSEDED_PROMPTS for every task in the set, on every future wording change,
- * with `migrateTaskPrompts` failing silently the day one copy drifts. Composed
- * at call time it reaches all of them regardless of edits, and a reworded block
- * ships with no migration at all.
+ * The defaults used to be seeded into the `system_prompt` column at first boot,
+ * which meant a reworded default reached nobody who had ever run the app. The
+ * workaround was SUPERSEDED_PROMPTS: a verbatim snapshot of every prompt the app
+ * had ever shipped, and a migration that replaced a stored value only while it
+ * still byte-matched one. Every future reword needed a new snapshot, and a
+ * snapshot built from a live constant stopped matching the day the constant
+ * changed, with a no-op migration looking exactly like an owner's edit.
+ *
+ * Storing only the difference from the default deletes all of that. An override
+ * is untouched forever; no override tracks the code.
+ */
+export function taskPrompt(task: string): string {
+	return getTaskConfig(task)?.promptOverride ?? DEFAULT_PROMPTS[task] ?? '';
+}
+
+/**
+ * A task's prompt, plus the house style where the task writes prose a person
+ * reads.
+ *
+ * The style is composed here rather than baked into `DEFAULT_PROMPTS` so that
+ * the two cannot be edited apart: an owner who rewrites the chat prompt still
+ * gets the current house style, and a reworded style block reaches them without
+ * touching what they wrote.
  *
  * The cost is that the block is not visible in the Admin -> Tasks textarea,
  * which is why that page says so and points at Admin -> Settings.
@@ -79,10 +93,10 @@ export function getTaskConfig(task: string) {
  * composed twice.
  */
 export function systemPromptFor(task: string, supplementTask?: string | null): string {
-	const parts = [getTaskConfig(task)?.systemPrompt ?? ''];
-	if (supplementTask) parts.push(getTaskConfig(supplementTask)?.systemPrompt ?? '');
+	const parts = [taskPrompt(task)];
+	if (supplementTask) parts.push(taskPrompt(supplementTask));
 	const stored = parts.filter(Boolean).join('\n\n');
-	return PROSE_TASKS.has(task) ? stored + houseStyle() : stored;
+	return PROSE_TASKS.has(task) ? stored + houseStyle(task) : stored;
 }
 
 /**
@@ -255,27 +269,6 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	// it invalidated the cacheable prefix behind it (see buildContext).
 	const priorRun = previousRunNote(chat.id);
 	const activeTools = applyToolPolicy([...tools, ...mcpLoopTools('chat')], 'chat');
-	/**
-	 * What the first leg may call: everything that does not go and look something
-	 * up, plus the gate that asks for the ones that do. See answer-first.ts.
-	 *
-	 * The first cut of this offered the gate *alone*, and the end-to-end smoke
-	 * rejected it — "draw me a spiral galaxy" could no longer reach
-	 * `generate_image` on the leg that wanted to. It was right to: the complaint
-	 * this feature exists for is the agent researching before answering, not the
-	 * agent doing what it was asked. Blocking the acting tools made an image, a
-	 * PDF, a card write or a clarifying question each pay a full extra round-trip
-	 * to announce an intention, and put `set_chat_title` out of reach on the one
-	 * leg the naming design runs in.
-	 *
-	 * Run through the tool policy like everything else, so an admin can switch the
-	 * gate off in Admin → Tools. When they have, `opening` is the non-lookup tools
-	 * with no way to ask for the rest — so it falls back to the whole toolset,
-	 * which is how chat behaved before any of this existed. An opening leg that
-	 * can neither look things up nor ask to is a dead end, not a guarantee.
-	 */
-	const gate = applyToolPolicy([goDeeperTool()], 'chat');
-	const opening = gate.length ? [...activeTools.filter((t) => !t.lookup), ...gate] : [];
 	// Everything already on this chat, so anything the run makes can be told
 	// apart from it afterwards. See the back-stop in onDone.
 	const attachmentsBefore = new Set(listAttachments(chat.id).map((a) => a.id));
@@ -289,7 +282,6 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		primary: choice,
 		backup,
 		tools: activeTools,
-		openingTools: opening,
 		maxIterations: chatMaxSteps(),
 		// The turn a person is sitting and watching, so it asks for the floor.
 		// Chat asked for nothing, and on a reasoning model "nothing" means the

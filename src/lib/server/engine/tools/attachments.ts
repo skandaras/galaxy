@@ -36,7 +36,7 @@ export function attachmentTools(chatId: string): LoopTool[] {
 			def: {
 				name: 'read_attachment',
 				description:
-					'Read the text of a document attached to this conversation. Use offset/limit to page through long files. Images have no text to read — use view_image for those.',
+					'Read the text of a document attached to this conversation. Use offset/limit to page through long files. Images have no text to read, so use view_image for those.',
 				parameters: {
 					type: 'object',
 					properties: {
@@ -83,7 +83,7 @@ export function attachmentTools(chatId: string): LoopTool[] {
 				const end = offset + slice.length;
 				const remaining = text.length - end;
 				return remaining > 0
-					? `${slice}\n…(${remaining} characters remain — call again with offset=${end})`
+					? `${slice}\n…(${remaining} characters remain: call again with offset=${end})`
 					: slice;
 			}
 		}

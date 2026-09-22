@@ -79,7 +79,7 @@ function describeCard(card: Card, boardName: string, userId: string): string {
 		lines.push('', '## Log (oldest first)');
 		for (const l of detail.log) {
 			lines.push(
-				`- ${l.createdAt.toISOString()} ${l.actor}: ${l.event}${l.detail ? ` — ${l.detail}` : ''}`
+				`- ${l.createdAt.toISOString()} ${l.actor}: ${l.event}${l.detail ? `, ${l.detail}` : ''}`
 			);
 		}
 	}
@@ -112,7 +112,6 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 	const read: LoopTool[] = [
 		{
 			parallelSafe: true,
-			lookup: true,
 			def: {
 				name: 'board_read',
 				description:
@@ -147,7 +146,7 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 										const lane = lanes.find((l) => l.id === c.laneId)?.name ?? '?';
 										const status = statuses.find((s) => s.id === c.statusId)?.name ?? '?';
 										const project = projects.find((p) => p.id === c.projectId);
-										return `- [${c.id}] ${c.title} — ${lane} / ${status}${c.priority === 'none' ? '' : ` / ${c.priority}`}${project ? ` / ${project.name}` : ''}`;
+										return `- [${c.id}] ${c.title}: ${lane} / ${status}${c.priority === 'none' ? '' : ` / ${c.priority}`}${project ? ` / ${project.name}` : ''}`;
 									})
 									.join('\n')
 							: '(no cards)';
@@ -165,11 +164,10 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 		},
 		{
 			parallelSafe: true,
-			lookup: true,
 			def: {
 				name: 'card_read',
 				description:
-					'Read one card in full — description, attachments and its whole activity Log. Read the Log before starting work: it records what has already been tried.',
+					'Read one card in full: description, attachments and its whole activity Log. Read the Log before starting work: it records what has already been tried.',
 				parameters: {
 					type: 'object',
 					properties: { cardId: { type: 'string' } },
@@ -191,7 +189,7 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 			def: {
 				name: 'card_add',
 				description:
-					'Add a card to a board. Only when the person has asked for something to be captured — do not file cards off your own initiative.',
+					'Add a card to a board. Only when the person has asked for something to be captured. Do not file cards off your own initiative.',
 				parameters: {
 					type: 'object',
 					properties: {
@@ -302,14 +300,14 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 				);
 				if (!updated) throw new Error('Could not update the card.');
 				const status = listStatuses(card.boardId).find((s) => s.id === updated.statusId);
-				return `Updated "${updated.title}" — status ${status?.name ?? '?'}${updated.archivedAt ? ' (archived off the board)' : ''}.`;
+				return `Updated "${updated.title}": status ${status?.name ?? '?'}${updated.archivedAt ? ' (archived off the board)' : ''}.`;
 			}
 		},
 		{
 			def: {
 				name: 'card_comment',
 				description:
-					'Write a note on a card’s Log. This is how you leave a record of what you did, what you found, or what is blocking you — the person will read it on the card.',
+					'Write a note on a card’s Log. This is how you leave a record of what you did, what you found, or what is blocking you. The person will read it on the card.',
 				parameters: {
 					type: 'object',
 					properties: { cardId: { type: 'string' }, note: { type: 'string' } },
@@ -339,7 +337,7 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 			def: {
 				name: 'lane_add',
 				description:
-					'Add a lane (a column) to a board. Lanes group cards however the person likes — status is a separate field, so do not create lanes named after workflow states.',
+					'Add a lane (a column) to a board. Lanes group cards however the person likes. Status is a separate field, so do not create lanes named after workflow states.',
 				parameters: {
 					type: 'object',
 					properties: {
@@ -397,7 +395,7 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 			def: {
 				name: 'project_add',
 				description:
-					'Add a project to a board. Projects are a way of grouping and filtering cards across lanes — a house move, a holiday, the tax return. Cards are then filed against one with card_add or card_update.',
+					'Add a project to a board. Projects are a way of grouping and filtering cards across lanes: a house move, a holiday, the tax return. Cards are then filed against one with card_add or card_update.',
 				parameters: {
 					type: 'object',
 					properties: {
@@ -419,7 +417,7 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 			def: {
 				name: 'board_add',
 				description:
-					'Create a new board. Only when the person has asked for one — a board is a place they will have to tend, not a filing convenience. It arrives with default lanes and statuses.',
+					'Create a new board. Only when the person has asked for one. A board is a place they will have to tend, not a filing convenience. It arrives with default lanes and statuses.',
 				parameters: {
 					type: 'object',
 					properties: { name: { type: 'string' }, description: { type: 'string' } },

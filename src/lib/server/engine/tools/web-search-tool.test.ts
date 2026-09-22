@@ -11,6 +11,7 @@ import {
 	normaliseQuery,
 	renderSnippetChars,
 	webSearchTool,
+	webSearchToolDef,
 	type SearchOutcome,
 	type SearchResult
 } from './web-search';
@@ -216,13 +217,9 @@ describe('webSearchTool', () => {
 		expect(meta[1]).toMatchObject({ deferred: true, searchesUsed: 1, perStep: 1 });
 	});
 
-	it('lets an admin buy the breadth back, and says so everywhere it says anything', async () => {
-		// The bug this whole rule exists to undo was two instructions disagreeing,
-		// so a description promising "one per turn" under a setting of two would
-		// be the same mistake in a new place.
+	it('lets an admin buy the breadth back', async () => {
 		const { search } = stubSearch();
 		const tool = webSearchTool(cfg({ searchesPerStep: 2 }), { search });
-		expect(tool.def.description).toContain('2 searches per turn');
 		tool.beginStep?.();
 		await tool.execute({ query: 'a' });
 		expect(await tool.execute({ query: 'b' })).toContain('2 per turn');
@@ -232,8 +229,16 @@ describe('webSearchTool', () => {
 		expect(search).toHaveBeenCalledTimes(2);
 	});
 
-	it('states the ration in its own description, so the model knows before it tries', () => {
-		expect(webSearchTool(cfg(), {}).def.description).toContain('one search per turn');
+	it('leaves its definition unmutated, so the ration is stated where it applies', () => {
+		// The configured number used to be appended to the description per
+		// instance, which made it the fourth place one rule was stated: the task
+		// prompt, the turn-budget note, this description and the refusal below all
+		// said it. The refusal is the one that lands, because it arrives at the
+		// moment the ration bites, and it cannot go stale against the setting.
+		expect(webSearchTool(cfg(), {}).def).toBe(webSearchToolDef);
+		expect(webSearchTool(cfg({ searchesPerStep: 2 }), {}).def.description).not.toMatch(
+			/\d+ searches per turn/
+		);
 	});
 
 	it('points at reading, not at the number of searches left', async () => {

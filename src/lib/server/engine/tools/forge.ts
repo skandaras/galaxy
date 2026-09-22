@@ -91,7 +91,7 @@ export function forgeTreeText(epic: ForgeEpic): string {
 	const tasks = listTasks(epic.id);
 	const lines = [
 		`# ${epic.title}`,
-		`state: ${epic.state}${epic.stateReason ? ` — ${epic.stateReason}` : ''}`,
+		`state: ${epic.state}${epic.stateReason ? `, ${epic.stateReason}` : ''}`,
 		`repo: ${epic.repoName || epic.repoUrl} · base ${epic.baseBranch} · integration ${epic.integrationBranch}`,
 		epic.brief ? `\nBrief:\n${epic.brief}` : ''
 	];
@@ -109,9 +109,9 @@ export function forgeTreeText(epic: ForgeEpic): string {
 		for (const t of mine) {
 			const checks = t.checks?.length
 				? t.checks.map((c) => c.name).join(', ')
-				: `no check — ${t.noCheckReason || 'unstated'}`;
+				: `no check, ${t.noCheckReason || 'unstated'}`;
 			lines.push(
-				`- [${t.state}] ${t.title} (${t.attempts} attempt${t.attempts === 1 ? '' : 's'}) — ${checks}`
+				`- [${t.state}] ${t.title} (${t.attempts} attempt${t.attempts === 1 ? '' : 's'}): ${checks}`
 			);
 		}
 	}
@@ -137,7 +137,7 @@ export function charterTools(sink: CharterSink): LoopTool[] {
 				description:
 					'Record the structure of this build: its sprints in order, the checks every task will be held to, ' +
 					'the slower checks worth running only at a sprint boundary, and how somebody would know the whole ' +
-					'thing worked. Call this once, at the end, after your written charter. You are proposing — a person ' +
+					'thing worked. Call this once, at the end, after your written charter. You are proposing, and a person ' +
 					'confirms the checks before anything runs, and nothing can change them afterwards.',
 				parameters: {
 					type: 'object',
@@ -191,7 +191,7 @@ export function charterTools(sink: CharterSink): LoopTool[] {
 				const standingChecks = readChecks(a.standingChecks);
 				if (!standingChecks.length) {
 					throw new Error(
-						'At least one standing check is required — read package.json or the CI workflow and propose what this repository already runs.'
+						'At least one standing check is required: read package.json or the CI workflow and propose what this repository already runs.'
 					);
 				}
 				sink({
@@ -214,7 +214,6 @@ export function forgeReadTools(epicId: string, userId: string): LoopTool[] {
 	return [
 		{
 			parallelSafe: true,
-			lookup: true,
 			def: {
 				name: 'forge_read',
 				description:

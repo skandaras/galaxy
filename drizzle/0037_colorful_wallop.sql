@@ -1,0 +1,1 @@
+ALTER TABLE `task_configs` ADD `prompt_override` text;
