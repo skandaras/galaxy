@@ -38,7 +38,7 @@ const pending = new Map<string, Pending>();
 export const askUserToolDef: ToolDef = {
 	name: 'ask_user',
 	description:
-		'Ask the person you are working for a question and wait for their answer. Use this when you are missing something only they can tell you, or when you have hit a blocker they should know about — not to check in, confirm the obvious, or narrate progress. Ask one focused question at a time. If you can reasonably work it out yourself, do that instead. The run parks until they answer, however long that takes, so only ask when the answer is worth waiting for.',
+		'Ask the person you are working for a question and wait for their answer. Use this when you are missing something only they can tell you, or when you have hit a blocker they should know about. Not to check in, confirm the obvious, or narrate progress. Ask one focused question at a time. If you can reasonably work it out yourself, do that instead. The run parks until they answer, however long that takes, so only ask when the answer is worth waiting for.',
 	parameters: {
 		type: 'object',
 		properties: {

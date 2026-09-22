@@ -1,7 +1,12 @@
 <script lang="ts">
 	interface TaskConfig {
 		task: string;
+		/** What the task will run on: the override where there is one, else the default. */
 		systemPrompt: string;
+		/** What this release ships, so the box can be put back without a reload. */
+		defaultPrompt: string;
+		/** Whether the text above is the owner's or the shipped one. */
+		overridden: boolean;
 		primaryModelId: string | null;
 		backupModelId: string | null;
 	}
@@ -41,8 +46,23 @@
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify(cfg)
 		});
+		// The route clears the override when the text matches the default, so the
+		// badge has to be recomputed here rather than left as it was.
+		cfg.overridden = cfg.systemPrompt !== cfg.defaultPrompt;
 		savedTask = cfg.task;
 		setTimeout(() => (savedTask = null), 1500);
+	}
+
+	/**
+	 * Hand the box back the shipped prompt and save it.
+	 *
+	 * Saving the default is what *clears* the override, so this needs no endpoint
+	 * of its own. A task with no override tracks the code, which is the point:
+	 * reset once and every future reword arrives without being asked for.
+	 */
+	async function resetToDefault(cfg: TaskConfig) {
+		cfg.systemPrompt = cfg.defaultPrompt;
+		await save(cfg);
 	}
 
 	async function showHistory(task: string) {
@@ -63,15 +83,24 @@
 
 <section>
 	<p class="preamble">
+		A box left at the shipped wording keeps tracking it, so a prompt improved in a later release
+		arrives on its own. Save anything else and the task is marked <em>edited</em>: it is yours from
+		then on and nothing will touch it, until you reset it.
+	</p>
+	<p class="preamble">
 		The agents that write prose also carry a shared house style, which is not shown in these boxes
-		and is not editable here — it reaches chat, coding, deep research, the board, the sub-agent and
-		the background reviewers. Read it, and add your own rules to it, under Settings &rarr; House
-		style.
+		and is not editable here — how they sound reaches chat, coding, deep research, the board, the
+		sub-agent and the background reviewers, and how their replies are shaped reaches the ones that
+		answer in prose rather than JSON. Read it, and add your own rules to it, under Settings &rarr;
+		House style.
 	</p>
 	{#each configs as cfg (cfg.task)}
 		<article class="card">
 			<header>
-				<h3>{cfg.task}</h3>
+				<h3>
+					{cfg.task}
+					{#if cfg.overridden}<span class="badge">edited</span>{/if}
+				</h3>
 				<div class="model-row">
 					<label>
 						primary
@@ -101,6 +130,9 @@
 				<button class="btn" onclick={() => showHistory(cfg.task)}>
 					{historyTask === cfg.task ? 'Hide history' : 'History'}
 				</button>
+				{#if cfg.systemPrompt !== cfg.defaultPrompt}
+					<button class="btn" onclick={() => resetToDefault(cfg)}>Reset to default</button>
+				{/if}
 			</footer>
 			{#if historyTask === cfg.task}
 				<ul class="history">
@@ -168,6 +200,18 @@
 		font-size: var(--text-sm);
 		color: var(--fg-dim);
 		margin: 0 0 0.9rem;
+	}
+	/* Same shape as the scoped badge in Tools.svelte, for the same kind of fact:
+	   this row is not on its default any more. */
+	.badge {
+		font-size: var(--text-xs);
+		border: 1px solid var(--accent);
+		color: var(--accent);
+		border-radius: 3px;
+		padding: 0 0.25rem;
+		text-transform: uppercase;
+		vertical-align: middle;
+		margin-left: 0.4rem;
 	}
 	textarea {
 		width: 100%;

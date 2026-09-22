@@ -37,7 +37,7 @@ vi.mock('$lib/server/engine/engine', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('$lib/server/engine/engine')>();
 	return {
 		...actual,
-		getTaskConfig: () => ({ task: 'cortex-groom', systemPrompt: '' }),
+		getTaskConfig: () => ({ task: 'cortex-groom', systemPrompt: '', promptOverride: '' }),
 		pickModel: () => ({
 			model: { modelKey: 'mock/model' },
 			provider: {},

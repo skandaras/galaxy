@@ -264,7 +264,7 @@ async function connect(server: McpServer): Promise<Client> {
 		// transport's HTTP status — flattening this to a plain Error is what hid
 		// the 401 from explainAuthFailure.
 		if (!detail) throw err;
-		const wrapped = new Error(`${messageOf(err)} — ${detail}`, { cause: err });
+		const wrapped = new Error(`${messageOf(err)}: ${detail}`, { cause: err });
 		(wrapped as { code?: unknown }).code = (err as { code?: unknown })?.code;
 		throw wrapped;
 	}
@@ -298,7 +298,7 @@ async function describeFailure(serverId: string, err: unknown): Promise<string> 
 	const base = explainAuthFailure(err) ?? messageOf(err);
 	const detail = await stderrDetail(serverId);
 	// The handshake path already appends the detail, so don't say it twice.
-	return detail && !base.includes(detail) ? `${base} — ${detail}` : base;
+	return detail && !base.includes(detail) ? `${base}: ${detail}` : base;
 }
 
 /**
@@ -320,7 +320,7 @@ export function explainAuthFailure(err: unknown): string | null {
 	if (!unauthorized) return null;
 	return [
 		`The server rejected Galaxy's credentials (HTTP ${code ?? '401/403'}).`,
-		'Usually the Authorization header is missing or wrong — check the headers field.',
+		'Usually the Authorization header is missing or wrong. Check the headers field.',
 		'Servers that require an OAuth sign-in instead of a token are not supported;',
 		'see docs/MCP.md for which servers work with a static token.'
 	].join(' ');

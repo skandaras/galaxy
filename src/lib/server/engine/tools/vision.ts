@@ -40,7 +40,7 @@ export const viewImageToolDef: ToolDef = {
 	name: 'view_image',
 	description:
 		'Ask a vision model what is in an image attached to this conversation, and get its answer ' +
-		'back as text. You cannot see images yourself — this is how you read a screenshot, a photo, ' +
+		'back as text. You cannot see images yourself, so this is how you read a screenshot, a photo, ' +
 		'a chart or a scanned page. Ask for what you actually need ("what does the error say?", ' +
 		'"transcribe the table", "what is wrong with this layout?") rather than for a description: ' +
 		'a specific question gets a specific answer, and you can call it again for more. One image ' +
@@ -77,7 +77,7 @@ export function visionTools(chatId: string, userId: string): LoopTool[] {
 				const question = String(a.question ?? '').trim();
 				if (!question) throw new Error('question is required');
 				if (getBudgetStatus().blocked) {
-					throw new Error('The spend cap has been reached — say so rather than guessing at the image.');
+					throw new Error('The spend cap has been reached, so say so rather than guessing at the image.');
 				}
 
 				const image = pickImage(chatId, a.id);
@@ -128,7 +128,7 @@ export function visionTools(chatId: string, userId: string): LoopTool[] {
 				}
 				const body =
 					answer.length > MAX_ANSWER_CHARS
-						? `${answer.slice(0, MAX_ANSWER_CHARS)}\n…(cut off — ask about one part of the image at a time)`
+						? `${answer.slice(0, MAX_ANSWER_CHARS)}\n…(cut off: ask about one part of the image at a time)`
 						: answer;
 				return `${choice.model.displayName} on ${image.name}:\n${body}`;
 			}
@@ -152,14 +152,14 @@ function pickImage(chatId: string, rawId: unknown): AttachmentSummary {
 	if (!id) {
 		if (images.length === 1) return images[0];
 		throw new Error(
-			`This conversation has ${images.length} images — say which one with id: ${images.map((x) => `${x.name} (${x.id})`).join(', ')}`
+			`This conversation has ${images.length} images, so say which one with id: ${images.map((x) => `${x.name} (${x.id})`).join(', ')}`
 		);
 	}
 	const match = images.find((x) => x.id === id);
 	if (match) return match;
 
 	const document = listAttachments(chatId).find((x) => x.id === id);
-	if (document) throw new Error(`${document.name} is not an image — read it with read_attachment.`);
+	if (document) throw new Error(`${document.name} is not an image. Read it with read_attachment.`);
 	throw new Error(
 		`No image with id ${id}. Attached: ${images.map((x) => `${x.name} (${x.id})`).join(', ')}`
 	);

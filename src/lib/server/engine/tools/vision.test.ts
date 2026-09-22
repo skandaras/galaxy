@@ -36,7 +36,12 @@ vi.mock('../engine', async (importOriginal) => {
 		...actual,
 		getTaskConfig: (task: string) =>
 			task === 'vision'
-				? { task, systemPrompt: 'you look', primaryModelId: configuredModelId }
+				? {
+						task,
+						systemPrompt: 'you look',
+						promptOverride: 'you look',
+						primaryModelId: configuredModelId
+					}
 				: actual.getTaskConfig(task)
 	};
 });

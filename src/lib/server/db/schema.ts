@@ -305,7 +305,26 @@ export type CoreTask = (typeof CORE_TASKS)[number];
 
 export const taskConfigs = sqliteTable('task_configs', {
 	task: text('task').primaryKey(),
+	/**
+	 * The resolved prompt, kept in step with `promptOverride` on every boot.
+	 *
+	 * Nothing reads it any more: `systemPromptFor` resolves
+	 * `promptOverride ?? DEFAULT_PROMPTS[task]`. It stays written because this app
+	 * updates itself and can be rolled back to the previous image, and that image
+	 * reads this column directly. Dropping it in the same release as the code that
+	 * stopped using it is exactly what AGENTS.md forbids.
+	 */
 	systemPrompt: text('system_prompt').notNull().default(''),
+	/**
+	 * The owner's own prompt for this task, or null to use the shipped default.
+	 *
+	 * Null is the normal state. Defaults used to be *seeded* into `systemPrompt`,
+	 * which froze them at install time: changing a default reached nobody who had
+	 * ever booted the app, so every reword needed its predecessor frozen verbatim
+	 * in a SUPERSEDED_PROMPTS table and a migration that matched on it. Storing
+	 * only the difference from the default removes both.
+	 */
+	promptOverride: text('prompt_override'),
 	primaryModelId: text('primary_model_id'),
 	backupModelId: text('backup_model_id'),
 	options: text('options', { mode: 'json' })

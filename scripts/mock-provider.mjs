@@ -496,10 +496,6 @@ const server = createServer(async (req, res) => {
 			parsed.messages.some(
 				(m) => m.role === 'user' && textOf(m.content).toLowerCase().includes(word)
 			);
-		// What a real model does on the opening leg: it cannot search yet, so it
-		// says it needs to. Only when the gate is what is on offer — once the run
-		// is past it, `web_search` is there and this is not.
-		const wantsGate = offered('look_into_it') && !offered('web_search') && everAsksFor('search');
 		const wantsTool = offered('web_search') && everAsksFor('search');
 		// Same shape as the search trigger above, for the drawing path: the agent
 		// calls generate_image, which calls the painter model behind it.
@@ -1106,7 +1102,6 @@ const server = createServer(async (req, res) => {
 			system.includes('[This conversation has no name yet]') &&
 			!namedAlready &&
 			!wantsTool &&
-			!wantsGate &&
 			!wantsImage &&
 			!wantsView &&
 			!drewAlready &&
@@ -1130,24 +1125,7 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
-		if (wantsGate) {
-			// A word of answer before asking to go further, which is the whole
-			// point of the gate: the person has something to read immediately.
-			delta(res, { content: 'Briefly: galaxies are large. Let me check the latest.' });
-			delta(res, {
-				tool_calls: [
-					{
-						index: 0,
-						id: 'call_gate',
-						function: {
-							name: 'look_into_it',
-							arguments: JSON.stringify({ reason: 'recent galaxy news' })
-						}
-					}
-				]
-			});
-			delta(res, {}, 'tool_calls');
-		} else if (wantsTool) {
+		if (wantsTool) {
 			// Tool-call arguments intentionally split across chunks to exercise accumulation.
 			delta(res, {
 				tool_calls: [{ index: 0, id: 'call_1', function: { name: 'web_search', arguments: '' } }]

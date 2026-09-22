@@ -44,7 +44,6 @@ export function cortexTools(
 	const tools: LoopTool[] = [
 		{
 			parallelSafe: true,
-			lookup: true,
 			def: {
 				name: 'cortex_query',
 				description:
@@ -56,14 +55,14 @@ export function cortexTools(
 					// nearly every turn and then to have found something, and that is how
 					// a lattice stops being context and starts being a script.
 					'Read the working map of who you are talking to. The lattice holds their ' +
-					'concepts and how those connect — what is currently true of them, their work ' +
+					'concepts and how those connect: what is currently true of them, their work ' +
 					'and their world, not a log of past events. Give it what the conversation is ' +
 					'about and it returns the concepts that bear on it plus how they relate, ' +
 					'including ones the question never named.\n\n' +
 					'Worth a call when the answer would genuinely differ for knowing them: their ' +
 					'work, their commitments, their taste, a choice that turns on their situation. ' +
 					'Not worth one for a question with a right answer independent of who is asking. ' +
-					'If what comes back does not bear on the question, ignore it — a query that ' +
+					'If what comes back does not bear on the question, ignore it. A query that ' +
 					'turns out not to help is a normal outcome, not a reason to work it in.\n\n' +
 					'Pass from_node instead of query to explore outward from a concept you have.',
 				parameters: {
@@ -144,9 +143,9 @@ export function cortexTools(
 				'across several turns rather than mentioning it once.\n\n' +
 				'The bar is that it would still matter in six months. Most conversations do not ' +
 				'clear it, and recording nothing is the ordinary outcome of a turn rather than a ' +
-				'missed one — a lattice full of things that seemed worth noting on the day is ' +
+				'missed one. A lattice full of things that seemed worth noting on the day is ' +
 				'worse than a small one, because every query has to wade through it.\n\n' +
-				'A concept, not a fact — facts belong in memory. The test is whether the thing has ' +
+				'A concept, not a fact: facts belong in memory. The test is whether the thing has ' +
 				'edges. A named position that connects to other ideas is a concept: "the view that ' +
 				"institutions decay by succeeding\", which connects to their reading, their work and " +
 				'their scepticism about growth. "Interested in politics" has nowhere to go and ' +
@@ -225,7 +224,7 @@ export function cortexTools(
 			if (made.length) lines.push(`Connected to: ${made.join(', ')}`);
 			if (failed.length) lines.push(`Could not connect to: ${failed.join(', ')}`);
 			if (!made.length && !failed.length) {
-				lines.push('No connections made — an unconnected node will not surface in a query.');
+				lines.push('No connections made, and an unconnected node will not surface in a query.');
 			}
 			return lines.join('\n');
 		}

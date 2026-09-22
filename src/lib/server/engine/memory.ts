@@ -170,7 +170,7 @@ export function memoryDigest(userId: string, maxItems = memoryCap()): string {
 	const lines = items.map((m) => `- (${m.kind}) ${m.content}`);
 	return [
 		'',
-		'[Memory — durable observations from past activity]',
+		'[Memory: durable observations from past activity]',
 		// The landing zone for anything the memory audit got wrong. These lines
 		// were extracted from content the platform does not control, and they sit
 		// in the system prompt of every chat and coding turn — so say plainly what
@@ -325,7 +325,7 @@ export function gatherActivity(userId: string, sinceMs: number): ActivityDigest 
 const LONG_TERM_PREAMBLE =
 	'Memories that were held in working memory and lost their place to something worth more. ' +
 	'The working set is small on purpose; this is where the rest of what was learned goes. ' +
-	'Newest first — search this rather than reading it end to end.';
+	'Newest first. Search this rather than reading it end to end.';
 
 function preserveInLibrary(
 	userId: string,
@@ -341,7 +341,7 @@ function preserveInLibrary(
 	const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
 	const section = [
 		`## ${stamp}`,
-		...leaving.map((l) => `- (${l.item.kind}) ${l.item.content}${l.why ? ` — ${l.why}` : ''}`)
+		...leaving.map((l) => `- (${l.item.kind}) ${l.item.content}${l.why ? `, ${l.why}` : ''}`)
 	].join('\n');
 	saveDoc({
 		id: existing?.id,
@@ -465,7 +465,7 @@ export async function runMemory(
 			// difference between a memory and a topic log, so it should not
 			// live in only one of the two places.
 			'The test for every candidate: would this change how you answer a *different* question, on a *different* day? If not, leave it out.',
-			'Never record what the person asked about, searched for, read or was curious about — a topic is not a fact about them, and the conversation already records it. Never record something that was true of one occasion only.',
+			'Never record what the person asked about, searched for, read or was curious about. A topic is not a fact about them, and the conversation already records it. Never record something that was true of one occasion only.',
 			'Do record: standing preferences, constraints they work under, how they like to work, their tools and environment, decisions already taken, and roles or relationships that recur. Write the fact, not the occasion you learnt it on.',
 			'Prefer fewer, and an empty list is the right answer on most days. Every line is re-sent on every future turn, so a memory has to be worth more than it costs.',
 			// The scarcity is now real rather than advisory. The prompt
@@ -486,7 +486,7 @@ export async function runMemory(
 						`${beyondCap} older memories are stored but never reach a prompt, and are not listed. Until the set is back under ${cap} you can only swap, not grow: retiring frees nothing, and anything you add has to displace one of the numbered memories above.`
 					]
 				: []),
-			`The user dismissed these — never extract them again, in any wording:\n${dismissed.map((m) => m.content).join('\n') || '(none)'}${dismissedTotal > dismissed.length ? `\n(and ${dismissedTotal - dismissed.length} older dismissals not listed)` : ''}`,
+			`The user dismissed these, so never extract them again, in any wording:\n${dismissed.map((m) => m.content).join('\n') || '(none)'}${dismissedTotal > dismissed.length ? `\n(and ${dismissedTotal - dismissed.length} older dismissals not listed)` : ''}`,
 			`Existing skills: ${existingSkills || '(none)'}`,
 			// Everything below is written by whoever produced it — a person,
 			// a fetched page, a card someone else filled in — and whatever
@@ -703,7 +703,7 @@ export async function runMemory(
 		return {
 			ran: false,
 			reason: timedOut
-				? `${choice.model.displayName} did not answer within the ${Math.round(limitMs / 1000)}s it was given — raise the time limit in Admin → Memory, or point the memory task at a faster model`
+				? `${choice.model.displayName} did not answer within the ${Math.round(limitMs / 1000)}s it was given. Raise the time limit in Admin → Memory, or point the memory task at a faster model`
 				: message
 		};
 	}
@@ -748,7 +748,7 @@ export async function consolidateMemory(
 ): Promise<{ ran: boolean; reason?: string; proposal?: ConsolidationProposal }> {
 	const active = listMemoryItems(userId).filter((m) => m.status === 'active');
 	if (active.length < MIN_ITEMS_TO_CONSOLIDATE) {
-		return { ran: false, reason: `only ${active.length} active memories — nothing to merge yet` };
+		return { ran: false, reason: `only ${active.length} active memories, so nothing to merge yet` };
 	}
 	if (getBudgetStatus().blocked) return { ran: false, reason: 'budget cap reached' };
 
@@ -786,7 +786,7 @@ export async function consolidateMemory(
 							'- Also drop anything that is a record of what the person asked about, searched for, read or was curious about, rather than a fact about them. "Asked about connection pooling" and "interested in sourdough" are notes about a conversation, not things that change a future answer. The test is whether the item would change how you answer a different question on a different day; if it would not, list it as redundant.',
 							'- Judge an item on what it says, not on how it is worded. A topic log dressed as a preference is still a topic log.',
 							'Reply with ONLY a JSON object: {"merged":[{"kind":"preference|pattern|fact","content":"…","replaces":[1,4]}],"redundant":[7]}',
-							'"replaces" lists the numbers the merged line stands in for. "redundant" lists numbers to remove — exact duplicates of something else in the list, and items that do not pass the test above.',
+							'"replaces" lists the numbers the merged line stands in for. "redundant" lists numbers to remove: exact duplicates of something else in the list, and items that do not pass the test above.',
 							`--- MEMORIES (${active.length}) ---`,
 							numbered
 						].join('\n\n')

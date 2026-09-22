@@ -2,7 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
 import { comparisonContext, type ComparisonSide } from '$lib/server/cortex';
-import { getTaskConfig, pickModel } from '$lib/server/engine/engine';
+import { getTaskConfig, pickModel, taskPrompt } from '$lib/server/engine/engine';
 import { getBudgetStatus } from '$lib/server/engine/budget';
 import { logUsage } from '$lib/server/engine/usage';
 
@@ -36,7 +36,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	const { text: context, concepts } = comparisonContext(user.id, prompt);
 
 	const run = async (extra: string): Promise<ComparisonSide> => {
-		const system = [cfg?.systemPrompt ?? '', extra].filter(Boolean).join('\n\n');
+		// Through the resolver, not off the row: `system_prompt` is a rollback copy
+		// and an install that never edited its chat prompt has no override at all,
+		// so reading the column directly would compare against stale text.
+		const system = [taskPrompt('chat'), extra].filter(Boolean).join('\n\n');
 		const startedAt = Date.now();
 		const { text, usage } = await choice.adapter.complete(
 			{

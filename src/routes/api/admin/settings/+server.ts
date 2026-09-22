@@ -25,7 +25,7 @@ import {
 	normaliseWebSearchSettings,
 	setSetting
 } from '$lib/server/settings';
-import { HOUSE_VOICE } from '$lib/server/engine/voice';
+import { HOUSE_VOICE, OUTPUT_FORMAT } from '$lib/server/engine/voice';
 import { emitEvent } from '$lib/server/engine/events';
 
 const KNOWN_KEYS = [
@@ -119,7 +119,14 @@ export const GET: RequestHandler = ({ locals }) => {
 		// Read-only, like the `has…` flags above: the owner's additions are edited
 		// against the house style, so the editor has to be able to show it. It
 		// cannot be written back — normaliseStyleSettings returns `text` alone.
-		if (key === 'style') value.house = HOUSE_VOICE;
+		//
+		// Both halves, because both are composed at call time now. Showing only
+		// the diction would leave the owner overriding layout rules they had no
+		// way to read.
+		if (key === 'style') {
+			value.house = HOUSE_VOICE;
+			value.layout = OUTPUT_FORMAT;
+		}
 		out[key] = value;
 	}
 	return json(out);

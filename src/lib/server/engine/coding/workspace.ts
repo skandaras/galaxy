@@ -103,7 +103,7 @@ export function repoInstructions(workspaceRel: string): string {
 		const slice = body.slice(0, budget);
 		budget -= slice.length;
 		blocks.push(
-			`[${name} — this repository's own instructions. Follow them; they outrank your general habits.]\n${slice}${
+			`[${name}: this repository's own instructions. Follow them; they outrank your general habits.]\n${slice}${
 				slice.length < body.length ? '\n…(truncated)' : ''
 			}`
 		);

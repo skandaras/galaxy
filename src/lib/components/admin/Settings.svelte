@@ -30,7 +30,7 @@
 	let retention = $state({ eventDays: 60, usageDays: 400, uxIdeaDays: 14, cortexChangeDays: 90 });
 	let fetchCfg = $state({ timeoutMs: 15000, maxChars: 20000, maxFetchesPerTurn: 5 });
 	/** `house` is served read-only, for editing against — it is never sent back. */
-	let style = $state({ text: '', house: '' });
+	let style = $state({ text: '', house: '', layout: '' });
 	let saved = $state<string | null>(null);
 	let deployBusy = $state<string | null>(null);
 	let deployMsg = $state<string | null>(null);
@@ -114,7 +114,7 @@
 		coding = { ...data.coding };
 		retention = { ...data.retention };
 		fetchCfg = { ...data.fetch };
-		style = { text: '', house: '', ...data.style };
+		style = { text: '', house: '', layout: '', ...data.style };
 		await loadPush();
 	}
 
@@ -401,6 +401,14 @@
 		<details>
 			<summary class="hint">Read the built-in house style</summary>
 			<pre class="voice">{style.house}</pre>
+		</details>
+		<details>
+			<summary class="hint">Read the built-in layout rules</summary>
+			<p class="hint">
+				These reach the agents that answer in prose: chat, coding and the two Forge documents.
+				The ones that answer with JSON get the voice above and none of this.
+			</p>
+			<pre class="voice">{style.layout}</pre>
 		</details>
 		<button class="btn primary" onclick={() => save('style', { text: style.text })}>
 			{saved === 'style' ? 'Saved ✓' : 'Save'}

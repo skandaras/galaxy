@@ -48,7 +48,13 @@ vi.mock('./engine', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('./engine')>();
 	return {
 		...actual,
-		getTaskConfig: () => ({ task: 'cortex-groom', systemPrompt: 'you tend a lattice' }),
+		getTaskConfig: () => ({
+			task: 'cortex-groom',
+			// The override is what taskPrompt reads; systemPrompt is only the
+			// rollback copy now. See the schema.
+			systemPrompt: 'you tend a lattice',
+			promptOverride: 'you tend a lattice'
+		}),
 		pickModel: () => ({
 			model: { modelKey: 'mock/model' },
 			provider: {},

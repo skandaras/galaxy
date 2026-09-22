@@ -38,7 +38,7 @@ export function imageTools(chatId: string, userId: string): LoopTool[] {
 				description:
 					'Draw an image from a description and attach it to this conversation. Use it when ' +
 					'the user asks for a picture, an illustration, a logo, a photo-like asset or a ' +
-					'mock-up — not for diagrams, charts or anything made of shapes and labels, which ' +
+					'mock-up. Not for diagrams, charts or anything made of shapes and labels, which ' +
 					'belong in a mermaid or svg fenced block instead. Returns a markdown image link: ' +
 					'include it in your reply exactly as given, or the user never sees what you drew. ' +
 					'Pass reference_attachment_id to work from an image already in the conversation.',
@@ -48,7 +48,7 @@ export function imageTools(chatId: string, userId: string): LoopTool[] {
 						prompt: {
 							type: 'string',
 							description:
-								'What to draw, in as much detail as you can give — subject, composition, ' +
+								'What to draw, in as much detail as you can give: subject, composition, ' +
 								'style, palette, mood. Vague prompts produce vague pictures.'
 						},
 						name: {
@@ -109,7 +109,7 @@ export function imageTools(chatId: string, userId: string): LoopTool[] {
 				const images = res.images ?? [];
 				if (!images.length) {
 					throw new Error(
-						`${choice.model.displayName} returned no image${res.text ? ` — it replied: ${res.text.slice(0, 300)}` : ''}. ` +
+						`${choice.model.displayName} returned no image${res.text ? `, and replied: ${res.text.slice(0, 300)}` : ''}. ` +
 							'It may not actually generate images; check Admin → Tasks → visual.'
 					);
 				}
@@ -139,7 +139,7 @@ export function imageTools(chatId: string, userId: string): LoopTool[] {
 				name: 'save_svg',
 				description:
 					'Save SVG markup you have written as a file attached to this conversation, so the ' +
-					'user can download and keep it. Write the SVG yourself — this does not call an ' +
+					'user can download and keep it. Write the SVG yourself; this does not call an ' +
 					'image model. To simply show a diagram in the thread you do not need this tool at ' +
 					'all: an ```svg fenced code block renders inline. Use this when the user wants the ' +
 					'file itself.',
@@ -160,7 +160,7 @@ export function imageTools(chatId: string, userId: string): LoopTool[] {
 					throw new Error('markup must be a complete SVG document starting with <svg');
 				}
 				if (markup.length > MAX_SVG_CHARS) {
-					throw new Error(`SVG is ${markup.length} characters — the limit is ${MAX_SVG_CHARS}`);
+					throw new Error(`SVG is ${markup.length} characters; the limit is ${MAX_SVG_CHARS}`);
 				}
 				const ref = addAttachment(chatId, {
 					name: `${fileBase(a.name, 'drawing')}.svg`,
@@ -206,7 +206,7 @@ function referenceContent(chatId: string, rawId: unknown) {
 	const id = typeof rawId === 'string' ? rawId.trim() : '';
 	if (!id) return null;
 	const match = listAttachments(chatId).find((x) => x.id === id);
-	if (!match) throw new Error(`No attachment with id ${id} — call list_attachments first.`);
+	if (!match) throw new Error(`No attachment with id ${id}. Call list_attachments first.`);
 	if (match.kind !== 'image') throw new Error(`${match.name} is not an image.`);
 	const url = attachmentDataUrl(chatId, id);
 	if (!url) throw new Error(`Could not read ${match.name}.`);

@@ -168,10 +168,10 @@ export function previousRunNote(chatId: string, now = Date.now()): string {
 		if (stopReason === 'exhausted') {
 			return 'The last run used up its step budget before the model said it was done, so the work is probably incomplete.';
 		}
-		return 'The last run finished but returned an empty reply — the user saw nothing at all.';
+		return 'The last run finished but returned an empty reply, so the user saw nothing at all.';
 	};
 
-	const lines = ['', `[Previous attempt on this conversation — ${ago(previous.startedAt, now)}]`, what()];
+	const lines = ['', `[Previous attempt on this conversation, ${ago(previous.startedAt, now)}]`, what()];
 
 	const steps = runSteps(chatId, previous);
 	if (steps.length) {
@@ -189,8 +189,8 @@ export function previousRunNote(chatId: string, now = Date.now()): string {
 
 	lines.push(
 		previous.status === 'cancelled' || unfinished
-			? 'Continue from where it got to rather than starting over — call run_history for what it already did — and say briefly what you are picking up from.'
-			: 'Do not simply repeat that attempt. Work out what went wrong first — call run_history if you need the detail — and either take a different route or tell the user plainly what is blocking it.'
+			? 'Continue from where it got to rather than starting over. Call run_history for what it already did, and say briefly what you are picking up from.'
+			: 'Do not simply repeat that attempt. Work out what went wrong first, calling run_history if you need the detail, and either take a different route or tell the user plainly what is blocking it.'
 	);
 	return lines.join('\n');
 }
@@ -211,7 +211,7 @@ function lastReplyWasEmpty(chatId: string): boolean {
 export const runHistoryToolDef: ToolDef = {
 	name: 'run_history',
 	description:
-		'Look at what happened on recent attempts in this conversation — the same record the ' +
+		'Look at what happened on recent attempts in this conversation: the same record the ' +
 		'Observatory shows: how each run ended, which tools it called, and any errors. Use this ' +
 		'when a previous attempt failed or was stopped and you need to know why before trying ' +
 		'again, rather than repeating work that has already been done or has already failed.',
@@ -231,7 +231,6 @@ export function runHistoryTool(chatId: string): LoopTool {
 	return {
 		def: runHistoryToolDef,
 		parallelSafe: true,
-		lookup: true,
 		describe: () => 'recent runs',
 		execute: async (args) => {
 			const limit = Math.max(1, Math.min(Number(args.limit) || 3, MAX_RUNS));
@@ -250,7 +249,7 @@ export function formatRunHistory(chatId: string, limit: number, now = Date.now()
 	const out: string[] = [];
 	for (const run of runs) {
 		const took = run.finishedAt ? ` in ${Math.round((run.finishedAt - run.startedAt) / 1000)}s` : '';
-		out.push(`## ${run.task} run, ${ago(run.startedAt, now)} — ${run.status}${took}`);
+		out.push(`## ${run.task} run, ${ago(run.startedAt, now)}, ${run.status}${took}`);
 		if (run.error) out.push(`error: ${run.error}`);
 
 		const steps = runSteps(chatId, run);
@@ -261,7 +260,7 @@ export function formatRunHistory(chatId: string, limit: number, now = Date.now()
 		for (const s of steps) {
 			const detail = [s.summary, s.error ? `error: ${s.error}` : '']
 				.filter(Boolean)
-				.join(' — ');
+				.join(', ');
 			out.push(
 				`- ${s.name} ${s.status}${s.durationMs ? ` (${s.durationMs}ms)` : ''}${detail ? `: ${detail}` : ''}`
 			);

@@ -23,7 +23,7 @@ export const setChatTitleToolDef: ToolDef = {
 	name: 'set_chat_title',
 	description:
 		'Name this conversation. Call this once, as part of your first reply, with a short ' +
-		'subject-style name — two to five words, naming what the conversation is about rather ' +
+		'subject-style name of two to five words, naming what the conversation is about rather ' +
 		'than restating the request. "Postgres connection pooling", not "Question about databases" ' +
 		'or "How to fix my pool". Only offered while the conversation is still unnamed; calling it ' +
 		'costs the user nothing and saves a second model call.',
@@ -60,7 +60,7 @@ export function setChatTitleTool(chatId: string, userId: string, onSet: () => vo
 			if (!chat) throw new Error('chat not found');
 			if (chat.titleCustom) {
 				onSet();
-				return `This conversation is already named "${chat.title}" by the user — left unchanged.`;
+				return `This conversation is already named "${chat.title}" by the user, so it was left unchanged.`;
 			}
 
 			updateChat(chatId, { title });
@@ -75,7 +75,7 @@ export function nameThisChatNote(): string {
 	return [
 		'',
 		'[This conversation has no name yet]',
-		'Call set_chat_title once during this reply with a short, subject-style name for it. Do this alongside answering — it is not a reason to delay or shorten your reply.'
+		'Call set_chat_title once during this reply with a short, subject-style name for it. Do this alongside answering. It is not a reason to delay or shorten your reply.'
 	].join('\n');
 }
 
@@ -144,7 +144,7 @@ export async function maybeTitleChat(chatId: string, userId: string): Promise<st
 					{
 						role: 'user',
 						content: [
-							'CHAT-TITLE: Name this conversation. Reply with the title alone — no quotes, no punctuation at the end, no preamble.',
+							'CHAT-TITLE: Name this conversation. Reply with the title alone: no quotes, no punctuation at the end, no preamble.',
 							`--- OPENING MESSAGE ---\n${firstUser.content.slice(0, MAX_SOURCE_CHARS)}`,
 							`--- REPLY ---\n${firstReply.content.slice(0, MAX_SOURCE_CHARS)}`
 						].join('\n\n')

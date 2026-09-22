@@ -26,7 +26,12 @@ vi.mock('../engine', async (importOriginal) => {
 		...actual,
 		getTaskConfig: (task: string) =>
 			task === 'visual'
-				? { task, systemPrompt: 'you draw', primaryModelId: 'model-visual' }
+				? {
+						task,
+						systemPrompt: 'you draw',
+						promptOverride: 'you draw',
+						primaryModelId: 'model-visual'
+					}
 				: actual.getTaskConfig(task)
 	};
 });

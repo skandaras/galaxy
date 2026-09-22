@@ -26,13 +26,13 @@ import { boardsDigest } from './boards';
 export function bootstrapContext(userId: string): string {
 	return [
 		'',
-		'[Available skills — load the full instructions with skill_load when one applies]',
+		'[Available skills: load the full instructions with skill_load when one applies]',
 		skillIndexText(),
 		'',
-		'[Library index — a line per folder, naming what sits at the top of it and nothing nested inside that. These are the docs you can see: your own plus anything shared. A "(N beneath)" is a whole subtree collapsed to one number: open it with library_tree. This is a catalogue, not their contents: search inside them with library_search, read one with library_read, save durable knowledge with library_write — filed inside an existing document wherever it belongs under one, which costs this block nothing]',
+		'[Library index: a line per folder, naming what sits at the top of it and nothing nested inside that. These are the docs you can see: your own plus anything shared. A "(N beneath)" is a whole subtree collapsed to one number: open it with library_tree. This is a catalogue, not their contents: search inside them with library_search, read one with library_read, save durable knowledge with library_write, filed inside an existing document wherever it belongs under one, which costs this block nothing]',
 		libraryDigest(userId),
 		'',
-		'[Task boards — yours plus any shared with you. Read them with board_read, one card in full with card_read]',
+		'[Task boards: yours plus any shared with you. Read them with board_read, one card in full with card_read]',
 		boardsDigest(userId),
 		// Ahead of the memory digest on purpose. Placed after it, Cortex read as
 		// more of the same — another record of things that already happened — and
@@ -74,12 +74,11 @@ export function knowledgeTools(userId: string): LoopTool[] {
 		},
 		{
 			parallelSafe: true,
-			lookup: true,
 			def: {
 				name: 'library_search',
 				description:
 					'Search inside the Library. Matches on document titles and full text, and returns ' +
-					'the matching fragments with their document ids — not whole documents. Use this ' +
+					'the matching fragments with their document ids, not whole documents. Use this ' +
 					'to find which doc holds something, then library_read to open it.',
 				parameters: {
 					type: 'object',
@@ -96,12 +95,11 @@ export function knowledgeTools(userId: string): LoopTool[] {
 		},
 		{
 			parallelSafe: true,
-			lookup: true,
 			def: {
 				name: 'library_tree',
 				description:
 					'Open one level of the Library. With no arguments it lists the folders, which is ' +
-					'the top of the shelf — there is nothing above a folder and no document sits ' +
+					'the top of the shelf: there is nothing above a folder and no document sits ' +
 					'outside one. With a folder it lists the documents at the top of that folder; ' +
 					'with a document id, what is filed under that document. This is how you open a ' +
 					'subtree the index collapsed to a count: the index carries a line per folder, so ' +
@@ -126,7 +124,7 @@ export function knowledgeTools(userId: string): LoopTool[] {
 					// for the roots. Below the top of a folder the count is the listing.
 					const under = (counts.get(d.id) ?? 1) - 1;
 					return `- ${d.title} (id: ${d.id})${d.author === 'agent' ? ' [agent]' : ''}${
-						under > 0 ? ` — ${under} beneath it` : ''
+						under > 0 ? `, ${under} beneath it` : ''
 					}`;
 				};
 
@@ -144,13 +142,12 @@ export function knowledgeTools(userId: string): LoopTool[] {
 				const folders = listFolderCounts(userId);
 				if (!folders.length) return '(library is empty)';
 				return folders
-					.map((f) => `- ${f.name} (folder) — ${f.count} document${f.count === 1 ? '' : 's'}`)
+					.map((f) => `- ${f.name} (folder): ${f.count} document${f.count === 1 ? '' : 's'}`)
 					.join('\n');
 			}
 		},
 		{
 			parallelSafe: true,
-			lookup: true,
 			def: {
 				name: 'library_read',
 				description: 'Read a Library document by title or id.',
@@ -176,7 +173,7 @@ export function knowledgeTools(userId: string): LoopTool[] {
 				const cap = toolResultMaxChars();
 				const body =
 					doc.body.length > cap
-						? `${doc.body.slice(0, cap)}\n\n[truncated at ${cap} characters — search this doc for the part you need]`
+						? `${doc.body.slice(0, cap)}\n\n[truncated at ${cap} characters. Search this doc for the part you need]`
 						: doc.body;
 				return where + body;
 			}

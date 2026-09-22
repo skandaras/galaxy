@@ -248,10 +248,10 @@ export function startCodingTurn(opts: {
 
 	const cfg = getTaskConfig('coding');
 	const choice = pickModel(opts.modelId ?? cfg?.primaryModelId ?? null, 'coding');
-	if (!choice) throw new EngineError('No usable model — configure one in admin');
+	if (!choice) throw new EngineError('No usable model: configure one in admin');
 	if (!choice.model.supportsTools) {
 		throw new EngineError(
-			`${choice.model.displayName} does not support tool calling — pick a tool-capable model for coding`
+			`${choice.model.displayName} does not support tool calling. Pick a tool-capable model for coding`
 		);
 	}
 	const backup = cfg?.backupModelId ? resolveModel(cfg.backupModelId) : null;
@@ -526,7 +526,7 @@ async function driveCodingTurn(opts: {
 		pushChunk(job, { type: 'stage', name: 'continuing', detail: `leg ${leg + 1}` });
 		pushChunk(job, {
 			type: 'notice',
-			text: `Step limit reached — continuing automatically (leg ${leg + 1} of ${coding.maxLegs}).`
+			text: `Step limit reached, continuing automatically (leg ${leg + 1} of ${coding.maxLegs}).`
 		});
 		// A real message rather than a hidden nudge: the transcript should show
 		// why another assistant turn follows.
@@ -574,7 +574,7 @@ async function checkpoint(
 	}
 	pushChunk(job, {
 		type: 'notice',
-		text: 'Checkpointed uncommitted work locally so it is not lost — not pushed.'
+		text: 'Checkpointed uncommitted work locally so it is not lost. Not pushed.'
 	});
 	return true;
 }
@@ -582,13 +582,13 @@ async function checkpoint(
 function buildCodingSystemPrompt(base: string, session: CodeSession): string {
 	const modeNote =
 		session.mode === 'plan'
-			? `You are in PLAN mode: only read-only tools are available. Explore the repository and produce a concrete, numbered implementation plan as your final answer. Do NOT attempt changes — the user must approve the plan first.`
+			? `You are in PLAN mode: only read-only tools are available. Explore the repository and produce a concrete, numbered implementation plan as your final answer. Do NOT attempt changes; the user must approve the plan first.`
 			: [
 					`You are in IMPLEMENT mode: make the changes. Read before you write, keep diffs minimal, run relevant checks with bash when available, then commit with git_commit and push with git_push. Finish with a short summary of what changed.`,
 					// Both of these target ways a turn used to end mid-task: running
 					// out of steps holding uncommitted edits, and answering with a
 					// description of an edit instead of making it.
-					`Never end a turn with uncommitted changes — if you are running short, commit what you have before you stop.`,
+					`Never end a turn with uncommitted changes. If you are running short, commit what you have before you stop.`,
 					`Never describe an action you have not taken: if you say you are going to edit a file, call the tool in the same turn.`
 				].join(' ');
 	return [

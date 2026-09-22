@@ -1087,10 +1087,10 @@ export function cortexDigest(userId: string): string {
 	const { circuits, unfiled } = circuitIndex(userId, nodes);
 	const lines = [
 		'',
-		'[Cortex — the working map of this person: ' +
+		'[Cortex: the working map of this person, ' +
 			`${nodes.length} concept${nodes.length === 1 ? '' : 's'}` +
 			(circuits.length ? ` across ${circuits.length} area${circuits.length === 1 ? '' : 's'}` : '') +
-			', and how they connect. Not a record of past events — this is what is currently true ' +
+			', and how they connect. Not a record of past events. This is what is currently true ' +
 			'of them, their work and their world.'
 	];
 
@@ -1107,7 +1107,7 @@ export function cortexDigest(userId: string): string {
 		// Nothing to group by and too many to list. Say so rather than silently
 		// offering a number, which is the failure this whole block exists to fix.
 		lines.push(
-			'  No areas assigned yet, so this index cannot show what is in there — ' +
+			'  No areas assigned yet, so this index cannot show what is in there. ' +
 				'assign circuits to concepts and it will.'
 		);
 	}
@@ -1134,7 +1134,7 @@ export function cortexDigest(userId: string): string {
 	// the important one — nothing else in the prompt said that consulting the map
 	// and then not using it was a perfectly good outcome.
 	lines.push(
-		'Query it with cortex_query when the answer would differ for knowing this person — ' +
+		'Query it with cortex_query when the answer would differ for knowing this person: ' +
 			'their work, their commitments, their taste, a decision that turns on their situation. ' +
 			'It returns the concepts that bear on it and how they relate, including ones the ' +
 			'question never named.\n' +

@@ -260,6 +260,13 @@
       "when": 1789876680972,
       "tag": "0036_futuristic_warhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1790057881844,
+      "tag": "0037_colorful_wallop",
+      "breakpoints": true
     }
   ]
 }
