@@ -22,6 +22,7 @@ const epic = (state: ForgeEpicState = 'running'): ForgeEpic =>
 		stateReason: '',
 		charterDocId: null,
 		boardId: null,
+		proposal: null,
 		standingChecks: [],
 		gateChecks: [],
 		acceptance: [],

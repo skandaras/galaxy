@@ -1,6 +1,8 @@
 import type {
+	ForgeCheck,
 	ForgeCheckResult,
 	ForgeEpicState,
+	ForgeProposal,
 	ForgeSprintState,
 	ForgeTaskState
 } from '$lib/server/db/schema';
@@ -219,6 +221,73 @@ export function progressLine(p: Progress): string {
 	if (p.blocked) parts.push(`${p.blocked} stuck`);
 	if (p.running) parts.push(`${p.running} working`);
 	return parts.join(' · ');
+}
+
+/**
+ * Whether a stopped build can be picked back up.
+ *
+ * `abandoned` belongs here with the other two. Giving up on a build was a door
+ * that only opened one way: the state was reachable from the page and nothing
+ * on the page would take it back, so the only answer to changing your mind was
+ * a second epic and a second charter run. What resuming an unapproved one does
+ * is `resumeState`'s business on the server, not this function's.
+ */
+export const canResume = (state: ForgeEpicState): boolean =>
+	state === 'paused' || state === 'blocked' || state === 'abandoned';
+
+/** What this file needs of a check. `timeoutMs` is the run's business, never the form's. */
+export type NamedCommand = Pick<ForgeCheck, 'name' | 'command'>;
+
+/** `name: command` per line, which is how the approval form holds a check. */
+export const checkLines = (checks: NamedCommand[] | null | undefined): string =>
+	(checks ?? []).map((c) => `${c.name}: ${c.command}`).join('\n');
+
+/**
+ * The three boxes the approval screen opens with.
+ *
+ * From the proposal, which is what the charter run wrote and what a person is
+ * being asked to confirm. This used to read the frozen columns, which are null
+ * until the moment of approval — so the form offered three empty boxes and the
+ * route behind it refused the submission for having no standing check. The
+ * frozen columns are still the fallback, for an epic approved before the
+ * proposal was stored anywhere.
+ */
+export function approvalDraft(epic: {
+	proposal?: ForgeProposal | null;
+	standingChecks?: NamedCommand[] | null;
+	gateChecks?: NamedCommand[] | null;
+	acceptance?: string[] | null;
+}): { standing: string; gate: string; acceptance: string } {
+	const p = epic.proposal;
+	return {
+		standing: checkLines(p?.standingChecks ?? epic.standingChecks),
+		gate: checkLines(p?.gateChecks ?? epic.gateChecks),
+		acceptance: (p?.acceptance ?? epic.acceptance ?? []).join('\n')
+	};
+}
+
+/**
+ * Read the form back, `name: command` per line.
+ *
+ * Lines rather than a table of paired inputs, because this is the one form a
+ * person fills in: the commands are what they are agreeing to and they should
+ * see all of them at once.
+ *
+ * A line with no colon is taken as a bare command. That is how a sentence once
+ * became a standing check; what stops it now is the server running every one of
+ * these before it freezes anything.
+ */
+export function parseChecks(text: string): NamedCommand[] {
+	return text
+		.split('\n')
+		.map((l) => l.trim())
+		.filter(Boolean)
+		.map((line) => {
+			const at = line.indexOf(':');
+			if (at === -1) return { name: line, command: line };
+			return { name: line.slice(0, at).trim(), command: line.slice(at + 1).trim() };
+		})
+		.filter((c) => c.command);
 }
 
 /**

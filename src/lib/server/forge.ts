@@ -10,6 +10,7 @@ import {
 	type ForgeCheck,
 	type ForgeCheckResult,
 	type ForgeEpicState,
+	type ForgeProposal,
 	type ForgeSprintState,
 	type ForgeTaskState
 } from '$lib/server/db/schema';
@@ -63,6 +64,7 @@ export function createEpic(opts: {
 		stateReason: '',
 		charterDocId: null,
 		boardId: null,
+		proposal: null,
 		standingChecks: null,
 		gateChecks: null,
 		acceptance: null,
@@ -116,10 +118,30 @@ export function setEpicState(
 		.set({
 			state,
 			stateReason: reason,
-			...(state === 'done' || state === 'abandoned' ? { finishedAt: now() } : {})
+			// Cleared on the way back out, not merely set on the way in. A build
+			// that was abandoned and then picked up again kept the timestamp of the
+			// moment it was given up on, so it read as finished while it ran.
+			...(state === 'done' || state === 'abandoned'
+				? { finishedAt: now() }
+				: { finishedAt: null })
 		})
 		.where(eq(forgeEpics.id, id))
 		.run();
+}
+
+/**
+ * Where a build goes when somebody picks it back up.
+ *
+ * `running` is only right for one whose checks are frozen. Abandoning at the
+ * approval screen and resuming would otherwise start a build that was never
+ * approved, which is the one thing approval exists to prevent — so an
+ * unapproved epic goes back to the screen it was abandoned at, or to drafting
+ * if the charter run never reached one. This used to be a 400 telling a person
+ * to approve an epic the page was offering them no way to open.
+ */
+export function resumeState(epic: ForgeEpic): ForgeEpicState {
+	if (epic.approvedAt) return 'running';
+	return epic.proposal ? 'awaiting-approval' : 'drafting';
 }
 
 /**
@@ -135,6 +157,22 @@ export function setEpicOverride(id: string, maxUsdOverride: number): void {
 
 export function markStepped(id: string): void {
 	db.update(forgeEpics).set({ lastStepAt: now() }).where(eq(forgeEpics.id, id)).run();
+}
+
+/**
+ * Record what the charter proposed, for the person about to confirm it.
+ *
+ * Deliberately not the frozen columns. `approveEpic` stays the only writer of
+ * those, so nothing here weakens the rule the gate rests on: a run proposes, a
+ * person confirms, and after that no run and nothing the repository says about
+ * itself can change the commands its work is judged by.
+ *
+ * A revision replaces this wholesale, the way `clearOutline` replaces the
+ * outline. The checks from a charter somebody rejected are not half of the next
+ * proposal.
+ */
+export function setProposal(epicId: string, proposal: ForgeProposal): void {
+	db.update(forgeEpics).set({ proposal }).where(eq(forgeEpics.id, epicId)).run();
 }
 
 /**
@@ -203,6 +241,39 @@ export function addSprint(opts: {
 export function clearOutline(epicId: string): void {
 	db.delete(forgeTasks).where(eq(forgeTasks.epicId, epicId)).run();
 	db.delete(forgeSprints).where(eq(forgeSprints.epicId, epicId)).run();
+}
+
+/**
+ * Remove a build and everything filed under it, and say which chats went with it.
+ *
+ * No forge table has a foreign key, so the cascade is written out rather than
+ * left to SQLite — `deleteBoard` is the same shape for the same reason. Leaf to
+ * root inside one transaction, so a failure part-way leaves no row pointing at
+ * a parent that has gone.
+ *
+ * Three things it deliberately does not touch. The Library documents, because
+ * `deleteDoc` promotes children rather than cascading and the reason is written
+ * there. The mirrored board, which is already independent in both directions.
+ * And the integration branch on the remote, which is the only remaining copy of
+ * whatever never merged.
+ *
+ * The chat ids come back rather than being torn down here: this module owns
+ * rows, and a workspace on disk belongs to the engine. `purgeEpic` is the
+ * caller that does both.
+ */
+export function deleteEpic(id: string, userId: string): string[] | null {
+	const epic = getEpic(id, userId);
+	if (!epic) return null;
+	const chatIds = listTasks(id)
+		.map((t) => t.chatId)
+		.filter((c): c is string => !!c);
+	db.transaction((tx) => {
+		tx.delete(forgeGateRuns).where(eq(forgeGateRuns.epicId, id)).run();
+		tx.delete(forgeTasks).where(eq(forgeTasks.epicId, id)).run();
+		tx.delete(forgeSprints).where(eq(forgeSprints.epicId, id)).run();
+		tx.delete(forgeEpics).where(eq(forgeEpics.id, id)).run();
+	});
+	return chatIds;
 }
 
 export function listSprints(epicId: string): ForgeSprint[] {

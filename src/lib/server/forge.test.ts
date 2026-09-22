@@ -7,6 +7,7 @@ import {
 	approveEpic,
 	countAttempt,
 	createEpic,
+	deleteEpic,
 	dueEpics,
 	epicsInFlight,
 	forgeSpend,
@@ -19,7 +20,9 @@ import {
 	openTask,
 	recordGateRun,
 	getTask,
+	resumeState,
 	setEpicState,
+	setProposal,
 	setSprintState,
 	setTaskState,
 	snapshot,
@@ -359,5 +362,142 @@ describe('giving a parked task a different contract', () => {
 		});
 		// And Alice's task is untouched by Bob having asked.
 		expect(getTask(task.id, ALICE)!.state).toBe('blocked');
+	});
+});
+
+describe('what the charter proposed', () => {
+	const PROPOSAL = {
+		standingChecks: [{ name: 'test', command: 'npm test', timeoutMs: 600_000 }],
+		gateChecks: [{ name: 'e2e', command: 'bash scripts/smoke-e2e.sh', timeoutMs: 600_000 }],
+		acceptance: ['the app boots']
+	};
+
+	it('survives the charter run, so the approval screen has something to show', () => {
+		// The fault this exists for: the proposal was a local in `runCharter` that
+		// was dropped unless auto-approve was on, so the form opened on three
+		// empty boxes and the route behind it refused the submission.
+		const epic = newEpic();
+		setProposal(epic.id, PROPOSAL);
+		expect(getEpic(epic.id, ALICE)?.proposal).toEqual(PROPOSAL);
+	});
+
+	it('is replaced wholesale by the next one, never merged', () => {
+		const epic = newEpic();
+		setProposal(epic.id, PROPOSAL);
+		setProposal(epic.id, { standingChecks: CHECKS, gateChecks: [], acceptance: [] });
+		const stored = getEpic(epic.id, ALICE)?.proposal;
+		expect(stored?.standingChecks).toEqual(CHECKS);
+		expect(stored?.gateChecks).toEqual([]);
+	});
+
+	it('is not the frozen checks, and cannot become them on its own', () => {
+		const epic = newEpic();
+		setProposal(epic.id, PROPOSAL);
+		expect(getEpic(epic.id, ALICE)?.standingChecks).toBeNull();
+		expect(getEpic(epic.id, ALICE)?.state).toBe('drafting');
+	});
+
+	it('cannot reach the checks once they are frozen', () => {
+		const epic = newEpic();
+		approveEpic(epic.id, ALICE, { standingChecks: CHECKS });
+		setProposal(epic.id, {
+			standingChecks: [{ name: 'test', command: 'true', timeoutMs: 0 }],
+			gateChecks: [],
+			acceptance: []
+		});
+		expect(getEpic(epic.id, ALICE)?.standingChecks).toEqual(CHECKS);
+	});
+});
+
+describe('picking a stopped build back up', () => {
+	it('runs again once its checks are frozen', () => {
+		const epic = newEpic();
+		approveEpic(epic.id, ALICE, { standingChecks: CHECKS });
+		setEpicState(epic.id, 'abandoned');
+		expect(resumeState(getEpic(epic.id, ALICE)!)).toBe('running');
+	});
+
+	it('goes back to the approval screen when it was abandoned at one', () => {
+		// Resuming an unapproved epic into `running` would start a build whose
+		// checks were never frozen, which is what approval exists to prevent.
+		const epic = newEpic();
+		setProposal(epic.id, { standingChecks: CHECKS, gateChecks: [], acceptance: [] });
+		setEpicState(epic.id, 'abandoned');
+		expect(resumeState(getEpic(epic.id, ALICE)!)).toBe('awaiting-approval');
+	});
+
+	it('goes back to drafting when the charter never got that far', () => {
+		const epic = newEpic();
+		setEpicState(epic.id, 'abandoned');
+		expect(resumeState(getEpic(epic.id, ALICE)!)).toBe('drafting');
+	});
+
+	it('stops reading as finished', () => {
+		// It kept the timestamp of the moment it was given up on, so a build that
+		// was running again still said it had ended.
+		const epic = newEpic();
+		approveEpic(epic.id, ALICE, { standingChecks: CHECKS });
+		setEpicState(epic.id, 'abandoned');
+		expect(getEpic(epic.id, ALICE)?.finishedAt).toBeInstanceOf(Date);
+		setEpicState(epic.id, 'running');
+		expect(getEpic(epic.id, ALICE)?.finishedAt).toBeNull();
+	});
+});
+
+describe('deleting a build', () => {
+	const withWork = (owner = ALICE) => {
+		const epic = createEpic({
+			ownerId: owner,
+			title: 'Doomed',
+			repoUrl: 'https://example.invalid/r.git'
+		});
+		const sprint = addSprint({ epicId: epic.id, title: 'One' });
+		const task = openTask({
+			epicId: epic.id,
+			sprintId: sprint.id,
+			title: 'A task',
+			checks: CHECKS
+		});
+		recordGateRun({
+			epicId: epic.id,
+			scope: 'task',
+			targetId: task.id,
+			results: [],
+			passed: false
+		});
+		return { epic, sprint, task };
+	};
+
+	it('takes its sprints, tasks and gate runs with it', () => {
+		// No forge table has a foreign key, so nothing cascades on its own: a
+		// delete that only removed the epic row would leave every child behind
+		// pointing at a parent that had gone.
+		const { epic, task } = withWork();
+		expect(deleteEpic(epic.id, ALICE)).toEqual([]);
+		expect(getEpic(epic.id, ALICE)).toBeNull();
+		expect(listSprints(epic.id)).toEqual([]);
+		expect(listTasks(epic.id)).toEqual([]);
+		expect(gateRunsFor(task.id)).toEqual([]);
+	});
+
+	it('leaves another build’s rows exactly where they were', () => {
+		const doomed = withWork();
+		const keep = withWork();
+		deleteEpic(doomed.epic.id, ALICE);
+		expect(getEpic(keep.epic.id, ALICE)).not.toBeNull();
+		expect(listTasks(keep.epic.id)).toHaveLength(1);
+		expect(gateRunsFor(keep.task.id)).toHaveLength(1);
+	});
+
+	it('hands back the chats it removed, for the workspaces they hold', () => {
+		const { epic, task } = withWork();
+		setTaskState(task.id, 'running', { chatId: 'chat-1' });
+		expect(deleteEpic(epic.id, ALICE)).toEqual(['chat-1']);
+	});
+
+	it('will not delete somebody else’s', () => {
+		const { epic } = withWork();
+		expect(deleteEpic(epic.id, BOB)).toBeNull();
+		expect(getEpic(epic.id, ALICE)).not.toBeNull();
 	});
 });

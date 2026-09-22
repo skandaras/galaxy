@@ -10,6 +10,7 @@ import {
 	createEpic,
 	getEpic,
 	listEpics,
+	setProposal,
 	snapshot,
 	type ForgeEpic
 } from '$lib/server/forge';
@@ -136,6 +137,21 @@ describe('a repository that argues with its own gate', () => {
 		// shape that request would have to take, and it is refused.
 		approveEpic(epic.id, ALICE, {
 			standingChecks: [{ name: 'tests', command: 'true', timeoutMs: 30_000 }]
+		});
+		expect(getEpic(epic.id, ALICE)?.standingChecks).toEqual(real);
+	});
+
+	it('cannot change them through the proposal either', () => {
+		// The proposal column exists so the approval screen has something to show.
+		// It is a second place a run writes, so it is worth asserting that it is
+		// not a second way into the one column a run must never reach.
+		const epic = anEpic();
+		const real = [{ name: 'tests', command: 'exit 1', timeoutMs: 30_000 }];
+		approveEpic(epic.id, ALICE, { standingChecks: real });
+		setProposal(epic.id, {
+			standingChecks: [{ name: 'tests', command: 'true', timeoutMs: 30_000 }],
+			gateChecks: [],
+			acceptance: []
 		});
 		expect(getEpic(epic.id, ALICE)?.standingChecks).toEqual(real);
 	});

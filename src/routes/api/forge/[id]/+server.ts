@@ -6,10 +6,12 @@ import {
 	getEpic,
 	listSprints,
 	listTasks,
+	resumeState,
 	setEpicOverride,
 	setEpicState
 } from '$lib/server/forge';
 import { describeStep, nextStep } from '$lib/server/engine/forge-step';
+import { purgeEpic, reconcileForge } from '$lib/server/engine/forge-recover';
 import { forgeSettings } from '$lib/server/settings';
 
 /**
@@ -87,11 +89,47 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	if (!(action in STATES)) {
 		error(400, `Unknown action. Try one of: ${Object.keys(STATES).join(', ')}`);
 	}
-	// Resuming an epic that never got past its charter would start it with no
-	// frozen checks, which is the one thing approval exists to prevent.
-	if (action === 'resume' && !epic.approvedAt) {
-		error(400, 'This epic has not been approved yet — confirm its checks first');
-	}
-	setEpicState(epic.id, STATES[action], typeof body.reason === 'string' ? body.reason : '');
+	// Where a resume lands is `resumeState`'s answer rather than a flat
+	// `running`: an epic abandoned before approval has no frozen checks to run
+	// with, and starting it anyway is the one thing approval exists to prevent.
+	const to = action === 'resume' ? resumeState(epic) : STATES[action];
+	// The state first, then the rows. `startTask`'s subscriber asks whether the
+	// epic is still running before it moves a finished turn to `gating`, so the
+	// state has to be off `running` before anything cancels a job — otherwise a
+	// turn that unwound in between would drag the task it belongs to into a gate
+	// against a workspace holding half an attempt.
+	setEpicState(epic.id, to, typeof body.reason === 'string' ? body.reason : '');
+	// Stopping means stopping the work too. Setting the state alone left the
+	// coding turn the build was in the middle of running, so the page said
+	// paused while the runner carried on and the bill with it.
+	//
+	// Picking one back up runs the same reconcile without the cancel, because a
+	// task still claiming to be running is one `tasksInFlight` counts and
+	// `nextStep` will not step past: a build resumed without this went back to
+	// `running` and sat there until the next restart.
+	reconcileForge({ epicId: epic.id, cancel: action !== 'resume' });
 	return json(getEpic(epic.id, user.id));
+};
+
+/**
+ * Delete a build outright.
+ *
+ * Its rows and its tasks' workspaces go; the charter and the records stay in
+ * the Library, where `deleteDoc` promotes children rather than cascading, and
+ * the integration branch stays on the remote, where it is the only remaining
+ * copy of anything that never merged. Refused while a turn is live, the way a
+ * coding session is.
+ */
+export const DELETE: RequestHandler = ({ locals, params }) => {
+	const user = requireCoder(locals);
+	const epic = getEpic(params.id, user.id);
+	if (!epic) error(404, 'Epic not found');
+	const outcome = purgeEpic(epic, user.id);
+	if (!outcome.ok) {
+		// Both readings, because a pause asks the turn to stop and the turn is
+		// what ends it: somebody who has just pressed Pause gets this too, and
+		// telling them to pause is no use to them.
+		error(409, 'A task is still running. Pause this build if you have not, and try again once its turn has stopped.');
+	}
+	return json({ ok: true });
 };

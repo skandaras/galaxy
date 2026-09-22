@@ -1,9 +1,17 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { forgeSprints, forgeTasks } from '$lib/server/db/schema';
-import { countAttempt, setSprintState, setTaskState } from '$lib/server/forge';
+import {
+	countAttempt,
+	deleteEpic,
+	listTasks,
+	setSprintState,
+	setTaskState,
+	type ForgeEpic
+} from '$lib/server/forge';
 import { emitEvent } from './events';
-import { findRunningJobForChat } from './jobs';
+import { cancelJob, findRunningJobForChat } from './jobs';
+import { destroySession, getSession } from './coding/session';
 
 /**
  * What a restart leaves half-done inside an epic.
@@ -35,24 +43,44 @@ import { findRunningJobForChat } from './jobs';
  * Safe to call while the server is up — it asks whether each task's job is live
  * rather than assuming it is not — but at boot it never has to, because the live
  * job map is empty by definition.
+ *
+ * `epicId` narrows it to one build, which is what resuming one needs: a run
+ * abandoned mid-task comes back with its task still claiming to be running, so
+ * `tasksInFlight` counts it, the sweep decides the epic is at its concurrency
+ * limit and `nextStep` returns null. Resuming without this put a build back into
+ * `running` and left it there doing nothing until the next restart.
+ *
+ * `cancel` is for a person stopping their own build rather than a process
+ * dying. It ends the live job instead of stepping around it, and counts no
+ * attempt: the boot path counts one because a task that reliably takes the
+ * process down should eventually park, and somebody pressing Pause is not that.
+ * Without it, abandoning stopped the epic and left the coding turn running, so
+ * the runner carried on and so did the bill.
  */
-export function reconcileForge(): number {
+export function reconcileForge(opts: { epicId?: string; cancel?: boolean } = {}): number {
+	const { epicId, cancel } = opts;
 	let moved = 0;
 
 	for (const task of db
 		.select()
 		.from(forgeTasks)
-		.where(eq(forgeTasks.state, 'running'))
+		.where(
+			and(eq(forgeTasks.state, 'running'), epicId ? eq(forgeTasks.epicId, epicId) : undefined)
+		)
 		.all()) {
-		if (task.chatId && findRunningJobForChat(task.chatId)) continue;
-		const attempts = countAttempt(task.id);
+		const live = task.chatId ? findRunningJobForChat(task.chatId) : null;
+		if (live) {
+			if (!cancel) continue;
+			cancelJob(live);
+		}
+		const attempts = cancel ? task.attempts : countAttempt(task.id);
 		setTaskState(task.id, 'planned');
 		emitEvent({
 			task: 'forge',
 			type: 'job',
 			name: 'forge.recovered',
 			status: 'error',
-			detail: { taskId: task.id, epicId: task.epicId, was: 'running', attempts }
+			detail: { taskId: task.id, epicId: task.epicId, was: 'running', attempts, cancelled: !!live }
 		});
 		moved++;
 	}
@@ -60,7 +88,12 @@ export function reconcileForge(): number {
 	for (const sprint of db
 		.select()
 		.from(forgeSprints)
-		.where(eq(forgeSprints.state, 'planning'))
+		.where(
+			and(
+				eq(forgeSprints.state, 'planning'),
+				epicId ? eq(forgeSprints.epicId, epicId) : undefined
+			)
+		)
 		.all()) {
 		setSprintState(sprint.id, 'outlined');
 		emitEvent({
@@ -74,4 +107,43 @@ export function reconcileForge(): number {
 	}
 
 	return moved;
+}
+
+export type PurgeResult = { ok: true; tasks: number } | { ok: false; reason: 'busy' };
+
+/**
+ * Delete a build, its rows and the workspaces its tasks were using.
+ *
+ * Refused while a task's turn is live, the way a coding session refuses to be
+ * deleted mid-run: the turn would carry on writing to a workspace whose task
+ * row had gone, and the job that outlived it has nothing left to report to.
+ * Pausing first is what a person does about that, and it is one button along.
+ *
+ * `destroySession` per task is the same teardown a retry already does before it
+ * re-clones, so the workspace, the chat and its messages go together. One cost
+ * comes with it, already recorded on `forgeSpend`: deleting a chat nulls
+ * `usage_log.chat_id`, so this build's spend leaves that sum. The platform-wide
+ * cap still counts the money; only the attribution goes.
+ */
+export function purgeEpic(epic: ForgeEpic, userId: string): PurgeResult {
+	const tasks = listTasks(epic.id);
+	if (tasks.some((t) => t.chatId && findRunningJobForChat(t.chatId))) {
+		return { ok: false, reason: 'busy' };
+	}
+	// Rows first would leave no way to find the workspaces if this threw.
+	for (const task of tasks) {
+		if (!task.chatId) continue;
+		const session = getSession(task.chatId, userId);
+		if (session) destroySession(session);
+	}
+	deleteEpic(epic.id, userId);
+	emitEvent({
+		userId,
+		task: 'forge',
+		type: 'job',
+		name: 'forge.deleted',
+		status: 'ok',
+		detail: { epicId: epic.id, tasks: tasks.length }
+	});
+	return { ok: true, tasks: tasks.length };
 }

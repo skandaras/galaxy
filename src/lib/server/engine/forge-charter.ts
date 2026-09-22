@@ -3,6 +3,7 @@ import {
 	approveEpic,
 	clearOutline,
 	setEpicState,
+	setProposal,
 	type ForgeEpic
 } from '$lib/server/forge';
 import { db } from '$lib/server/db';
@@ -133,12 +134,20 @@ export async function runCharter(
 
 		const timeoutMs = DEFAULT_CHECK_TIMEOUT_MS;
 		const stamp = (c: { name: string; command: string }) => ({ ...c, timeoutMs });
+		// Stored before the branch, so both paths read one copy. It used to be
+		// written only inside the auto-approve arm, which meant that on the default
+		// path the proposal died with this function: the approval screen opened on
+		// three empty boxes, the route that reads them refused the submission for
+		// having no standing check, and the only surviving record of what the model
+		// had proposed was the prose in the charter document.
+		const proposed = {
+			standingChecks: plan.standingChecks.map(stamp),
+			gateChecks: plan.gateChecks.map(stamp),
+			acceptance: plan.acceptance
+		};
+		setProposal(epic.id, proposed);
 		if (settings.autoApproveCharter) {
-			approveEpic(epic.id, userId, {
-				standingChecks: plan.standingChecks.map(stamp),
-				gateChecks: plan.gateChecks.map(stamp),
-				acceptance: plan.acceptance
-			});
+			approveEpic(epic.id, userId, proposed);
 		} else {
 			// Proposed, not frozen. The checks only become the thing a run cannot
 			// edit at the moment a person confirms them.

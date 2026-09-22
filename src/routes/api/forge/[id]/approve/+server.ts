@@ -30,19 +30,21 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 
 	const body = await request.json().catch(() => ({}));
 	// The charter's proposal is the default, so approving without editing takes
-	// what was proposed rather than nothing.
+	// what was proposed rather than nothing. It reads `proposal` rather than the
+	// frozen columns: line 29 has already refused an approved epic, so those are
+	// null by definition here and this fallback could only ever find nothing.
 	const standingChecks = body.standingChecks
 		? readChecks(body.standingChecks, DEFAULT_CHECK_TIMEOUT_MS)
-		: (epic.standingChecks ?? []);
+		: (epic.proposal?.standingChecks ?? []);
 	if (!standingChecks.length) {
 		error(400, 'At least one standing check is required — a build with no gate is not a build');
 	}
 	const gateChecks = body.gateChecks
 		? readChecks(body.gateChecks, DEFAULT_CHECK_TIMEOUT_MS)
-		: (epic.gateChecks ?? []);
+		: (epic.proposal?.gateChecks ?? []);
 	const acceptance = Array.isArray(body.acceptance)
 		? body.acceptance.filter((a: unknown): a is string => typeof a === 'string')
-		: (epic.acceptance ?? []);
+		: (epic.proposal?.acceptance ?? []);
 
 	const verdict = await withWorkspace(epic.repoUrl, epic.baseBranch, (ws) =>
 		validateChecks({ checks: [...standingChecks, ...gateChecks], workspaceRel: ws.workspaceRel })
