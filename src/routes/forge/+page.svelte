@@ -11,9 +11,11 @@
 	import { onDestroy } from 'svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import type { ForgeCheckResult, ForgeEpicState } from '$lib/server/db/schema';
+	import type { ForgeCheckResult, ForgeEpicState, ForgeProposal } from '$lib/server/db/schema';
 	import {
 		ago,
+		approvalDraft,
+		canResume,
 		checksInReadingOrder,
 		duration,
 		epicActivity,
@@ -21,6 +23,7 @@
 		epicTone,
 		gateSummary,
 		needsApproval,
+		parseChecks,
 		progress,
 		progressLine,
 		say,
@@ -46,6 +49,7 @@
 		charterDocId: string | null;
 		boardId: string | null;
 		maxUsdOverride: number;
+		proposal: ForgeProposal | null;
 		standingChecks: { name: string; command: string }[] | null;
 		gateChecks: { name: string; command: string }[] | null;
 		acceptance: string[] | null;
@@ -96,6 +100,7 @@
 	let refused = $state<Verdict[]>([]);
 	let red = $state<Verdict[]>([]);
 	let amending = $state<{ task: TaskView; text: string; why: string } | null>(null);
+	let confirmingDelete = $state(false);
 
 	// In the URL rather than in $state so a build can be linked to, Back leaves
 	// it, and the notification the driver raises has somewhere to point.
@@ -167,38 +172,9 @@
 	}
 
 	function seedApproval(row: EpicRow) {
-		const lines = (checks: { name: string; command: string }[] | null) =>
-			(checks ?? []).map((c) => `${c.name}: ${c.command}`).join('\n');
-		approval = {
-			standing: lines(row.standingChecks),
-			gate: lines(row.gateChecks),
-			acceptance: (row.acceptance ?? []).join('\n'),
-			feedback: ''
-		};
+		approval = { ...approvalDraft(row), feedback: '' };
 		refused = [];
 		red = [];
-	}
-
-	/**
-	 * `name: command` per line, because the alternative was a table of paired
-	 * inputs and this is the one form a person fills in — the commands are what
-	 * they are agreeing to, and they should be able to see all of them at once.
-	 *
-	 * A line with no colon is taken as a bare command. That is how a sentence
-	 * once became a standing check; what stops it now is the server running
-	 * every one of these before it freezes anything.
-	 */
-	function parseChecks(text: string) {
-		return text
-			.split('\n')
-			.map((l) => l.trim())
-			.filter(Boolean)
-			.map((line) => {
-				const at = line.indexOf(':');
-				if (at === -1) return { name: line, command: line };
-				return { name: line.slice(0, at).trim(), command: line.slice(at + 1).trim() };
-			})
-			.filter((c) => c.command);
 	}
 
 	$effect(() => {
@@ -211,6 +187,7 @@
 		gate = null;
 		activity = [];
 		amending = null;
+		confirmingDelete = false;
 		if (id) void loadOne(id);
 		else epic = null;
 	});
@@ -310,6 +287,17 @@
 				body: JSON.stringify(body)
 			});
 			await Promise.all([loadOne(epic!.id), loadList()]);
+		});
+
+	const remove = () =>
+		act('delete', async () => {
+			await api(`/api/forge/${epic!.id}`, { method: 'DELETE' });
+			// Back to the list before reloading it: the epic in the URL has gone,
+			// and loading it again would answer 404 and blank the page with an
+			// error instead of the list the person is about to want.
+			confirmingDelete = false;
+			open(null);
+			await loadList();
 		});
 
 	const stepNow = () =>
@@ -640,9 +628,14 @@
 							Nothing to run
 						{/if}
 					</button>
-				{:else if epic.state === 'paused' || epic.state === 'blocked'}
+				{:else if canResume(epic.state)}
+					<!--
+					  Abandoned is resumable too. It used to be a door that only opened
+					  one way: the page offered Abandon and then nothing, so changing
+					  your mind meant a second epic and a second charter run.
+					-->
 					<button onclick={() => patch({ action: 'resume' }, 'resume')} disabled={!!busy}>
-						Resume
+						{busy === 'resume' ? 'Picking it up…' : 'Resume'}
 					</button>
 				{/if}
 				{#if epic.state !== 'done' && epic.state !== 'abandoned'}
@@ -680,6 +673,31 @@
 				</ol>
 			{/if}
 		{/if}
+
+		<!--
+		  Outside the approval fork, because a build stuck at its approval screen
+		  is one of the likeliest to want deleting and the actions row above is
+		  not drawn there. Two steps rather than a confirm() the rest of this page
+		  does not use, and the question names what goes: a build holds a
+		  repository's workspaces and a fortnight of records, and the two do not go
+		  the same way.
+		-->
+		<div class="actions remove">
+			{#if confirmingDelete}
+				<p class="meta wide">
+					Delete this build? Its tree, its gate history and every task's workspace go with it. The
+					charter and the records stay in the Library.
+				</p>
+				<button class="danger" onclick={remove} disabled={!!busy}>
+					{busy === 'delete' ? 'Deleting…' : 'Yes, delete it'}
+				</button>
+				<button onclick={() => (confirmingDelete = false)} disabled={!!busy}>Cancel</button>
+			{:else}
+				<button class="danger" onclick={() => (confirmingDelete = true)} disabled={!!busy}>
+					Delete this build
+				</button>
+			{/if}
+		</div>
 
 		<ol class="tree">
 			{#each tree as sprint (sprint.id)}
@@ -1067,6 +1085,15 @@
 	}
 	.spend input {
 		max-width: 8rem;
+	}
+	/* Its own row, separated from the actions that do not destroy anything. */
+	.actions.remove {
+		border-top: 1px solid var(--border);
+		padding-top: 0.8rem;
+	}
+	.actions .wide {
+		flex-basis: 100%;
+		margin: 0;
 	}
 	.row {
 		display: flex;

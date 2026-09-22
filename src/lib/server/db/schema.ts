@@ -1517,6 +1517,21 @@ export interface ForgeCheckResult {
 	timedOut: boolean;
 }
 
+/**
+ * What the charter run proposed, before anybody confirmed it.
+ *
+ * Its own column rather than an early write to the three below, so that
+ * `approveEpic` stays their only writer. It used to be a local in `runCharter`
+ * that was dropped unless `autoApproveCharter` was on, which left the approval
+ * screen offering three empty boxes and asked a person to retype the commands
+ * the model had already worked out.
+ */
+export interface ForgeProposal {
+	standingChecks: ForgeCheck[];
+	gateChecks: ForgeCheck[];
+	acceptance: string[];
+}
+
 export const FORGE_EPIC_STATES = [
 	'drafting',
 	'awaiting-approval',
@@ -1564,6 +1579,8 @@ export const forgeEpics = sqliteTable(
 		 * that no later run, and nothing the repository says about itself, can
 		 * touch.
 		 */
+		/** The charter's proposal, which the approval screen opens with. */
+		proposal: text('proposal', { mode: 'json' }).$type<ForgeProposal>(),
 		standingChecks: text('standing_checks', { mode: 'json' }).$type<ForgeCheck[]>(),
 		/** The expensive ones, run only at a sprint or epic boundary. */
 		gateChecks: text('gate_checks', { mode: 'json' }).$type<ForgeCheck[]>(),

@@ -1,0 +1,1 @@
+ALTER TABLE `forge_epics` ADD `proposal` text;

@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { ForgeCheckResult } from '$lib/server/db/schema';
 import {
 	ago,
+	approvalDraft,
+	canResume,
 	checksInReadingOrder,
 	duration,
 	epicActivity,
 	epicProgress,
 	epicTone,
 	gateSummary,
+	parseChecks,
 	progress,
 	progressLine,
 	say,
@@ -332,5 +335,69 @@ describe('the progress line', () => {
 		// Which is what the first screenshot showed: a bar at nought against a
 		// track the same colour as the rule above it, reading as a divider.
 		expect(progressLine(progress([]))).toBe('no tasks planned yet');
+	});
+});
+
+describe('the approval screen’s three boxes', () => {
+	const PROPOSAL = {
+		standingChecks: [
+			{ name: 'lint', command: 'npm run lint', timeoutMs: 600_000 },
+			{ name: 'test', command: 'npm test', timeoutMs: 600_000 }
+		],
+		gateChecks: [{ name: 'e2e', command: 'bash scripts/smoke-e2e.sh', timeoutMs: 600_000 }],
+		acceptance: ['the app boots', 'the tests pass']
+	};
+
+	it('opens with what the charter proposed', () => {
+		// The fault: this read the frozen columns, which are null until the
+		// moment of approval. So the form offered three empty boxes and the route
+		// behind it refused the submission for having no standing check.
+		const draft = approvalDraft({ proposal: PROPOSAL });
+		expect(draft.standing).toBe('lint: npm run lint\ntest: npm test');
+		expect(draft.gate).toBe('e2e: bash scripts/smoke-e2e.sh');
+		expect(draft.acceptance).toBe('the app boots\nthe tests pass');
+	});
+
+	it('is empty rather than broken when there is no proposal', () => {
+		expect(approvalDraft({})).toEqual({ standing: '', gate: '', acceptance: '' });
+		expect(approvalDraft({ proposal: null })).toEqual({ standing: '', gate: '', acceptance: '' });
+	});
+
+	it('falls back to the frozen checks for a build approved before any of this', () => {
+		// Name and command only: the timeout is the run's business, and the form
+		// has never been able to set one.
+		const draft = approvalDraft({ standingChecks: [{ name: 'test', command: 'npm test' }] });
+		expect(draft.standing).toBe('test: npm test');
+	});
+
+	it('reads back what it wrote', () => {
+		expect(parseChecks(approvalDraft({ proposal: PROPOSAL }).standing)).toEqual([
+			{ name: 'lint', command: 'npm run lint' },
+			{ name: 'test', command: 'npm test' }
+		]);
+	});
+
+	it('takes a line with no colon as a bare command', () => {
+		// Which is how a sentence once became a standing check. What stops it now
+		// is the server running every one of these before it freezes anything.
+		expect(parseChecks('npm test')).toEqual([{ name: 'npm test', command: 'npm test' }]);
+		expect(parseChecks('  \n\nnpm test\n  ')).toHaveLength(1);
+	});
+});
+
+describe('which builds can be picked back up', () => {
+	it('includes an abandoned one', () => {
+		// Giving up used to be a door that only opened one way: the page offered
+		// Abandon and then nothing, so changing your mind meant a second epic.
+		expect(canResume('abandoned')).toBe(true);
+		expect(canResume('paused')).toBe(true);
+		expect(canResume('blocked')).toBe(true);
+	});
+
+	it('excludes the ones with nothing to resume', () => {
+		expect(canResume('running')).toBe(false);
+		expect(canResume('done')).toBe(false);
+		expect(canResume('drafting')).toBe(false);
+		expect(canResume('awaiting-approval')).toBe(false);
 	});
 });

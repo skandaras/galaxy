@@ -3,6 +3,7 @@ import {
 	countAttempt,
 	countSprintAttempt,
 	gateRunsFor,
+	getEpic,
 	listSprints,
 	listTasks,
 	markStepped,
@@ -188,6 +189,12 @@ async function startTask(epic: ForgeEpic, task: ForgeTask, userId: string): Prom
 		if (settled) return;
 		settled = true;
 		off?.();
+		// A turn cancelled because its build was paused or abandoned has nothing
+		// to gate, and the halt has already put this task back to `planned`. The
+		// row is re-read rather than trusted from the closure: `epic` is the
+		// snapshot this step started from, and the whole reason for stopping is
+		// that something changed since.
+		if (getEpic(epic.id, userId)?.state !== 'running') return;
 		// Whether it finished or fell over, what comes next is the gate. A turn
 		// that errored may still have committed something worth judging, and a
 		// gate is the only thing entitled to say it did not.

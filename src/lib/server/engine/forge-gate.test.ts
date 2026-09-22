@@ -5,6 +5,7 @@ import {
 	boundOutput,
 	couldNotRun,
 	gateReport,
+	isRedCheck,
 	runGate,
 	unrunnableChecks,
 	vacuousChecks,
@@ -159,6 +160,29 @@ describe('the red-green rule', () => {
 
 	it('rejects a baseline with no checks in it at all', () => {
 		expect(baselineIsRed([])).toBe(false);
+	});
+
+	it('still names the checks that were real when the set is refused', () => {
+		// Refusing the set and keeping nothing are different answers. A task
+		// proposing one real check beside a `true` used to lose both and open
+		// with no gate at all, which is the opposite of what the rule is for.
+		const mixed = [result('real', 1), result('true', 0)];
+		expect(baselineIsRed(mixed)).toBe(false);
+		expect(mixed.filter(isRedCheck).map((r) => r.name)).toEqual(['real']);
+	});
+
+	it('does not count a check nothing could run as one worth keeping', () => {
+		const absent: ForgeCheckResult = {
+			name: 'prose',
+			command: 'You write a test for this',
+			exitCode: 127,
+			durationMs: 1,
+			output: 'You: command not found',
+			timedOut: false
+		};
+		expect(isRedCheck(absent)).toBe(false);
+		expect(isRedCheck(result('real', 1))).toBe(true);
+		expect(isRedCheck(result('green', 0))).toBe(false);
 	});
 });
 

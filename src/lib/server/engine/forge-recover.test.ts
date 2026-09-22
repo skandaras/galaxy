@@ -22,7 +22,7 @@ import {
 } from '$lib/server/forge';
 import { cancelJob, createJob } from './jobs';
 import { nextStep } from './forge-step';
-import { reconcileForge } from './forge-recover';
+import { purgeEpic, reconcileForge } from './forge-recover';
 
 /**
  * What a restart leaves behind inside an epic.
@@ -173,5 +173,94 @@ describe('a sprint the process died while planning', () => {
 		setSprintState(sprint.id, 'gating');
 		expect(reconcileForge()).toBe(0);
 		expect(sprintRow(sprint.id, epic.id).state).toBe('gating');
+	});
+});
+
+describe('narrowing it to one build', () => {
+	it('leaves another build’s stranded task alone', () => {
+		// Resuming an epic needs this: the whole-table sweep would charge an
+		// attempt against a task in a build nobody had touched.
+		const mine = build();
+		const theirs = build();
+		setTaskState(mine.task.id, 'running', { chatId: 'chat-a' });
+		setTaskState(theirs.task.id, 'running', { chatId: 'chat-b' });
+
+		expect(reconcileForge({ epicId: mine.epic.id })).toBe(1);
+		expect(taskRow(mine.task.id, mine.epic.id).state).toBe('planned');
+		expect(taskRow(theirs.task.id, theirs.epic.id).state).toBe('running');
+	});
+
+	it('is what stops a resumed build sitting at running doing nothing', () => {
+		// tasksInFlight counts a stranded task, so the sweep decides the epic is
+		// at its concurrency limit and nextStep will not step past it.
+		const { epic, task } = build();
+		setTaskState(task.id, 'running', { chatId: 'chat-gone' });
+		expect(tasksInFlight(epic.id)).toBe(1);
+
+		reconcileForge({ epicId: epic.id });
+		expect(tasksInFlight(epic.id)).toBe(0);
+	});
+});
+
+describe('a person stopping their own build', () => {
+	it('ends the turn that was running rather than stepping around it', () => {
+		// Setting the epic's state alone left the coding turn going, so the page
+		// said paused while the runner carried on and the bill with it.
+		const { epic, task } = build();
+		// Its own chat id: the live-job map is module level and nothing clears it
+		// between cases, so a reused id finds the previous test's job instead.
+		setTaskState(task.id, 'running', { chatId: 'chat-halt' });
+		const job = createJob({
+			chatId: 'chat-halt',
+			userId: ALICE,
+			task: 'coding',
+			persist: false
+		});
+
+		expect(reconcileForge({ epicId: epic.id, cancel: true })).toBe(1);
+		// The signal, not the status: `cancelJob` asks the loop to stop and the
+		// loop is what marks the row finished as it unwinds. Here there is no
+		// loop, so the abort having been raised is the whole of the evidence.
+		expect(job.controller.signal.aborted).toBe(true);
+		expect(taskRow(task.id, epic.id).state).toBe('planned');
+	});
+
+	it('spends no attempt, because a pause is not the task failing', () => {
+		// The boot path counts one so a task that reliably takes the process down
+		// eventually parks. Somebody pressing Pause is not that, and counting it
+		// would park a task for being interrupted three times.
+		const { epic, task } = build();
+		setTaskState(task.id, 'running', { chatId: 'chat-halt-attempts' });
+		createJob({ chatId: 'chat-halt-attempts', userId: ALICE, task: 'coding', persist: false });
+
+		reconcileForge({ epicId: epic.id, cancel: true });
+		expect(taskRow(task.id, epic.id).attempts).toBe(0);
+	});
+});
+
+describe('deleting a build', () => {
+	it('refuses while one of its turns is still live', () => {
+		// The turn would carry on writing to a workspace whose task row had gone.
+		const { epic, task } = build();
+		setTaskState(task.id, 'running', { chatId: 'chat-purge-live' });
+		const job = createJob({
+			chatId: 'chat-purge-live',
+			userId: ALICE,
+			task: 'coding',
+			persist: false
+		});
+
+		expect(purgeEpic(getEpic(epic.id, ALICE)!, ALICE)).toEqual({ ok: false, reason: 'busy' });
+		expect(getEpic(epic.id, ALICE)).not.toBeNull();
+		cancelJob(job);
+	});
+
+	it('takes the build once nothing is running', () => {
+		const { epic, task } = build();
+		setTaskState(task.id, 'running', { chatId: 'chat-gone' });
+
+		expect(purgeEpic(getEpic(epic.id, ALICE)!, ALICE)).toEqual({ ok: true, tasks: 1 });
+		expect(getEpic(epic.id, ALICE)).toBeNull();
+		expect(listTasks(epic.id)).toEqual([]);
 	});
 });

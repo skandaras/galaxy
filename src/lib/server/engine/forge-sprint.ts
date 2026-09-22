@@ -5,6 +5,7 @@ import {
 	type ForgeEpic,
 	type ForgeSprint
 } from '$lib/server/forge';
+import type { ForgeCheck } from '$lib/server/db/schema';
 import { emitEvent } from './events';
 import { extractJson } from './json';
 import { forgeSystemPrompt, runHeadless, withWorkspace } from './forge-agent';
@@ -12,6 +13,7 @@ import { forgeReadTools, forgeTreeText, readTasks, type TaskProposal } from './t
 import { readOnlyCodingTools } from './coding/tools';
 import {
 	baselineIsRed,
+	isRedCheck,
 	runGate,
 	unrunnableChecks,
 	vacuousChecks,
@@ -83,8 +85,11 @@ export async function runSprintPlan(
 					maxIterations: SPRINT_MAX_STEPS
 				});
 
-			let proposals = parse((await ask()).text);
-			if (!proposals.length) return { ran: false as const, reason: 'no tasks were proposed' };
+			const first = parse((await ask()).text);
+			let proposals = first.tasks;
+			if (!proposals.length) {
+				return { ran: false as const, reason: `no tasks were proposed: ${first.shape}` };
+			}
 
 			let baselines = await baselineAll(proposals, ws.workspaceRel);
 			const failedFirst = baselines.filter((b) => b.vacuous).length;
@@ -122,8 +127,8 @@ export async function runSprintPlan(
 						)
 					).text
 				);
-				if (retry.length) {
-					proposals = retry;
+				if (retry.tasks.length) {
+					proposals = retry.tasks;
 					baselines = await baselineAll(proposals, ws.workspaceRel);
 				}
 			}
@@ -132,14 +137,17 @@ export async function runSprintPlan(
 			for (const [i, b] of baselines.entries()) {
 				// A check that could not fail is not carried onto the task. What is
 				// carried is the admission that there is no check, which is what the
-				// sprint review is told to read by hand.
-				const keep = b.vacuous ? [] : b.proposal.checks;
+				// sprint review is told to read by hand. The refusal is per check
+				// rather than per task: a proposal is sent back as a whole when any
+				// of it was vacuous, and after that one retry whatever was genuinely
+				// red is still a contract worth holding the work to.
+				const keep = b.keep;
 				const reason = keep.length
 					? ''
 					: b.proposal.noCheckReason ||
 						(b.unrunnable.length
 							? `nothing could run the check it proposed (${b.unrunnable.join(', ')})`
-							: b.vacuous
+							: b.passing.length
 								? `the planner could not express a check that fails first (it proposed: ${b.passing.join(', ')})`
 								: 'no check was proposed');
 				if (!keep.length) uncheckable += 1;
@@ -203,15 +211,31 @@ export async function runSprintPlan(
 }
 
 /**
- * Read the proposal out of a reply.
+ * Read the proposal out of a reply, and say what was wrong when there is none.
  *
  * An object with the array inside it, never a bare array: `extractJson` spans
  * the outermost braces, so a top-level array either fails to parse or quietly
  * returns its single element as though it were the whole answer.
+ *
+ * `shape` names the failure without quoting the reply. A planner that produces
+ * nothing used to file `no tasks were proposed` and no more, which is the same
+ * sentence whether the model wrote prose instead of JSON, used a different key,
+ * or returned entries with no title — three faults wanting three different
+ * corrections. The reply itself stays out of it: a sprint plan can quote the
+ * brief back, and `forge-privacy.test.ts` holds the Observatory to counts and
+ * ids rather than to what somebody is building.
  */
-function parse(text: string): TaskProposal[] {
+function parse(text: string): { tasks: TaskProposal[]; shape: string } {
 	const parsed = extractJson(text);
-	return parsed ? readTasks(parsed.tasks) : [];
+	if (!parsed) {
+		const shape = text.trim() ? 'the reply held no JSON object' : 'the reply was empty';
+		return { tasks: [], shape };
+	}
+	if (!Array.isArray(parsed.tasks)) {
+		return { tasks: [], shape: 'the JSON had no tasks array' };
+	}
+	const tasks = readTasks(parsed.tasks);
+	return { tasks, shape: tasks.length ? '' : 'every entry in the tasks array was unusable' };
 }
 
 interface Baseline {
@@ -220,6 +244,16 @@ interface Baseline {
 	passing: string[];
 	/** Checks nothing could run, which are red for ever and prove nothing. */
 	unrunnable: string[];
+	/**
+	 * The ones that ran and failed, which are the ones worth freezing.
+	 *
+	 * Separate from `vacuous` because the two answer different questions. A set
+	 * with one bad check in it should send the planner back for a better
+	 * proposal, and that is what `vacuous` decides. What to keep afterwards is
+	 * per check: a task offering `npx vitest run tests/new.test.ts` alongside
+	 * `true` used to fail the set and lose both, and open with no gate at all.
+	 */
+	keep: ForgeCheck[];
 	vacuous: boolean;
 	results: Awaited<ReturnType<typeof runGate>>['results'];
 }
@@ -228,7 +262,7 @@ async function baselineAll(proposals: TaskProposal[], workspaceRel: string): Pro
 	const out: Baseline[] = [];
 	for (const proposal of proposals) {
 		if (!proposal.checks.length) {
-			out.push({ proposal, passing: [], unrunnable: [], vacuous: false, results: [] });
+			out.push({ proposal, passing: [], unrunnable: [], keep: [], vacuous: false, results: [] });
 			continue;
 		}
 		const checks = proposal.checks.map((c) => ({ ...c, timeoutMs: DEFAULT_CHECK_TIMEOUT_MS }));
@@ -237,6 +271,9 @@ async function baselineAll(proposals: TaskProposal[], workspaceRel: string): Pro
 			proposal: { ...proposal, checks },
 			passing: vacuousChecks(results),
 			unrunnable: unrunnableChecks(results),
+			// By index rather than by name: `runGate` runs the checks in the order
+			// it is given them and a model is free to name two of them the same.
+			keep: checks.filter((_c, i) => isRedCheck(results[i])),
 			vacuous: !baselineIsRed(results),
 			results
 		});

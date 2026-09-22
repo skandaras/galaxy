@@ -147,6 +147,19 @@ export function baselineIsRed(results: ForgeCheckResult[]): boolean {
 	);
 }
 
+/**
+ * Whether one baseline result is a check worth freezing.
+ *
+ * `baselineIsRed` answers for the set, which is the right question when
+ * deciding whether to send a planner back for a better proposal. It is the
+ * wrong one for deciding what to keep: a task offering one real check and one
+ * `true` failed the set and lost both, and opened with no gate at all. What
+ * survives is each check that ran and failed on its own.
+ */
+export function isRedCheck(result: ForgeCheckResult): boolean {
+	return result.exitCode !== 0 && !couldNotRun(result);
+}
+
 /** The checks that passed at baseline, so a refusal can name them. */
 export function vacuousChecks(results: ForgeCheckResult[]): string[] {
 	return results.filter((r) => r.exitCode === 0).map((r) => r.name);
@@ -213,7 +226,7 @@ export async function validateChecks(opts: {
 	});
 	return {
 		refused: results.filter(couldNotRun).map(verdict),
-		red: results.filter((r) => r.exitCode !== 0 && !couldNotRun(r)).map(verdict)
+		red: results.filter(isRedCheck).map(verdict)
 	};
 }
 

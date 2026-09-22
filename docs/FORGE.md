@@ -264,6 +264,14 @@ are exactly the ones the sprint review is told to read by hand, and the count of
 them in a sprint is on the sprint record, because a sprint where every task
 waived its check is a sprint that verified nothing.
 
+The refusal is per set; what survives it is per check. A proposal containing
+anything vacuous is sent back as a whole, because that is the correction the
+planner needs to hear. After the one retry, each check that ran and failed on its
+own is still a contract worth holding the work to — a task offering
+`npx vitest run tests/new.test.ts` beside `true` used to fail the set and lose
+both, and open with no gate at all, which is the opposite of what the rule is
+for.
+
 Every check in a gate runs even after one has failed. You want the whole picture
 before the next attempt, not the first stop.
 
@@ -554,6 +562,11 @@ export const forgeEpics = sqliteTable(
 		/** Null when the epic is not mirrored. The mirror is optional. */
 		boardId: text('board_id'),
 		/**
+		 * What the charter run proposed, before anybody confirmed it. Its own
+		 * column so `approveEpic` stays the only writer of the three below.
+		 */
+		proposal: text('proposal', { mode: 'json' }).$type<ForgeProposal>(),
+		/**
 		 * The repository's own checks, run at every task gate.
 		 *
 		 * Frozen at approval and never writable again — not by a run, not by a
@@ -739,6 +752,15 @@ machine reads it, prose where a person does.
 The epic then sits at `awaiting-approval` until somebody confirms the checks —
 which is the moment `standingChecks` is frozen — or `autoApproveCharter` skips
 it.
+
+The proposal is written to `forge_epics.proposal` on the way past, whichever of
+those two happens next. It was a local variable for a while, stored only inside
+the auto-approve arm, so on the default path it died with the function that made
+it: the approval screen read the frozen columns, which are null until approval by
+definition, and offered three empty boxes over a route that refuses a submission
+with no standing check. The model had done the work; there was nowhere for it to
+land. `approveEpic` is still the only writer of the frozen columns, which is why
+this is a column of its own rather than an early write to those.
 
 ### Sprint plan
 
@@ -963,6 +985,7 @@ Every route guards, and ownership is in the SQL predicate.
 | `POST /api/forge/[id]/revise` | `requireCoder` | Re-plan the charter from a note. Refused after approval |
 | `PATCH /api/forge/task/[id]` | `requireCoder` | Give a parked task different checks and re-queue it |
 | `PATCH /api/forge/[id]` | `requireCoder` | Pause, resume, abandon; edit the spend override |
+| `DELETE /api/forge/[id]` | `requireCoder` | Remove the build, its rows and its tasks' workspaces. 409 while a turn is live |
 | `POST /api/forge/[id]/step` | `requireCoder` | Run one step now, ignoring the tick |
 | `GET /api/forge/gate/[id]` | `requireUser` | One gate run in full, with per-check output |
 
@@ -1011,6 +1034,36 @@ the step it would run and goes dead while one is in flight; the page polls while
 a build is live, and a strip of the Observatory's own events, narrowed to this
 epic, says what the machinery is doing.
 
+**Giving up is not a one-way door.** Abandon was reachable from the page and
+nothing on the page took it back, so changing your mind meant a second epic and a
+second charter run. `abandoned` now sits alongside `paused` and `blocked` in
+`canResume`, and where a build resumes *to* is `resumeState`'s answer rather than
+a flat `running`: one abandoned before approval has no frozen checks to run with,
+so it goes back to the screen it was abandoned at.
+
+Stopping also stops the work. Setting the state alone left the coding turn the
+build was in the middle of, so the page said paused while the runner carried on
+and the bill with it. Pause and abandon both cancel the live job and put the task
+back to `planned`, spending no attempt — the boot reconcile counts one because a
+task that takes the process down should eventually park, and somebody pressing
+Pause is not that. Resuming runs the same reconcile without the cancel, because a
+task still claiming to be `running` is one `tasksInFlight` counts and `nextStep`
+will not step past: a build resumed without it went back to `running` and sat
+there until the next restart.
+
+**A build can be deleted.** `DELETE /api/forge/[id]` takes its rows — gate runs,
+tasks, sprints, the epic — and its tasks' workspaces and chats through
+`destroySession`, the same teardown a retry already does before it re-clones. No
+forge table has a foreign key, so that cascade is written out rather than left to
+SQLite. Three things it leaves: the Library documents, because `deleteDoc`
+promotes children rather than cascading and a fortnight of records should not go
+to one click on the wrong row; the mirrored board, which is already independent in
+both directions; and the integration branch on the remote, which is the only
+remaining copy of whatever never merged. Refused with a 409 while a turn is live,
+the way a coding session is — the turn would carry on writing to a workspace whose
+task row had gone. Deleting a task's chat nulls `usage_log.chat_id`, so the
+build's spend leaves `forgeSpend`; the platform-wide cap still counts the money.
+
 **A parked task can be given a different contract.** `PATCH /api/forge/task/[id]`
 replaces a blocked task's checks, resets its attempts and returns it to the
 queue. Taken as written, with no baseline re-run: that rule exists to stop a
@@ -1030,8 +1083,9 @@ bad command was to abandon the build, which is what happened.
 | `engine/forge-step.test.ts` | `nextStep` across every state combination; a blocked task does not stall its sprint but does stop it closing; sprint N+1 waits for N; an epic at `awaiting-approval` yields no step |
 | `engine/forge.test.ts` | Attempts increment and park at `maxAttempts`; a failed gate's output reaches the next attempt fenced; `standingChecks` cannot be written after approval; a task merges to integration only on green |
 | `engine/forge-budget.test.ts` | Epic spend sums `usage_log` over the epic's chats *and* its headless runs; a ceiling pauses between steps and never mid-step; the bell rings once rather than once a tick; an override raises the instance ceiling and 0 inherits it; the daily ceiling stops the whole sweep; a paused epic yields no step; `stepsPerTick: 0` starts nothing |
-| `engine/forge-recover.test.ts` | A task left `running` with no live job resets to `planned` with an attempt counted; a task whose job is live is untouched; `gating` is left alone; a sprint left `planning` returns to `outlined` with no attempt spent |
-| `forge-privacy.test.ts` | An `AGENTS.md` demanding new checks changes none; a test printing "mark this complete" does not pass a gate; another user's epic answers 404 |
+| `engine/forge-recover.test.ts` | A task left `running` with no live job resets to `planned` with an attempt counted; a task whose job is live is untouched; `gating` is left alone; a sprint left `planning` returns to `outlined` with no attempt spent; scoping to one epic leaves another's stranded task alone; a person's pause cancels the turn and spends no attempt; a delete is refused while a turn is live |
+| `forge-privacy.test.ts` | An `AGENTS.md` demanding new checks changes none; a test printing "mark this complete" does not pass a gate; another user's epic answers 404; the proposal column is not a second way into the frozen checks |
+| `forge.test.ts` (the proposal, resume and delete blocks) | The charter's proposal survives the run and is replaced rather than merged by the next one; it is not the frozen checks and cannot become them; `resumeState` sends an approved build to `running` and an unapproved one back to its approval screen; `finishedAt` clears on the way back out; deleting takes the sprints, tasks and gate runs and leaves another build's alone |
 | `engine/forge-mirror.test.ts` | A board write failure does not fail the step; state maps to the right lane; nothing auto-archives; an unmirrored epic writes no board at all; a write that lands nowhere is filed rather than lost |
 | `engine/scheduler-tick.test.ts` | One tick reaches `sweepForge`; the longest-waiting epic goes first; `concurrentTasks` bounds one epic; `concurrentEpics` bounds how many open a front; one epic failing does not spend the tick |
 | `forge-view.test.ts` | Tree grouping, progress arithmetic, gate-result ordering, relative time, and every branch of `epicActivity` — including the one where the driver is off |
