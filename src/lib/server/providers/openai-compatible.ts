@@ -348,7 +348,7 @@ export async function* parseChatCompletionStream(
 			yield { type: 'reasoning', delta: reasoning };
 		}
 		const toolCalls = delta.tool_calls as
-			| { index?: number; id?: string; function?: { name?: string; arguments?: string } }[]
+			| { index?: number; id?: string; function?: { name?: string; arguments?: unknown } }[]
 			| undefined;
 		if (toolCalls) {
 			for (const tc of toolCalls) {
@@ -356,7 +356,11 @@ export async function* parseChatCompletionStream(
 				const entry = pendingCalls.get(idx) ?? { id: '', name: '', args: '' };
 				if (tc.id) entry.id = tc.id;
 				if (tc.function?.name) entry.name += tc.function.name;
-				if (tc.function?.arguments) entry.args += tc.function.arguments;
+				// Some servers send the arguments already parsed. Concatenated, an
+				// object became "[object Object]", which no tool can read.
+				const args = tc.function?.arguments;
+				if (typeof args === 'string') entry.args += args;
+				else if (args && typeof args === 'object') entry.args += JSON.stringify(args);
 				pendingCalls.set(idx, entry);
 			}
 			// The batch is only emitted once the stream ends, so without this the

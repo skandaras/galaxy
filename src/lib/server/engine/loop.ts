@@ -975,7 +975,7 @@ async function executeToolCall(
 	stepId: string
 ): Promise<{ output: string; ok: boolean; display?: ToolDisplay }> {
 	const { job, persist } = opts;
-	const args = safeParseArgs(call.arguments);
+	const { args, problem } = parseToolArgs(call.arguments);
 	const summary = tool?.describe?.(args);
 	const started = Date.now();
 	/**
@@ -1014,6 +1014,30 @@ async function executeToolCall(
 			}),
 			ok: false
 		};
+	}
+	if (problem) {
+		// Running the tool on `{}` is what this used to do, and it turned every
+		// unreadable call into the tool's own complaint about a missing field. A
+		// set_chat_title call from GLM reached the feed as "title is required" with
+		// an empty summary, and nothing recorded what the model had actually sent.
+		// The snippet goes back to the model so it can correct the call this turn,
+		// and into the event so the next one of these can be diagnosed.
+		const error = `The arguments for ${call.name} could not be read (${problem}): ${call.arguments.slice(0, 200)}. Call it again with a JSON object matching its parameters.`;
+		emitEvent(
+			{
+				userId: opts.userId,
+				chatId: opts.chatId,
+				task: opts.task,
+				type: 'tool.call',
+				name: call.name,
+				status: 'error',
+				durationMs: Date.now() - started,
+				detail: { summary, error, argsChars: call.arguments.length }
+			},
+			{ persist }
+		);
+		emit('error', error);
+		return { output: JSON.stringify({ error }), ok: false };
 	}
 	let meta: Record<string, unknown> = {};
 	let display: ToolDisplay | undefined;
@@ -1058,12 +1082,37 @@ async function executeToolCall(
 	}
 }
 
-function safeParseArgs(raw: string): Record<string, unknown> {
+/**
+ * A tool call's arguments, or what was wrong with them. Exported for tests.
+ *
+ * Empty means a tool with no parameters, which is not a fault. A JSON string
+ * holding the JSON object is unwrapped once: some OpenAI-compatible servers
+ * encode the arguments twice, and the call is plainly readable.
+ */
+export function parseToolArgs(raw: string): { args: Record<string, unknown>; problem?: string } {
+	if (!raw.trim()) return { args: {} };
+	let value: unknown;
 	try {
-		return JSON.parse(raw);
+		value = JSON.parse(raw);
 	} catch {
-		return {};
+		return { args: {}, problem: 'not valid JSON' };
 	}
+	if (typeof value === 'string') {
+		try {
+			value = JSON.parse(value);
+		} catch {
+			return { args: {}, problem: 'not a JSON object' };
+		}
+	}
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return { args: {}, problem: 'not a JSON object' };
+	}
+	return { args: value as Record<string, unknown> };
+}
+
+/** For the labels, which should show what they can and never fail a step. */
+function safeParseArgs(raw: string): Record<string, unknown> {
+	return parseToolArgs(raw).args;
 }
 
 function addUsage(a: Usage | null, b: Usage): Usage {

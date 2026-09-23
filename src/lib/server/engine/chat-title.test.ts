@@ -101,6 +101,14 @@ describe('set_chat_title', () => {
 		expect(was()).toBe(false);
 	});
 
+	it('says which keys arrived, so a misnamed field can be told from an empty one', async () => {
+		const chat = createChat({ userId: USER });
+		const { tool } = toolFor(chat.id);
+		await expect(tool.execute({ name: 'Postgres pooling' })).rejects.toThrow(/got keys: name/);
+		await expect(tool.execute({})).rejects.toThrow(/got no arguments/);
+		await expect(tool.execute({})).rejects.toThrow(/\{"title": "two to five words"\}/);
+	});
+
 	it('is scoped to its own chat', async () => {
 		const chat = createChat({ userId: USER });
 		const { tool } = toolFor(chat.id);
