@@ -1,0 +1,1 @@
+ALTER TABLE `providers` ADD `coding_only` integer DEFAULT false NOT NULL;

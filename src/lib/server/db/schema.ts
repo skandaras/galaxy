@@ -210,6 +210,13 @@ export const providers = sqliteTable('providers', {
 	baseUrl: text('base_url').notNull(),
 	apiKeyEnc: text('api_key_enc'),
 	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+	/**
+	 * Keep this provider's models to the coding agent (see CODING_ONLY_TASKS).
+	 * Checked where a model is resolved, not only where one is listed: the chat
+	 * route accepts any model id the browser sends, and two fallbacks pick the
+	 * first enabled model with no one choosing it.
+	 */
+	codingOnly: integer('coding_only', { mode: 'boolean' }).notNull().default(false),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 });
 

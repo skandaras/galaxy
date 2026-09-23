@@ -18,6 +18,7 @@ const masked = (p: typeof providers.$inferSelect) => ({
 	baseUrl: p.baseUrl,
 	hasKey: Boolean(p.apiKeyEnc),
 	enabled: p.enabled,
+	codingOnly: p.codingOnly,
 	createdAt: p.createdAt.getTime()
 });
 
@@ -49,6 +50,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		baseUrl,
 		apiKeyEnc: typeof body.apiKey === 'string' && body.apiKey ? encryptSecret(body.apiKey) : null,
 		enabled: true,
+		codingOnly: body.codingOnly === true,
 		createdAt: new Date()
 	};
 	db.insert(providers).values(row).run();
