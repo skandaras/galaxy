@@ -198,7 +198,14 @@ export const attachments = sqliteTable(
 
 export const providers = sqliteTable('providers', {
 	id: text('id').primaryKey(),
-	kind: text('kind', { enum: ['openrouter', 'openai-compatible'] }).notNull(),
+	/**
+	 * Which adapter speaks to it. `openai` is OpenAI itself over the Responses
+	 * API; `openai-compatible` covers everything else that speaks chat
+	 * completions, OpenAI included. The column is plain text, so a new kind
+	 * needs no migration, and an image from before `openai` existed reads such a
+	 * row as a compat provider: it still works, over the older protocol.
+	 */
+	kind: text('kind', { enum: ['openrouter', 'openai-compatible', 'openai'] }).notNull(),
 	name: text('name').notNull(),
 	baseUrl: text('base_url').notNull(),
 	apiKeyEnc: text('api_key_enc'),

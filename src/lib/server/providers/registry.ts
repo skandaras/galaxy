@@ -4,6 +4,7 @@ import { db } from '$lib/server/db';
 import { models, providers } from '$lib/server/db/schema';
 import { decryptSecret } from '$lib/server/crypto';
 import { createOpenAiCompatAdapter } from './openai-compatible';
+import { createOpenAiResponsesAdapter } from './openai-responses';
 import type { ProviderAdapter } from './types';
 
 export type ProviderRow = typeof providers.$inferSelect;
@@ -13,6 +14,9 @@ export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
 export function adapterFor(provider: ProviderRow): ProviderAdapter {
 	const apiKey = provider.apiKeyEnc ? decryptSecret(provider.apiKeyEnc) : undefined;
+	if (provider.kind === 'openai') {
+		return createOpenAiResponsesAdapter({ baseUrl: provider.baseUrl, apiKey });
+	}
 	return createOpenAiCompatAdapter({
 		baseUrl: provider.baseUrl,
 		apiKey,

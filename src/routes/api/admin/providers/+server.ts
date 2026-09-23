@@ -6,7 +6,10 @@ import { db } from '$lib/server/db';
 import { providers } from '$lib/server/db/schema';
 import { encryptSecret } from '$lib/server/crypto';
 import { OPENROUTER_BASE_URL } from '$lib/server/providers/registry';
+import { OPENAI_BASE_URL } from '$lib/server/providers/openai-responses';
 import { emitEvent } from '$lib/server/engine/events';
+
+type ProviderKind = (typeof providers.$inferSelect)['kind'];
 
 const masked = (p: typeof providers.$inferSelect) => ({
 	id: p.id,
@@ -26,19 +29,22 @@ export const GET: RequestHandler = ({ locals }) => {
 export const POST: RequestHandler = async ({ locals, request }) => {
 	const admin = requireAdmin(locals);
 	const body = await request.json().catch(() => ({}));
-	const kind = body.kind === 'openrouter' ? 'openrouter' : 'openai-compatible';
+	const kind: ProviderKind =
+		body.kind === 'openrouter' || body.kind === 'openai' ? body.kind : 'openai-compatible';
 	const baseUrl =
 		typeof body.baseUrl === 'string' && body.baseUrl.trim()
 			? body.baseUrl.trim().replace(/\/$/, '')
 			: kind === 'openrouter'
 				? OPENROUTER_BASE_URL
-				: '';
+				: kind === 'openai'
+					? OPENAI_BASE_URL
+					: '';
 	if (!baseUrl) error(400, 'baseUrl is required for openai-compatible providers');
 	const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : kind;
 
 	const row = {
 		id: randomUUID(),
-		kind: kind as 'openrouter' | 'openai-compatible',
+		kind,
 		name,
 		baseUrl,
 		apiKeyEnc: typeof body.apiKey === 'string' && body.apiKey ? encryptSecret(body.apiKey) : null,

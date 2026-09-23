@@ -122,6 +122,7 @@
 			kind
 			<select bind:value={form.kind}>
 				<option value="openrouter">OpenRouter</option>
+				<option value="openai">OpenAI (Responses API)</option>
 				<option value="openai-compatible">OpenAI-compatible endpoint</option>
 			</select>
 		</label>
@@ -132,7 +133,11 @@
 		<label>
 			base URL
 			<input
-				placeholder={form.kind === 'openrouter' ? 'default: openrouter.ai' : 'http://host:8000/v1'}
+				placeholder={form.kind === 'openrouter'
+					? 'default: openrouter.ai'
+					: form.kind === 'openai'
+						? 'default: api.openai.com'
+						: 'http://host:8000/v1'}
 				bind:value={form.baseUrl}
 			/>
 		</label>
