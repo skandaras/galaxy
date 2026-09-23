@@ -53,7 +53,16 @@ export function setChatTitleTool(chatId: string, userId: string, onSet: () => vo
 		describe: (args) => String(args.title ?? ''),
 		execute: async (args) => {
 			const title = cleanTitle(String(args.title ?? ''));
-			if (!title) throw new Error('title is required');
+			if (!title) {
+				// The bare "title is required" gave the model nothing to correct and
+				// the feed nothing to diagnose. Which keys did arrive tells a model
+				// that named the field something else apart from one that sent an
+				// empty title.
+				const keys = Object.keys(args);
+				throw new Error(
+					`title is required: call set_chat_title with {"title": "two to five words"} (got ${keys.length ? `keys: ${keys.join(', ')}` : 'no arguments'})`
+				);
+			}
 
 			// A name the user chose always wins, even mid-turn.
 			const chat = getChat(chatId, userId);

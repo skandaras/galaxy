@@ -87,6 +87,36 @@ describe('parseChatCompletionStream', () => {
 		});
 	});
 
+	it('serialises arguments a server sent already parsed', async () => {
+		// Concatenated as a string, this object used to become "[object Object]",
+		// which reached the tool as no arguments at all.
+		const events = await collect(
+			streamOf(
+				chunk({
+					choices: [
+						{
+							delta: {
+								tool_calls: [
+									{
+										index: 0,
+										id: 'call_1',
+										function: { name: 'set_chat_title', arguments: { title: 'Galaxy' } }
+									}
+								]
+							},
+							finish_reason: 'tool_calls'
+						}
+					]
+				}),
+				'data: [DONE]\n\n'
+			)
+		);
+		expect(events).toContainEqual({
+			type: 'tool_calls',
+			calls: [{ id: 'call_1', name: 'set_chat_title', arguments: '{"title":"Galaxy"}' }]
+		});
+	});
+
 	it('survives chunk boundaries splitting SSE lines', async () => {
 		const full = chunk({ choices: [{ delta: { content: 'split' } }] }) + 'data: [DONE]\n\n';
 		const mid = Math.floor(full.length / 2);
