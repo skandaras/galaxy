@@ -405,7 +405,7 @@
 		<details>
 			<summary class="hint">Read the built-in layout rules</summary>
 			<p class="hint">
-				These reach the agents that answer in prose: chat, coding and the two Forge documents.
+				These reach the agents that answer in prose: chat and coding.
 				The ones that answer with JSON get the voice above and none of this.
 			</p>
 			<pre class="voice">{style.layout}</pre>

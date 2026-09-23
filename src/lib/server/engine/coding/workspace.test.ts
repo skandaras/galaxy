@@ -1,14 +1,10 @@
-import { describe, it, expect, afterAll, beforeAll } from 'vitest';
-import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
+import { describe, it, expect, beforeAll } from 'vitest';
+import { mkdirSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { dataDir, runMigrations } from '$lib/server/db';
+import { dataDir } from '$lib/server/db';
 import {
 	authenticatedUrl,
-	createWorkspace,
-	destroyWorkspace,
 	gitAuthArgs,
-	mergeIntoBranch,
 	repoInstructions,
 	safeJoin,
 	scrubSecrets,
@@ -131,130 +127,5 @@ describe('repoInstructions', () => {
 		const out = repoInstructions(INSTR);
 		expect(out).toContain('…(truncated)');
 		expect(out.length).toBeLessThan(9_000);
-	});
-});
-
-/**
- * Real git against a real local origin, not a mock.
- *
- * `getExecutor()` defaults to the local executor and every vitest worker has its
- * own DATA_DIR, so a bare repository under it is the cheapest honest way to
- * exercise branching and merging. Mocking git here would have tested the shell
- * strings and nothing about whether the sequence works.
- */
-describe('branching and merging', () => {
-	const ORIGIN = join(dataDir, 'origin-work');
-	const BARE = `${ORIGIN}.git`;
-	/** Committing in the fixture, where no user is configured. */
-	const AS = '-c user.email=t@t -c user.name=t';
-
-	const git = (cwd: string, args: string) =>
-		execSync(`git ${args}`, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-
-	const made: string[] = [];
-	const clone = async (opts?: { from?: string }) => {
-		const ws = await createWorkspace(BARE, opts);
-		made.push(ws.workspaceRel);
-		return ws;
-	};
-	/** Commit a file on whatever branch the workspace is on. */
-	const commit = (ws: string, file: string, body: string) => {
-		const dir = join(dataDir, ws);
-		writeFileSync(join(dir, file), body);
-		git(dir, `add -A`);
-		git(dir, `${AS} commit -qm ${JSON.stringify(`add ${file}`)}`);
-	};
-
-	beforeAll(() => {
-		// gitAuthArgs reads the stored GitHub token, so this suite needs the
-		// settings table even though nothing here is authenticated.
-		runMigrations();
-		rmSync(ORIGIN, { recursive: true, force: true });
-		rmSync(BARE, { recursive: true, force: true });
-		mkdirSync(ORIGIN, { recursive: true });
-		git(ORIGIN, 'init -q -b main');
-		writeFileSync(join(ORIGIN, 'README.md'), 'line one\n');
-		git(ORIGIN, 'add -A');
-		git(ORIGIN, `${AS} commit -qm init`);
-		git(dataDir, `clone -q --bare ${JSON.stringify(ORIGIN)} ${JSON.stringify(BARE)}`);
-	});
-
-	afterAll(() => {
-		for (const ws of made) destroyWorkspace(ws);
-	});
-
-	it('starts from the default head when no branch is named', async () => {
-		const ws = await clone();
-		expect(ws.baseBranch).toBe('main');
-		expect(ws.workBranch).toMatch(/^galaxy\/session-/);
-	});
-
-	it('falls back to the default head when the branch is not on the remote yet', async () => {
-		// Forge's integration branch does not exist until the first green task
-		// pushes it, so every clone before that legitimately lands on the base.
-		const ws = await clone({ from: 'forge/not-yet' });
-		expect(ws.baseBranch).toBe('main');
-	});
-
-	it('merges a work branch into a branch that does not exist yet, and pushes it', async () => {
-		const ws = await clone();
-		commit(ws.workspaceRel, 'first.txt', 'from task one\n');
-
-		const merged = await mergeIntoBranch(ws.workspaceRel, BARE, {
-			target: 'forge/demo',
-			source: ws.workBranch,
-			baseBranch: ws.baseBranch
-		});
-		expect(merged.ok).toBe(true);
-		// The point of the whole exercise: the next task can clone this.
-		expect(git(BARE, 'branch --list forge/demo')).toContain('forge/demo');
-		expect(git(BARE, 'log --oneline forge/demo')).toContain('add first.txt');
-	});
-
-	it('then starts the next task from that branch, carrying what landed', async () => {
-		const ws = await clone({ from: 'forge/demo' });
-		expect(ws.baseBranch).toBe('forge/demo');
-		expect(existsSync(join(dataDir, ws.workspaceRel, 'first.txt'))).toBe(true);
-
-		commit(ws.workspaceRel, 'second.txt', 'from task two\n');
-		const merged = await mergeIntoBranch(ws.workspaceRel, BARE, {
-			target: 'forge/demo',
-			source: ws.workBranch,
-			baseBranch: ws.baseBranch
-		});
-		expect(merged.ok).toBe(true);
-		expect(git(BARE, 'log --oneline forge/demo')).toContain('add second.txt');
-	});
-
-	it('reports a conflict instead of throwing, and leaves no half-merge behind', async () => {
-		// Two tasks editing the same line is the case a driver has to survive: it
-		// parks the task exactly as a failing test would, and the branch it could
-		// not land on must be untouched.
-		const a = await clone({ from: 'forge/demo' });
-		const b = await clone({ from: 'forge/demo' });
-		commit(a.workspaceRel, 'README.md', 'rewritten by A\n');
-		commit(b.workspaceRel, 'README.md', 'rewritten by B\n');
-
-		expect(
-			(
-				await mergeIntoBranch(a.workspaceRel, BARE, {
-					target: 'forge/demo',
-					source: a.workBranch,
-					baseBranch: a.baseBranch
-				})
-			).ok
-		).toBe(true);
-
-		const second = await mergeIntoBranch(b.workspaceRel, BARE, {
-			target: 'forge/demo',
-			source: b.workBranch,
-			baseBranch: b.baseBranch
-		});
-		expect(second.ok).toBe(false);
-		expect(second.output).toMatch(/conflict/i);
-		// `git merge --abort` ran: nothing is left staged or unmerged.
-		expect(git(join(dataDir, b.workspaceRel), 'status --porcelain').trim()).toBe('');
-		// And A's work is still what the branch holds.
-		expect(git(BARE, 'show forge/demo:README.md')).toContain('rewritten by A');
 	});
 });

@@ -163,8 +163,8 @@ export function knowledgeTools(userId: string): LoopTool[] {
 				const meta = findDocByTitle(ref, userId);
 				const doc = meta ? getDoc(meta.id, userId) : getDoc(ref, userId);
 				if (!doc) throw new Error(`No Library doc matching "${ref}"`);
-				// Where it sits, so an agent reading a task record knows which sprint
-				// and which epic it belongs to without walking back up by hand.
+				// Where it sits, so an agent reading a nested document knows what it
+				// belongs to without walking back up by hand.
 				const path = docPath(doc.meta.id, userId);
 				const where = path.length > 1 ? `[Filed under: ${path.slice(0, -1).join(' › ')}]\n\n` : '';
 				// Held to the same per-call budget as a file read in a coding turn.

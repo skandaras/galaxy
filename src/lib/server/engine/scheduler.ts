@@ -9,42 +9,24 @@ import {
 	DEFAULT_RETENTION,
 	DEFAULT_SKILL_OPTIMISER,
 	DEFAULT_UX_AUDIT,
-	forgeSettings,
 	getSetting,
 	setSetting,
 	type AlignmentSettings,
-	type ForgeSettings,
 	type MemorySettings,
 	type RetentionSettings,
 	type SkillOptimiserSettings,
 	type UxAuditSettings
 } from '$lib/server/settings';
 import { decayReinforcement, refreshLayout } from '$lib/server/cortex';
-import {
-	dueEpics,
-	epicsInFlight,
-	forgeSpend,
-	forgeSpendSince,
-	setEpicState,
-	tasksInFlight,
-	type ForgeEpic
-} from '$lib/server/forge';
-import { notify } from '$lib/server/notifications';
 import { groomSettings, groomStatus, runCortexGroom } from './cortex-groom';
 import { getSynthesisStatus, runAlignmentSynthesis } from './alignment';
-import { getBudgetStatus } from './budget';
 import { emitEvent } from './events';
-import { runStep } from './forge-run';
 import { getMemoryStatus, runMemory, runSkillOptimiser } from './memory';
 import { runUxAudit } from './ux-audit';
 
 const TICK_MS = 5 * 60 * 1000;
 const UX_LAST_RUN_KEY = 'ux.lastRun';
 const SKILLS_LAST_RUN_KEY = 'skills.lastRun';
-const FORGE_LAST_SKIP_KEY = 'forge.lastSkip';
-/** A capped sweep files one event an hour, not one every five minutes. */
-const FORGE_SKIP_GAP_MS = 3_600_000;
-const DAY_MS = 86_400_000;
 /** Pruning is cheap but pointless to repeat every tick. */
 const PRUNE_INTERVAL_MS = 6 * 3_600_000;
 
@@ -81,10 +63,7 @@ export function startScheduler(): void {
  *
  * Ordered cheapest first: the two synchronous Cortex sweeps answer "has anything
  * changed" without doing any work on most ticks, and the per-user model jobs run
- * sequentially after them so they cannot race the budget cap. Forge is last
- * because it is the most expensive thing here — one of its steps can be a gate
- * running the repository's whole test suite — and a sweep that overruns the
- * five-minute tick should overrun nobody else's turn.
+ * sequentially after them so they cannot race the budget cap.
  */
 export async function tick(): Promise<void> {
 	// A slow sweep must not overlap the next tick.
@@ -98,7 +77,6 @@ export async function tick(): Promise<void> {
 		await sweepAlignmentSynthesis();
 		await sweepUxAudit();
 		await sweepSkillOptimiser();
-		await sweepForge();
 		prune();
 	} finally {
 		sweeping = false;
@@ -299,133 +277,6 @@ async function sweepSkillOptimiser(): Promise<void> {
 	if (now < lastRun + cfg.intervalHours * 3_600_000) return;
 	setSetting(SKILLS_LAST_RUN_KEY, now);
 	await runSweep('skill-optimiser', undefined, () => runSkillOptimiser());
-}
-
-/**
- * Forge's driver — what makes an epic build itself rather than wait for
- * somebody to keep pressing a button.
- *
- * There is no process that "is" a running epic: `closeAbandonedJobs` ends
- * anything that tries to be one, and live job state is a module-level Map that
- * dies with the process. So an epic is a row whose state says what should
- * happen next, and this is the thing that notices. A restart mid-build loses at
- * most one step.
- *
- * Exported for its tests, as `prune` and `runSweep` are.
- */
-export async function sweepForge(): Promise<void> {
-	const cfg: ForgeSettings = forgeSettings();
-	// 0 pauses everything, and because it is a settings row rather than a flag in
-	// a process the pause survives a restart — which is the only kind of pause
-	// worth having for something that runs for days.
-	if (!cfg.enabled || cfg.stepsPerTick < 1) return;
-
-	// The platform cap outranks Forge's own dials: an agent nobody is watching is
-	// the last thing that should spend what is left of a capped month.
-	if (getBudgetStatus().blocked) {
-		noteForgeSkip('the budget cap is reached');
-		return;
-	}
-
-	const dayCapReached = (): boolean => {
-		if (cfg.maxUsdPerDay <= 0) return false;
-		const today = forgeSpendSince(Date.now() - DAY_MS);
-		if (today < cfg.maxUsdPerDay) return false;
-		noteForgeSkip(`Forge has spent $${today.toFixed(2)} of its $${cfg.maxUsdPerDay} for the day`);
-		return true;
-	};
-
-	let started = 0;
-	// Longest-waiting first, which dueEpics orders for us. Insertion order would
-	// starve whatever was created last as soon as there is more work than pace.
-	for (const epic of dueEpics()) {
-		if (started >= cfg.stepsPerTick) break;
-		// Re-read per step rather than once for the tick: at twenty steps a tick
-		// the first few can spend the day's allowance between them, and a ceiling
-		// only checked at the top is one the rest of the tick sails past.
-		if (dayCapReached()) break;
-
-		const inFlight = tasksInFlight(epic.id);
-		if (inFlight >= cfg.concurrentTasks) continue;
-		// An epic with nothing in flight would be opening a new front, and
-		// concurrentEpics is how many fronts there may be. Read fresh each time
-		// round rather than counted up here: a step that just started a task has
-		// already moved its epic into that count.
-		if (inFlight === 0 && epicsInFlight() >= cfg.concurrentEpics) continue;
-
-		// Between steps and never inside one. A step is the unit that produces
-		// something usable, so stopping between them leaves a coherent tree rather
-		// than a half-written file — research's rule, for research's reason.
-		const ceiling = epic.maxUsdOverride || cfg.maxUsdPerEpic;
-		if (ceiling > 0) {
-			const spent = forgeSpend(epic.id);
-			if (spent >= ceiling) {
-				pauseOnSpend(epic, spent, ceiling);
-				continue;
-			}
-		}
-
-		let stepped = false;
-		await runSweep('forge', epic.ownerId, async () => {
-			const outcome = await runStep(epic, epic.ownerId);
-			stepped = outcome.step !== 'none';
-		});
-		// An epic with nothing to do has not used the tick's allowance. Counting it
-		// would let one idle epic at the head of the queue spend the whole tick and
-		// leave the epic behind it never moving.
-		if (stepped) started++;
-	}
-}
-
-/**
- * Say why the driver did nothing, but not three hundred times a day.
- *
- * Skipping is never silent — every other sweep files its skips — and a budget
- * that stays capped for a week would otherwise file one event every five
- * minutes, which is the Observatory made useless by the thing it is reporting.
- * Same shape as the UX audit's.
- */
-function noteForgeSkip(reason: string): void {
-	const now = Date.now();
-	if (now - getSetting<number>(FORGE_LAST_SKIP_KEY, 0) < FORGE_SKIP_GAP_MS) return;
-	setSetting(FORGE_LAST_SKIP_KEY, now);
-	emitEvent({
-		task: 'forge',
-		type: 'job',
-		name: 'forge.sweep',
-		status: 'error',
-		detail: { skipped: true, reason }
-	});
-}
-
-/**
- * Stop an epic that has spent what it was allowed to, and say so.
- *
- * `paused`, not `blocked`: nothing is wrong with the build, and raising the
- * ceiling is all it takes to carry on. Pausing is also what keeps this quiet —
- * a paused epic leaves dueEpics, so the bell rings once rather than on every
- * tick for ever, and notify() has no dedupe of its own to fall back on.
- */
-function pauseOnSpend(epic: ForgeEpic, spent: number, ceiling: number): void {
-	const reason = `it has spent $${spent.toFixed(2)} of its $${ceiling.toFixed(2)} ceiling`;
-	setEpicState(epic.id, 'paused', reason);
-	notify({
-		userId: epic.ownerId,
-		kind: 'forge-blocked',
-		title: `"${epic.title}" has paused`,
-		// No link until /forge exists: a notification pointing at a page that
-		// answers 404 is worse than one that simply says what happened.
-		body: `${reason}. Raise it to let the build carry on.`,
-		entityId: epic.id
-	});
-	emitEvent({
-		userId: epic.ownerId,
-		task: 'forge',
-		type: 'budget',
-		name: 'forge.ceiling',
-		status: 'error',
-		detail: { epicId: epic.id, spentUsd: spent, ceilingUsd: ceiling }
-	});
 }
 
 /**

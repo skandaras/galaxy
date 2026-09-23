@@ -203,13 +203,6 @@ export const providers = sqliteTable('providers', {
 	baseUrl: text('base_url').notNull(),
 	apiKeyEnc: text('api_key_enc'),
 	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
-	/**
-	 * Nothing reads it. It kept a provider's models to the coding agent, for a
-	 * native OpenAI provider that was taken back out a release later. It stays
-	 * because migration 0039 added it and the image before this one selects it,
-	 * so dropping it now would break a rollback. It can go in the release after.
-	 */
-	codingOnly: integer('coding_only', { mode: 'boolean' }).notNull().default(false),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 });
 
@@ -300,13 +293,7 @@ export const CORE_TASKS = [
 	'board',
 	'alignment',
 	'alignment-synthesis',
-	'cortex-groom',
-	// Forge's three planning voices. Task *execution* deliberately reuses
-	// 'coding': a Forge task is a coding task, and a second coding prompt is two
-	// places for a repository's conventions to drift apart.
-	'forge-charter',
-	'forge-sprint',
-	'forge-review'
+	'cortex-groom'
 ] as const;
 export type CoreTask = (typeof CORE_TASKS)[number];
 
@@ -823,11 +810,7 @@ export const NOTIFICATION_KINDS = [
 	'card-assigned',
 	'board-shared',
 	'card-done',
-	'turn-failed',
-	// A Forge task that ran out of attempts. The driver subscribes to its own
-	// coding job, and failJob only rings the bell when nothing is watching — so
-	// without this a parked task would be announced by nothing at all.
-	'forge-blocked'
+	'turn-failed'
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -1492,224 +1475,4 @@ export const cortexProposals = sqliteTable(
 		index('cortex_proposals_user_status_idx').on(t.userId, t.status, t.createdAt),
 		index('cortex_proposals_fingerprint_idx').on(t.fingerprint)
 	]
-);
-
-// --- forge ------------------------------------------------------------------
-
-/**
- * Forge is the layer above one coding turn: a charter, sprints beneath it, tasks
- * beneath those, and a gate on the end of each. See `docs/FORGE.md`.
- *
- * The thing these four tables exist for is that an epic cannot be a job. Live
- * job state is a module-level Map and `closeAbandonedJobs()` errors every
- * running row at boot, so a build that spans two days and three deploys has to
- * be rows that say what should happen next, with each unit of work a short job
- * of its own.
- */
-
-/** A command whose exit code decides whether a unit of work is finished. */
-export interface ForgeCheck {
-	name: string;
-	command: string;
-	timeoutMs: number;
-}
-
-export interface ForgeCheckResult {
-	name: string;
-	command: string;
-	exitCode: number;
-	durationMs: number;
-	/** Head and tail, as the executor's own bounding produces it. */
-	output: string;
-	timedOut: boolean;
-}
-
-/**
- * What the charter run proposed, before anybody confirmed it.
- *
- * Its own column rather than an early write to the three below, so that
- * `approveEpic` stays their only writer. It used to be a local in `runCharter`
- * that was dropped unless `autoApproveCharter` was on, which left the approval
- * screen offering three empty boxes and asked a person to retype the commands
- * the model had already worked out.
- */
-export interface ForgeProposal {
-	standingChecks: ForgeCheck[];
-	gateChecks: ForgeCheck[];
-	acceptance: string[];
-}
-
-export const FORGE_EPIC_STATES = [
-	'drafting',
-	'awaiting-approval',
-	'running',
-	'paused',
-	'blocked',
-	'done',
-	'abandoned'
-] as const;
-export type ForgeEpicState = (typeof FORGE_EPIC_STATES)[number];
-
-export const forgeEpics = sqliteTable(
-	'forge_epics',
-	{
-		id: text('id').primaryKey(),
-		ownerId: text('owner_id').notNull(),
-		title: text('title').notNull(),
-		/** What the person asked for, verbatim. The charter run's only input. */
-		brief: text('brief').notNull().default(''),
-		repoUrl: text('repo_url').notNull(),
-		repoName: text('repo_name').notNull().default(''),
-		baseBranch: text('base_branch').notNull().default('main'),
-		/**
-		 * `forge/<slug>`. Every task branches off it and merges back only on green,
-		 * which is what stops task 7 inheriting task 6's broken tree and the gate
-		 * meaning nothing by the middle of the first sprint.
-		 */
-		integrationBranch: text('integration_branch').notNull(),
-		state: text('state', { enum: FORGE_EPIC_STATES }).notNull().default('drafting'),
-		/**
-		 * Why it is paused or blocked, in one line. A state that cannot say why it
-		 * stopped sends somebody to the Observatory to guess.
-		 */
-		stateReason: text('state_reason').notNull().default(''),
-		/** Root of the epic's document tree: the charter itself. */
-		charterDocId: text('charter_doc_id'),
-		/** Null when the epic is not mirrored to a board. The mirror is optional. */
-		boardId: text('board_id'),
-		/**
-		 * The repository's own checks — lint, typecheck, tests, build — run at every
-		 * task gate.
-		 *
-		 * Written once, by approveEpic, and never again. This column is the whole
-		 * reason a run cannot mark its own homework: it is the one input to a gate
-		 * that no later run, and nothing the repository says about itself, can
-		 * touch.
-		 */
-		/** The charter's proposal, which the approval screen opens with. */
-		proposal: text('proposal', { mode: 'json' }).$type<ForgeProposal>(),
-		standingChecks: text('standing_checks', { mode: 'json' }).$type<ForgeCheck[]>(),
-		/** The expensive ones, run only at a sprint or epic boundary. */
-		gateChecks: text('gate_checks', { mode: 'json' }).$type<ForgeCheck[]>(),
-		/** The charter's own done list, for the epic gate and for a person. */
-		acceptance: text('acceptance', { mode: 'json' }).$type<string[]>(),
-		/** 0 inherits the instance setting, as feed_topics.intervalHours does. */
-		maxUsdOverride: real('max_usd_override').notNull().default(0),
-		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-		approvedAt: integer('approved_at', { mode: 'timestamp_ms' }),
-		finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
-		/** The sweep orders by this, so the longest-waiting epic goes first. */
-		lastStepAt: integer('last_step_at', { mode: 'timestamp_ms' })
-	},
-	(t) => [
-		index('forge_epics_owner_idx').on(t.ownerId),
-		// The sweep's only read: live epics, longest-waiting first.
-		index('forge_epics_due_idx').on(t.state, t.lastStepAt)
-	]
-);
-
-export const FORGE_SPRINT_STATES = [
-	'outlined',
-	'planning',
-	'running',
-	'gating',
-	'done',
-	'blocked'
-] as const;
-export type ForgeSprintState = (typeof FORGE_SPRINT_STATES)[number];
-
-export const forgeSprints = sqliteTable(
-	'forge_sprints',
-	{
-		id: text('id').primaryKey(),
-		epicId: text('epic_id').notNull(),
-		/** Sprint N+1 cannot start until N is done. Ordering *is* the dependency. */
-		position: integer('position').notNull().default(0),
-		title: text('title').notNull(),
-		/**
-		 * One sentence the sprint is judged against. The review run reads the
-		 * sprint's whole diff against this and nothing else — a goal that needs a
-		 * paragraph is two sprints.
-		 */
-		goal: text('goal').notNull().default(''),
-		state: text('state', { enum: FORGE_SPRINT_STATES }).notNull().default('outlined'),
-		/** Child of the charter in the Library tree. */
-		recordDocId: text('record_doc_id'),
-		attempts: integer('attempts').notNull().default(0),
-		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-		startedAt: integer('started_at', { mode: 'timestamp_ms' }),
-		finishedAt: integer('finished_at', { mode: 'timestamp_ms' })
-	},
-	(t) => [index('forge_sprints_epic_idx').on(t.epicId, t.position)]
-);
-
-export const FORGE_TASK_STATES = ['planned', 'running', 'gating', 'done', 'blocked'] as const;
-export type ForgeTaskState = (typeof FORGE_TASK_STATES)[number];
-
-export const forgeTasks = sqliteTable(
-	'forge_tasks',
-	{
-		id: text('id').primaryKey(),
-		epicId: text('epic_id').notNull(),
-		sprintId: text('sprint_id').notNull(),
-		position: integer('position').notNull().default(0),
-		title: text('title').notNull(),
-		/** What to do. Becomes the first message of the coding turn. */
-		intent: text('intent').notNull().default(''),
-		/** How a person would tell it worked, in prose, for the review run. */
-		acceptance: text('acceptance').notNull().default(''),
-		/**
-		 * Frozen when the task opens, written before its code existed by a run
-		 * holding read-only tools — and each one proved to fail against the tree as
-		 * it stood. A check that passes before the work has not described the work.
-		 */
-		checks: text('checks', { mode: 'json' }).$type<ForgeCheck[]>(),
-		/** Set instead of `checks` when the work is not test-shaped, and why. */
-		noCheckReason: text('no_check_reason').notNull().default(''),
-		state: text('state', { enum: FORGE_TASK_STATES }).notNull().default('planned'),
-		attempts: integer('attempts').notNull().default(0),
-		/** The coding session's chat. Also how the epic's spend is summed. */
-		chatId: text('chat_id'),
-		branch: text('branch').notNull().default(''),
-		/** Child of the sprint record in the Library tree. */
-		recordDocId: text('record_doc_id'),
-		/** The mirrored card, when the epic has a board. */
-		cardId: text('card_id'),
-		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-		startedAt: integer('started_at', { mode: 'timestamp_ms' }),
-		finishedAt: integer('finished_at', { mode: 'timestamp_ms' })
-	},
-	(t) => [
-		index('forge_tasks_sprint_idx').on(t.sprintId, t.position),
-		// nextStep's read: this epic's actionable tasks.
-		index('forge_tasks_epic_state_idx').on(t.epicId, t.state)
-	]
-);
-
-/**
- * Every gate that has run, kept rather than overwritten.
- *
- * A column on the task would answer "did the last attempt pass". The question
- * that matters a month later is "why did sprint 3 pass", and attempt 4 would
- * have written over the answer. Same reasoning that keeps superseded feed items
- * and anchors an alignment assessment to the constitution version of its day.
- */
-export const forgeGateRuns = sqliteTable(
-	'forge_gate_runs',
-	{
-		id: text('id').primaryKey(),
-		epicId: text('epic_id').notNull(),
-		scope: text('scope', { enum: ['task', 'sprint', 'epic'] }).notNull(),
-		targetId: text('target_id').notNull(),
-		attempt: integer('attempt').notNull().default(1),
-		/**
-		 * True for the run made *before* a task opens, which proves its checks fail
-		 * on the tree as it stands. A baseline that passes rejects the task.
-		 */
-		baseline: integer('baseline', { mode: 'boolean' }).notNull().default(false),
-		results: text('results', { mode: 'json' }).$type<ForgeCheckResult[]>(),
-		passed: integer('passed', { mode: 'boolean' }).notNull().default(false),
-		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
-	},
-	(t) => [index('forge_gate_runs_target_idx').on(t.targetId, t.createdAt)]
 );

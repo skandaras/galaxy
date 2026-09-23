@@ -281,6 +281,13 @@
       "when": 1790138990249,
       "tag": "0039_great_scorpion",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1790160745389,
+      "tag": "0040_drop_forge",
+      "breakpoints": true
     }
   ]
 }

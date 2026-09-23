@@ -52,11 +52,12 @@ omission.
 `eq(table.userId, userId)`, `boardRole(...)`. A route that filters in JS after an unscoped
 read is a leak waiting to happen. "Exists but not yours" answers 404, not 403.
 
-**Migrations must be forward-compatible.** This app updates itself and can be rolled back to
-the previous image, so the old code must still boot against the new schema. Additive only —
-new nullable columns, new tables, new indexes. Never rename or drop in the same release as
-the code that stops using it. `npm run db:generate` after a schema change; commit the
-generated SQL.
+**Removing something removes all of it.** When a feature or column goes, its tables,
+columns, settings rows and comments go in the same change. Don't leave a column "for the
+release after", and don't leave a comment explaining something that no longer exists. Git
+history is the record. A drop can break a rollback to the previous image, so the commit
+body says what that image would fail on. `npm run db:generate` after a schema change;
+commit the generated SQL.
 
 **Every model call logs usage.** `logUsage` in `engine/usage.ts`, with the `ModelChoice` so
 the call can be priced — `getBudgetStatus()` sums `cost_usd`, and a call that reaches a
