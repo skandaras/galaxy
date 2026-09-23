@@ -118,11 +118,11 @@ export function systemPromptFor(task: string, supplementTask?: string | null): s
  */
 export function pickModel(modelId: string | null, task?: string): ModelChoice | null {
 	if (modelId) {
-		const direct = resolveModel(modelId);
+		const direct = resolveModel(modelId, task);
 		if (direct) return direct;
 	}
-	const first = listEnabledModels()[0];
-	const choice = first ? resolveModel(first.id) : null;
+	const first = listEnabledModels(task)[0];
+	const choice = first ? resolveModel(first.id, task) : null;
 	if (modelId && choice) {
 		emitEvent({
 			task,
@@ -130,7 +130,8 @@ export function pickModel(modelId: string | null, task?: string): ModelChoice | 
 			name: `${modelId} → ${choice.model.modelKey}`,
 			status: 'error',
 			detail: {
-				reason: 'the configured model is missing or disabled; used the first enabled one'
+				reason:
+					'the configured model is missing, disabled or kept to other tasks; used the first enabled one'
 			}
 		});
 	}

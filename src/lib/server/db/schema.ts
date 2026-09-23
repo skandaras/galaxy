@@ -198,11 +198,25 @@ export const attachments = sqliteTable(
 
 export const providers = sqliteTable('providers', {
 	id: text('id').primaryKey(),
-	kind: text('kind', { enum: ['openrouter', 'openai-compatible'] }).notNull(),
+	/**
+	 * Which adapter speaks to it. `openai` is OpenAI itself over the Responses
+	 * API; `openai-compatible` covers everything else that speaks chat
+	 * completions, OpenAI included. The column is plain text, so a new kind
+	 * needs no migration, and an image from before `openai` existed reads such a
+	 * row as a compat provider: it still works, over the older protocol.
+	 */
+	kind: text('kind', { enum: ['openrouter', 'openai-compatible', 'openai'] }).notNull(),
 	name: text('name').notNull(),
 	baseUrl: text('base_url').notNull(),
 	apiKeyEnc: text('api_key_enc'),
 	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+	/**
+	 * Keep this provider's models to the coding agent (see CODING_ONLY_TASKS).
+	 * Checked where a model is resolved, not only where one is listed: the chat
+	 * route accepts any model id the browser sends, and two fallbacks pick the
+	 * first enabled model with no one choosing it.
+	 */
+	codingOnly: integer('coding_only', { mode: 'boolean' }).notNull().default(false),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 });
 

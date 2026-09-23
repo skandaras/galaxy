@@ -11,7 +11,7 @@ export const GET: RequestHandler = ({ locals, url }) => {
 	const task = url.searchParams.get('task') ?? 'chat';
 	const cfg = db.select().from(taskConfigs).where(eq(taskConfigs.task, task)).get();
 	return json({
-		models: listEnabledModels(),
+		models: listEnabledModels(task),
 		defaultModelId: cfg?.primaryModelId ?? null
 	});
 };

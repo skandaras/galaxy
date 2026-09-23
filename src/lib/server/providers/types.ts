@@ -20,6 +20,18 @@ export interface ProviderMessage {
 	content: MessageContent;
 	tool_call_id?: string;
 	tool_calls?: ToolCall[];
+	/**
+	 * What the provider returned for this assistant turn in its own shape, for an
+	 * adapter that needs it back verbatim on the next call.
+	 *
+	 * The OpenAI Responses API returns the model's reasoning as encrypted items
+	 * that must be sent back, in order, ahead of the function calls they led to.
+	 * Dropped, a reasoning model starts each tool step without the thinking
+	 * behind the call it just made. Nothing here reads or persists it: the loop
+	 * attaches it to the in-memory transcript for the rest of the leg, the
+	 * adapter that produced it replays it, and every other adapter ignores it.
+	 */
+	providerItems?: unknown[];
 }
 
 export interface ToolDef {
@@ -90,6 +102,8 @@ export type StreamEvent =
 	 */
 	| { type: 'progress' }
 	| { type: 'tool_calls'; calls: ToolCall[] }
+	/** See `ProviderMessage.providerItems`. Only the Responses adapter emits it. */
+	| { type: 'provider_items'; items: unknown[] }
 	| { type: 'usage'; usage: Usage }
 	| { type: 'done'; finishReason: string | null };
 

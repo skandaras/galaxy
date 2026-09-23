@@ -81,6 +81,39 @@ describe('pickModel', () => {
 		expect(substitutions()).toHaveLength(0);
 	});
 
+	it('never falls back onto a coding-only provider for another task', () => {
+		// Sorted ahead of the configured model, so a fallback that ignored the
+		// flag would take it. This is the path by which a chat asking for a model
+		// it may not use would otherwise end up on it.
+		db.insert(providers)
+			.values({
+				id: 'p-coding',
+				name: 'coding',
+				kind: 'openai',
+				baseUrl: 'http://127.0.0.1:1/v1',
+				apiKeyEnc: null,
+				enabled: true,
+				codingOnly: true,
+				createdAt: new Date()
+			})
+			.run();
+		db.insert(models)
+			.values({
+				id: 'm-coding',
+				providerId: 'p-coding',
+				modelKey: 'coding-one',
+				displayName: 'A Coding Model',
+				supportsTools: true,
+				cacheMode: 'auto',
+				enabled: true
+			})
+			.run();
+		expect(pickModel('m-coding', 'chat')?.model.modelKey).toBe('mock-one');
+		expect(substitutions()[0]?.name).toContain('m-coding');
+		expect(pickModel(null, 'chat')?.model.modelKey).toBe('mock-one');
+		expect(pickModel('m-coding', 'coding')?.model.modelKey).toBe('coding-one');
+	});
+
 	it('has nothing to substitute when no model is enabled', () => {
 		db.update(models).set({ enabled: false }).run();
 		expect(pickModel('m-deleted', 'memory')).toBeNull();
