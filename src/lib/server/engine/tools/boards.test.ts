@@ -169,6 +169,21 @@ describe('what an agent can change', () => {
 		expect((await call(boardTools(ALICE), 'board_read', {})).includes('Bins out')).toBe(true);
 	});
 
+	it('ties a card to the repository when a coding session files it', async () => {
+		createBoard({ ownerId: ALICE, name: 'Household' });
+		const repoUrl = 'https://github.com/alice/game.git';
+		await call(boardTools(ALICE, true, { repoUrl }), 'card_add', {
+			board: 'Household',
+			title: 'Boss fight'
+		});
+		await call(boardTools(ALICE, true), 'card_add', { board: 'Household', title: 'Bins out' });
+		const [board] = listBoards(ALICE);
+		const byTitle = Object.fromEntries(listCards(board.id).map((c) => [c.title, c.repoUrl]));
+		expect(byTitle['Boss fight']).toBe(repoUrl);
+		// Filed from chat or the board agent: nothing to start in Code.
+		expect(byTitle['Bins out']).toBeNull();
+	});
+
 	it('cannot add a card to a board it is not on', async () => {
 		createBoard({ ownerId: ALICE, name: 'Household' });
 		await expect(

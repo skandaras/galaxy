@@ -55,6 +55,8 @@ export interface Card {
 	position: number;
 	createdBy: string;
 	assignedTo: string | null;
+	/** Set when a coding session filed the card, and what Start in Code clones. */
+	repoUrl: string | null;
 	archivedAt: number | null;
 	createdAt: number;
 	updatedAt: number;

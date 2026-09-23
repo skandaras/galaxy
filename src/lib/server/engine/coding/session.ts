@@ -302,7 +302,7 @@ export function startCodingTurn(opts: {
 				runHistoryTool(chat.id),
 				// A coding task often is a card; reading the board is how the agent
 				// finds out what it was actually asked for.
-				...boardTools(opts.userId),
+				...boardTools(opts.userId, undefined, { repoUrl: session.repoUrl }),
 				// Why a thing is built the way it is outlives any one session, and
 				// that is the sort of thing the lattice holds. The chat id is what
 				// lets a query be judged against the reply it fed — see cortex-learn.

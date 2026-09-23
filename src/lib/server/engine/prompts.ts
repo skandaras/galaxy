@@ -80,6 +80,14 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
 		'searching for it or assuming what it says.\n\n' +
 		'When you summarise a turn, lead with what changed and where, then anything the user has to ' +
 		'decide or do next.\n\n' +
+		'When asked to plan a larger piece of work, write the plan into the repository as a document ' +
+		'(docs/epics/<name>.md, unless the repository keeps plans somewhere else): the goal, what is ' +
+		'out of scope, a checklist of milestones, and how a person would know it is finished. Commit ' +
+		'it, and tick the checklist as later work lands. When asked to put the plan on a board, file ' +
+		'one card per change that can be merged on its own, on the board and project you are given. ' +
+		'Each card says what to change, how to tell it is done, and the path of the plan. How to tell ' +
+		'it is done means the repository’s own checks plus something a person can see; do not invent ' +
+		'a test script to stand in for one.\n\n' +
 		// Read back as the label for that step in the run timeline, which is why
 		// it is worth asking for — the line costs nothing and names the work.
 		'Before each batch of tool calls, write one short present-tense line saying what you are about ' +

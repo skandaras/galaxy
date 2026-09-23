@@ -877,6 +877,10 @@ BOBBOARD=$(as bob $M/api/boards | node -pe "JSON.parse(require('fs').readFileSyn
 BOBCARD=$(as bob -X POST $M/api/boards/$BOBBOARD/cards -d '{"title":"Bob private task"}' | jqn .id)
 check "alice cannot hand bob's card to an agent" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' $M/api/cards/$BOBCARD/agent)" "404"
+check "nor start his card in Code" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' $M/api/cards/$BOBCARD/code)" "404"
+check "a card filed outside a coding session has no repository to start in" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' $M/api/cards/$HCARD/code)" "400"
 check "nor run a board action on his board" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: alice' -H 'content-type: application/json' -d '{"action":"prioritise"}' $M/api/boards/$BOBBOARD/agent)" "404"
 

@@ -739,6 +739,12 @@ export const cards = sqliteTable(
 		position: integer('position').notNull().default(0),
 		createdBy: text('created_by').notNull(),
 		assignedTo: text('assigned_to'),
+		/**
+		 * The repository a coding session filed this card against, so the card can
+		 * be started as a coding session on that repository. Null for every card
+		 * filed any other way.
+		 */
+		repoUrl: text('repo_url'),
 		/** Set when the card reaches a done status; archived cards leave the board. */
 		archivedAt: integer('archived_at', { mode: 'timestamp_ms' }),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),

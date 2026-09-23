@@ -1,0 +1,1 @@
+ALTER TABLE `cards` ADD `repo_url` text;
