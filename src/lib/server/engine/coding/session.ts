@@ -254,7 +254,7 @@ export function startCodingTurn(opts: {
 			`${choice.model.displayName} does not support tool calling. Pick a tool-capable model for coding`
 		);
 	}
-	const backup = cfg?.backupModelId ? resolveModel(cfg.backupModelId, 'coding') : null;
+	const backup = cfg?.backupModelId ? resolveModel(cfg.backupModelId) : null;
 
 	appendMessage(chat.id, {
 		role: 'user',

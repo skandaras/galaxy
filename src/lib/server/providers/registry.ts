@@ -4,9 +4,7 @@ import { db } from '$lib/server/db';
 import { models, providers } from '$lib/server/db/schema';
 import { decryptSecret } from '$lib/server/crypto';
 import { createOpenAiCompatAdapter } from './openai-compatible';
-import { createOpenAiResponsesAdapter } from './openai-responses';
 import type { ProviderAdapter } from './types';
-import { scopeAllows } from '$lib/model-scope';
 
 export type ProviderRow = typeof providers.$inferSelect;
 export type ModelRow = typeof models.$inferSelect;
@@ -15,9 +13,6 @@ export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
 export function adapterFor(provider: ProviderRow): ProviderAdapter {
 	const apiKey = provider.apiKeyEnc ? decryptSecret(provider.apiKeyEnc) : undefined;
-	if (provider.kind === 'openai') {
-		return createOpenAiResponsesAdapter({ baseUrl: provider.baseUrl, apiKey });
-	}
 	return createOpenAiCompatAdapter({
 		baseUrl: provider.baseUrl,
 		apiKey,
@@ -33,20 +28,11 @@ export interface ModelChoice {
 	adapter: ProviderAdapter;
 }
 
-/**
- * The model to call for `task`, or null if it is missing, disabled, or kept to
- * other tasks.
- *
- * `task` defaults to nothing, which a coding-only provider refuses. Every call
- * site that predates the flag therefore stays out of coding-only models
- * without being edited, and the ones that should reach them say so.
- */
-export function resolveModel(modelId: string, task?: string): ModelChoice | null {
+export function resolveModel(modelId: string): ModelChoice | null {
 	const model = db.select().from(models).where(eq(models.id, modelId)).get();
 	if (!model || !model.enabled) return null;
 	const provider = db.select().from(providers).where(eq(providers.id, model.providerId)).get();
 	if (!provider || !provider.enabled) return null;
-	if (!scopeAllows(provider.codingOnly, task)) return null;
 	return { model, provider, adapter: adapterFor(provider) };
 }
 
@@ -91,11 +77,9 @@ export interface ModelListing {
 	supportsImageOutput: boolean;
 	supportsReasoning: boolean;
 	contextWindow: number | null;
-	codingOnly: boolean;
 }
 
-/** Enabled models `task` may run. The same default as resolveModel: no task, no coding-only models. */
-export function listEnabledModels(task?: string): ModelListing[] {
+export function listEnabledModels(): ModelListing[] {
 	const providerRows = new Map(
 		db.select().from(providers).where(eq(providers.enabled, true)).all().map((p) => [p.id, p])
 	);
@@ -104,10 +88,7 @@ export function listEnabledModels(task?: string): ModelListing[] {
 		.from(models)
 		.where(eq(models.enabled, true))
 		.all()
-		.filter((m) => {
-			const provider = providerRows.get(m.providerId);
-			return provider !== undefined && scopeAllows(provider.codingOnly, task);
-		})
+		.filter((m) => providerRows.has(m.providerId))
 		.map((m) => ({
 			id: m.id,
 			displayName: m.displayName,
@@ -117,8 +98,7 @@ export function listEnabledModels(task?: string): ModelListing[] {
 			supportsVision: m.supportsVision,
 			supportsImageOutput: m.supportsImageOutput,
 			supportsReasoning: m.supportsReasoning,
-			contextWindow: m.contextWindow,
-			codingOnly: providerRows.get(m.providerId)!.codingOnly
+			contextWindow: m.contextWindow
 		}))
 		.sort((a, b) => a.displayName.localeCompare(b.displayName));
 }

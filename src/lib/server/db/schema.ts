@@ -198,23 +198,16 @@ export const attachments = sqliteTable(
 
 export const providers = sqliteTable('providers', {
 	id: text('id').primaryKey(),
-	/**
-	 * Which adapter speaks to it. `openai` is OpenAI itself over the Responses
-	 * API; `openai-compatible` covers everything else that speaks chat
-	 * completions, OpenAI included. The column is plain text, so a new kind
-	 * needs no migration, and an image from before `openai` existed reads such a
-	 * row as a compat provider: it still works, over the older protocol.
-	 */
-	kind: text('kind', { enum: ['openrouter', 'openai-compatible', 'openai'] }).notNull(),
+	kind: text('kind', { enum: ['openrouter', 'openai-compatible'] }).notNull(),
 	name: text('name').notNull(),
 	baseUrl: text('base_url').notNull(),
 	apiKeyEnc: text('api_key_enc'),
 	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
 	/**
-	 * Keep this provider's models to the coding agent (see CODING_ONLY_TASKS).
-	 * Checked where a model is resolved, not only where one is listed: the chat
-	 * route accepts any model id the browser sends, and two fallbacks pick the
-	 * first enabled model with no one choosing it.
+	 * Nothing reads it. It kept a provider's models to the coding agent, for a
+	 * native OpenAI provider that was taken back out a release later. It stays
+	 * because migration 0039 added it and the image before this one selects it,
+	 * so dropping it now would break a rollback. It can go in the release after.
 	 */
 	codingOnly: integer('coding_only', { mode: 'boolean' }).notNull().default(false),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()

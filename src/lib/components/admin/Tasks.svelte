@@ -1,6 +1,4 @@
 <script lang="ts">
-	import { CODING_ONLY_TASKS, scopeAllows } from '$lib/model-scope';
-
 	interface TaskConfig {
 		task: string;
 		/** What the task will run on: the override where there is one, else the default. */
@@ -16,7 +14,6 @@
 		id: string;
 		displayName: string;
 		providerName: string;
-		codingOnly: boolean;
 	}
 	interface PromptVersion {
 		id: string;
@@ -34,9 +31,7 @@
 	async function load() {
 		const [cfgRes, modelRes] = await Promise.all([
 			fetch('/api/admin/task-configs'),
-			// Asked for as a coding task because that is the listing with nothing
-			// left out; each row then offers only what its own task may run.
-			fetch(`/api/models?task=${CODING_ONLY_TASKS[0]}`)
+			fetch('/api/models')
 		]);
 		configs = await cfgRes.json();
 		models = (await modelRes.json()).models;
@@ -111,7 +106,7 @@
 						primary
 						<select bind:value={cfg.primaryModelId}>
 							<option value={null}>first enabled model</option>
-							{#each models.filter((m) => scopeAllows(m.codingOnly, cfg.task)) as m (m.id)}
+							{#each models as m (m.id)}
 								<option value={m.id}>{m.displayName} · {m.providerName}</option>
 							{/each}
 						</select>
@@ -120,7 +115,7 @@
 						backup
 						<select bind:value={cfg.backupModelId}>
 							<option value={null}>none</option>
-							{#each models.filter((m) => scopeAllows(m.codingOnly, cfg.task)) as m (m.id)}
+							{#each models as m (m.id)}
 								<option value={m.id}>{m.displayName} · {m.providerName}</option>
 							{/each}
 						</select>

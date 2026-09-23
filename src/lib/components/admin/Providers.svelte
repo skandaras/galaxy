@@ -6,11 +6,10 @@
 		baseUrl: string;
 		hasKey: boolean;
 		enabled: boolean;
-		codingOnly: boolean;
 	}
 
 	let providers = $state<Provider[]>([]);
-	let form = $state({ kind: 'openrouter', name: '', baseUrl: '', apiKey: '', codingOnly: false });
+	let form = $state({ kind: 'openrouter', name: '', baseUrl: '', apiKey: '' });
 	let keyEditId = $state<string | null>(null);
 	let keyDraft = $state('');
 	let busy = $state<string | null>(null);
@@ -34,8 +33,7 @@
 				kind: form.kind,
 				name: form.name || undefined,
 				baseUrl: form.baseUrl || undefined,
-				apiKey: form.apiKey || undefined,
-				codingOnly: form.codingOnly
+				apiKey: form.apiKey || undefined
 			})
 		});
 		busy = null;
@@ -43,7 +41,7 @@
 			notice = (await res.json().catch(() => ({})))?.message ?? 'Failed to add provider';
 			return;
 		}
-		form = { kind: 'openrouter', name: '', baseUrl: '', apiKey: '', codingOnly: false };
+		form = { kind: 'openrouter', name: '', baseUrl: '', apiKey: '' };
 		notice = null;
 		await load();
 	}
@@ -89,7 +87,7 @@
 			{#each providers as p (p.id)}
 				<tr class:disabled={!p.enabled}>
 					<td>{p.name}</td>
-					<td>{p.kind}{#if p.codingOnly}<span class="scope">coding only</span>{/if}</td>
+					<td>{p.kind}</td>
 					<td class="url">{p.baseUrl}</td>
 					<td>
 						{#if keyEditId === p.id}
@@ -109,13 +107,6 @@
 						<button class="btn" onclick={() => patch(p, { enabled: !p.enabled })}>
 							{p.enabled ? 'Disable' : 'Enable'}
 						</button>
-						<button
-							class="btn"
-							title="Coding only: its models appear in Code and nowhere else"
-							onclick={() => patch(p, { codingOnly: !p.codingOnly })}
-						>
-							{p.codingOnly ? 'Allow everywhere' : 'Coding only'}
-						</button>
 						<button class="btn danger" onclick={() => remove(p)}>Delete</button>
 					</td>
 				</tr>
@@ -131,7 +122,6 @@
 			kind
 			<select bind:value={form.kind}>
 				<option value="openrouter">OpenRouter</option>
-				<option value="openai">OpenAI (Responses API)</option>
 				<option value="openai-compatible">OpenAI-compatible endpoint</option>
 			</select>
 		</label>
@@ -142,21 +132,13 @@
 		<label>
 			base URL
 			<input
-				placeholder={form.kind === 'openrouter'
-					? 'default: openrouter.ai'
-					: form.kind === 'openai'
-						? 'default: api.openai.com'
-						: 'http://host:8000/v1'}
+				placeholder={form.kind === 'openrouter' ? 'default: openrouter.ai' : 'http://host:8000/v1'}
 				bind:value={form.baseUrl}
 			/>
 		</label>
 		<label>
 			API key <span class="opt">optional</span>
 			<input type="password" bind:value={form.apiKey} />
-		</label>
-		<label class="check">
-			<input type="checkbox" bind:checked={form.codingOnly} />
-			coding only
 		</label>
 		<button class="btn primary" disabled={busy === 'add'} onclick={add}>Add</button>
 	</div>
@@ -215,17 +197,6 @@
 		gap: 0.2rem;
 		font-size: var(--text-sm);
 		color: var(--label);
-	}
-	.scope {
-		margin-left: 0.4rem;
-		font-size: var(--text-xs);
-		color: var(--fg-dim);
-	}
-	.form label.check {
-		flex-direction: row;
-		align-items: center;
-		gap: 0.35rem;
-		padding-bottom: 0.4rem;
 	}
 	.opt {
 		color: var(--fg-dim);
