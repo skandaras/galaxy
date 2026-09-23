@@ -540,6 +540,7 @@ export function createCard(
 		priority?: CardPriority;
 		projectId?: string | null;
 		assignedTo?: string | null;
+		repoUrl?: string | null;
 	}
 ): Card | null {
 	if (!boardRole(boardId, userId)) return null;
@@ -567,6 +568,7 @@ export function createCard(
 		position: nextPosition(lane.id),
 		createdBy: userId,
 		assignedTo: opts.assignedTo ?? null,
+		repoUrl: opts.repoUrl ?? null,
 		archivedAt: status.isDone ? now : null,
 		createdAt: now,
 		updatedAt: now

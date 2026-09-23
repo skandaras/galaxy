@@ -219,6 +219,11 @@
 		const g = await reposRes.json().catch(() => ({ configured: false, repos: [] }));
 		githubConfigured = g.configured;
 		repos = g.repos;
+
+		// ?chat=<id> is how a board card hands work over: the card starts the
+		// session and its first turn, then sends the user here to watch it.
+		const wanted = new URLSearchParams(location.search).get('chat');
+		if (wanted) await select(wanted);
 	});
 
 	// Nothing tore this pane down: onMount is async here, so its return value is

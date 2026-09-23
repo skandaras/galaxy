@@ -105,8 +105,15 @@ export function agentWritesAllowed(): boolean {
  * `writes` defaults to the admin setting. The admin catalogue passes true so
  * the write tools stay listed either way — a control that disappears when the
  * setting is off is a control nobody can find their way back to.
+ *
+ * `repoUrl` is set when a coding session builds these, and a card it files is
+ * tied to that repository so it can later be started as a coding session there.
  */
-export function boardTools(userId: string, writes = agentWritesAllowed()): LoopTool[] {
+export function boardTools(
+	userId: string,
+	writes = agentWritesAllowed(),
+	context: { repoUrl?: string } = {}
+): LoopTool[] {
 	const writesAllowed = writes;
 
 	const read: LoopTool[] = [
@@ -188,8 +195,9 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 		{
 			def: {
 				name: 'card_add',
-				description:
-					'Add a card to a board. Only when the person has asked for something to be captured. Do not file cards off your own initiative.',
+				description: context.repoUrl
+					? 'Add a card to a board. Only when the person has asked for something to be captured. Do not file cards off your own initiative. A card filed from here is tied to this repository and can be started as a coding session on it, so make its description stand on its own: what to change, how to tell it is done, and the path of any plan document it belongs to.'
+					: 'Add a card to a board. Only when the person has asked for something to be captured. Do not file cards off your own initiative.',
 				parameters: {
 					type: 'object',
 					properties: {
@@ -225,7 +233,8 @@ export function boardTools(userId: string, writes = agentWritesAllowed()): LoopT
 					projectId: project?.id ?? null,
 					priority: CARD_PRIORITIES.includes(a.priority as CardPriority)
 						? (a.priority as CardPriority)
-						: undefined
+						: undefined,
+					repoUrl: context.repoUrl ?? null
 				});
 				if (!card) throw new Error('Could not add the card.');
 				logCard(card.id, { actor: 'agent', userId, event: 'agent', detail: 'card created by agent' });

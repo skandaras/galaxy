@@ -12,7 +12,6 @@ import {
 import { ensureSkillsRepo } from '$lib/server/skills';
 import { typstAvailable } from '$lib/server/pdf';
 import { closeAbandonedJobs } from '$lib/server/engine/jobs';
-import { reconcileForge } from '$lib/server/engine/forge-recover';
 import { startScheduler } from '$lib/server/engine/scheduler';
 import { isTrustedProxy, parseAuthHeaders, isAdminFromGroups } from '$lib/server/auth';
 import { provisionUser } from '$lib/server/users';
@@ -31,10 +30,6 @@ seedSkills();
 // map does not survive a restart but the rows do, and a row left at 'running'
 // is one nothing will ever revisit. See closeAbandonedJobs.
 closeAbandonedJobs();
-// And immediately after it, for the same reason one layer up: a Forge task is a
-// job row *and* a task row, so closing the job leaves the task claiming to be
-// running and its epic waiting on work that died with the last process.
-reconcileForge();
 startScheduler();
 // Settle "can this instance make PDFs?" now, so assembling a toolset — which is
 // synchronous — can just read the answer.

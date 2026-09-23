@@ -167,6 +167,25 @@
 		await goto(`/chat?chat=${chatId}`);
 	}
 
+	/**
+	 * Start the card as a coding session on the repository it was filed
+	 * against, and open it on the Code page to watch.
+	 */
+	async function startInCode() {
+		busy = true;
+		handoffError = null;
+		const res = await fetch(`/api/cards/${cardId}/code`, { method: 'POST' });
+		busy = false;
+		if (!res.ok) {
+			handoffError =
+				(await res.json().catch(() => ({}))).message ?? 'Could not start a coding session';
+			return;
+		}
+		const { chatId } = await res.json();
+		onchanged();
+		await goto(`/code?chat=${chatId}`);
+	}
+
 	async function remove() {
 		if (!confirm('Delete this card and its log? This cannot be undone.')) return;
 		const res = await fetch(`/api/cards/${cardId}`, { method: 'DELETE' }).catch(() => null);
@@ -332,6 +351,9 @@
 				<button class="btn primary" disabled={busy} onclick={giveToAgent}>
 					{busy ? 'Starting…' : 'Give to AI'}
 				</button>
+				{#if card.repoUrl}
+					<button class="btn" disabled={busy} onclick={startInCode}>Start in Code</button>
+				{/if}
 				<button class="btn danger" disabled={busy} onclick={remove}>Delete card</button>
 			</footer>
 			{#if handoffError}<p class="error" role="alert">{handoffError}</p>{/if}

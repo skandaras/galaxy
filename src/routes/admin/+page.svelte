@@ -9,7 +9,6 @@
 	import Boards from '$lib/components/admin/Boards.svelte';
 	import Ux from '$lib/components/admin/Ux.svelte';
 	import Cortex from '$lib/components/admin/Cortex.svelte';
-	import Forge from '$lib/components/admin/Forge.svelte';
 	import Settings from '$lib/components/admin/Settings.svelte';
 	import Usage from '$lib/components/admin/Usage.svelte';
 	import { goto } from '$app/navigation';
@@ -25,7 +24,6 @@
 		'Skills',
 		'Memory',
 		'Boards',
-		'Forge',
 		'Cortex',
 		'UX',
 		'Settings',
@@ -65,8 +63,6 @@
 			<Cortex />
 		{:else if active === 'Boards'}
 			<Boards />
-		{:else if active === 'Forge'}
-			<Forge />
 		{:else if active === 'UX'}
 			<Ux />
 		{:else if active === 'Settings'}

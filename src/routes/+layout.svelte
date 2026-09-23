@@ -15,14 +15,7 @@
 		{ href: '/chat', label: 'Chat' },
 		// Coding is a per-user grant, because it pushes with a shared GitHub
 		// token; the API refuses it either way, this just stops offering it.
-		// Forge drives the coding agent against somebody's repository, so it sits
-		// behind the same grant /code does rather than a second one.
-		...(data.user?.canCode
-			? [
-					{ href: '/code', label: 'Code' },
-					{ href: '/forge', label: 'Forge' }
-				]
-			: []),
+		...(data.user?.canCode ? [{ href: '/code', label: 'Code' }] : []),
 		{ href: '/boards', label: 'Boards' },
 		{ href: '/library', label: 'Library' },
 		{ href: '/cortex', label: 'Cortex' },
