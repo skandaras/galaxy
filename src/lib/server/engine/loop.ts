@@ -601,7 +601,6 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		callUsage = null;
 		let iterationText = '';
 		let toolCalls: ToolCall[] = [];
-		let providerItems: unknown[] | undefined;
 		// Per-iteration rather than per-run: each model call reasons afresh, and
 		// carrying the previous leg's thought over showed a note about a search
 		// that had already come back.
@@ -644,8 +643,6 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 					noteReasoning(ev.delta);
 				} else if (ev.type === 'tool_calls') {
 					toolCalls = ev.calls;
-				} else if (ev.type === 'provider_items') {
-					providerItems = ev.items;
 				} else if (ev.type === 'usage') {
 					callUsage = addUsage(callUsage, ev.usage);
 				}
@@ -752,12 +749,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		// the answer and must stay put.
 		pushChunk(job, { type: 'step', id: stepId, label, status: 'running', consumedText, note });
 
-		messages.push({
-			role: 'assistant',
-			content: iterationText,
-			tool_calls: toolCalls,
-			...(providerItems ? { providerItems } : {})
-		});
+		messages.push({ role: 'assistant', content: iterationText, tool_calls: toolCalls });
 		// Round-trip boundary. A tool that limits what one round-trip may do —
 		// rather than what one turn may do — learns here that a new one has begun.
 		for (const tool of opts.tools) tool.beginStep?.();

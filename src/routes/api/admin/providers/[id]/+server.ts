@@ -20,7 +20,6 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 		patch.apiKeyEnc = body.apiKey ? encryptSecret(body.apiKey) : null;
 	}
 	if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
-	if (typeof body.codingOnly === 'boolean') patch.codingOnly = body.codingOnly;
 
 	if (Object.keys(patch).length) {
 		db.update(providers).set(patch).where(eq(providers.id, row.id)).run();

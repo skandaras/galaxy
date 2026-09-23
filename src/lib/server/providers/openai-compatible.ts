@@ -393,7 +393,7 @@ export async function* parseChatCompletionStream(
  * that distinguishes a slow upstream from a dead connection — so the caller
  * gets everything and decides.
  */
-export async function* sseLines(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+async function* sseLines(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
 	let buffer = '';

@@ -6,19 +6,20 @@ import { db } from '$lib/server/db';
 import { providers } from '$lib/server/db/schema';
 import { encryptSecret } from '$lib/server/crypto';
 import { OPENROUTER_BASE_URL } from '$lib/server/providers/registry';
-import { OPENAI_BASE_URL } from '$lib/server/providers/openai-responses';
 import { emitEvent } from '$lib/server/engine/events';
 
-type ProviderKind = (typeof providers.$inferSelect)['kind'];
-
-const masked = (p: typeof providers.$inferSelect) => ({
+const masked = (
+	p: Pick<
+		typeof providers.$inferSelect,
+		'id' | 'kind' | 'name' | 'baseUrl' | 'apiKeyEnc' | 'enabled' | 'createdAt'
+	>
+) => ({
 	id: p.id,
 	kind: p.kind,
 	name: p.name,
 	baseUrl: p.baseUrl,
 	hasKey: Boolean(p.apiKeyEnc),
 	enabled: p.enabled,
-	codingOnly: p.codingOnly,
 	createdAt: p.createdAt.getTime()
 });
 
@@ -30,27 +31,23 @@ export const GET: RequestHandler = ({ locals }) => {
 export const POST: RequestHandler = async ({ locals, request }) => {
 	const admin = requireAdmin(locals);
 	const body = await request.json().catch(() => ({}));
-	const kind: ProviderKind =
-		body.kind === 'openrouter' || body.kind === 'openai' ? body.kind : 'openai-compatible';
+	const kind = body.kind === 'openrouter' ? 'openrouter' : 'openai-compatible';
 	const baseUrl =
 		typeof body.baseUrl === 'string' && body.baseUrl.trim()
 			? body.baseUrl.trim().replace(/\/$/, '')
 			: kind === 'openrouter'
 				? OPENROUTER_BASE_URL
-				: kind === 'openai'
-					? OPENAI_BASE_URL
-					: '';
+				: '';
 	if (!baseUrl) error(400, 'baseUrl is required for openai-compatible providers');
 	const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : kind;
 
 	const row = {
 		id: randomUUID(),
-		kind,
+		kind: kind as 'openrouter' | 'openai-compatible',
 		name,
 		baseUrl,
 		apiKeyEnc: typeof body.apiKey === 'string' && body.apiKey ? encryptSecret(body.apiKey) : null,
 		enabled: true,
-		codingOnly: body.codingOnly === true,
 		createdAt: new Date()
 	};
 	db.insert(providers).values(row).run();
