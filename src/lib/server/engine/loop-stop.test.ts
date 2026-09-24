@@ -1,7 +1,12 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '$lib/server/db';
 import type { ModelChoice } from '$lib/server/providers/registry';
-import type { ChatRequest, StreamEvent, ToolCall } from '$lib/server/providers/types';
+import type {
+	ChatRequest,
+	ProviderMessage,
+	StreamEvent,
+	ToolCall
+} from '$lib/server/providers/types';
 import {
 	applyChunk,
 	isTimelineChunk,
@@ -78,6 +83,9 @@ async function run(opts: {
 	budgetBlocked?: () => boolean;
 	cancelAfterMs?: number;
 	tools?: LoopTool[];
+	leg?: { index: number; of: number };
+	/** Messages to start from instead of a bare system prompt. */
+	resume?: ProviderMessage[];
 }): Promise<{ summary: TurnSummary | null; chunks: JobChunk[]; text: string | null }> {
 	const job = createJob({ chatId: 'c1', userId: 'u1', task: 'coding', persist: false });
 	const chunks: JobChunk[] = [];
@@ -96,9 +104,11 @@ async function run(opts: {
 		backup: null,
 		tools: opts.tools ?? [readTool],
 		maxIterations: opts.maxIterations,
+		leg: opts.leg,
 		budgetBlocked: opts.budgetBlocked,
 		// A real system message, so the loop has somewhere to put the turn budget.
-		buildMessages: () => [{ role: 'system', content: 'You are a test agent.' }],
+		buildMessages: () =>
+			opts.resume ? [...opts.resume] : [{ role: 'system', content: 'You are a test agent.' }],
 		onDone: (t, _u, _c, s) => {
 			summary = s;
 			text = t;
@@ -320,6 +330,73 @@ describe('the turn budget the model is told about', () => {
 	it('does not nudge a run too short to reach the threshold', async () => {
 		const { chunks } = await run({ choice: scriptedChoice({ toolRounds: 0 }), maxIterations: 1 });
 		expect(chunks.some((c) => c.type === 'notice' && c.text.includes('turns left'))).toBe(false);
+	});
+});
+
+describe('a turn made of several legs', () => {
+	/** Every request the model was sent, as the messages it was given. */
+	function recording(choice: ModelChoice): ProviderMessage[][] {
+		const sent: ProviderMessage[][] = [];
+		const inner = choice.adapter.stream.bind(choice.adapter);
+		choice.adapter.stream = async function* (req: ChatRequest) {
+			sent.push(req.messages.map((m) => ({ ...m })));
+			return yield* inner(req);
+		} as typeof choice.adapter.stream;
+		return sent;
+	}
+	const wrapUps = (messages: ProviderMessage[]) =>
+		messages.filter(
+			(m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('turns left')
+		);
+
+	it('tells the model the whole budget, and that its context carries across legs', async () => {
+		const choice = scriptedChoice({ toolRounds: 0 });
+		const sent = recording(choice);
+		await run({ choice, maxIterations: 12, leg: { index: 1, of: 3 } });
+		const system = String(sent[0][0].content);
+		expect(system).toContain('up to 12 model turns per leg, and up to 3 legs');
+		expect(system).toContain('still in view');
+		expect(system).toContain('smallest part of it that works end to end');
+	});
+
+	it('does not ask a leg that will be continued to land', async () => {
+		// Told to wrap up, a coding agent spent its last turns tidying a plan file
+		// and then began the next leg by working out what it had been doing.
+		const choice = scriptedChoice({ toolRounds: 0, neverStops: true });
+		const sent = recording(choice);
+		await run({ choice, maxIterations: 6, leg: { index: 1, of: 3 } });
+		expect(sent.flatMap(wrapUps)).toHaveLength(0);
+	});
+
+	it('still asks the last leg to land', async () => {
+		const choice = scriptedChoice({ toolRounds: 0, neverStops: true });
+		const sent = recording(choice);
+		await run({ choice, maxIterations: 6, leg: { index: 3, of: 3 } });
+		expect(sent.at(-1)?.filter((m) => wrapUps([m]).length)).toHaveLength(1);
+	});
+
+	it('hands back the transcript, and a continued leg starts from it', async () => {
+		const first = await run({
+			choice: scriptedChoice({ toolRounds: 0, neverStops: true }),
+			maxIterations: 3,
+			leg: { index: 1, of: 2 }
+		});
+		const transcript = first.summary?.transcript ?? [];
+		expect(transcript.filter((m) => m.role === 'tool')).toHaveLength(3);
+
+		const choice = scriptedChoice({ toolRounds: 0 });
+		const sent = recording(choice);
+		await run({
+			choice,
+			maxIterations: 3,
+			leg: { index: 2, of: 2 },
+			resume: [...transcript, { role: 'user', content: 'Continue from where you left off.' }]
+		});
+		// The first leg's tool results are what a rebuilt context lost.
+		expect(sent[0].filter((m) => m.role === 'tool')).toHaveLength(3);
+		// And the budget note is not appended a second time, which would also
+		// change the prefix the provider cached on the first leg.
+		expect(String(sent[0][0].content).split('[Turn budget:')).toHaveLength(2);
 	});
 });
 

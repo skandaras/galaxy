@@ -114,6 +114,17 @@ export interface TurnSummary {
 	 * since overwriting an actual reply never would be.
 	 */
 	fallbackReply: boolean;
+	/**
+	 * The message array as the leg left it, tool exchanges and all.
+	 *
+	 * Tool exchanges are never stored, so a leg rebuilt from the chat starts
+	 * from the one line of fallback reply the last leg saved and has to find
+	 * its place again. On a coding turn that re-orientation cost several steps
+	 * of every continuation leg: checking git state, calling run_history (which
+	 * cannot see the running job), globbing the repository. The next leg
+	 * continues this array instead. See driveCodingTurn.
+	 */
+	transcript: ProviderMessage[];
 }
 
 export interface LoopOptions {
@@ -127,6 +138,15 @@ export interface LoopOptions {
 	buildMessages: () => ProviderMessage[];
 	tools: LoopTool[];
 	maxIterations: number;
+	/**
+	 * Where this run sits in a turn made of several legs, when it is one.
+	 *
+	 * A leg that will be continued must not be told to land: the wrap-up note
+	 * near the cap made a coding agent spend its last turns rewriting a plan
+	 * file and committing, then start the next leg working out what it had been
+	 * doing. Only the last leg gets the note. Absent means a single run.
+	 */
+	leg?: { index: number; of: number };
 	/**
 	 * How hard the model should think on each leg of this turn.
 	 *
@@ -185,10 +205,12 @@ const WRAP_UP_AT = 2;
  * budget on a handful of pages and stopped with nothing to show. Saying it is
  * worth more than raising the cap.
  */
-export function turnBudgetNote(maxIterations: number, hasSearch = false): string {
+export function turnBudgetNote(maxIterations: number, hasSearch = false, legs = 1): string {
 	return [
 		'',
-		`[Turn budget: this reply may take up to ${maxIterations} model turns]`,
+		legs > 1
+			? `[Turn budget: up to ${maxIterations} model turns per leg, and up to ${legs} legs for this request]`
+			: `[Turn budget: this reply may take up to ${maxIterations} model turns]`,
 		'One turn can call several tools at once, and they all run before you are asked again. Batch independent calls, every URL you need and every file you want to read, into a single turn rather than spending a turn on each.',
 		// Said only where there is a web_search to say it about, and said here
 		// because this note is what the model actually reads: the tool
@@ -200,7 +222,15 @@ export function turnBudgetNote(maxIterations: number, hasSearch = false): string
 					'Searching is the exception, and it is not an economy you are giving up. A search is a question you ask so that its answer can shape the next one, so run one query, read what it returns, and let that decide what you search for next. Two queries written before either has come back are two guesses.'
 				]
 			: []),
-		'If the work will not fit, answer with what you have and say plainly what you could not check.'
+		// The model sizes the work to the budget it is told about. Told fifty
+		// turns and nothing about legs, it planned for fifty and then treated
+		// the end of each leg as the end of the task.
+		...(legs > 1
+			? [
+					'When a leg runs out, your work is committed as a checkpoint and the next leg continues this same conversation, with everything you have read and done still in view. Do not stop to write a hand-over or tidy up at the end of a leg; keep working until the task is finished.',
+					'Size the task to this budget before you start. If the request will not fit, build the smallest part of it that works end to end, commit that, and say what is left, rather than leaving several parts half done.'
+				]
+			: ['If the work will not fit, answer with what you have and say plainly what you could not check.'])
 	].join('\n');
 }
 
@@ -495,21 +525,60 @@ export async function* streamWithIdleTimeout(
  * Eliding beats failing: the run continues with the context that still
  * matters, where previously an unbounded transcript grew every request until
  * the call stalled. Returns how many results were dropped.
+ *
+ * The arguments of the model's own calls count too. A write_file carries the
+ * whole file, and while one leg was one context that stayed within what fifty
+ * steps can write; with legs continuing one transcript it is three times that,
+ * and nothing else bounds it. Old arguments keep their short fields, the path
+ * and the command, so the model can still see what it did.
  */
 export function elideOldToolOutput(messages: ProviderMessage[], budget: number): number {
 	let total = 0;
-	for (const m of messages) if (m.role === 'tool') total += m.content.length;
+	for (const m of messages) total += carriedChars(m);
 	if (total <= budget) return 0;
 
 	let dropped = 0;
 	for (const m of messages) {
 		if (total <= budget) break;
+		if (m.role === 'assistant' && m.tool_calls?.length) {
+			const before = carriedChars(m);
+			m.tool_calls = m.tool_calls.map((c) => ({ ...c, arguments: shrinkArguments(c.arguments) }));
+			total -= before - carriedChars(m);
+			continue;
+		}
 		if (m.role !== 'tool' || m.content === ELIDED) continue;
 		total -= m.content.length - ELIDED.length;
 		m.content = ELIDED;
 		dropped++;
 	}
 	return dropped;
+}
+
+/** String fields at or under this length survive argument elision. */
+const ARG_KEEP_CHARS = 200;
+
+function carriedChars(m: ProviderMessage): number {
+	if (m.role === 'tool') return m.content.length;
+	if (m.role === 'assistant' && m.tool_calls) {
+		return m.tool_calls.reduce((n, c) => n + c.arguments.length, 0);
+	}
+	return 0;
+}
+
+/** Exported for tests. Always returns a JSON object, which is what a provider replays. */
+export function shrinkArguments(raw: string): string {
+	if (raw.length <= ARG_KEEP_CHARS) return raw;
+	const { args, problem } = parseToolArgs(raw);
+	if (problem) return '{}';
+	const kept: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(args)) {
+		const text = typeof value === 'string' ? value : JSON.stringify(value);
+		kept[key] =
+			text.length <= ARG_KEEP_CHARS
+				? value
+				: `[${text.length.toLocaleString('en-US')} characters, dropped from context after use]`;
+	}
+	return JSON.stringify(kept);
 }
 
 async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise<void> {
@@ -522,17 +591,22 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	// Appended here rather than by each caller: the loop owns the budget, so it
 	// is the only thing that can describe it accurately. Only worth saying when
 	// there are tools to batch.
-	if (toolDefs.length && messages[0]?.role === 'system' && typeof messages[0].content === 'string') {
-		messages[0] = {
-			...messages[0],
-			content:
-				messages[0].content +
-				turnBudgetNote(
-					opts.maxIterations,
-					opts.tools.some((t) => t.def.name === 'web_search')
-				)
-		};
+	const budgetNote = turnBudgetNote(
+		opts.maxIterations,
+		opts.tools.some((t) => t.def.name === 'web_search'),
+		opts.leg?.of
+	);
+	// A continued leg arrives with the note already on its system message, and
+	// appending it again would also change the prefix the provider has cached.
+	if (
+		toolDefs.length &&
+		messages[0]?.role === 'system' &&
+		typeof messages[0].content === 'string' &&
+		!messages[0].content.endsWith(budgetNote)
+	) {
+		messages[0] = { ...messages[0], content: messages[0].content + budgetNote };
 	}
+	const finalLeg = !opts.leg || opts.leg.index >= opts.leg.of;
 
 	/**
 	 * The reply, one entry per leg that kept its text.
@@ -806,7 +880,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		// and the turn ends holding an unfinished answer; with it the model gets
 		// one clear chance to land.
 		const left = opts.maxIterations - 1 - iteration;
-		if (left === WRAP_UP_AT) messages.push({ role: 'user', content: wrapUpNote(left) });
+		if (left === WRAP_UP_AT && finalLeg) messages.push({ role: 'user', content: wrapUpNote(left) });
 
 		// Tool results are re-sent on every later iteration, so a long run has to
 		// shed the oldest ones or its own request eventually stalls the call.
@@ -841,7 +915,8 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		steps,
 		toolCalls: toolCallRecords,
 		trace,
-		fallbackReply: usedFallback
+		fallbackReply: usedFallback,
+		transcript: messages
 	};
 	if (stopReason === 'budget') {
 		pushChunk(job, {

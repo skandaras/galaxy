@@ -16,6 +16,7 @@ const leg = (patch: Partial<TurnSummary> = {}): TurnSummary => ({
 	],
 	trace: [],
 	fallbackReply: false,
+	transcript: [],
 	...patch
 });
 

@@ -983,8 +983,10 @@ LSTREAM=$(curl -sN --max-time 90 $L/api/jobs/$LJOB/stream)
 check "step limit checkpoints the work" "$LSTREAM" 'Checkpointed uncommitted work'
 check "step limit continues automatically" "$LSTREAM" 'continuing automatically (leg 2'
 check "continuation finishes the job" "$LSTREAM" 'picked up after the step limit'
+# Three steps of the first leg, carried into the second rather than rebuilt
+# from the stored chat, which keeps no tool exchanges.
+check "the second leg still sees the first leg's tool results" "$LSTREAM" 'with 3 earlier tool results in view'
 check "checkpointed work reaches the remote" "$(git -C $ORIGIN2.git log --all --oneline)" 'WIP checkpoint'
-# The second leg is told to carry on from state rather than start over.
 check "continuation is visible in the transcript" "$(api $L/api/chats/$SID2)" 'Continue from where you left off'
 
 # --- alignment ---------------------------------------------------------------
