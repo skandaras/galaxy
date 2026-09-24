@@ -5,6 +5,7 @@
 		question: string;
 		disciplines: string[];
 		openTasks: number;
+		status: { text: string; at: string; by: string } | null;
 	}
 	interface Index {
 		configured: boolean;
@@ -36,9 +37,12 @@
 <div class="ivory-page">
 	<header>
 		<h2>Ivory Tower</h2>
-		{#if data?.repoUrl}
-			<a class="repo" href={data.repoUrl} target="_blank" rel="noopener">{data.repo}</a>
-		{/if}
+		<div class="head-actions">
+			{#if data?.repoUrl}
+				<a class="repo" href={data.repoUrl} target="_blank" rel="noopener">{data.repo}</a>
+			{/if}
+			{#if data?.configured}<a class="new" href="/ivory/new">New project</a>{/if}
+		</div>
 	</header>
 
 	{#if failure}
@@ -52,9 +56,8 @@
 		</p>
 	{:else if !data.projectCount}
 		<p class="notice">
-			No projects on the Shelf yet. Add <code>projects/&lt;slug&gt;/brief.md</code> to
-			<code>{data.repo}</code>, or run “Set up Shelf” in Admin → Settings to write the templates and a
-			sample project.
+			No projects on the Shelf yet. <a href="/ivory/new">Create one</a>, or run “Set up Shelf” in
+			Admin → Settings to write the templates and a sample project to <code>{data.repo}</code>.
 		</p>
 	{:else}
 		{#each data.groups ?? [] as group (group.discipline)}
@@ -66,6 +69,7 @@
 							<a class="project" href="/ivory/{p.slug}">
 								<span class="title">{p.title}</span>
 								{#if p.question}<span class="question">{p.question}</span>{/if}
+								{#if p.status}<span class="status" title="{p.status.by}, {p.status.at} UTC">{p.status.text}</span>{/if}
 								<span class="meta">
 									<span class="num">{p.openTasks}</span> open task{p.openTasks === 1 ? '' : 's'}
 									{#if p.disciplines.length > 1}
@@ -112,6 +116,31 @@
 		letter-spacing: 0.15em;
 		text-transform: uppercase;
 		color: var(--heading);
+	}
+	.head-actions {
+		display: flex;
+		align-items: baseline;
+		gap: 1rem;
+		flex-wrap: wrap;
+	}
+	.new {
+		border: 1px solid var(--accent);
+		border-radius: 5px;
+		padding: 0.3rem 0.7rem;
+		color: var(--fg);
+		text-decoration: none;
+		font-size: var(--text-sm);
+	}
+	.status {
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
+		border-left: 2px solid var(--accent);
+		padding-left: 0.45rem;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
 	}
 	.repo {
 		font-size: var(--text-sm);

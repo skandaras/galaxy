@@ -8,15 +8,15 @@ import {
 	agentLabel,
 	createIssue,
 	ensureLabels,
+	ensureProjectIssue,
 	IssueLabelError,
 	IVORY_AGENTS,
 	labelSet,
-	listOpenIssues,
-	projectIssueNumber,
 	projectLabel
 } from './board';
 import type { ShelfClient } from './github';
 import { projectFromBrief } from './shelf';
+import { writeProjectStatus } from './status';
 
 /**
  * The planner's proposal, between the run that wrote it and the person who
@@ -122,6 +122,8 @@ export interface ApprovalResult {
 	created: { number: number; url: string; title: string }[];
 	/** Set when some issues were created and the rest were not. */
 	failed?: string;
+	/** Set when the tasks were filed but the project's status line could not be updated. */
+	statusError?: string;
 }
 
 /**
@@ -156,7 +158,9 @@ export async function approvePlan(
 			(l) => l.name === projectLabel(project.slug) || tasks.some((t) => l.name === agentLabel(t.agent))
 		);
 		await ensureLabels(client, wanted);
-		const parent = projectIssueNumber(project, await listOpenIssues(client, { fresh: true }), client.repo);
+		// Created now if the project never had one, so the tasks have a parent to
+		// nest under. Best effort: tasks under the project label are found either way.
+		const parent = await ensureProjectIssue(client, project).catch(() => null);
 
 		for (const task of tasks) {
 			let issue;
@@ -190,7 +194,15 @@ export async function approvePlan(
 		return { created, failed };
 	}
 	recordDecision(chat.id, created);
-	return { created };
+	const first = created[0];
+	const statusError = await writeProjectStatus(client, proposal.slug, {
+		text: `Plan approved: ${created.length} task${created.length === 1 ? '' : 's'} filed. Next: #${first.number} ${first.title}`.slice(0, 280),
+		by: 'Galaxy'
+	}).then(
+		() => undefined,
+		(err) => String(err)
+	);
+	return statusError ? { created, statusError } : { created };
 }
 
 function recordDecision(chatId: string, created: ApprovalResult['created'], failed?: string): void {
@@ -202,11 +214,16 @@ function recordDecision(chatId: string, created: ApprovalResult['created'], fail
 	appendMessage(chatId, { role: 'assistant', content: lines.join('\n') });
 }
 
-/** Drop the proposal. Nothing reaches GitHub. */
-export function rejectPlan(opts: { chatId: string; userId: string }): void {
+/**
+ * Drop the proposal. No task reaches GitHub; the caller may update the
+ * project's status line, which is why the project is returned.
+ */
+export function rejectPlan(opts: { chatId: string; userId: string }): { slug: string } {
 	const chat = getChat(opts.chatId, opts.userId);
 	if (!chat) throw new PlanError('No such plan', 404);
-	if (!getProposal(chat.id)) throw new PlanError('This plan has already been approved or rejected.', 409);
+	const proposal = getProposal(chat.id);
+	if (!proposal) throw new PlanError('This plan has already been approved or rejected.', 409);
 	deleteSetting(PLAN_KEY, chat.id);
 	appendMessage(chat.id, { role: 'assistant', content: 'Plan rejected. Nothing was added to the board.' });
+	return { slug: proposal.slug };
 }

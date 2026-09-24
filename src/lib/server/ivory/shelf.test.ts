@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeGithub, SAMPLE_BRIEF } from './github-fixture';
 import { groupByDiscipline, listProjects, projectFromBrief, questionOf, UNFILED } from './shelf';
 import { shelfIndex, shelfProjectView } from './view';
+import { withStatus } from './status';
 
 describe('projectFromBrief', () => {
 	it('takes the slug from the folder and the question from its section', () => {
@@ -48,6 +49,12 @@ describe('the Shelf index', () => {
 		for (const g of index.groups) {
 			expect(g.projects.map((x) => [x.slug, x.openTasks])).toEqual([['bees-and-queues', 1]]);
 		}
+		expect(index.groups[0].projects[0].status).toBeNull();
+
+		// The status line comes from the project issue, read from the same listing.
+		gh.issues[0].body = withStatus('', { text: 'Two notes in.', by: 'Galaxy', at: '2026-09-25 10:00' });
+		gh.clock.now += 61_000;
+		expect((await shelfIndex(gh.client)).groups[0].projects[0].status?.text).toBe('Two notes in.');
 	});
 
 	it('reads an empty repository as no projects rather than an error', async () => {

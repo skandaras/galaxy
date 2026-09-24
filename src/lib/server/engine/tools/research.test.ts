@@ -12,6 +12,7 @@ import {
 	readPaperTool,
 	recordingFetch,
 	runPaperSearch,
+	setStatusTool,
 	searchPapersWith,
 	shelfReadTool,
 	shelfWriteTool,
@@ -315,5 +316,15 @@ describe('read_paper', () => {
 		await expect(readPaperTool(CFG, { read: async () => ({ ok: false, attempts: [] }) }).execute({})).rejects.toThrow(
 			/needs a DOI/
 		);
+	});
+});
+
+describe('set_status', () => {
+	it('records a cleaned line and reaches nothing else', async () => {
+		let recorded: string | null = null;
+		const tool = setStatusTool((t) => (recorded = t));
+		expect(await tool.execute({ summary: '  Two notes written.\n Next: #7. ' })).toMatch(/^Status recorded/);
+		expect(recorded).toBe('Two notes written.\nNext: #7.');
+		await expect(tool.execute({ summary: 'one\ntwo\nthree' })).rejects.toThrow('Status not set: Keep the status to one or two lines.');
 	});
 });

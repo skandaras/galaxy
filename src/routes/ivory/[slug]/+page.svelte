@@ -36,6 +36,8 @@
 		projectIssue: number | null;
 		issues: Issue[];
 		issuesUrl: string;
+		projectIssueUrl: string | null;
+		status: { text: string; at: string; by: string } | null;
 	}
 
 	interface PlannedTask {
@@ -51,6 +53,8 @@
 	const PLAN_AGENTS = ['ivory-read', 'ivory-synthesise', 'ivory-redteam', 'none'];
 
 	const slug = $derived(page.params.slug);
+	/** Set by the new-project form when the brief was written but the issue was not. */
+	const createWarning = $derived(page.url.searchParams.get('warning'));
 	let view = $state<ProjectView | null>(null);
 	let failure = $state<string | null>(null);
 
@@ -167,6 +171,21 @@
 	{:else if !view}
 		<p class="notice">Reading the project…</p>
 	{:else}
+		{#if createWarning}<p class="notice error" role="alert">{createWarning}</p>{/if}
+		<section class="status-box" aria-label="Project status">
+			<h3>Status</h3>
+			{#if view.status}
+				<p class="status-text">{view.status.text}</p>
+				<p class="plan-meta">
+					{view.status.by} · {view.status.at} UTC{#if view.projectIssueUrl}
+						· <a href={view.projectIssueUrl} target="_blank" rel="noopener">project issue</a>{/if}
+				</p>
+			{:else}
+				<p class="plan-meta">
+					No status yet. The next agent run, or approving a plan, sets one.
+				</p>
+			{/if}
+		</section>
 		{#if planMsg}<p class="notice" role="status">{planMsg}</p>{/if}
 		{#if approved}
 			<section class="approved" role="status" aria-label="Added to the board">
@@ -422,6 +441,15 @@
 		justify-content: space-between;
 		gap: 0.8rem;
 		flex-wrap: wrap;
+	}
+	.status-box {
+		border-left: 3px solid var(--accent);
+		padding: 0.2rem 0 0.2rem 0.8rem;
+		margin-bottom: 1rem;
+	}
+	.status-text {
+		margin: 0 0 0.3rem;
+		white-space: pre-line;
 	}
 	.tasks {
 		border-bottom: 1px solid var(--border);

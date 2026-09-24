@@ -158,6 +158,12 @@ export function fakeGithub(
 			const i = gh.issues.find((x) => x.number === Number(one[1]));
 			return i ? reply(200, rawIssue(i)) : reply(404, { message: 'Not Found' });
 		}
+		if (one && method === 'PATCH') {
+			const i = gh.issues.find((x) => x.number === Number(one[1]));
+			if (!i) return reply(404, { message: 'Not Found' });
+			if (typeof body.body === 'string') i.body = body.body;
+			return reply(200, rawIssue(i));
+		}
 		const addLabels = /^\/issues\/(\d+)\/labels$/.exec(path);
 		if (addLabels && method === 'POST') {
 			if (opts.labels === 'refuse') return reply(403, { message: 'Resource not accessible by personal access token' });

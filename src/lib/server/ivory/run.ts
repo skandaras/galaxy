@@ -26,6 +26,7 @@ import {
 	proposeTasksTool,
 	readPaperTool,
 	recordingFetch,
+	setStatusTool,
 	shelfReadTool,
 	shelfWriteTool,
 	type PaperSearchConfig,
@@ -44,6 +45,7 @@ import {
 } from './board';
 import { shelfClient, type ShelfClient } from './github';
 import { WRITE_SOURCE_NOTE_SKILL } from './notes';
+import { writeProjectStatus } from './status';
 import { blobUrl, listPaths, projectFromBrief, repoInfo, SLUG } from './shelf';
 
 /**
@@ -302,6 +304,7 @@ export function startIvoryTurn(
 
 	const reading = newRunReading();
 	const written: { path: string; commitUrl: string }[] = [];
+	let status: string | null = null;
 	const paper = paperConfig();
 	const tools: LoopTool[] = [
 		...(paper.provider === 'none'
@@ -318,7 +321,8 @@ export function startIvoryTurn(
 			reading
 		),
 		// Read-only for both agents; only the reader's writer below can write.
-		shelfReadTool(client, { slug: scope.slug, writable: [] })
+		shelfReadTool(client, { slug: scope.slug, writable: [] }),
+		setStatusTool((text) => (status = text))
 	];
 	if (task === 'ivory-read') {
 		// The reader only: the planner plans from abstracts and has no note to write.
@@ -351,6 +355,7 @@ export function startIvoryTurn(
 		client,
 		scope,
 		written,
+		status: () => status,
 		modelKey: () => modelKey,
 		always: (opts.announce ?? 'if-written') === 'always',
 		userId: opts.userId,
@@ -403,6 +408,7 @@ function announceWhenFinished(
 		client: ShelfClient;
 		scope: IvoryRunScope;
 		written: { path: string; commitUrl: string }[];
+		status: () => string | null;
 		modelKey: () => string;
 		always: boolean;
 		userId: string;
@@ -429,20 +435,31 @@ function announceWhenFinished(
 				entityId: ctx.chatId
 			});
 		}
-		// A planner run has no issue to report to; its result is the proposal.
-		if (ctx.scope.issue === null) return;
-		if (!ctx.always && !ctx.written.length) return;
-		void postRunComment(ctx.client, ctx.scope, ctx.written, ctx.modelKey(), failed).catch((err) => {
+		const report = (name: string, err: unknown) =>
 			emitEvent({
 				userId: ctx.userId,
 				chatId: ctx.chatId,
 				task: ctx.scope.task,
 				type: 'tool.call',
-				name: 'ivory.comment',
+				name,
 				status: 'error',
 				detail: { issue: ctx.scope.issue, error: String(err) }
 			});
-		});
+		// Only from a run that finished: a line written by a run that failed
+		// halfway would describe work that did not happen.
+		const line = ctx.status();
+		if (line && !failed) {
+			void writeProjectStatus(ctx.client, ctx.scope.slug, {
+				text: line,
+				by: `${ctx.scope.task} + ${ctx.modelKey()}`
+			}).catch((err) => report('ivory.status', err));
+		}
+		// A planner run has no issue to report to; its result is the proposal.
+		if (ctx.scope.issue === null) return;
+		if (!ctx.always && !ctx.written.length) return;
+		void postRunComment(ctx.client, ctx.scope, ctx.written, ctx.modelKey(), failed).catch((err) =>
+			report('ivory.comment', err)
+		);
 	});
 }
 
