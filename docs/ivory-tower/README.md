@@ -80,6 +80,31 @@ proposal and touches nothing on GitHub.
 The prompt puts the kill-criteria checks first, starting with whether the idea is already known
 in the target field. The model is left empty for the owner to pick; a large one is intended.
 
+## Re-planning
+
+"Plan next tasks" (it reads "Plan tasks" until a task has been closed) gives the planner the
+brief, the status line, the closed tasks, one line per note (title, year, access, claims) and one
+line per claim (status, reviews, author). It builds on what is done, files synthesiser tasks once
+there are notes and red-team tasks naming each draft or challenged claim, and proposes nothing when
+the brief's Done when is met or a kill criterion has fired.
+
+## The synthesiser (`ivory-synthesise`) and the red-team (`ivory-redteam`)
+
+Both run from a task's Run button, like the reader, with the Shelf's claim template (or the
+seeded one) in their prompt. The red-team also gets the kin-selection example as calibration.
+
+- **Synthesiser tools:** `paper_search` (for the prior-art table), `shelf_read`, `shelf_write` into
+  `claims/`, `set_status`. It writes `status: draft` only; Galaxy stamps `authored_by`.
+- **Red-team tools:** `paper_search`, `read_paper`, `fetch_url`, `shelf_read`, `shelf_write` on
+  existing claims only, `set_status`. It may not set `draft`; Galaxy keeps `authored_by` as it
+  was and adds the red-team to `reviewed_by`.
+- **Checked in code** (`ivory/claims.ts`): the claim's fields and template sections, notes that
+  exist, and that a claim is never reviewed by a model from the same family as its author. The
+  family comes from the model key's vendor (`z-ai/glm-5.3` → `z-ai`), with bare names mapped to
+  their maker. It is checked before a red-team run starts, when the task names the claim, and again
+  at every write, which covers a failover to the backup model. The other gates in the template stay
+  instructions, as the brief left them.
+
 ## Where the brief and the code differ
 
 - **`fetch_page`** does not exist. The tool is `fetch_url`.

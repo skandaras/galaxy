@@ -137,11 +137,13 @@ export function fakeGithub(
 		}
 		if (path === '/issues' && method === 'GET') {
 			const state = url.searchParams.get('state') ?? 'open';
+			const labels = (url.searchParams.get('labels') ?? '').split(',').filter(Boolean);
 			return reply(
 				200,
 				paginate(
 					gh.issues
 						.filter((i) => !unlisted.has(i.number) && (state === 'all' || i.state === state))
+						.filter((i) => labels.every((l) => i.labels.includes(l)))
 						.map(rawIssue)
 				)
 			);
@@ -246,4 +248,53 @@ Seeley describes how a colony allocates foragers among flower patches.
 
 ## Relevance to the project
 It is the allocation mechanism the brief asks about.
+`;
+
+/** A mapping claim that passes validation, citing GOOD_NOTE's file. */
+export const GOOD_CLAIM = `---
+id: C-001
+type: mapping
+project: bees
+source_domain: "entomology (honeybee foraging)"
+target_domain: "operations research (load balancing)"
+status: draft
+authored_by: "ivory-synthesise + z-ai/glm-5.3"
+reviewed_by: []
+notes: [N-002-seeley-1995.md]
+---
+
+# C-001: Waggle dances allocate foragers like a load balancer
+
+## Claim
+Recruitment by dance duration has the same structure as weighted request routing.
+
+## Formalism in the source domain
+Dance duration scales with patch profitability (N-002-seeley-1995).
+
+## Mapping
+| Source term | Target term | Measurable in target? | Evidence |
+|---|---|---|---|
+| dance duration | routing weight | yes | N-002-seeley-1995 |
+
+## Assumptions carried over
+| Assumption in source | Holds in target? (yes / no / unknown) | Evidence |
+|---|---|---|
+| foragers follow dances in proportion | unknown | |
+
+## Predictions
+
+### P1
+- Prediction: weights track server profitability.
+- Already known in target? no
+- Test: reading.
+
+## Prior art in the target field
+| Query | Source searched | Result |
+|---|---|---|
+| honeybee load balancing | OpenAlex | honeybee algorithm (Nakrani 2004) |
+
+## Red-team log
+
+## Verdict
+Draft; needs review.
 `;

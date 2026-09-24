@@ -4,9 +4,11 @@ import { createChat, deleteChat, getMessages } from '$lib/server/chats';
 import { subscribeJob, type LiveJob } from '$lib/server/engine/jobs';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import type { ChatRequest, StreamEvent } from '$lib/server/providers/types';
-import { fakeGithub, SAMPLE_BRIEF } from './github-fixture';
+import { fakeGithub, GOOD_CLAIM, GOOD_NOTE, SAMPLE_BRIEF } from './github-fixture';
 import { approvePlan, getProposal, listProposals, rejectPlan, storeProposal, validateTasks, type Proposal } from './plan';
-import { startPlanRun } from './run';
+import { planBrief, projectHistory, startPlanRun } from './run';
+import { projectFromBrief } from './shelf';
+import { withStatus } from './status';
 import { readStatus } from './status';
 import { RECENT_ISSUE_MS } from './board';
 import { shelfIndex, shelfProjectView } from './view';
@@ -262,5 +264,40 @@ describe('the planner run', () => {
 		expect(getProposal(chatId)?.tasks).toHaveLength(2);
 		// The run was briefed with what is on the board already.
 		expect(getMessages(chatId)[0].content).toContain('--- BEGIN OPEN TASKS ---');
+	});
+});
+
+describe('re-planning', () => {
+	it('tells the planner what is done, what the notes found and where each claim stands', async () => {
+		const gh = fakeGithub();
+		gh.files.set('projects/bees/brief.md', BRIEF);
+		gh.files.set('projects/bees/notes/N-002-seeley-1995.md', GOOD_NOTE);
+		gh.files.set('projects/bees/claims/C-001.md', GOOD_CLAIM.replace('status: draft', 'status: challenged').replace('reviewed_by: []', 'reviewed_by: ["ivory-redteam + openai/gpt-5"]'));
+		gh.files.set('projects/bees/synthesis.md', 'later');
+		const parent = gh.addIssue({
+			title: 'Project',
+			body: withStatus('', { text: 'C-001 challenged; one objection open.', by: 'Galaxy', at: '2026-09-25 10:00' }),
+			labels: ['project:bees', 'discipline:entomology']
+		});
+		gh.addIssue({ title: 'Read Seeley 1995', labels: ['project:bees', 'agent:ivory-read'], state: 'closed' });
+		gh.addIssue({ title: 'Somebody else', labels: ['project:wasps'], state: 'closed' });
+		gh.addIssue({ title: 'Red-team C-001 again', labels: ['project:bees', 'agent:ivory-redteam'] });
+
+		const history = await projectHistory(gh.client, projectFromBrief('bees', BRIEF));
+		expect(history.status).toBe('C-001 challenged; one objection open.');
+		expect(history.closed.map((i) => i.title)).toEqual(['Read Seeley 1995']);
+		expect(history.open.map((i) => i.title)).toEqual(['Red-team C-001 again']);
+		expect(history.notes).toEqual(['notes/N-002-seeley-1995.md: The Wisdom of the Hive (1995), abstract-only, 1 claim']);
+		expect(history.claims).toEqual([
+			'claims/C-001.md: C-001: Waggle dances allocate foragers like a load balancer, status challenged, 1 review, written by ivory-synthesise + z-ai/glm-5.3'
+		]);
+		expect(history.otherFiles).toEqual(['synthesis.md']);
+		expect(parent.number).toBe(1);
+
+		const text = planBrief('bees', BRIEF, history);
+		for (const block of ['CURRENT STATUS', 'DONE (CLOSED TASKS)', 'OPEN TASKS', 'NOTES', 'CLAIMS', 'OTHER FILES']) {
+			expect(text).toContain(`--- BEGIN ${block} ---`);
+		}
+		expect(text).toContain('#2 Read Seeley 1995 [agent:ivory-read]');
 	});
 });

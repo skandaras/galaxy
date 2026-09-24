@@ -37,7 +37,7 @@ export type ToolSource = 'builtin' | 'mcp';
  * a control that does nothing. Keep in step with the applyToolPolicy call sites.
 
  */
-export const TOOL_TASKS = ['chat', 'coding', 'ivory-read', 'ivory-plan'] as const;
+export const TOOL_TASKS = ['chat', 'coding', 'ivory-read', 'ivory-plan', 'ivory-synthesise', 'ivory-redteam'] as const;
 export type ToolTask = (typeof TOOL_TASKS)[number];
 
 export interface ToolDescriptor {
@@ -108,7 +108,7 @@ export function builtinDescriptors(): ToolDescriptor[] {
 	add(
 		[{ def: fetchUrlToolDef, execute: async () => '' }],
 		'web',
-		['chat', 'coding', 'ivory-read', 'ivory-plan'],
+		['chat', 'coding', 'ivory-read', 'ivory-plan', 'ivory-redteam'],
 		'not tied to the composer’s web-search toggle'
 	);
 	// Declarations only: each live tool is built per run, scoped to one project.
@@ -116,14 +116,19 @@ export function builtinDescriptors(): ToolDescriptor[] {
 	add(
 		declared([paperSearchToolDef, shelfReadToolDef]),
 		'research',
-		['ivory-read', 'ivory-plan'],
+		['ivory-read', 'ivory-plan', 'ivory-synthesise', 'ivory-redteam'],
 		'Ivory Tower only; shelf_read reaches a single project folder'
 	);
-	add(declared([shelfWriteToolDef]), 'research', ['ivory-read'], 'writes only to one project’s notes/');
+	add(
+		declared([shelfWriteToolDef]),
+		'research',
+		['ivory-read', 'ivory-synthesise', 'ivory-redteam'],
+		'the reader writes notes/, the synthesiser and red-team claims/, in one project only'
+	);
 	add(
 		declared([readPaperToolDef]),
 		'research',
-		['ivory-read'],
+		['ivory-read', 'ivory-redteam'],
 		'Europe PMC, arXiv, CORE, Semantic Scholar, then open copies; CORE and Semantic Scholar need keys (Admin → Settings → Shelf)'
 	);
 	// The planner's only output. It records a proposal; creating issues is left
@@ -132,7 +137,7 @@ export function builtinDescriptors(): ToolDescriptor[] {
 	add(
 		declared([setStatusToolDef]),
 		'research',
-		['ivory-read', 'ivory-plan'],
+		['ivory-read', 'ivory-plan', 'ivory-synthesise', 'ivory-redteam'],
 		'records a status line; Galaxy writes it to the project issue when the run ends'
 	);
 	// The user id only scopes execution. The write tools are also gated at run

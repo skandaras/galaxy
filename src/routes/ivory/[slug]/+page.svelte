@@ -37,6 +37,7 @@
 		issues: Issue[];
 		issuesUrl: string;
 		projectIssueUrl: string | null;
+		closedTasks: number;
 		status: { text: string; at: string; by: string } | null;
 	}
 
@@ -127,7 +128,7 @@
 	});
 
 	/** The agents that can be started from here. The rest are labels for later phases. */
-	const RUNNABLE = new Set(['ivory-read']);
+	const RUNNABLE = new Set(['ivory-read', 'ivory-synthesise', 'ivory-redteam']);
 	let starting = $state<number | null>(null);
 	let runFailure = $state<string | null>(null);
 
@@ -156,7 +157,7 @@
 			<div class="title-row">
 				<h2>{view.project.title}</h2>
 				<button class="run" disabled={planBusy !== null} onclick={startPlan}>
-					{planBusy === 'start' ? 'Starting…' : 'Plan tasks'}
+					{planBusy === 'start' ? 'Starting…' : view.closedTasks ? 'Plan next tasks' : 'Plan tasks'}
 				</button>
 			</div>
 			<p class="tags">
