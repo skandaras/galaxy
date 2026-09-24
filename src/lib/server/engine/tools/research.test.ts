@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fakeGithub, GOOD_NOTE } from '$lib/server/ivory/github-fixture';
+import { routedFetch } from '$lib/server/ivory/scholarly-fixture';
 import {
 	checkAgainstReading,
 	formatPapers,
@@ -8,14 +9,24 @@ import {
 	paperSearchTool,
 	PaperProviderError,
 	rebuildAbstract,
+	readPaperTool,
 	recordingFetch,
+	runPaperSearch,
 	searchPapersWith,
 	shelfReadTool,
 	shelfWriteTool,
 	type PaperSearchConfig
 } from './research';
 
-const CFG: PaperSearchConfig = { provider: 'openalex', mailto: '', maxResults: 5, perTurn: 2, timeoutMs: 1000 };
+const CFG: PaperSearchConfig = {
+	provider: 'openalex',
+	mailto: '',
+	maxResults: 5,
+	perTurn: 2,
+	timeoutMs: 1000,
+	s2Key: '',
+	coreKey: ''
+};
 
 describe('OpenAlex', () => {
 	it('puts an inverted abstract back in order', () => {
@@ -35,7 +46,11 @@ describe('OpenAlex', () => {
 				authorships: [{ author: { display_name: 'Thomas D. Seeley' } }],
 				abstract_inverted_index: { hello: [0] },
 				open_access: { is_oa: true, oa_url: 'https://example.org/hive.pdf' },
-				primary_location: { landing_page_url: 'https://example.org/hive' }
+				primary_location: { landing_page_url: 'https://example.org/hive' },
+				ids: { pmcid: 'https://www.ncbi.nlm.nih.gov/pmc/articles/PMC42' },
+				locations: [
+					{ is_oa: true, pdf_url: 'https://arxiv.org/pdf/2101.00001v2', source: { type: 'repository', display_name: 'arXiv' } }
+				]
 			})
 		).toEqual({
 			title: 'The Wisdom of the Hive',
@@ -45,7 +60,9 @@ describe('OpenAlex', () => {
 			url: 'https://doi.org/10.1/x',
 			abstract: 'hello',
 			openAccess: true,
-			oaUrl: 'https://example.org/hive.pdf'
+			oaUrl: 'https://example.org/hive.pdf',
+			pmcid: 'PMC42',
+			arxivId: '2101.00001'
 		});
 	});
 
@@ -55,23 +72,30 @@ describe('OpenAlex', () => {
 			asked = String(url);
 			return new Response(JSON.stringify({ results: [] }));
 		}) as unknown as typeof fetch;
-		expect(await searchPapersWith({ ...CFG, mailto: 'me@example.org' }, 'bees', { fromYear: 1990, fetchImpl: ok })).toEqual([]);
+		expect(
+			await searchPapersWith('openalex', { ...CFG, mailto: 'me@example.org' }, 'bees', { fromYear: 1990, fetchImpl: ok })
+		).toEqual([]);
 		expect(asked).toContain('search=bees');
 		expect(asked).toContain('filter=from_publication_date%3A1990-01-01');
 		expect(asked).toContain('mailto=me%40example.org');
 
 		const down = (async () => new Response('busy', { status: 503 })) as unknown as typeof fetch;
-		await expect(searchPapersWith(CFG, 'bees', { fetchImpl: down })).rejects.toThrow(PaperProviderError);
+		await expect(searchPapersWith('openalex', CFG, 'bees', { fetchImpl: down })).rejects.toThrow(PaperProviderError);
 	});
 
 	it('fences what it returns as untrusted, and says when nothing came back', () => {
 		expect(formatPapers([], 'bees')).toMatch(/^No papers for "bees"/);
 		const out = formatPapers(
-			[{ title: 'T', authors: [], year: null, doi: null, url: 'u', abstract: '', openAccess: false, oaUrl: null }],
+			[
+				{ title: 'T', authors: [], year: null, doi: null, url: 'u', abstract: '', openAccess: false, oaUrl: null, pmcid: null, arxivId: null },
+				{ title: 'U', authors: [], year: null, doi: null, url: 'v', abstract: '', openAccess: true, oaUrl: null, pmcid: 'PMC1', arxivId: null }
+			],
 			'bees'
 		);
 		expect(out).toContain('--- BEGIN RESULTS ---');
-		expect(out).toContain('Open-access full text: no');
+		expect(out).toContain('Full text: no open copy listed; read_paper may still find a repository copy');
+		expect(out).toContain('IDs: PMCID PMC1');
+		expect(out).toContain('Full text: likely available; read it with read_paper');
 	});
 });
 
@@ -190,5 +214,106 @@ describe('shelf_read and shelf_write', () => {
 			/Not written[\s\S]*does not appear in anything read/
 		);
 		expect(gh.commits).toEqual([]);
+	});
+});
+
+describe('runPaperSearch', () => {
+	it('falls back to Semantic Scholar when OpenAlex fails, and fills missing authors from Crossref', async () => {
+		const { impl, asked } = routedFetch([
+			['api.openalex.org', () => new Response('down', { status: 503 })],
+			[
+				'api.semanticscholar.org/graph/v1/paper/search',
+				() =>
+					new Response(
+						JSON.stringify({
+							data: [
+								{
+									title: 'Heritability in twins',
+									year: 2001,
+									authors: [],
+									externalIds: { DOI: '10.1000/twins', PubMedCentral: '555' },
+									openAccessPdf: null
+								}
+							]
+						})
+					)
+			],
+			['api.crossref.org/works/10.1000/twins', () => new Response(JSON.stringify({ message: { author: [{ given: 'Ada', family: 'Twin' }] } }))]
+		]);
+		const out = await runPaperSearch(CFG, 'twin heritability', { fetchImpl: impl });
+		expect(out.provider).toBe('semanticscholar');
+		expect(out.failedOver).toMatch(/openalex search failed/);
+		expect(out.results).toEqual([
+			expect.objectContaining({ authors: ['Ada Twin'], doi: 'https://doi.org/10.1000/twins', pmcid: 'PMC555', openAccess: true })
+		]);
+		expect(asked.map((a) => new URL(a.url).hostname)).toEqual([
+			'api.openalex.org',
+			'api.semanticscholar.org',
+			'api.crossref.org'
+		]);
+	});
+
+	it('does not fall back when the search worked and found nothing', async () => {
+		const { impl, asked } = routedFetch([['api.openalex.org', () => new Response(JSON.stringify({ results: [] }))]]);
+		expect((await runPaperSearch(CFG, 'nothing', { fetchImpl: impl })).results).toEqual([]);
+		expect(asked).toHaveLength(1);
+	});
+});
+
+describe('read_paper', () => {
+	const long = `${'a'.repeat(24_000)}${'the second part holds the quoted passage '.repeat(20)}`;
+
+	it('reads a long paper in parts from one lookup, and counts what was shown as read', async () => {
+		let lookups = 0;
+		const reading = newRunReading();
+		const tool = readPaperTool(CFG, {
+			read: async () => {
+				lookups++;
+				return { ok: true, text: long, source: 'Europe PMC', locator: 'PMC77', attempts: [] };
+			},
+			reading
+		});
+		const one = await tool.execute({ doi: 'https://doi.org/10.1000/kin' });
+		expect(one).toMatch(/^Full text of PMC77, from Europe PMC\. Part 1 of 2\./);
+		expect(one).toContain('(Part 2 continues; ask read_paper for it.)');
+		const two = await tool.execute({ doi: '10.1000/KIN', part: 2 });
+		expect(two).toContain('the second part holds the quoted passage');
+		expect(lookups).toBe(1);
+
+		const note = GOOD_NOTE.replace('access: abstract-only', 'access: full-text').replace(
+			'- Quote: "dance duration scales with patch profitability"',
+			'- Quote: "the second part holds the quoted passage"'
+		);
+		expect(checkAgainstReading(note, reading)).toEqual([]);
+	});
+
+	it('lists where it looked when there is no open text, and reads nothing', async () => {
+		const reading = newRunReading();
+		const tool = readPaperTool(CFG, {
+			read: async () => ({
+				ok: false,
+				attempts: [
+					{ source: 'Europe PMC', outcome: 'not in its open-access full-text set' },
+					{ source: 'Publisher', outcome: 'refused (HTTP 403)' }
+				]
+			}),
+			reading
+		});
+		expect(await tool.execute({ doi: '10.1000/closed' })).toBe(
+			[
+				'No open full text was found. Where it looked:',
+				'- Europe PMC: not in its open-access full-text set',
+				'- Publisher: refused (HTTP 403)',
+				'',
+				'Write the note from the abstract, with access: abstract-only.'
+			].join('\n')
+		);
+		expect(reading).toEqual({ texts: [], readFullText: false });
+	});
+
+	it('needs something to look up', async () => {
+		await expect(readPaperTool(CFG, { read: async () => ({ ok: false, attempts: [] }) }).execute({})).rejects.toThrow(
+			/needs a DOI/
+		);
 	});
 });

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '$lib/server/db';
 import { DEFAULT_FETCH } from '$lib/server/settings';
@@ -143,11 +145,28 @@ describe('fetch_url', () => {
 	});
 
 	it('refuses a binary type by name instead of dumping bytes', async () => {
-		const { t } = tool(() => reply('%PDF-1.7 …', { contentType: 'application/pdf' }));
-		const out = await t.execute({ url: 'https://example.com/a.pdf' });
+		const { t } = tool(() => reply('\u0089PNG…', { contentType: 'image/png' }));
+		const out = await t.execute({ url: 'https://example.com/a.png' });
 
-		expect(out).toContain('application/pdf');
+		expect(out).toContain('image/png');
 		expect(out).toContain('not readable as text');
+	});
+
+	it('reads the text of a PDF', async () => {
+		const pdf = readFileSync(join('src/lib/server/fixtures', 'sample.pdf'));
+		const { t } = tool(() => new Response(pdf, { headers: { 'content-type': 'application/pdf' } }));
+		const out = await t.execute({ url: 'https://example.com/paper.pdf' });
+
+		expect(out).toContain('--- BEGIN CONTENT ---');
+		expect(out).toContain('Galaxy attachment test document.');
+	});
+
+	it('says so when a PDF has no text to read', async () => {
+		const { t } = tool(() => reply('%PDF-1.7 not really', { contentType: 'application/pdf' }));
+		const out = await t.execute({ url: 'https://example.com/scan.pdf' });
+
+		expect(out).toMatch(/is a PDF with no readable text layer/);
+		expect(out).not.toContain('--- BEGIN CONTENT ---');
 	});
 
 	it('reports an HTTP error rather than throwing the turn away', async () => {
