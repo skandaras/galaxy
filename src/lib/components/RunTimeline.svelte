@@ -92,7 +92,8 @@
 						     carries only its first sentence. -->
 						{#if item.note}<p class="note">{item.note}</p>{/if}
 						<ul class="tools">
-							{#each item.tools as tool, t (tool.callId ?? `${tool.name}-${t}`)}
+							<!-- Position first: a provider may reuse a call id within one step. -->
+							{#each item.tools as tool, t (`${t}-${tool.callId ?? tool.name}`)}
 								<li class="t-{tool.status}">
 									{#if tool !== solo}
 										<div class="t-line">

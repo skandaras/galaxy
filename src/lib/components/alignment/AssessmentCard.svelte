@@ -157,7 +157,7 @@
 					them is the point.
 				</p>
 				<div class="mechanisms">
-					{#each assessment.disengagement as m (m)}
+					{#each assessment.disengagement as m, i (i)}
 						<span class="mechanism">{mechanismNames[m] ?? m}</span>
 					{/each}
 				</div>
