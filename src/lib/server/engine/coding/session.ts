@@ -320,7 +320,7 @@ export function startCodingTurn(opts: {
 		);
 
 	/** One pass of the agent loop. Resolves with how it ended. */
-	const runLeg = async (): Promise<{ summary: TurnSummary | null; messageId?: string }> => {
+	const runLeg: RunLeg = async ({ leg, resume }) => {
 		let summary: TurnSummary | null = null;
 		let messageId: string | undefined;
 		const tools = buildTools();
@@ -334,24 +334,31 @@ export function startCodingTurn(opts: {
 			backup,
 			tools,
 			maxIterations: codingMaxSteps(),
+			leg,
 			budgetBlocked: () => getBudgetStatus().blocked,
 			// Legs share one job, so the driver below closes it once at the end.
 			autoComplete: false,
 			// Rebuilt per call: compaction moves compactedUpTo, and the session
 			// state block changes as the agent works. Replaying everything
 			// regardless is what let a long session grow without bound.
+			//
+			// Except on a continued leg, which picks up the last leg's own
+			// transcript. Copied, so a failover retry starts again from the same
+			// place rather than from whatever the failed attempt appended.
 			buildMessages: (): ProviderMessage[] =>
-				buildContext({
-					systemPrompt,
-					chat: getChat(chat.id, opts.userId) ?? chat,
-					history: getMessages(chat.id),
-					supportsVision: choice.model.supportsVision,
-					// The two volatile blocks, kept out of the system message so the
-					// prefix survives a leg. The state block changes every leg by design
-					// — that is what it is for — and in front of the prompt it
-					// invalidated everything behind it (see buildContext).
-					tail: formatState(loadState(chat.id)) + priorRun
-				}),
+				resume
+					? [...resume]
+					: buildContext({
+							systemPrompt,
+							chat: getChat(chat.id, opts.userId) ?? chat,
+							history: getMessages(chat.id),
+							supportsVision: choice.model.supportsVision,
+							// The two volatile blocks, kept out of the system message so the
+							// prefix survives a leg. The state block changes every leg by design
+							// — that is what it is for — and in front of the prompt it
+							// invalidated everything behind it (see buildContext).
+							tail: formatState(loadState(chat.id)) + priorRun
+						}),
 			onDone: (text, _usage, usedChoice, turnSummary) => {
 				summary = turnSummary;
 				const saved = appendMessage(chat.id, {
@@ -404,6 +411,12 @@ export function startCodingTurn(opts: {
 	return job;
 }
 
+type RunLeg = (opts: {
+	leg: { index: number; of: number };
+	/** The previous leg's transcript plus the continuation message, or null for leg one. */
+	resume: ProviderMessage[] | null;
+}) => Promise<{ summary: TurnSummary | null; messageId?: string }>;
+
 /**
  * Run the turn to a finish: capture what happened, checkpoint work the model
  * left uncommitted, and start another leg when it simply ran out of steps.
@@ -417,7 +430,7 @@ async function driveCodingTurn(opts: {
 	chat: string;
 	session: CodeSession;
 	userId: string;
-	runLeg: () => Promise<{ summary: TurnSummary | null; messageId?: string }>;
+	runLeg: RunLeg;
 }): Promise<void> {
 	const { job, session } = opts;
 	const coding = getSetting<CodingSettings>('coding', DEFAULT_CODING);
@@ -425,10 +438,12 @@ async function driveCodingTurn(opts: {
 	// How the turn as a whole ended, which is how its last leg ended — several
 	// legs can be exhausted on the way to one that finishes.
 	let lastStopReason: StopReason | undefined;
+	const legs = coding.autoContinue ? coding.maxLegs : 1;
+	let resume: ProviderMessage[] | null = null;
 
 	for (let leg = 1; ; leg++) {
 		pushChunk(job, { type: 'stage', name: 'working', detail: `leg ${leg}` });
-		const { summary, messageId } = await opts.runLeg();
+		const { summary, messageId } = await opts.runLeg({ leg: { index: leg, of: legs }, resume });
 		lastMessageId = messageId ?? lastMessageId;
 		// No summary means the loop failed and already failed the job.
 		if (!summary) return;
@@ -468,6 +483,7 @@ async function driveCodingTurn(opts: {
 		});
 
 		const dirty = await isDirty(session.workspaceRel);
+		let checkpointed = false;
 		if (dirty && coding.autoCheckpoint) {
 			pushChunk(job, { type: 'stage', name: 'checkpointing' });
 			// The one place that waits on the summary at all, and only briefly:
@@ -476,8 +492,10 @@ async function driveCodingTurn(opts: {
 			// back to the changed-file list rather than holding the run open.
 			const note = await withDeadline(legSummary, CHECKPOINT_SUMMARY_WAIT_MS);
 			const committed = await checkpoint(job, session, summary, note);
+			checkpointed = committed;
 			if (committed) {
-				// Refresh so the next leg sees a clean tree and the new commit.
+				// Refresh so the next turn's state block sees a clean tree and the
+				// new commit. A continued leg is told about it in its own message.
 				await captureState({
 					chatId: opts.chat,
 					workspaceRel: session.workspaceRel,
@@ -495,7 +513,7 @@ async function driveCodingTurn(opts: {
 		const canContinue =
 			coding.autoContinue &&
 			summary.stopReason === 'exhausted' &&
-			leg < coding.maxLegs &&
+			leg < legs &&
 			!job.controller.signal.aborted &&
 			!getBudgetStatus().blocked;
 
@@ -512,18 +530,40 @@ async function driveCodingTurn(opts: {
 		pushChunk(job, { type: 'stage', name: 'continuing', detail: `leg ${leg + 1}` });
 		pushChunk(job, {
 			type: 'notice',
-			text: `Step limit reached, continuing automatically (leg ${leg + 1} of ${coding.maxLegs}).`
+			text: `Step limit reached, continuing automatically (leg ${leg + 1} of ${legs}).`
 		});
+		const content = continuationMessage(leg + 1, legs, codingMaxSteps(), checkpointed);
 		// A real message rather than a hidden nudge: the transcript should show
 		// why another assistant turn follows.
-		appendMessage(opts.chat, {
-			role: 'user',
-			content:
-				'Continue from where you left off. Use the session state above rather than re-reading the repository, and commit and push once the task is done.'
-		});
+		appendMessage(opts.chat, { role: 'user', content });
+		resume = [...summary.transcript, { role: 'user', content }];
 	}
 
 	completeJob(job, lastMessageId, lastStopReason);
+}
+
+/**
+ * What the next leg is told. It sees the last leg's transcript, so this only
+ * has to say what happened outside it: the step cap, and the checkpoint commit
+ * the model did not make itself and would otherwise find by running git.
+ *
+ * Exported for tests.
+ */
+export function continuationMessage(
+	leg: number,
+	legs: number,
+	steps: number,
+	checkpointed: boolean
+): string {
+	return [
+		`Continue from where you left off. Leg ${leg} of ${legs} starts now, with up to ${steps} more model turns.`,
+		checkpointed
+			? 'Your uncommitted edits were committed locally as a WIP checkpoint, not pushed, so the working tree is clean.'
+			: '',
+		'Everything from the last leg is above: carry on with the next step rather than re-reading the repository or the run history. Commit and push once the task is done.'
+	]
+		.filter(Boolean)
+		.join(' ');
 }
 
 /**

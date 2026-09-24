@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { splitPatch } from './session';
+import { continuationMessage, splitPatch } from './session';
 
 const PATCH = [
 	'diff --git a/src/a.ts b/src/a.ts',
@@ -45,5 +45,23 @@ describe('splitPatch', () => {
 		// A truncated patch can start mid-file; a fragment with no header is not
 		// attributable to any path and must not become one.
 		expect(splitPatch('@@ -1 +1 @@\n-orphan line')).toEqual([]);
+	});
+});
+
+describe('continuationMessage', () => {
+	it('says what happened outside the transcript the next leg continues', () => {
+		const text = continuationMessage(2, 3, 50, true);
+		expect(text).toContain('Leg 2 of 3');
+		expect(text).toContain('up to 50 more model turns');
+		// The checkpoint is the one change the model did not make itself.
+		expect(text).toContain('WIP checkpoint');
+	});
+
+	it('does not claim a checkpoint that did not happen', () => {
+		expect(continuationMessage(2, 3, 50, false)).not.toContain('checkpoint');
+	});
+
+	it('keeps the opening the transcript and the smoke look for', () => {
+		expect(continuationMessage(2, 3, 50, false)).toMatch(/^Continue from where you left off/);
 	});
 });

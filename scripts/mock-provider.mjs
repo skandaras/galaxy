@@ -748,17 +748,21 @@ const server = createServer(async (req, res) => {
 					delta(res, {}, 'stop');
 				}
 			} else {
-				// Prior assistant replies in the history mean this is a continuation
-				// leg. The first leg's edits were checkpointed for us, so pick up at
-				// the push rather than starting the sequence again — which is the
-				// behaviour a resumed run is supposed to have.
-				const priorLegs = parsed.messages.filter(
-					(m) => m.role === 'assistant' && !m.tool_calls
-				).length;
-				if (priorLegs > 0) {
-					if (toolResults === 0) call('git_push', {});
+				// The continuation message means this is a later leg. It continues
+				// the first leg's transcript, so the tool results from before it are
+				// still in view; the reply counts them, which is how the smoke tells
+				// a continued leg from one rebuilt without them. The first leg's
+				// edits were checkpointed for us, so pick up at the push.
+				const resumedAt = parsed.messages.findIndex(
+					(m) => m.role === 'user' && String(m.content).startsWith('Continue from where you left off')
+				);
+				if (resumedAt !== -1) {
+					const before = parsed.messages.slice(0, resumedAt).filter((m) => m.role === 'tool').length;
+					if (toolResults === before) call('git_push', {});
 					else {
-						delta(res, { content: 'Done: picked up after the step limit and pushed.' });
+						delta(res, {
+							content: `Done: picked up after the step limit with ${before} earlier tool results in view, and pushed.`
+						});
 						delta(res, {}, 'stop');
 					}
 				} else if (toolResults === 0) {

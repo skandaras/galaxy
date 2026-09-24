@@ -11,6 +11,7 @@ import {
 	elideOldToolOutput,
 	isNarration,
 	noteFor,
+	shrinkArguments,
 	stepLabel,
 	streamWithIdleTimeout
 } from './loop';
@@ -286,6 +287,28 @@ describe('elideOldToolOutput', () => {
 		expect(messages[1].content).toBe('u'.repeat(900));
 	});
 
+	it('counts the arguments of the model\'s own calls, keeping their short fields', () => {
+		// A write_file carries the whole file. Once legs share one transcript,
+		// nothing else bounds those.
+		const write = (id: string, content: string): ProviderMessage => ({
+			role: 'assistant',
+			content: '',
+			tool_calls: [{ id, name: 'write_file', arguments: JSON.stringify({ path: `${id}.ts`, content }) }]
+		});
+		const messages: ProviderMessage[] = [
+			write('a', 'x'.repeat(5_000)),
+			{ role: 'tool', content: 'ok', tool_call_id: 'a' },
+			write('b', 'y'.repeat(5_000)),
+			{ role: 'tool', content: 'ok', tool_call_id: 'b' }
+		];
+		elideOldToolOutput(messages, 6_000);
+		const first = JSON.parse(messages[0].tool_calls![0].arguments);
+		expect(first.path).toBe('a.ts');
+		expect(first.content).toContain('5,000 characters');
+		// The newest write is still whole.
+		expect(JSON.parse(messages[2].tool_calls![0].arguments).content).toHaveLength(5_000);
+	});
+
 	it('is stable when called again with nothing left to shed', () => {
 		const messages: ProviderMessage[] = [toolMsg('a'.repeat(500)), toolMsg('b'.repeat(500))];
 		elideOldToolOutput(messages, 200);
@@ -293,5 +316,20 @@ describe('elideOldToolOutput', () => {
 		// A second pass must not spin: everything droppable is already dropped.
 		elideOldToolOutput(messages, 200);
 		expect(messages.map((m) => m.content)).toEqual(after);
+	});
+});
+
+describe('shrinkArguments', () => {
+	it('leaves short arguments as they are', () => {
+		expect(shrinkArguments('{"path":"a.ts"}')).toBe('{"path":"a.ts"}');
+	});
+
+	it('always returns a JSON object, since the provider replays it', () => {
+		expect(shrinkArguments(`not json ${'z'.repeat(300)}`)).toBe('{}');
+		const shrunk = shrinkArguments(JSON.stringify({ command: 'ls', stdin: 'q'.repeat(300) }));
+		expect(JSON.parse(shrunk)).toEqual({
+			command: 'ls',
+			stdin: '[300 characters, dropped from context after use]'
+		});
 	});
 });
