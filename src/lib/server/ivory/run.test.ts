@@ -113,7 +113,9 @@ describe('startReadRun', () => {
 						url: 'https://doi.org/10.4159/9780674043404',
 						abstract: ABSTRACT,
 						openAccess: false,
-						oaUrl: null
+						oaUrl: null,
+						pmcid: null,
+						arxivId: null
 					}
 				]
 			}
@@ -123,7 +125,7 @@ describe('startReadRun', () => {
 
 		// Exactly the brief's allowlist, on every round-trip.
 		for (const names of offered) {
-			expect([...names].sort()).toEqual(['fetch_url', 'paper_search', 'shelf_read', 'shelf_write']);
+			expect([...names].sort()).toEqual(['fetch_url', 'paper_search', 'read_paper', 'shelf_read', 'shelf_write']);
 		}
 
 		// The one valid note landed, stamped, and it passes the template's checks.

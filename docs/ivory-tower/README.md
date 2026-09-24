@@ -20,8 +20,19 @@ An open issue labelled `project:<slug>` and `agent:ivory-read` gets a Run button
 page. The run opens an ordinary chat (so it streams, survives a closed tab and takes follow-ups)
 with the issue and the brief as its first message, fenced as material rather than instructions.
 
-- **Tools:** `paper_search` (OpenAlex; Admin → Settings → Shelf), `fetch_url`, `shelf_read`,
-  `shelf_write`, and nothing else. Admin → Tools can switch any of them off.
+- **Tools:** `paper_search`, `read_paper`, `fetch_url`, `shelf_read`, `shelf_write`, and nothing
+  else. Admin → Tools can switch any of them off.
+- **Search** (`paper_search`) is OpenAlex, falling back to Semantic Scholar when it fails (or the
+  other way round, in Admin → Settings → Shelf). Records with no authors are completed from
+  Crossref.
+- **Full texts** (`read_paper`, `ivory/fulltext.ts`) come from APIs that hand over the text before
+  any publisher site is tried: Europe PMC (PubMed Central's open-access articles), arXiv, CORE
+  (university repositories; needs a free key), Semantic Scholar's open-access PDF (needs a free
+  key), then every open copy OpenAlex lists, repositories first. A bot-check page counts as a
+  failure and the next source is tried; it is never worked around. Long papers come back in
+  parts. When nothing is open, the tool lists each source and why it failed, and the note is
+  written from the abstract as `access: abstract-only`. Paywalled papers with no open copy stay
+  that way.
 - **Scope:** `shelf_read` reaches only `projects/<slug>/`; `shelf_write` only
   `projects/<slug>/notes/*.md`. Anything else throws, and shows red in the Observatory.
 - **What a note must be before it is written** (`ivory/notes.ts`): the template's frontmatter,

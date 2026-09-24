@@ -1,7 +1,7 @@
 import type { ToolDef } from '$lib/server/providers/types';
 import type { FetchSettings } from '$lib/server/settings';
 import { githubToken } from '../coding/workspace';
-import { assertPublicHttpUrl, htmlToText, READABLE_TYPE, safeFetch } from '../research';
+import { assertPublicHttpUrl, htmlToText, READABLE_TYPE, readCappedBytes, safeFetch } from '../research';
 import { BROWSER_UA } from './web-search';
 import type { LoopTool } from '../loop';
 
@@ -11,7 +11,7 @@ export const fetchUrlToolDef: ToolDef = {
 		'Read the contents of a specific web address. Use this whenever a URL is given to you or ' +
 		'appears in something you have read. Never search for a page whose address you already ' +
 		'have, and never guess at what is on it. Handles HTML (reduced to readable text), ' +
-		'markdown, JSON and plain text. GitHub links resolve to their real contents: a file URL ' +
+		'PDF (its text layer), markdown, JSON and plain text. GitHub links resolve to their real contents: a file URL ' +
 		'returns that file, and a repository URL returns its README, or, if it has none, whatever ' +
 		'introductory document is at its root. When that is not enough, ask for a specific file ' +
 		'URL rather than assuming a layout.',
@@ -142,14 +142,32 @@ export function fetchUrlTool(cfg: FetchSettings, deps: FetchToolDeps = {}): Loop
 			}
 
 			const contentType = res.headers.get('content-type') ?? '';
-			if (!READABLE_TYPE.test(contentType)) {
+			// PDFs used to be refused here as "not readable as text", although the
+			// extractor for attachments and deep research was one import away. For
+			// papers, reports and standards the PDF is usually the only copy.
+			const isPdf = contentType.split(';')[0].trim().toLowerCase() === 'application/pdf';
+			if (!isPdf && !READABLE_TYPE.test(contentType)) {
 				report?.({ url: shownUrl, contentType, rejected: true, fetchesUsed: used });
 				return `${shownUrl} is ${contentType || 'of an unknown type'}, which is not readable as text. Only pages, documents and data files can be read this way.`;
 			}
 
-			const { text, truncatedBytes } = await readCapped(res, MAX_BYTES);
-			const isHtml = /html/i.test(contentType);
-			const body = isHtml ? htmlToText(text) : text;
+			let body: string;
+			let truncatedBytes: boolean;
+			if (isPdf) {
+				const bytes = await readCappedBytes(res, MAX_BYTES);
+				truncatedBytes = bytes.length >= MAX_BYTES;
+				const { extractPdf } = await import('$lib/server/attachments');
+				try {
+					body = await extractPdf(bytes);
+				} catch (err) {
+					report?.({ url: shownUrl, contentType, rejected: true, fetchesUsed: used });
+					return `${shownUrl} is a PDF with no readable text layer (${err instanceof Error ? err.message : String(err)}). It may be a scan.`;
+				}
+			} else {
+				const read = await readCapped(res, MAX_BYTES);
+				truncatedBytes = read.truncatedBytes;
+				body = /html/i.test(contentType) ? htmlToText(read.text) : read.text;
+			}
 			const clipped = body.length > cfg.maxChars;
 			const shown = clipped ? body.slice(0, cfg.maxChars) : body;
 

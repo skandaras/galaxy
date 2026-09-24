@@ -656,8 +656,12 @@ export const DEFAULT_BOARDS: BoardSettings = { maxBoardsPerUser: 20, agentWrites
 export interface IvorySettings {
 	/** The Shelf: `owner/name` of the GitHub repository Ivory Tower reads and writes. */
 	shelfRepo: string;
-	/** Where `paper_search` looks. OpenAlex needs no key. */
-	paperProvider: 'openalex' | 'none';
+	/**
+	 * Where `paper_search` looks first; the other one is the fallback when it
+	 * fails. OpenAlex needs no key; Semantic Scholar works without one but is
+	 * often rate-limited on the shared pool.
+	 */
+	paperProvider: 'openalex' | 'semanticscholar' | 'none';
 	/**
 	 * Sent to OpenAlex as `mailto`, which moves requests into its faster
 	 * "polite pool". Empty by default: an address is the owner's to give out.
@@ -666,7 +670,14 @@ export interface IvorySettings {
 	paperMaxResults: number;
 	/** Paper searches one agent turn may run. */
 	paperSearchesPerTurn: number;
+	/** CORE's API key, encrypted. CORE hands over repository full texts. */
+	coreApiKeyEnc?: string;
+	/** Semantic Scholar's API key, encrypted. */
+	semanticScholarApiKeyEnc?: string;
 }
+
+/** The key fields, carried through normalisation for the admin route to encrypt, keep or clear. */
+const IVORY_SECRET_KEYS = ['coreApiKey', 'coreApiKeyEnc', 'semanticScholarApiKey', 'semanticScholarApiKeyEnc'];
 
 export const DEFAULT_IVORY: IvorySettings = {
 	shelfRepo: 'skandaras/ivorytower',
@@ -695,9 +706,17 @@ export function normaliseIvorySettings(raw: Record<string, unknown>): IvorySetti
 	const mailto = typeof raw.openAlexMailto === 'string' ? raw.openAlexMailto.trim() : '';
 	const int = (v: unknown, fallback: number, lo: number, hi: number) =>
 		Number.isFinite(Number(v)) && v !== '' && v !== null ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : fallback;
+	// Passed through untouched, the way normaliseWebSearchSettings spreads its
+	// raw value: dropping them here would lose a saved key on every read and
+	// the plaintext on the way to being encrypted.
+	const secrets = Object.fromEntries(
+		IVORY_SECRET_KEYS.filter((k) => typeof raw[k] === 'string' || raw[k] === null).map((k) => [k, raw[k]])
+	);
 	return {
+		...secrets,
 		shelfRepo: repo ?? DEFAULT_IVORY.shelfRepo,
-		paperProvider: raw.paperProvider === 'none' ? 'none' : 'openalex',
+		paperProvider:
+			raw.paperProvider === 'none' || raw.paperProvider === 'semanticscholar' ? raw.paperProvider : 'openalex',
 		openAlexMailto: /^[^\s@]+@[^\s@]+$/.test(mailto) ? mailto : '',
 		paperMaxResults: int(raw.paperMaxResults, DEFAULT_IVORY.paperMaxResults, 1, 25),
 		paperSearchesPerTurn: int(raw.paperSearchesPerTurn, DEFAULT_IVORY.paperSearchesPerTurn, 1, 40)

@@ -104,7 +104,11 @@ function fill(key: string, value: Record<string, unknown>): Record<string, unkno
 // string means "keep the existing secret"; null clears it.
 const SECRET_FIELDS: Record<string, { plain: string; enc: string }[]> = {
 	websearch: [{ plain: 'apiKey', enc: 'apiKeyEnc' }],
-	github: [{ plain: 'token', enc: 'tokenEnc' }]
+	github: [{ plain: 'token', enc: 'tokenEnc' }],
+	ivory: [
+		{ plain: 'coreApiKey', enc: 'coreApiKeyEnc' },
+		{ plain: 'semanticScholarApiKey', enc: 'semanticScholarApiKeyEnc' }
+	]
 };
 
 export const GET: RequestHandler = ({ locals }) => {

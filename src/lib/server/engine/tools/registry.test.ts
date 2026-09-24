@@ -38,6 +38,7 @@ const EXPECTED = [
 	'paper_search',
 	'shelf_read',
 	'shelf_write',
+	'read_paper',
 	'propose_tasks',
 	// boards
 	'board_read',

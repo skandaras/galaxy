@@ -10,7 +10,13 @@ import { boardTools } from './boards';
 import { cortexTools } from './cortex';
 import { createPdfToolDef } from './documents';
 import { fetchUrlToolDef } from './fetch-url';
-import { paperSearchToolDef, proposeTasksToolDef, shelfReadToolDef, shelfWriteToolDef } from './research';
+import {
+	paperSearchToolDef,
+	proposeTasksToolDef,
+	readPaperToolDef,
+	shelfReadToolDef,
+	shelfWriteToolDef
+} from './research';
 import type { ToolDef } from '$lib/server/providers/types';
 import { imageTools } from './images';
 import { knowledgeTools } from './knowledge';
@@ -113,6 +119,12 @@ export function builtinDescriptors(): ToolDescriptor[] {
 		'Ivory Tower only; shelf_read reaches a single project folder'
 	);
 	add(declared([shelfWriteToolDef]), 'research', ['ivory-read'], 'writes only to one project’s notes/');
+	add(
+		declared([readPaperToolDef]),
+		'research',
+		['ivory-read'],
+		'Europe PMC, arXiv, CORE, Semantic Scholar, then open copies; CORE and Semantic Scholar need keys (Admin → Settings → Shelf)'
+	);
 	// The planner's only output. It records a proposal; creating issues is left
 	// to the approval, which is why no planner tool can write to the board.
 	add(declared([proposeTasksToolDef]), 'research', ['ivory-plan'], 'records a proposal; creates nothing');

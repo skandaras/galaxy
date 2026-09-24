@@ -18,7 +18,11 @@
 		paperProvider: 'openalex',
 		openAlexMailto: '',
 		paperMaxResults: 8,
-		paperSearchesPerTurn: 12
+		paperSearchesPerTurn: 12,
+		coreApiKey: '',
+		semanticScholarApiKey: '',
+		hasCoreApiKey: false,
+		hasSemanticScholarApiKey: false
 	});
 	let shelfBusy = $state(false);
 	let shelfMsg = $state<string | null>(null);
@@ -132,7 +136,8 @@
 		compaction = { ...data.compaction };
 		budget = { ...data.budget };
 		github = { token: '', hasToken: Boolean(data.github?.hasToken) };
-		ivory = { ...data.ivory };
+		// Keys are write-only: the form starts blank and the flags say whether one is saved.
+		ivory = { ...data.ivory, coreApiKey: '', semanticScholarApiKey: '' };
 		research = { baseUrl: '', ...data.research };
 		coding = { ...data.coding };
 		retention = { ...data.retention };
@@ -471,6 +476,7 @@
 				paper search
 				<select bind:value={ivory.paperProvider}>
 					<option value="openalex">OpenAlex (no key)</option>
+					<option value="semanticscholar">Semantic Scholar</option>
 					<option value="none">disabled</option>
 				</select>
 			</label>
@@ -486,6 +492,30 @@
 			<label>
 				searches per turn
 				<input type="number" min="1" max="40" bind:value={ivory.paperSearchesPerTurn} />
+			</label>
+			<label>
+				CORE API key
+				<input
+					type="password"
+					bind:value={ivory.coreApiKey}
+					placeholder={ivory.hasCoreApiKey ? '(saved — leave blank to keep)' : 'optional'}
+				/>
+				<small>
+					Full texts from university repositories. Free from
+					<a href="https://core.ac.uk/services/api" target="_blank" rel="noopener">core.ac.uk</a>.
+				</small>
+			</label>
+			<label>
+				Semantic Scholar API key
+				<input
+					type="password"
+					bind:value={ivory.semanticScholarApiKey}
+					placeholder={ivory.hasSemanticScholarApiKey ? '(saved — leave blank to keep)' : 'optional'}
+				/>
+				<small>
+					Open-access PDFs and a second search engine. Free from
+					<a href="https://www.semanticscholar.org/product/api" target="_blank" rel="noopener">semanticscholar.org</a>.
+				</small>
 			</label>
 		</div>
 		<p class="hint">

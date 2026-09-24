@@ -2723,7 +2723,7 @@ export const READABLE_TYPE =
 export const MAX_PAGE_BYTES = 2_000_000;
 
 /** Read a response body up to a byte ceiling, then stop pulling. */
-async function readCappedBytes(res: Response, maxBytes: number): Promise<Buffer> {
+export async function readCappedBytes(res: Response, maxBytes: number): Promise<Buffer> {
 	const reader = res.body?.getReader();
 	if (!reader) return Buffer.from(await res.arrayBuffer());
 	const chunks: Uint8Array[] = [];
@@ -2880,6 +2880,11 @@ export async function safeFetch(
 export interface PageFetchDeps {
 	/** Injected in tests so no suite depends on the network. */
 	fetchImpl?: typeof fetch;
+	/**
+	 * Characters of text kept. Research wants a page's gist and keeps
+	 * PAGE_TEXT_CHARS; Ivory's reader wants a whole paper.
+	 */
+	clipChars?: number;
 }
 
 /** The prose alone, for callers that do not care where the page points. */
@@ -2930,7 +2935,10 @@ export async function fetchPageContent(
 	// attachments and a lot of primary material is only published this way.
 	if (bare === 'application/pdf') {
 		const { extractPdf } = await import('$lib/server/attachments');
-		return { text: clipPage(await extractPdf(await readCappedBytes(res, MAX_PAGE_BYTES))), links: [] };
+		return {
+			text: clipPage(await extractPdf(await readCappedBytes(res, MAX_PAGE_BYTES)), deps.clipChars),
+			links: []
+		};
 	}
 	if (bare && !READABLE_TYPE.test(bare)) {
 		throw new PageFetchError('unreadable-type', `Not readable as text: ${bare}`);
@@ -2948,7 +2956,7 @@ export async function fetchPageContent(
 	// comparison operators.
 	const html = bare ? /html|xml/.test(bare) : /^\s*(<!doctype html|<html|<)/i.test(body);
 	return {
-		text: clipPage(html ? htmlToReadableText(body) : body.trim()),
+		text: clipPage(html ? htmlToReadableText(body) : body.trim(), deps.clipChars),
 		// `res.url` rather than the requested one: a redirect moves what a
 		// relative href resolves against, and resolving against the old address
 		// is how a followed link 404s.
@@ -3326,11 +3334,11 @@ export function extractLinks(html: string, baseUrl: string, cap = MAX_PAGE_LINKS
 }
 
 /** Clip to the budget, preferring a paragraph boundary near the end of it. */
-export function clipPage(text: string): string {
-	if (text.length <= PAGE_TEXT_CHARS) return text;
-	const head = text.slice(0, PAGE_TEXT_CHARS);
+export function clipPage(text: string, max = PAGE_TEXT_CHARS): string {
+	if (text.length <= max) return text;
+	const head = text.slice(0, max);
 	const cut = head.lastIndexOf('\n\n');
 	// Never give back more than 40% of the budget chasing a boundary.
-	return (cut > PAGE_TEXT_CHARS * 0.6 ? head.slice(0, cut) : head).trimEnd();
+	return (cut > max * 0.6 ? head.slice(0, cut) : head).trimEnd();
 }
 

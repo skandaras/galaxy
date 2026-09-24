@@ -24,12 +24,15 @@ import {
 	newRunReading,
 	paperSearchTool,
 	proposeTasksTool,
+	readPaperTool,
 	recordingFetch,
 	shelfReadTool,
 	shelfWriteTool,
 	type PaperSearchConfig,
-	type PaperSearchDeps
+	type PaperSearchDeps,
+	type ReadPaperDeps
 } from '$lib/server/engine/tools/research';
+import { decryptSecret } from '$lib/server/crypto';
 import {
 	agentLabel,
 	commentOnIssue,
@@ -85,6 +88,7 @@ export interface IvoryDeps {
 	choice?: ModelChoice;
 	backup?: ModelChoice | null;
 	paperSearch?: PaperSearchDeps['search'];
+	readPaper?: ReadPaperDeps['read'];
 	fetchImpl?: typeof fetch;
 }
 
@@ -232,7 +236,9 @@ function paperConfig(): PaperSearchConfig {
 		mailto: cfg.openAlexMailto,
 		maxResults: cfg.paperMaxResults,
 		perTurn: cfg.paperSearchesPerTurn,
-		timeoutMs: 20_000
+		timeoutMs: 20_000,
+		coreKey: cfg.coreApiKeyEnc ? decryptSecret(cfg.coreApiKeyEnc) : '',
+		s2Key: cfg.semanticScholarApiKeyEnc ? decryptSecret(cfg.semanticScholarApiKeyEnc) : ''
 	};
 }
 
@@ -314,6 +320,10 @@ export function startIvoryTurn(
 		// Read-only for both agents; only the reader's writer below can write.
 		shelfReadTool(client, { slug: scope.slug, writable: [] })
 	];
+	if (task === 'ivory-read') {
+		// The reader only: the planner plans from abstracts and has no note to write.
+		tools.push(readPaperTool(paper, { read: deps.readPaper, fetchImpl: deps.fetchImpl, reading }));
+	}
 	if (task === 'ivory-read' && scope.issue !== null && scope.issueUrl) {
 		tools.push(
 			shelfWriteTool(
