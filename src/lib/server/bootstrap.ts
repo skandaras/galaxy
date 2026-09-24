@@ -8,6 +8,7 @@ import {
 	type WebSearchSettings
 } from '$lib/server/settings';
 import { taskConfigs, CORE_TASKS, skills } from '$lib/server/db/schema';
+import { WRITE_SOURCE_NOTE_SKILL } from '$lib/server/ivory/notes';
 import { eq } from 'drizzle-orm';
 import { saveSkill } from '$lib/server/skills';
 import { deleteEmptyChats } from '$lib/server/chats';
@@ -134,6 +135,57 @@ There is **no** write path, no live selection context, no design-system variable
 - **Empty result for a node** — the node id is wrong, or the token's scope doesn't cover that file (e.g. a library file needs \`library_content:read\`).
 `;
 
+const WRITE_SOURCE_NOTE_BODY = `## When to use
+
+Writing a note about one source for an Ivory Tower project: one note per paper, book or page, in the project's \`notes/\` folder.
+
+## The file
+
+Name it \`notes/N-<number>-<first author>-<year>.md\`, e.g. \`notes/N-003-hamilton-1964.md\`. Numbers are unique within the project; read \`notes/\` first and take the next one.
+
+\`\`\`markdown
+---
+id: N-003
+project: <filled in for you>
+title: "Full title of the source"
+authors: [W. D. Hamilton]
+year: 1964
+doi_or_url: "https://doi.org/10.1016/0022-5193(64)90038-4"
+access: full-text            # or abstract-only, when you did not read the full text
+read_by: <filled in for you>
+task: <filled in for you>
+---
+
+# Short title
+
+## Summary
+Three to five sentences in your own words: what the source argues or shows, and how.
+
+## Claims extracted
+
+### N-003.1
+- Claim: One sentence stating what the source claims.
+- Quote: "a short passage copied word for word"
+- Location: section 2, page 7 (or figure 3, or "abstract")
+- Confidence the source supports it: direct
+
+## Relevance to the project
+One or two sentences linking the source to the brief's question.
+
+## Follow-ups
+Optional: cited works worth reading, open questions.
+\`\`\`
+
+## The rules
+
+- **No quote, no claim.** Every claim carries a short quote copied exactly from what you read in this run, and its location. If you cannot quote it, leave the claim out. The quote is checked against what you actually read before the note is written.
+- **Keep quotes short**: a phrase or a sentence, at least three words, enough to find the passage.
+- **access says what you read.** \`full-text\` only if you read the full text. From an abstract alone it is \`abstract-only\`, and the claims can only come from the abstract.
+- **direct or indirect.** \`direct\` when the source says it outright; \`indirect\` when it follows from what the source says but is not stated.
+- **Claims the project needs, not every claim.** Extract what bears on the brief's question, including anything that cuts against the project's idea.
+- **Your words in the summary, the source's words in the quote.** Do not paraphrase inside a quote, and do not add what the source does not say.
+`;
+
 /**
  * Idempotent boot seeding for bundled skills. These are written once (if
  * absent) and from then on owned by the user — editing or deleting them in
@@ -155,6 +207,13 @@ export function seedSkills(): void {
 			'Typst markup for the create_pdf tool: document structure, tables, maths, and what this instance cannot do.',
 		triggers: 'pdf, create_pdf, typst, document, report, letter, typeset',
 		body: TYPST_SKILL_BODY
+	});
+	seedSkill(WRITE_SOURCE_NOTE_SKILL, {
+		category: 'ivory-tower',
+		description:
+			'The note format for Ivory Tower source notes: frontmatter, claims with verbatim quotes and locations, and what access means.',
+		triggers: 'ivory tower, source note, reading notes, shelf, ivory-read',
+		body: WRITE_SOURCE_NOTE_BODY
 	});
 }
 

@@ -653,6 +653,61 @@ export interface BoardSettings {
 
 export const DEFAULT_BOARDS: BoardSettings = { maxBoardsPerUser: 20, agentWrites: true };
 
+export interface IvorySettings {
+	/** The Shelf: `owner/name` of the GitHub repository Ivory Tower reads and writes. */
+	shelfRepo: string;
+	/** Where `paper_search` looks. OpenAlex needs no key. */
+	paperProvider: 'openalex' | 'none';
+	/**
+	 * Sent to OpenAlex as `mailto`, which moves requests into its faster
+	 * "polite pool". Empty by default: an address is the owner's to give out.
+	 */
+	openAlexMailto: string;
+	paperMaxResults: number;
+	/** Paper searches one agent turn may run. */
+	paperSearchesPerTurn: number;
+}
+
+export const DEFAULT_IVORY: IvorySettings = {
+	shelfRepo: 'skandaras/ivorytower',
+	paperProvider: 'openalex',
+	openAlexMailto: '',
+	paperMaxResults: 8,
+	paperSearchesPerTurn: 12
+};
+
+/** `owner/name` from either that or a github.com URL, or null for anything else. */
+export function parseRepoSlug(raw: string): string | null {
+	const s = raw
+		.trim()
+		.replace(/^https?:\/\/github\.com\//i, '')
+		.replace(/\.git$/i, '')
+		.replace(/\/+$/, '');
+	return /^[\w.-]+\/[\w.-]+$/.test(s) ? s : null;
+}
+
+/**
+ * Anything that does not read as a repository falls back to the default rather
+ * than being stored, because every Shelf call builds its URL from this string.
+ */
+export function normaliseIvorySettings(raw: Record<string, unknown>): IvorySettings {
+	const repo = typeof raw.shelfRepo === 'string' ? parseRepoSlug(raw.shelfRepo) : null;
+	const mailto = typeof raw.openAlexMailto === 'string' ? raw.openAlexMailto.trim() : '';
+	const int = (v: unknown, fallback: number, lo: number, hi: number) =>
+		Number.isFinite(Number(v)) && v !== '' && v !== null ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : fallback;
+	return {
+		shelfRepo: repo ?? DEFAULT_IVORY.shelfRepo,
+		paperProvider: raw.paperProvider === 'none' ? 'none' : 'openalex',
+		openAlexMailto: /^[^\s@]+@[^\s@]+$/.test(mailto) ? mailto : '',
+		paperMaxResults: int(raw.paperMaxResults, DEFAULT_IVORY.paperMaxResults, 1, 25),
+		paperSearchesPerTurn: int(raw.paperSearchesPerTurn, DEFAULT_IVORY.paperSearchesPerTurn, 1, 40)
+	};
+}
+
+export function ivorySettings(): IvorySettings {
+	return normaliseIvorySettings(getSetting<Record<string, unknown>>('ivory', {}));
+}
+
 export interface CortexSettings {
 	/**
 	 * Whether agents may write to the lattice, or only read it.

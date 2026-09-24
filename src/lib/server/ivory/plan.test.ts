@@ -1,0 +1,185 @@
+import { beforeAll, describe, expect, it } from 'vitest';
+import { runMigrations } from '$lib/server/db';
+import { createChat, deleteChat, getMessages } from '$lib/server/chats';
+import { subscribeJob, type LiveJob } from '$lib/server/engine/jobs';
+import type { ModelChoice } from '$lib/server/providers/registry';
+import type { ChatRequest, StreamEvent } from '$lib/server/providers/types';
+import { fakeGithub, SAMPLE_BRIEF } from './github-fixture';
+import { approvePlan, getProposal, listProposals, rejectPlan, storeProposal, validateTasks, type Proposal } from './plan';
+import { startPlanRun } from './run';
+
+beforeAll(() => {
+	runMigrations();
+});
+
+const BRIEF = SAMPLE_BRIEF.replace('slug: bees-and-queues', 'slug: bees');
+
+const TASKS = [
+	{
+		title: 'Check whether load balancing already describes waggle dances',
+		body: 'Search operations research for honeybee allocation models.',
+		agent: 'ivory-read',
+		rationale: 'The kill criterion: the idea may already be known.'
+	},
+	{
+		title: 'Decide what counts as a load in a colony',
+		body: 'Write down the mapping before any claim is drafted.',
+		agent: 'none',
+		rationale: 'The mapping needs a person.'
+	}
+];
+
+function withPlan(userId = 'planner-user') {
+	const gh = fakeGithub();
+	gh.files.set('projects/bees/brief.md', BRIEF);
+	const parent = gh.addIssue({ title: 'Project', labels: ['project:bees', 'discipline:entomology'] });
+	const chat = createChat({ userId, title: 'Ivory plan', agentTask: 'ivory-plan' });
+	const proposal: Proposal = {
+		repo: gh.repo,
+		slug: 'bees',
+		tasks: validateTasks(TASKS).tasks,
+		proposedBy: 'ivory-plan + mock/big',
+		at: Date.now()
+	};
+	storeProposal(chat.id, proposal);
+	return { gh, chatId: chat.id, parent, userId };
+}
+
+describe('validateTasks', () => {
+	it('accepts a plan and names every problem with a bad one', () => {
+		expect(validateTasks(TASKS).problems).toEqual([]);
+		expect(validateTasks([{ title: '', body: 'x', agent: 'ivory-plan', rationale: '' }]).problems).toEqual([
+			'Task 1: a title of 1 to 120 characters is needed.',
+			'Task 1: a rationale of 1 to 600 characters is needed.',
+			'Task 1: agent must be one of ivory-read, ivory-synthesise, ivory-redteam, none.'
+		]);
+		expect(validateTasks([]).problems).toEqual(['At least one task is needed.']);
+	});
+});
+
+describe('approving a plan', () => {
+	it('creates correctly labelled issues under the project, once', async () => {
+		const { gh, chatId, parent, userId } = withPlan();
+		const result = await approvePlan(gh.client, { chatId, userId, tasks: TASKS });
+
+		const made = gh.issues.filter((i) => i.number !== parent.number);
+		expect(made.map((i) => [i.title, i.labels])).toEqual([
+			[TASKS[0].title, ['project:bees', 'agent:ivory-read']],
+			[TASKS[1].title, ['project:bees']]
+		]);
+		expect(made[0].body).toContain('**Why:** The kill criterion');
+		expect(made[0].body).toContain('Proposed by ivory-plan + mock/big');
+		expect(gh.subIssues).toEqual(made.map((i) => ({ parent: parent.number, child: i.id })));
+		expect(gh.labels.has('agent:ivory-read')).toBe(true);
+		expect(result.created.map((c) => c.number)).toEqual(made.map((i) => i.number));
+		expect(getMessages(chatId).at(-1)?.content).toMatch(/^Plan approved\. 2 tasks added/);
+
+		// A second click finds nothing to approve.
+		await expect(approvePlan(gh.client, { chatId, userId, tasks: TASKS })).rejects.toThrow(/already been approved/);
+		expect(gh.issues).toHaveLength(3);
+	});
+
+	it("files the owner's edits, not the planner's original", async () => {
+		const { gh, chatId, userId } = withPlan();
+		await approvePlan(gh.client, { chatId, userId, tasks: [{ ...TASKS[0], title: 'Edited title' }] });
+		expect(gh.issues.map((i) => i.title)).toEqual(['Project', 'Edited title']);
+	});
+
+	it('refuses an edited plan that breaks the rules, and keeps the proposal', async () => {
+		const { gh, chatId, userId } = withPlan();
+		await expect(
+			approvePlan(gh.client, { chatId, userId, tasks: [{ ...TASKS[0], agent: 'ivory-plan' }] })
+		).rejects.toThrow(/agent must be one of/);
+		expect(getProposal(chatId)).not.toBeNull();
+		expect(gh.issues).toHaveLength(1);
+	});
+
+	it("is not reachable from someone else's account", async () => {
+		const { gh, chatId } = withPlan('owner-a');
+		await expect(approvePlan(gh.client, { chatId, userId: 'owner-b', tasks: TASKS })).rejects.toThrow(/No such plan/);
+		expect(() => rejectPlan({ chatId, userId: 'owner-b' })).toThrow(/No such plan/);
+		expect(listProposals('owner-b', gh.repo, 'bees')).toEqual([]);
+		expect(listProposals('owner-a', gh.repo, 'bees').map((p) => p.chatId)).toEqual([chatId]);
+	});
+});
+
+describe('rejecting a plan', () => {
+	it('creates nothing and clears the proposal', async () => {
+		const { gh, chatId, userId } = withPlan();
+		rejectPlan({ chatId, userId });
+		expect(gh.requests.filter((r) => r.method !== 'GET')).toEqual([]);
+		expect(getProposal(chatId)).toBeNull();
+		await expect(approvePlan(gh.client, { chatId, userId, tasks: TASKS })).rejects.toThrow(/already been approved or rejected/);
+		expect(gh.issues).toHaveLength(1);
+	});
+});
+
+describe('deleting the planner chat', () => {
+	it('takes the waiting proposal with it', () => {
+		const { gh, chatId, userId } = withPlan('deleter');
+		deleteChat(chatId, userId);
+		expect(getProposal(chatId)).toBeNull();
+		expect(listProposals(userId, gh.repo, 'bees')).toEqual([]);
+	});
+});
+
+describe('the planner run', () => {
+	it('holds no tool that writes to the board, and ends in a proposal rather than issues', async () => {
+		const gh = fakeGithub();
+		gh.files.set('projects/bees/brief.md', BRIEF);
+		gh.addIssue({ title: 'Project', labels: ['project:bees', 'discipline:entomology'] });
+		const offered: string[][] = [];
+		let step = 0;
+		const choice = {
+			model: {
+				id: 'm2',
+				modelKey: 'mock/big',
+				displayName: 'Mock Big',
+				supportsTools: true,
+				supportsVision: false,
+				supportsReasoning: false,
+				reasoningMode: 'auto',
+				promptCostPerMTok: null,
+				completionCostPerMTok: null
+			},
+			provider: {},
+			adapter: {
+				async *stream(req: ChatRequest): AsyncGenerator<StreamEvent> {
+					offered.push((req.tools ?? []).map((t) => t.name));
+					if (step++ === 0) {
+						yield { type: 'tool_calls', calls: [{ id: 'p1', name: 'propose_tasks', arguments: JSON.stringify({ tasks: TASKS }) }] };
+						yield { type: 'done', finishReason: 'tool_calls' };
+						return;
+					}
+					yield { type: 'text', delta: 'The plan tests prior art first. It is waiting on the project page.' };
+					yield { type: 'done', finishReason: 'stop' };
+				},
+				complete: async () => ({ text: '', usage: null }),
+				listModels: async () => []
+			}
+		} as unknown as ModelChoice;
+
+		const { chatId, job } = await startPlanRun(
+			{ slug: 'bees', userId: 'planner-run' },
+			{ client: gh.client, choice, backup: null, paperSearch: async () => [] }
+		);
+		await new Promise<void>((resolve) => {
+			const off = subscribeJob(job as LiveJob, (c) => {
+				if (c.type === 'done' || c.type === 'error') {
+					queueMicrotask(() => off());
+					resolve();
+				}
+			});
+		});
+
+		for (const names of offered) {
+			expect([...names].sort()).toEqual(['fetch_url', 'paper_search', 'propose_tasks', 'shelf_read']);
+		}
+		expect(gh.requests.filter((r) => r.method !== 'GET')).toEqual([]);
+		expect(gh.comments).toEqual([]);
+		expect(getProposal(chatId)).toMatchObject({ slug: 'bees', proposedBy: 'ivory-plan + mock/big' });
+		expect(getProposal(chatId)?.tasks).toHaveLength(2);
+		// The run was briefed with what is on the board already.
+		expect(getMessages(chatId)[0].content).toContain('--- BEGIN OPEN TASKS ---');
+	});
+});

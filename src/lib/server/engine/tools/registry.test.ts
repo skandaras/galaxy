@@ -34,6 +34,11 @@ const EXPECTED = [
 	// web
 	'web_search',
 	'fetch_url',
+	// research, Ivory Tower only
+	'paper_search',
+	'shelf_read',
+	'shelf_write',
+	'propose_tasks',
 	// boards
 	'board_read',
 	'card_read',

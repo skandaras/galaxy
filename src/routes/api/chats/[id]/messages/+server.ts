@@ -7,6 +7,7 @@ import { EngineError, startChatTurn } from '$lib/server/engine/engine';
 import { startResearchTurn } from '$lib/server/engine/research';
 import { BudgetExceededError } from '$lib/server/engine/budget';
 import { findRunningJobForChat, jobAgeMinutes } from '$lib/server/engine/jobs';
+import { isIvoryChat, IvoryRunError, startIvoryTurn } from '$lib/server/ivory/run';
 
 export const POST: RequestHandler = async ({ locals, params, request }) => {
 	const user = requireUser(locals);
@@ -33,6 +34,12 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	const attachments = Array.isArray(body.attachments) ? body.attachments : undefined;
 
 	try {
+		// An Ivory run keeps its own scope and toolset on every turn, the owner's
+		// follow-ups included; chat's tools would let it out of its project folder.
+		if (isIvoryChat(chat.agentTask)) {
+			const job = startIvoryTurn({ chatId: chat.id, userId: user.id, content });
+			return json({ jobId: job.id }, { status: 202 });
+		}
 		const job = body.deepResearch
 			? startResearchTurn({
 					chatId: chat.id,
@@ -54,6 +61,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	} catch (err) {
 		if (err instanceof BudgetExceededError) error(402, err.message);
 		if (err instanceof EngineError) error(400, err.message);
+		if (err instanceof IvoryRunError) error(err.status, err.message);
 		throw err;
 	}
 };
