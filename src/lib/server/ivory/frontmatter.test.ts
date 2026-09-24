@@ -15,6 +15,11 @@ describe('parseFrontmatter', () => {
 		expect(claim.meta.status).toBe('draft');
 		expect(claim.meta.reviewed_by).toEqual([]);
 
+		const example = parseFrontmatter(seed['templates/examples/C-example-kin-selection.md']);
+		expect(example.meta.status).toBe('survived');
+		expect(example.meta.reviewed_by).toEqual(['example']);
+		expect(example.meta.source_domain).toBe('evolutionary biology (social behaviour in animals)');
+
 		const note = parseFrontmatter(seed['templates/note.md']);
 		expect(note.meta.access).toBe('full-text');
 		expect(note.meta.year).toBeNull();

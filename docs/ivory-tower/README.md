@@ -10,7 +10,7 @@ where the code disagreed with the brief.
   the page view models (`view.ts`).
 - `src/routes/ivory/` and `src/routes/api/ivory/`: the pages and their API, all behind
   `requireCoder` except setup, which is admin-only.
-- `seed/`: the Shelf's README, templates and a sample project. Admin → Settings → Shelf →
+- `seed/`: the Shelf's README, templates, the kin-selection example claim and a sample project. Admin → Settings → Shelf →
   "Set up Shelf" writes whichever of these are missing. This folder is the only copy; the build
   reads it.
 
@@ -66,9 +66,6 @@ in the target field. The model is left empty for the owner to pick; a large one 
   Shelf's Issues.
 - **The Shelf was not reachable from the session that built this**, so the seed files live in
   `seed/` and Galaxy writes them to the Shelf itself.
-- **`templates/examples/C-example-kin-selection.md`** was not supplied with the brief. It is not
-  used until the red-team phase; add it to `seed/templates/examples/` when it arrives and run
-  "Set up Shelf" again.
 
 ## What Galaxy stores
 

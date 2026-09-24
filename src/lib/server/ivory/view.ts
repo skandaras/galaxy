@@ -1,5 +1,5 @@
 import { GithubError, type ShelfClient } from './github';
-import { listOpenIssues, projectIssueNumber, projectTasks, type ShelfIssue } from './board';
+import { listOpenIssues, projectIssueNumber, projectLabel, projectTasks, type ShelfIssue } from './board';
 import { getProject, groupByDiscipline, listProjects, repoInfo, type ShelfProject } from './shelf';
 
 /** What the Shelf pages are served. Assembled here so the routes stay thin. */
@@ -49,11 +49,13 @@ export function issueView(i: ShelfIssue): IssueView {
 export async function shelfProjectView(client: ShelfClient, slug: string) {
 	const detail = await getProject(client, slug);
 	if (!detail) return null;
-	const issues = await listOpenIssues(client);
+	const [issues, info] = await Promise.all([listOpenIssues(client), repoInfo(client)]);
 	const parent = projectIssueNumber(detail.project, issues, client.repo);
 	return {
 		...detail,
 		repo: client.repo,
+		// Open and closed: the way back to a project's tasks when the view shows none.
+		issuesUrl: `${info.html_url}/issues?q=${encodeURIComponent(`is:issue label:"${projectLabel(slug)}"`)}`,
 		projectIssue: parent,
 		issues: projectTasks(detail.project, issues, client.repo).map(issueView)
 	};

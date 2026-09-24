@@ -11,6 +11,9 @@ templates/
   brief.md              project brief
   claim-mapping.md      mapping claim: a mechanism from one field tested in another
   note.md               one note per source
+  examples/
+    C-example-kin-selection.md   a worked mapping claim that reached `survived`, the
+                                 calibration reference for the red-team agent
 projects/
   <slug>/
     brief.md
