@@ -14,14 +14,30 @@ where the code disagreed with the brief.
   "Set up Shelf" writes whichever of these are missing. This folder is the only copy; the build
   reads it.
 
+## Creating a project
+
+`/ivory/new` is a form with one field per section of the brief template. It writes
+`projects/<slug>/brief.md`, creates the project issue (labelled `project:<slug>` and each
+`discipline:<name>`, and linked from the brief's `board:` field) and sets the first status line.
+**Create and plan** also starts the planner. A folder name already on the Shelf is refused.
+
+## Status
+
+Each project has a one- or two-line status, kept in a marked section at the top of its project
+issue on GitHub (`ivory/status.ts`); GitHub's edit history is the record of earlier lines. The
+agents set it with `set_status`, which only records the line; the runner writes it to the issue
+when the run ends, and only if the run finished. Galaxy writes its own line when a project is
+created and when a plan is approved or rejected. A project with no project issue gets one on its
+first status write. The rest of the issue body is never touched.
+
 ## The reader (`ivory-read`)
 
 An open issue labelled `project:<slug>` and `agent:ivory-read` gets a Run button on its project
 page. The run opens an ordinary chat (so it streams, survives a closed tab and takes follow-ups)
 with the issue and the brief as its first message, fenced as material rather than instructions.
 
-- **Tools:** `paper_search`, `read_paper`, `fetch_url`, `shelf_read`, `shelf_write`, and nothing
-  else. Admin → Tools can switch any of them off.
+- **Tools:** `paper_search`, `read_paper`, `fetch_url`, `shelf_read`, `shelf_write`, `set_status`,
+  and nothing else. Admin → Tools can switch any of them off.
 - **Search** (`paper_search`) is OpenAlex, falling back to Semantic Scholar when it fails (or the
   other way round, in Admin → Settings → Shelf). Records with no authors are completed from
   Crossref.
@@ -50,8 +66,8 @@ with the issue and the brief as its first message, fenced as material rather tha
 ## The planner (`ivory-plan`)
 
 "Plan tasks" on a project page starts `ivory-plan` with the brief, the project's open tasks and
-the files already in its folder. Its tools are `paper_search`, `fetch_url`, `shelf_read` and
-`propose_tasks`; none of them writes to the board or the Shelf. `propose_tasks` records the plan
+the files already in its folder. Its tools are `paper_search`, `fetch_url`, `shelf_read`,
+`propose_tasks` and `set_status`; none of them writes to the board or the Shelf. `propose_tasks` records the plan
 (title, body, agent, rationale per task) against the planner's chat, and nothing else.
 
 The plan then waits on the project page, where the owner can edit titles, bodies and agents or

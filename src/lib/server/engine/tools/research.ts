@@ -7,6 +7,7 @@ import { setFrontmatterFields } from '$lib/server/ivory/frontmatter';
 import { comparable, parseNote, validateNote } from '$lib/server/ivory/notes';
 import { PLANNABLE_AGENTS, storeProposal, validateTasks } from '$lib/server/ivory/plan';
 import { readFullText, type Attempt, type FullTextResult, type PaperRef } from '$lib/server/ivory/fulltext';
+import { cleanStatus, STATUS_MAX_CHARS } from '$lib/server/ivory/status';
 import {
 	arxivIdFrom,
 	crossrefAuthors,
@@ -623,6 +624,43 @@ export function proposeTasksTool(ctx: {
 			});
 			report?.({ tasks: tasks.length });
 			return `Recorded a plan of ${tasks.length} task(s). It is waiting for the owner's approval on the project page; nothing is on the board yet.`;
+		}
+	};
+}
+
+// ---------------------------------------------------------------------------
+// set_status
+
+export const setStatusToolDef: ToolDef = {
+	name: 'set_status',
+	description:
+		"Set this project's status line: one or two sentences for the owner saying where the project " +
+		'stands now and what should happen next, for example "Four of six prior-art sources read; none ' +
+		'shows the mapping is already known. Next: read Albright 2019 (#7)." Call it once, as the last ' +
+		'thing you do; calling it again replaces the earlier line. It is shown in Galaxy and on the ' +
+		"project's issue when the run ends.",
+	parameters: {
+		type: 'object',
+		properties: { summary: { type: 'string', description: `One or two sentences, under ${STATUS_MAX_CHARS} characters` } },
+		required: ['summary']
+	}
+};
+
+/**
+ * Records the run's status line, and nothing else: the runner writes it to the
+ * project issue when the run ends, so no agent holds a tool that edits the
+ * board.
+ */
+export function setStatusTool(onStatus: (text: string) => void): LoopTool {
+	return {
+		def: setStatusToolDef,
+		describe: (args) => String(args.summary ?? '').slice(0, 80),
+		execute: async (args, report) => {
+			const cleaned = cleanStatus(args.summary);
+			if ('problem' in cleaned) throw new Error(`Status not set: ${cleaned.problem}`);
+			onStatus(cleaned.text);
+			report?.({ chars: cleaned.text.length });
+			return 'Status recorded. It will be shown on the project when this run ends.';
 		}
 	};
 }

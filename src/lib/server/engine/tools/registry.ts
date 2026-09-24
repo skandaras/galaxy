@@ -14,6 +14,7 @@ import {
 	paperSearchToolDef,
 	proposeTasksToolDef,
 	readPaperToolDef,
+	setStatusToolDef,
 	shelfReadToolDef,
 	shelfWriteToolDef
 } from './research';
@@ -128,6 +129,12 @@ export function builtinDescriptors(): ToolDescriptor[] {
 	// The planner's only output. It records a proposal; creating issues is left
 	// to the approval, which is why no planner tool can write to the board.
 	add(declared([proposeTasksToolDef]), 'research', ['ivory-plan'], 'records a proposal; creates nothing');
+	add(
+		declared([setStatusToolDef]),
+		'research',
+		['ivory-read', 'ivory-plan'],
+		'records a status line; Galaxy writes it to the project issue when the run ends'
+	);
 	// The user id only scopes execution. The write tools are also gated at run
 	// time on the agentWrites setting, so the catalogue lists them either way
 	// rather than hiding controls that reappear when the setting flips.

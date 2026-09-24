@@ -10,6 +10,7 @@ import type { ModelChoice } from '$lib/server/providers/registry';
 import type { ChatRequest, StreamEvent } from '$lib/server/providers/types';
 import { fakeGithub, GOOD_NOTE, SAMPLE_BRIEF } from './github-fixture';
 import { validateNote, WRITE_SOURCE_NOTE_SKILL } from './notes';
+import { readStatus } from './status';
 import { IvoryRunError, runScope, startReadRun } from './run';
 
 /**
@@ -22,7 +23,7 @@ beforeAll(() => {
 	seedSkills();
 });
 
-type Step = { tool: string; args: Record<string, unknown> } | { text: string };
+type Step = { tool: string; args: Record<string, unknown> } | { text: string } | { fail: string };
 
 /** A model that plays `steps` in order, one per round-trip, and records what it was offered. */
 function scripted(steps: Step[]) {
@@ -44,7 +45,10 @@ function scripted(steps: Step[]) {
 		adapter: {
 			async *stream(req: ChatRequest): AsyncGenerator<StreamEvent> {
 				offered.push((req.tools ?? []).map((t) => t.name));
-				const step = steps[i++] ?? { text: 'Done.' };
+				const step = steps[i] ?? { text: 'Done.' };
+				// A failing step fails every retry of it, so the run ends in error.
+				if ('fail' in step) throw new Error(step.fail);
+				i++;
 				if ('tool' in step) {
 					yield { type: 'tool_calls', calls: [{ id: `c${i}`, name: step.tool, arguments: JSON.stringify(step.args) }] };
 					yield { type: 'done', finishReason: 'tool_calls' };
@@ -96,6 +100,7 @@ describe('startReadRun', () => {
 			{ tool: 'paper_search', args: { query: 'Seeley Wisdom of the Hive' } },
 			{ tool: 'shelf_write', args: { path: 'projects/wasps/notes/N-001.md', content: GOOD_NOTE } },
 			{ tool: 'shelf_write', args: { path: 'notes/N-002-seeley-1995.md', content: GOOD_NOTE } },
+			{ tool: 'set_status', args: { summary: 'Seeley 1995 noted from its abstract. Next: find a full text.' } },
 			{ text: 'Wrote notes/N-002-seeley-1995.md.' }
 		]);
 		const { chatId, job } = await startReadRun(
@@ -121,11 +126,17 @@ describe('startReadRun', () => {
 			}
 		);
 		await finished(job);
-		await until(() => gh.comments.length > 0);
+		await until(() => gh.comments.length > 0 && gh.issues[0].body.includes('galaxy:status'));
+
+		// The runner put the reader's status line on the project issue, signed.
+		expect(readStatus(gh.issues[0].body)).toMatchObject({
+			text: 'Seeley 1995 noted from its abstract. Next: find a full text.',
+			by: 'ivory-read + mock/one'
+		});
 
 		// Exactly the brief's allowlist, on every round-trip.
 		for (const names of offered) {
-			expect([...names].sort()).toEqual(['fetch_url', 'paper_search', 'read_paper', 'shelf_read', 'shelf_write']);
+			expect([...names].sort()).toEqual(['fetch_url', 'paper_search', 'read_paper', 'set_status', 'shelf_read', 'shelf_write']);
 		}
 
 		// The one valid note landed, stamped, and it passes the template's checks.
@@ -154,6 +165,23 @@ describe('startReadRun', () => {
 		// The run is an ordinary chat that remembers its scope.
 		expect(runScope(chatId)).toMatchObject({ task: 'ivory-read', slug: 'bees', issue: task.number });
 		expect(getMessages(chatId).at(-1)?.content).toBe('Wrote notes/N-002-seeley-1995.md.');
+	});
+
+	it('writes no status line from a run that failed', async () => {
+		const { gh, task } = board();
+		const { choice } = scripted([
+			{ tool: 'set_status', args: { summary: 'All done here.' } },
+			{ fail: 'provider exploded' }
+		]);
+		const { job } = await startReadRun(
+			{ slug: 'bees', issueNumber: task.number, userId: 'reader-user' },
+			{ client: gh.client, choice, backup: null, paperSearch: async () => [] }
+		);
+		await finished(job);
+		await until(() => gh.comments.length > 0);
+		expect(job.status).toBe('error');
+		expect(gh.comments[0].body).toContain('did not finish this task');
+		expect(gh.issues.some((i) => i.body.includes('galaxy:status'))).toBe(false);
 	});
 
 	it('comments that nothing was written when the reader writes nothing', async () => {

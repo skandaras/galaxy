@@ -276,7 +276,7 @@ const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
 
 // 1. Every page renders, and renders quietly. A page that throws during
 //    hydration still answers 200, so the bash smoke calls it healthy.
-for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/ivory', '/settings', '/observatory', '/alignment']) {
+for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/ivory', '/ivory/new', '/settings', '/observatory', '/alignment']) {
 	problems = [];
 	// Not networkidle: the app holds SSE streams open (notifications, the
 	// Observatory feed), so the network is never idle and every goto would sit
@@ -296,6 +296,16 @@ check(
 	'/ivory explains that no GitHub token is configured',
 	await page
 		.getByText('no GitHub token is configured')
+		.waitFor({ timeout: 5000 })
+		.then(() => true, () => false),
+	true
+);
+// The new-project form says the same instead of offering a form that cannot save.
+await page.goto(`${B}/ivory/new`);
+check(
+	'/ivory/new explains that no GitHub token is configured',
+	await page
+		.getByText('No GitHub token is configured, so there is nowhere to create a project')
 		.waitFor({ timeout: 5000 })
 		.then(() => true, () => false),
 	true

@@ -1,11 +1,19 @@
 import { GithubError, type ShelfClient } from './github';
 import { listOpenIssues, projectIssueNumber, projectLabel, projectTasks, type ShelfIssue } from './board';
 import { getProject, groupByDiscipline, listProjects, repoInfo, type ShelfProject } from './shelf';
+import { readStatus, type ProjectStatus } from './status';
 
 /** What the Shelf pages are served. Assembled here so the routes stay thin. */
 
 export interface IndexProject extends ShelfProject {
 	openTasks: number;
+	status: ProjectStatus | null;
+}
+
+/** The status line from the project's issue, read from the issue list already fetched. */
+function statusOf(project: ShelfProject, issues: ShelfIssue[], repo: string): ProjectStatus | null {
+	const n = projectIssueNumber(project, issues, repo);
+	return readStatus(issues.find((i) => i.number === n)?.body);
 }
 
 export interface ShelfIndex {
@@ -23,7 +31,8 @@ export async function shelfIndex(client: ShelfClient): Promise<ShelfIndex> {
 	]);
 	const withCounts = projects.map((p) => ({
 		...p,
-		openTasks: projectTasks(p, issues, client.repo).length
+		openTasks: projectTasks(p, issues, client.repo).length,
+		status: statusOf(p, issues, client.repo)
 	}));
 	return {
 		repo: client.repo,
@@ -57,6 +66,8 @@ export async function shelfProjectView(client: ShelfClient, slug: string) {
 		// Open and closed: the way back to a project's tasks when the view shows none.
 		issuesUrl: `${info.html_url}/issues?q=${encodeURIComponent(`is:issue label:"${projectLabel(slug)}"`)}`,
 		projectIssue: parent,
+		projectIssueUrl: issues.find((i) => i.number === parent)?.url ?? null,
+		status: statusOf(detail.project, issues, client.repo),
 		issues: projectTasks(detail.project, issues, client.repo).map(issueView)
 	};
 }

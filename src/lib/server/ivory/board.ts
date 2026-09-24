@@ -1,14 +1,16 @@
 import type { ShelfClient } from './github';
-import type { ShelfProject } from './shelf';
+import { setFrontmatterFields } from './frontmatter';
+import { blobUrl, repoInfo, writeShelfFile, type ShelfProject } from './shelf';
 
 /**
  * The Shelf's board: the repository's Issues, organised by label.
  *
  * `project:<slug>` marks both the project's parent issue and every task under
  * it, `discipline:<name>` sits on the project issue, and `agent:<task>` names
- * the Galaxy agent a task is for. Galaxy reads and creates issues and comments
- * on them. It never closes one, and it keeps no copy of their state beyond the
- * client's one-minute cache.
+ * the Galaxy agent a task is for. Galaxy reads and creates issues, comments on
+ * them, and keeps the status section of a project issue up to date (status.ts).
+ * It never closes one, and it keeps no copy of their state beyond the client's
+ * one-minute cache.
  */
 
 export interface ShelfIssue {
@@ -227,4 +229,65 @@ export async function commentOnIssue(client: ShelfClient, number: number, body: 
  */
 export async function addSubIssue(client: ShelfClient, parentNumber: number, childId: number): Promise<void> {
 	await client.send('POST', `/issues/${parentNumber}/sub_issues`, { sub_issue_id: childId });
+}
+
+/**
+ * Replace an issue's body. Galaxy edits only project issues, and only the
+ * status section of them; see status.ts.
+ */
+export async function updateIssueBody(client: ShelfClient, number: number, body: string): Promise<ShelfIssue> {
+	const updated = toIssue(await client.send<RawIssue>('PATCH', `/issues/${number}`, { body }));
+	// A project issue created moments ago may be showing from the overlay while
+	// GitHub's list catches up; its copy there must carry the new body too.
+	for (const r of recent.get(client) ?? []) if (r.issue.number === number) r.issue = updated;
+	return updated;
+}
+
+/**
+ * The project's own issue, created if it has none.
+ *
+ * Nothing used to create one: the conventions called for it, but a project
+ * written by hand on GitHub had only its brief, so approved tasks had no
+ * parent to nest under and there was nowhere on the board for a project's
+ * status. The new issue carries the project and discipline labels, and its URL
+ * is written into the brief's `board:` field so it is found by link from then
+ * on.
+ */
+export async function ensureProjectIssue(client: ShelfClient, project: ShelfProject): Promise<number> {
+	const found = projectIssueNumber(project, await listOpenIssues(client, { fresh: true }), client.repo);
+	if (found !== null) return found;
+
+	const labels = [projectLabel(project.slug), ...project.disciplines.map(disciplineLabel)];
+	await ensureLabels(
+		client,
+		labelSet([project]).filter((l) => labels.includes(l.name))
+	);
+	const briefPath = `projects/${project.slug}/brief.md`;
+	const info = await repoInfo(client);
+	let issue: ShelfIssue;
+	let unlabelled: IssueLabelError | null = null;
+	try {
+		issue = await createIssue(client, {
+			title: project.title,
+			body: [project.question, '', `Brief: ${blobUrl(info, briefPath)}`].join('\n').trim(),
+			labels
+		});
+	} catch (err) {
+		if (!(err instanceof IssueLabelError)) throw err;
+		// It exists without its labels. Linked from the brief all the same, so
+		// the next attempt finds this one instead of filing another.
+		issue = err.issue;
+		unlabelled = err;
+	}
+	const brief = await client.file(briefPath, { fresh: true });
+	if (brief !== null) {
+		await writeShelfFile(
+			client,
+			briefPath,
+			setFrontmatterFields(brief, { board: issue.url }),
+			`Link ${project.slug} to its project issue #${issue.number}`
+		);
+	}
+	if (unlabelled) throw unlabelled;
+	return issue.number;
 }

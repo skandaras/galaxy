@@ -7,6 +7,7 @@ import type { ChatRequest, StreamEvent } from '$lib/server/providers/types';
 import { fakeGithub, SAMPLE_BRIEF } from './github-fixture';
 import { approvePlan, getProposal, listProposals, rejectPlan, storeProposal, validateTasks, type Proposal } from './plan';
 import { startPlanRun } from './run';
+import { readStatus } from './status';
 import { RECENT_ISSUE_MS } from './board';
 import { shelfIndex, shelfProjectView } from './view';
 
@@ -75,6 +76,10 @@ describe('approving a plan', () => {
 		expect(gh.labels.has('agent:ivory-read')).toBe(true);
 		expect(result.created.map((c) => c.number)).toEqual(made.map((i) => i.number));
 		expect(getMessages(chatId).at(-1)?.content).toMatch(/^Plan approved\. 2 tasks added/);
+		expect(readStatus(parent.body)).toMatchObject({
+			text: `Plan approved: 2 tasks filed. Next: #${made[0].number} ${TASKS[0].title}`,
+			by: 'Galaxy'
+		});
 
 		// A second click finds nothing to approve.
 		await expect(approvePlan(gh.client, { chatId, userId, tasks: TASKS })).rejects.toThrow(/already been approved/);
@@ -147,27 +152,42 @@ describe('a token that cannot label new issues', () => {
 	it('gets the labels on afterwards, so the tasks are still found', async () => {
 		const { gh, result } = await approveWith('drop');
 		expect(result.failed).toBeUndefined();
-		expect(gh.issues.map((i) => i.labels)).toEqual([
-			['project:bees', 'agent:ivory-read'],
-			['project:bees']
-		]);
+		const tasks = gh.issues.filter((i) => TASKS.some((t) => t.title === i.title));
+		expect(tasks.map((i) => i.labels)).toEqual([['project:bees', 'agent:ivory-read'], ['project:bees']]);
 		expect((await shelfProjectView(gh.client, 'bees'))?.issues).toHaveLength(2);
 	});
 
 	it('stops and says why when GitHub will not label at all, and files nothing twice', async () => {
 		const { gh, chatId, result } = await approveWith('refuse');
-		expect(gh.issues).toHaveLength(1);
-		expect(result.created.map((c) => c.number)).toEqual([gh.issues[0].number]);
+		// The project issue Galaxy tried to make first, and the one task, both unlabelled.
+		const tasks = gh.issues.filter((i) => TASKS.some((t) => t.title === i.title));
+		expect(tasks).toHaveLength(1);
+		expect(result.created.map((c) => c.number)).toEqual([tasks[0].number]);
 		expect(result.failed).toMatch(/would not give it project:bees, agent:ivory-read.*Contents and Issues read\/write/);
 		// The one not yet filed is still waiting for approval.
 		expect(getProposal(chatId)?.tasks.map((t) => t.title)).toEqual([TASKS[1].title]);
 	});
 });
 
+describe('approving a plan for a project with no project issue', () => {
+	it('gives it one, and nests the tasks under it', async () => {
+		const gh = fakeGithub();
+		gh.files.set('projects/bees/brief.md', BRIEF);
+		const chat = createChat({ userId: 'nest', title: 'Ivory plan', agentTask: 'ivory-plan' });
+		storeProposal(chat.id, { repo: gh.repo, slug: 'bees', tasks: validateTasks(TASKS).tasks, proposedBy: 'p', at: 1 });
+		await approvePlan(gh.client, { chatId: chat.id, userId: 'nest', tasks: TASKS });
+		const project = gh.issues.find((i) => i.labels.includes('discipline:entomology'))!;
+		const tasks = gh.issues.filter((i) => i !== project);
+		expect(tasks).toHaveLength(2);
+		expect(gh.subIssues).toEqual(tasks.map((t) => ({ parent: project.number, child: t.id })));
+		expect(readStatus(project.body)?.text).toMatch(/^Plan approved: 2 tasks filed/);
+	});
+});
+
 describe('rejecting a plan', () => {
 	it('creates nothing and clears the proposal', async () => {
 		const { gh, chatId, userId } = withPlan();
-		rejectPlan({ chatId, userId });
+		expect(rejectPlan({ chatId, userId })).toEqual({ slug: 'bees' });
 		expect(gh.requests.filter((r) => r.method !== 'GET')).toEqual([]);
 		expect(getProposal(chatId)).toBeNull();
 		await expect(approvePlan(gh.client, { chatId, userId, tasks: TASKS })).rejects.toThrow(/already been approved or rejected/);
@@ -234,7 +254,7 @@ describe('the planner run', () => {
 		});
 
 		for (const names of offered) {
-			expect([...names].sort()).toEqual(['fetch_url', 'paper_search', 'propose_tasks', 'shelf_read']);
+			expect([...names].sort()).toEqual(['fetch_url', 'paper_search', 'propose_tasks', 'set_status', 'shelf_read']);
 		}
 		expect(gh.requests.filter((r) => r.method !== 'GET')).toEqual([]);
 		expect(gh.comments).toEqual([]);
