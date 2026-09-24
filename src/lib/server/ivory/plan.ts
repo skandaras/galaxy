@@ -8,6 +8,7 @@ import {
 	agentLabel,
 	createIssue,
 	ensureLabels,
+	IssueLabelError,
 	IVORY_AGENTS,
 	labelSet,
 	listOpenIssues,
@@ -158,11 +159,21 @@ export async function approvePlan(
 		const parent = projectIssueNumber(project, await listOpenIssues(client, { fresh: true }), client.repo);
 
 		for (const task of tasks) {
-			const issue = await createIssue(client, {
-				title: task.title,
-				body: issueBody(task, proposal.proposedBy),
-				labels: [projectLabel(project.slug), ...(task.agent === 'none' ? [] : [agentLabel(task.agent)])]
-			});
+			let issue;
+			try {
+				issue = await createIssue(client, {
+					title: task.title,
+					body: issueBody(task, proposal.proposedBy),
+					labels: [projectLabel(project.slug), ...(task.agent === 'none' ? [] : [agentLabel(task.agent)])]
+				});
+			} catch (err) {
+				// It exists, unlabelled: report it as created so it is not filed twice,
+				// and stop, since every task after it would go the same way.
+				if (err instanceof IssueLabelError) {
+					created.push({ number: err.issue.number, url: err.issue.url, title: err.issue.title });
+				}
+				throw err;
+			}
 			created.push({ number: issue.number, url: issue.url, title: issue.title });
 			if (parent !== null) {
 				// Best effort: sub-issues are a newer API, and a task outside the

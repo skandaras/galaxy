@@ -166,12 +166,53 @@ export async function ensureLabels(client: ShelfClient, wanted: LabelSpec[]): Pr
 	return created;
 }
 
+/** An issue GitHub created but would not label, which leaves it invisible to the Shelf. */
+export class IssueLabelError extends Error {
+	constructor(
+		readonly issue: ShelfIssue,
+		readonly missing: string[]
+	) {
+		super(
+			`GitHub created #${issue.number} but would not give it ${missing.join(', ')}, so Galaxy cannot see it. ` +
+				'The GitHub token needs Contents and Issues read/write on the Shelf repository; label the issue by hand on GitHub once that is fixed.'
+		);
+		this.name = 'IssueLabelError';
+	}
+}
+
+/**
+ * Create an issue and make sure it carries its labels.
+ *
+ * GitHub silently drops the labels on a new issue when the caller lacks push
+ * access, and still answers 201. That is how an approved plan once became a
+ * set of unlabelled issues: on GitHub, but invisible to every Shelf view, which
+ * finds tasks by their `project:` label alone. The answer is read back, and a
+ * missing label is added with the labels endpoint; if GitHub refuses that too,
+ * this throws rather than report a task nobody can find.
+ */
 export async function createIssue(
 	client: ShelfClient,
 	issue: { title: string; body: string; labels: string[] }
 ): Promise<ShelfIssue> {
 	const created = toIssue(await client.send<RawIssue>('POST', '/issues', issue));
+	const lacking = (have: string[]) => {
+		const lower = new Set(have.map((l) => l.toLowerCase()));
+		return issue.labels.filter((l) => !lower.has(l.toLowerCase()));
+	};
+	let missing = lacking(created.labels);
+	if (missing.length) {
+		try {
+			const now = await client.send<(string | { name?: string })[]>('POST', `/issues/${created.number}/labels`, {
+				labels: missing
+			});
+			created.labels = now.map((l) => (typeof l === 'string' ? l : (l.name ?? ''))).filter(Boolean);
+			missing = lacking(created.labels);
+		} catch {
+			// Refused outright: reported below exactly as a silent drop would be.
+		}
+	}
 	rememberCreated(client, created);
+	if (missing.length) throw new IssueLabelError(created, missing);
 	return created;
 }
 
