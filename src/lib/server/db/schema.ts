@@ -294,7 +294,8 @@ export const CORE_TASKS = [
 	'alignment',
 	'alignment-synthesis',
 	'cortex-groom',
-	'ivory-read'
+	'ivory-read',
+	'ivory-plan'
 ] as const;
 export type CoreTask = (typeof CORE_TASKS)[number];
 

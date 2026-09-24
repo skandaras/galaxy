@@ -5,6 +5,7 @@ import { resolveShelfPath, type ShelfScope } from '$lib/server/ivory/scope';
 import { listPaths, writeShelfFile } from '$lib/server/ivory/shelf';
 import { setFrontmatterFields } from '$lib/server/ivory/frontmatter';
 import { comparable, parseNote, validateNote } from '$lib/server/ivory/notes';
+import { PLANNABLE_AGENTS, storeProposal, validateTasks } from '$lib/server/ivory/plan';
 
 /**
  * The `research` toolset: scholarly search and the Shelf.
@@ -366,6 +367,67 @@ export function shelfWriteTool(client: ShelfClient, scope: ShelfScope, ctx: Shel
 			report?.({ path, commitUrl });
 			ctx.onWrite?.({ path, commitUrl });
 			return `Written to ${path} (${created ? 'new file' : 'replaced the previous version'}). Commit: ${commitUrl}`;
+		}
+	};
+}
+
+// ---------------------------------------------------------------------------
+// propose_tasks
+
+export const proposeTasksToolDef: ToolDef = {
+	name: 'propose_tasks',
+	description:
+		"Record your plan for this project: the tasks you propose for its board. Nothing is created. The owner reviews the plan in Galaxy, edits or removes tasks, and approves or rejects it. Call it once with the whole plan; calling it again replaces the earlier proposal. Each task has a title, a body saying exactly what to do and what counts as done, the agent it is for (ivory-read, ivory-synthesise, ivory-redteam, or none for a person), and a one-sentence rationale. Put the kill-criteria checks first.",
+	parameters: {
+		type: 'object',
+		properties: {
+			tasks: {
+				type: 'array',
+				items: {
+					type: 'object',
+					properties: {
+						title: { type: 'string' },
+						body: { type: 'string' },
+						agent: { type: 'string', enum: [...PLANNABLE_AGENTS] },
+						rationale: { type: 'string' }
+					},
+					required: ['title', 'body', 'agent', 'rationale']
+				}
+			}
+		},
+		required: ['tasks']
+	}
+};
+
+/**
+ * Records a proposal against the planner's chat, and nothing else: no GitHub
+ * call is reachable from here. The board is written only by the approval.
+ */
+export function proposeTasksTool(ctx: {
+	chatId: string;
+	repo: string;
+	slug: string;
+	task: string;
+	modelKey: () => string;
+}): LoopTool {
+	return {
+		def: proposeTasksToolDef,
+		describe: (args) => `${Array.isArray(args.tasks) ? args.tasks.length : 0} task(s)`,
+		execute: async (args, report) => {
+			const { tasks, problems } = validateTasks(args.tasks);
+			if (problems.length) {
+				report?.({ rejected: problems.length });
+				throw new Error(`Not recorded. Fix these and call propose_tasks again:\n- ${problems.join('\n- ')}`);
+			}
+			storeProposal(ctx.chatId, {
+				repo: ctx.repo,
+				slug: ctx.slug,
+				tasks,
+				proposedBy: `${ctx.task} + ${ctx.modelKey()}`,
+				at: Date.now()
+			});
+			report?.({ tasks: tasks.length });
+			return `Recorded a plan of ${tasks.length} task(s). It is waiting for the owner's approval on the project page; nothing is on the board yet.`;
 		}
 	};
 }

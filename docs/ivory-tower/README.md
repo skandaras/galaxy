@@ -36,6 +36,23 @@ with the issue and the brief as its first message, fenced as material rather tha
   issue stays open.
 - **Model:** left empty for the owner to pick in Admin → Tasks. A small model is enough.
 
+## The planner (`ivory-plan`)
+
+"Plan tasks" on a project page starts `ivory-plan` with the brief, the project's open tasks and
+the files already in its folder. Its tools are `paper_search`, `fetch_url`, `shelf_read` and
+`propose_tasks`; none of them writes to the board or the Shelf. `propose_tasks` records the plan
+(title, body, agent, rationale per task) against the planner's chat, and nothing else.
+
+The plan then waits on the project page, where the owner can edit titles, bodies and agents or
+remove tasks. **Approve** is the only thing that creates issues. It re-checks the edited plan,
+creates the labels it needs, files each task with `project:<slug>` and its `agent:` label, and
+hangs it under the project issue as a sub-issue where GitHub allows. The proposal is removed
+before the first issue is made, so a second click creates nothing. **Reject** removes the
+proposal and touches nothing on GitHub.
+
+The prompt puts the kill-criteria checks first, starting with whether the idea is already known
+in the target field. The model is left empty for the owner to pick; a large one is intended.
+
 ## Where the brief and the code differ
 
 - **`fetch_page`** does not exist. The tool is `fetch_url`.
@@ -56,4 +73,5 @@ with the issue and the brief as its first message, fenced as material rather tha
 ## What Galaxy stores
 
 No tables were added. Project and task state stays on GitHub. Each run's scope (repository,
-project, issue) is a settings row keyed to its chat, like a coding session's state.
+project, issue) is a settings row keyed to its chat, like a coding session's state, and a plan
+waiting for a decision is another such row, deleted when it is approved or rejected.

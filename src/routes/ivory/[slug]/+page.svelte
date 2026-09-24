@@ -37,6 +37,18 @@
 		issues: Issue[];
 	}
 
+	interface PlannedTask {
+		title: string;
+		body: string;
+		agent: string;
+		rationale: string;
+	}
+	interface PendingPlan {
+		chatId: string;
+		proposal: { tasks: PlannedTask[]; proposedBy: string; at: number };
+	}
+	const PLAN_AGENTS = ['ivory-read', 'ivory-synthesise', 'ivory-redteam', 'none'];
+
 	const slug = $derived(page.params.slug);
 	let view = $state<ProjectView | null>(null);
 	let failure = $state<string | null>(null);
@@ -50,6 +62,51 @@
 			return;
 		}
 		view = body;
+		await loadPlans(s);
+	}
+
+	let plans = $state<PendingPlan[]>([]);
+	let planBusy = $state<string | null>(null);
+	let planMsg = $state<string | null>(null);
+
+	async function loadPlans(s: string) {
+		const res = await fetch(`/api/ivory/projects/${encodeURIComponent(s)}/plans`);
+		plans = res.ok ? await res.json() : [];
+	}
+
+	async function startPlan() {
+		planBusy = 'start';
+		planMsg = null;
+		const res = await fetch(`/api/ivory/projects/${encodeURIComponent(slug ?? '')}/plan`, { method: 'POST' });
+		const body = await res.json().catch(() => ({}));
+		planBusy = null;
+		if (!res.ok) {
+			planMsg = body.message ?? `The planner did not start (${res.status})`;
+			return;
+		}
+		await goto(`/chat?chat=${body.chatId}`);
+	}
+
+	async function decide(plan: PendingPlan, decision: 'approve' | 'reject') {
+		if (decision === 'reject' && !confirm('Reject this plan? Nothing will be added to the board.')) return;
+		planBusy = plan.chatId;
+		planMsg = null;
+		const res = await fetch(`/api/ivory/plans/${plan.chatId}/${decision}`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: decision === 'approve' ? JSON.stringify({ tasks: plan.proposal.tasks }) : undefined
+		});
+		const body = await res.json().catch(() => ({}));
+		planBusy = null;
+		if (!res.ok) {
+			planMsg = body.message ?? `That did not work (${res.status})`;
+			return;
+		}
+		planMsg =
+			decision === 'reject'
+				? 'Plan rejected. Nothing was added to the board.'
+				: `${body.created.length} task(s) added to the board.${body.failed ? ` The rest failed (${body.failed}) and are still pending.` : ''}`;
+		if (slug) await load(slug);
 	}
 
 	$effect(() => {
@@ -83,7 +140,12 @@
 	<header>
 		<a class="back" href="/ivory">← Shelf</a>
 		{#if view}
-			<h2>{view.project.title}</h2>
+			<div class="title-row">
+				<h2>{view.project.title}</h2>
+				<button class="run" disabled={planBusy !== null} onclick={startPlan}>
+					{planBusy === 'start' ? 'Starting…' : 'Plan tasks'}
+				</button>
+			</div>
 			<p class="tags">
 				{#each view.project.disciplines as d (d)}<span class="tag">{d}</span>{/each}
 				{#if view.project.validationTier}<span class="tier">tier: {view.project.validationTier}</span>{/if}
@@ -96,6 +158,41 @@
 	{:else if !view}
 		<p class="notice">Reading the project…</p>
 	{:else}
+		{#if planMsg}<p class="notice" role="status">{planMsg}</p>{/if}
+		{#each plans as plan (plan.chatId)}
+			<section class="plan" aria-label="Plan waiting for approval">
+				<h3>Plan waiting for approval</h3>
+				<p class="plan-meta">
+					{plan.proposal.proposedBy} · {new Date(plan.proposal.at).toLocaleString()} ·
+					<a href="/chat?chat={plan.chatId}">how it was made</a>
+				</p>
+				<ol>
+					{#each plan.proposal.tasks as task, i (i)}
+						<li class="planned">
+							<div class="planned-head">
+								<input bind:value={task.title} aria-label="Title of task {i + 1}" />
+								<select bind:value={task.agent} aria-label="Agent for task {i + 1}">
+									{#each PLAN_AGENTS as a (a)}<option value={a}>{a}</option>{/each}
+								</select>
+								<button class="link" onclick={() => plan.proposal.tasks.splice(i, 1)}>Remove</button>
+							</div>
+							<textarea bind:value={task.body} rows="4" aria-label="Body of task {i + 1}"></textarea>
+							<p class="why">Why: {task.rationale}</p>
+						</li>
+					{/each}
+				</ol>
+				<div class="plan-actions">
+					<button
+						class="run primary"
+						disabled={planBusy !== null || !plan.proposal.tasks.length}
+						onclick={() => decide(plan, 'approve')}
+					>
+						{planBusy === plan.chatId ? 'Working…' : `Approve and create ${plan.proposal.tasks.length} issue(s)`}
+					</button>
+					<button class="run" disabled={planBusy !== null} onclick={() => decide(plan, 'reject')}>Reject</button>
+				</div>
+			</section>
+		{/each}
 		<div class="columns">
 			<article class="brief">
 				<p class="source"><a href={view.briefUrl} target="_blank" rel="noopener">brief.md on GitHub</a></p>
@@ -277,6 +374,82 @@
 		font-size: var(--text-sm);
 		cursor: pointer;
 		min-height: 2rem;
+	}
+	.run.primary {
+		border-color: var(--accent);
+	}
+	.title-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.8rem;
+		flex-wrap: wrap;
+	}
+	.plan {
+		border: 1px solid var(--accent);
+		border-radius: var(--radius);
+		padding: 0.8rem;
+		margin-bottom: 1rem;
+	}
+	.plan-meta,
+	.why {
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
+		margin: 0 0 0.5rem;
+	}
+	.plan ol {
+		margin: 0 0 0.6rem;
+		padding-left: 1.4rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.8rem;
+	}
+	.planned {
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 0.35rem;
+	}
+	.planned-head {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		align-items: center;
+	}
+	.planned input {
+		flex: 1 1 16rem;
+	}
+	.planned input,
+	.planned select,
+	.planned textarea {
+		background: var(--bg-pane);
+		border: 1px solid var(--control-border);
+		border-radius: 5px;
+		color: var(--fg);
+		font-family: inherit;
+		font-size: var(--text-sm);
+		padding: 0.3rem 0.45rem;
+		min-width: 0;
+		box-sizing: border-box;
+	}
+	.planned textarea {
+		width: 100%;
+		resize: vertical;
+	}
+	.link {
+		background: none;
+		border: none;
+		color: var(--fg-dim);
+		font-family: inherit;
+		font-size: var(--text-sm);
+		text-decoration: underline;
+		cursor: pointer;
+		min-height: 2rem;
+	}
+	.plan-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
 	}
 	.run:disabled {
 		opacity: 0.6;
