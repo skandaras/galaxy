@@ -19,6 +19,9 @@
 		{ href: '/boards', label: 'Boards' },
 		{ href: '/library', label: 'Library' },
 		{ href: '/cortex', label: 'Cortex' },
+		// Behind the coding grant for the same reason as Code: the Shelf is read
+		// and written with the shared GitHub token.
+		...(data.user?.canCode ? [{ href: '/ivory', label: 'Ivory Tower' }] : []),
 		// A private feature, off by default and turned on per person in Settings.
 		...(data.alignmentEnabled ? [{ href: '/alignment', label: 'Alignment' }] : []),
 		{ href: '/settings', label: 'Settings' },

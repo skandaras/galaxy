@@ -150,3 +150,13 @@ describe('migrateResearchSettings', () => {
 		expect(migrateResearchSettings({ ...first!, maxQueries: 4 })).toBeNull();
 	});
 });
+
+describe('normaliseIvorySettings', () => {
+	it('accepts owner/name or a GitHub URL, and falls back to the default for anything else', async () => {
+		const { normaliseIvorySettings, DEFAULT_IVORY } = await import('./settings');
+		expect(normaliseIvorySettings({ shelfRepo: ' me/shelf ' }).shelfRepo).toBe('me/shelf');
+		expect(normaliseIvorySettings({ shelfRepo: 'https://github.com/me/shelf.git' }).shelfRepo).toBe('me/shelf');
+		expect(normaliseIvorySettings({ shelfRepo: 'me/shelf/../x' })).toEqual(DEFAULT_IVORY);
+		expect(normaliseIvorySettings({})).toEqual(DEFAULT_IVORY);
+	});
+});

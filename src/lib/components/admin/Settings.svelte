@@ -13,6 +13,9 @@
 	let compaction = $state({ ratio: 0.7, keepRecent: 8 });
 	let budget = $state({ enabled: false, limitUsd: 25, period: 'month' });
 	let github = $state({ token: '', hasToken: false });
+	let ivory = $state({ shelfRepo: '' });
+	let shelfBusy = $state(false);
+	let shelfMsg = $state<string | null>(null);
 	let hasSearchKey = $state(false);
 	let research = $state({
 		provider: 'inherit',
@@ -103,6 +106,19 @@
 		deployBusy = null;
 	}
 
+	async function setupShelf() {
+		shelfBusy = true;
+		shelfMsg = null;
+		// Set up the repository the form names, not whatever was saved before.
+		await save('ivory', ivory);
+		const res = await fetch('/api/ivory/setup', { method: 'POST' });
+		const data = await res.json().catch(() => ({}));
+		shelfMsg = res.ok
+			? `${data.repo}: ${data.written.length} file(s) written, ${data.labelsCreated.length} label(s) created.`
+			: (data.message ?? `Setup failed (${res.status})`);
+		shelfBusy = false;
+	}
+
 	async function load() {
 		const data = await (await fetch('/api/admin/settings')).json();
 		websearch = { apiKey: '', baseUrl: '', fallbackProvider: 'none', ...data.websearch };
@@ -110,6 +126,7 @@
 		compaction = { ...data.compaction };
 		budget = { ...data.budget };
 		github = { token: '', hasToken: Boolean(data.github?.hasToken) };
+		ivory = { ...data.ivory };
 		research = { baseUrl: '', ...data.research };
 		coding = { ...data.coding };
 		retention = { ...data.retention };
@@ -169,7 +186,8 @@
 			| 'coding'
 			| 'retention'
 			| 'fetch'
-			| 'style',
+			| 'style'
+			| 'ivory',
 		value: unknown
 	) {
 		await fetch('/api/admin/settings', {
@@ -434,6 +452,31 @@
 		<button class="btn primary" onclick={() => save('github', { token: github.token })}>
 			{saved === 'github' ? 'Saved ✓' : 'Save'}
 		</button>
+	</article>
+
+	<article class="card">
+		<h3>Shelf</h3>
+		<div class="grid">
+			<label>
+				repository
+				<input bind:value={ivory.shelfRepo} placeholder="owner/name" />
+			</label>
+		</div>
+		<p class="hint">
+			The GitHub repository Ivory Tower keeps its projects, notes and claims in, and whose Issues
+			are its board. It is read and written with the token above, so the token needs Contents and
+			Issues read/write on it. “Set up Shelf” writes any missing templates (and a sample project
+			while there are no projects) and creates the labels; it never overwrites a file.
+		</p>
+		<div class="row-buttons">
+			<button class="btn primary" onclick={() => save('ivory', ivory)}>
+				{saved === 'ivory' ? 'Saved ✓' : 'Save'}
+			</button>
+			<button class="btn" disabled={shelfBusy} onclick={setupShelf}>
+				{shelfBusy ? 'Setting up…' : 'Set up Shelf'}
+			</button>
+			{#if shelfMsg}<span class="deploy-msg">{shelfMsg}</span>{/if}
+		</div>
 	</article>
 
 	<article class="card">

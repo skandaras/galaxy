@@ -8,6 +8,7 @@ import {
 	DEFAULT_CODING,
 	DEFAULT_COMPACTION,
 	DEFAULT_FETCH,
+	DEFAULT_IVORY,
 	DEFAULT_CORTEX,
 	DEFAULT_CORTEX_GROOM,
 	DEFAULT_MEMORY,
@@ -18,6 +19,7 @@ import {
 	DEFAULT_UX_AUDIT,
 	DEFAULT_WEB_SEARCH,
 	getSetting,
+	normaliseIvorySettings,
 	normaliseResearchSettings,
 	normaliseStyleSettings,
 	normaliseWebSearchSettings,
@@ -41,7 +43,8 @@ const KNOWN_KEYS = [
 	'boards',
 	'cortex',
 	'cortexGroom',
-	'style'
+	'style',
+	'ivory'
 ] as const;
 const DEFAULTS: Record<string, unknown> = {
 	websearch: DEFAULT_WEB_SEARCH,
@@ -58,7 +61,8 @@ const DEFAULTS: Record<string, unknown> = {
 	boards: DEFAULT_BOARDS,
 	cortex: DEFAULT_CORTEX,
 	cortexGroom: DEFAULT_CORTEX_GROOM,
-	style: DEFAULT_STYLE
+	style: DEFAULT_STYLE,
+	ivory: DEFAULT_IVORY
 };
 
 /**
@@ -76,6 +80,7 @@ const DEFAULTS: Record<string, unknown> = {
  * the loop below is about to consume (on the way in).
  */
 const NORMALISERS: Record<string, (v: Record<string, unknown>) => Record<string, unknown>> = {
+	ivory: (v) => normaliseIvorySettings(v) as unknown as Record<string, unknown>,
 	research: (v) => normaliseResearchSettings(v) as unknown as Record<string, unknown>,
 	style: (v) => normaliseStyleSettings(v) as unknown as Record<string, unknown>,
 	websearch: (v) => normaliseWebSearchSettings(v) as unknown as Record<string, unknown>

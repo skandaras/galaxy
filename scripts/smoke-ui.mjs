@@ -276,7 +276,7 @@ const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
 
 // 1. Every page renders, and renders quietly. A page that throws during
 //    hydration still answers 200, so the bash smoke calls it healthy.
-for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settings', '/observatory', '/alignment']) {
+for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/ivory', '/settings', '/observatory', '/alignment']) {
 	problems = [];
 	// Not networkidle: the app holds SSE streams open (notifications, the
 	// Observatory feed), so the network is never idle and every goto would sit
@@ -288,6 +288,18 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 	const body = await page.locator('body').boundingBox();
 	check(`${path} draws something`, (body?.height ?? 0) > 100);
 }
+
+// 1a. The Shelf with no GitHub token says so, instead of hanging on "Reading".
+//     This instance has no token, which is the state a fresh install is in.
+await page.goto(`${B}/ivory`);
+check(
+	'/ivory explains that no GitHub token is configured',
+	await page
+		.getByText('no GitHub token is configured')
+		.waitFor({ timeout: 5000 })
+		.then(() => true, () => false),
+	true
+);
 
 // 1b. Every settings tab has a pane, and shows only its own.
 //
@@ -1277,7 +1289,7 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 	// the abort as a console error, which looks exactly like a broken page.
 	await phone.waitForTimeout(500);
 
-	for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settings']) {
+	for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/ivory', '/settings']) {
 		phoneProblems = [];
 		await phone.goto(B + path);
 		// The same wait as the desktop loop, which is the whole payoff of leaving
@@ -1691,6 +1703,7 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/settin
 		// unreachable on a phone.
 		check('More holds everything the bar could not', items, [
 			'✧ Cortex',
+			'▲ Ivory Tower',
 			'◉ Alignment',
 			'⚙ Settings',
 			'◎ Observatory'

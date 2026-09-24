@@ -653,6 +653,36 @@ export interface BoardSettings {
 
 export const DEFAULT_BOARDS: BoardSettings = { maxBoardsPerUser: 20, agentWrites: true };
 
+export interface IvorySettings {
+	/** The Shelf: `owner/name` of the GitHub repository Ivory Tower reads and writes. */
+	shelfRepo: string;
+}
+
+export const DEFAULT_IVORY: IvorySettings = { shelfRepo: 'skandaras/ivorytower' };
+
+/** `owner/name` from either that or a github.com URL, or null for anything else. */
+export function parseRepoSlug(raw: string): string | null {
+	const s = raw
+		.trim()
+		.replace(/^https?:\/\/github\.com\//i, '')
+		.replace(/\.git$/i, '')
+		.replace(/\/+$/, '');
+	return /^[\w.-]+\/[\w.-]+$/.test(s) ? s : null;
+}
+
+/**
+ * Anything that does not read as a repository falls back to the default rather
+ * than being stored, because every Shelf call builds its URL from this string.
+ */
+export function normaliseIvorySettings(raw: Record<string, unknown>): IvorySettings {
+	const repo = typeof raw.shelfRepo === 'string' ? parseRepoSlug(raw.shelfRepo) : null;
+	return { shelfRepo: repo ?? DEFAULT_IVORY.shelfRepo };
+}
+
+export function ivorySettings(): IvorySettings {
+	return normaliseIvorySettings(getSetting<Record<string, unknown>>('ivory', {}));
+}
+
 export interface CortexSettings {
 	/**
 	 * Whether agents may write to the lattice, or only read it.

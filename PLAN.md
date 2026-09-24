@@ -102,6 +102,8 @@ Internet ─► Proxy ──┤
 
 16. **Mobile** — responsive layout from day one + **PWA** (manifest + service worker) so it installs to a phone home screen immediately; **TWA APK** via `scripts/build-twa.sh` for de-Googled Android, where a WebAPK cannot be minted at all. Capacitor stays out — a native project to maintain buys nothing the TWA does not already give.
 
+17. **Ivory Tower** (`docs/ivory-tower/`) — theory-only research: literature synthesis, and mapping a mechanism from one field onto another. **The Shelf** is a separate GitHub repository (Admin → Settings → Shelf) holding project briefs, one note per source and claim files; `projects/` is flat and a project sits under every discipline its brief names. Its **board is that repository's Issues**, by label (`project:`, `discipline:`, `agent:`), and Galaxy stores no project or task state: pages read through a one-minute cache, and status lives on GitHub. Galaxy's own Boards are unrelated. The view at `/ivory` is behind the coding grant, because it uses the shared GitHub token. Admin's "Set up Shelf" writes the templates from `docs/ivory-tower/seed/` and creates the labels, and never overwrites.
+
 ---
 
 ## Deployment & dev → prod flow

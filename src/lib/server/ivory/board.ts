@@ -1,0 +1,158 @@
+import type { ShelfClient } from './github';
+import type { ShelfProject } from './shelf';
+
+/**
+ * The Shelf's board: the repository's Issues, organised by label.
+ *
+ * `project:<slug>` marks both the project's parent issue and every task under
+ * it, `discipline:<name>` sits on the project issue, and `agent:<task>` names
+ * the Galaxy agent a task is for. Galaxy reads and creates issues and comments
+ * on them. It never closes one, and it keeps no copy of their state beyond the
+ * client's one-minute cache.
+ */
+
+export interface ShelfIssue {
+	/** GitHub's database id, which the sub-issues API wants instead of the number. */
+	id: number;
+	number: number;
+	title: string;
+	body: string;
+	url: string;
+	state: 'open' | 'closed';
+	labels: string[];
+}
+
+interface RawIssue {
+	id: number;
+	number: number;
+	title: string;
+	body: string | null;
+	html_url: string;
+	state: 'open' | 'closed';
+	labels: (string | { name?: string })[];
+	pull_request?: unknown;
+}
+
+/**
+ * The agents a task may be labelled for. `ivory-synthesise` and
+ * `ivory-redteam` do not run yet; their labels exist so the planner can file
+ * work for them and a person can pick it up.
+ */
+export const IVORY_AGENTS = ['ivory-read', 'ivory-plan', 'ivory-synthesise', 'ivory-redteam'] as const;
+export type IvoryAgent = (typeof IVORY_AGENTS)[number];
+
+export const projectLabel = (slug: string) => `project:${slug}`;
+export const disciplineLabel = (d: string) => `discipline:${d}`;
+export const agentLabel = (a: string) => `agent:${a}`;
+
+function toIssue(r: RawIssue): ShelfIssue {
+	return {
+		id: r.id,
+		number: r.number,
+		title: r.title,
+		body: r.body ?? '',
+		url: r.html_url,
+		state: r.state,
+		labels: r.labels.map((l) => (typeof l === 'string' ? l : (l.name ?? ''))).filter(Boolean)
+	};
+}
+
+/** Every open issue, pull requests excluded (the issues endpoint returns both). */
+export async function listOpenIssues(client: ShelfClient, opts: { fresh?: boolean } = {}): Promise<ShelfIssue[]> {
+	const rows = await client.paged<RawIssue>('/issues?state=open', opts);
+	return rows.filter((r) => !r.pull_request).map(toIssue);
+}
+
+export async function getIssue(client: ShelfClient, number: number): Promise<ShelfIssue | null> {
+	try {
+		const r = await client.get<RawIssue>(`/issues/${number}`, { fresh: true });
+		return r.pull_request ? null : toIssue(r);
+	} catch {
+		return null;
+	}
+}
+
+/** The issue number a brief's `board:` URL points at, if it points into this repository. */
+export function boardIssueNumber(board: string, repo: string): number | null {
+	const m = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)\/?$/.exec(board.trim());
+	if (!m || m[1].toLowerCase() !== repo.toLowerCase()) return null;
+	return Number(m[2]);
+}
+
+/**
+ * Which of a project's issues is the project itself.
+ *
+ * The brief's `board:` link is authoritative. Without one, the project issue is
+ * the one carrying a `discipline:` label, since the conventions put those on
+ * the project issue and nowhere else.
+ */
+export function projectIssueNumber(project: ShelfProject, issues: ShelfIssue[], repo: string): number | null {
+	const linked = boardIssueNumber(project.board, repo);
+	if (linked !== null) return linked;
+	const mine = issues.filter((i) => i.labels.includes(projectLabel(project.slug)));
+	return mine.find((i) => i.labels.some((l) => l.startsWith('discipline:')))?.number ?? null;
+}
+
+/** A project's open tasks: its labelled issues, less the project issue itself. */
+export function projectTasks(project: ShelfProject, issues: ShelfIssue[], repo: string): ShelfIssue[] {
+	const parent = projectIssueNumber(project, issues, repo);
+	return issues.filter((i) => i.labels.includes(projectLabel(project.slug)) && i.number !== parent);
+}
+
+interface LabelSpec {
+	name: string;
+	color: string;
+	description: string;
+}
+
+export function labelSet(projects: ShelfProject[]): LabelSpec[] {
+	const out: LabelSpec[] = IVORY_AGENTS.map((a) => ({
+		name: agentLabel(a),
+		color: '5319e7',
+		description: `Task for the ${a} agent in Galaxy`
+	}));
+	for (const p of projects) {
+		out.push({ name: projectLabel(p.slug), color: '0e8a16', description: `Ivory Tower project ${p.slug}` });
+		for (const d of p.disciplines) {
+			out.push({ name: disciplineLabel(d), color: '1d76db', description: `Discipline: ${d}` });
+		}
+	}
+	return [...new Map(out.map((l) => [l.name.toLowerCase(), l])).values()];
+}
+
+/**
+ * Create whichever labels are missing. Safe to run any number of times: an
+ * existing label is left exactly as it is, colour and description included.
+ */
+export async function ensureLabels(client: ShelfClient, wanted: LabelSpec[]): Promise<string[]> {
+	const have = new Set(
+		(await client.paged<{ name: string }>('/labels', { fresh: true })).map((l) => l.name.toLowerCase())
+	);
+	const created: string[] = [];
+	for (const l of wanted) {
+		if (have.has(l.name.toLowerCase())) continue;
+		await client.send('POST', '/labels', l);
+		created.push(l.name);
+	}
+	return created;
+}
+
+export async function createIssue(
+	client: ShelfClient,
+	issue: { title: string; body: string; labels: string[] }
+): Promise<ShelfIssue> {
+	return toIssue(await client.send<RawIssue>('POST', '/issues', issue));
+}
+
+export async function commentOnIssue(client: ShelfClient, number: number, body: string): Promise<string> {
+	const r = await client.send<{ html_url: string }>('POST', `/issues/${number}/comments`, { body });
+	return r.html_url;
+}
+
+/**
+ * Hang a task under its project issue. GitHub's sub-issues API takes the
+ * child's id, not its number.
+ */
+export async function addSubIssue(client: ShelfClient, parentNumber: number, childId: number): Promise<void> {
+	await client.send('POST', `/issues/${parentNumber}/sub_issues`, { sub_issue_id: childId });
+}
