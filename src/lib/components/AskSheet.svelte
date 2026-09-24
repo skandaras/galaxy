@@ -59,7 +59,7 @@
 
 		{#if options.length}
 			<div class="options">
-				{#each options as option (option)}
+				{#each options as option, i (i)}
 					<button class="option" disabled={sending} onclick={() => send(option)}>{option}</button>
 				{/each}
 			</div>

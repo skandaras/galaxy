@@ -1024,7 +1024,7 @@
 							<!-- What Accept would actually do. Without this the only way to
 							     find out was to press it and read the history afterwards,
 							     which is not a review. -->
-							{#each p.preview as line (line)}
+							{#each p.preview as line, i (i)}
 								<span class="does">{line}</span>
 							{/each}
 							{#if p.rationale}<span class="hint">{p.rationale}</span>{/if}

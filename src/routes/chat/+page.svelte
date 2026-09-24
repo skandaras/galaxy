@@ -1288,7 +1288,10 @@
 				{/if}
 			</div>
 		{/if}
-		{#each notices as notice (notice)}
+		<!-- Keyed by position, not by text: the loop can send the same notice
+		     twice in one run, and a duplicate key throws and takes the page down.
+		     The list is only ever appended to, so positions are stable. -->
+		{#each notices as notice, i (i)}
 			<div class="banner">{notice}</div>
 		{/each}
 

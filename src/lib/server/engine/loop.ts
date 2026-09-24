@@ -556,6 +556,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 	// Assume the step cap wins; every other exit path below sets its own reason.
 	let stopReason: StopReason = 'exhausted';
 	let steps = 0;
+	let droppedSoFar = 0;
 	const toolCallRecords: ToolCallRecord[] = [];
 	const trace: TurnStep[] = [];
 	/** Label of the most recent tool-calling step, for the empty-reply fallback. */
@@ -811,9 +812,12 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		// shed the oldest ones or its own request eventually stalls the call.
 		const dropped = elideOldToolOutput(messages, toolOutputBudgetChars());
 		if (dropped) {
+			droppedSoFar += dropped;
 			pushChunk(job, {
 				type: 'notice',
-				text: `Dropped ${dropped} earlier tool result${dropped === 1 ? '' : 's'} to stay within the context budget.`
+				// With the running total, so a second trim in the same run is news
+				// rather than the first notice repeated word for word.
+				text: `Dropped ${dropped} earlier tool result${dropped === 1 ? '' : 's'} to stay within the context budget (${droppedSoFar} so far this run).`
 			});
 			emitEvent(
 				{
