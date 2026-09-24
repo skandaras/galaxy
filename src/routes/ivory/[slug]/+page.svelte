@@ -178,10 +178,13 @@
 						</li>
 					{/each}
 				</ul>
-				<p class="plan-meta">
-					They are GitHub issues on the Shelf, listed under Tasks below.
-					{#if approved.failed}The rest could not be created ({approved.failed}) and are still waiting for approval.{/if}
-				</p>
+				{#if approved.failed}
+					<p class="notice error" role="alert">
+						{approved.failed} Anything not created is still waiting for approval.
+					</p>
+				{:else}
+					<p class="plan-meta">They are GitHub issues on the Shelf, listed under Tasks below.</p>
+				{/if}
 				<button class="link" onclick={() => (approved = null)}>Dismiss</button>
 			</section>
 		{/if}

@@ -39,7 +39,19 @@ export interface FakeGithub {
 	addIssue(i: Partial<FakeIssue> & { title: string; labels: string[] }): FakeIssue;
 }
 
-export function fakeGithub(repo = 'owner/shelf', opts: { empty?: boolean; lagging?: boolean } = {}): FakeGithub {
+export function fakeGithub(
+	repo = 'owner/shelf',
+	opts: {
+		empty?: boolean;
+		lagging?: boolean;
+		/**
+		 * How a token without push access fares: GitHub drops the labels on a new
+		 * issue and still answers 201. `drop` lets the labels endpoint add them
+		 * afterwards; `refuse` rejects that too.
+		 */
+		labels?: 'keep' | 'drop' | 'refuse';
+	} = {}
+): FakeGithub {
 	const gh = {
 		repo,
 		files: new Map<string, string>(),
@@ -136,7 +148,8 @@ export function fakeGithub(repo = 'owner/shelf', opts: { empty?: boolean; laggin
 		}
 		if (path === '/issues' && method === 'POST') {
 			for (const l of body.labels ?? []) gh.labels.add(l);
-			const made = gh.addIssue({ title: body.title, body: body.body, labels: body.labels ?? [] });
+			const kept = (opts.labels ?? 'keep') === 'keep' ? (body.labels ?? []) : [];
+			const made = gh.addIssue({ title: body.title, body: body.body, labels: kept });
 			if (opts.lagging) unlisted.add(made.number);
 			return reply(201, rawIssue(made));
 		}
@@ -144,6 +157,14 @@ export function fakeGithub(repo = 'owner/shelf', opts: { empty?: boolean; laggin
 		if (one && method === 'GET') {
 			const i = gh.issues.find((x) => x.number === Number(one[1]));
 			return i ? reply(200, rawIssue(i)) : reply(404, { message: 'Not Found' });
+		}
+		const addLabels = /^\/issues\/(\d+)\/labels$/.exec(path);
+		if (addLabels && method === 'POST') {
+			if (opts.labels === 'refuse') return reply(403, { message: 'Resource not accessible by personal access token' });
+			const i = gh.issues.find((x) => x.number === Number(addLabels[1]));
+			if (!i) return reply(404, { message: 'Not Found' });
+			for (const l of body.labels) if (!i.labels.includes(l)) i.labels.push(l);
+			return reply(200, i.labels.map((name) => ({ name })));
 		}
 		const comment = /^\/issues\/(\d+)\/comments$/.exec(path);
 		if (comment && method === 'POST') {

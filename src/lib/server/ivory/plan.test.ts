@@ -134,6 +134,36 @@ describe('after approval', () => {
 	});
 });
 
+describe('a token that cannot label new issues', () => {
+	const approveWith = async (labels: 'drop' | 'refuse') => {
+		const gh = fakeGithub('owner/shelf', { labels });
+		gh.files.set('projects/bees/brief.md', BRIEF);
+		const chat = createChat({ userId: 'labels', title: 'Ivory plan', agentTask: 'ivory-plan' });
+		storeProposal(chat.id, { repo: gh.repo, slug: 'bees', tasks: validateTasks(TASKS).tasks, proposedBy: 'p', at: 1 });
+		const result = await approvePlan(gh.client, { chatId: chat.id, userId: 'labels', tasks: TASKS });
+		return { gh, chatId: chat.id, result };
+	};
+
+	it('gets the labels on afterwards, so the tasks are still found', async () => {
+		const { gh, result } = await approveWith('drop');
+		expect(result.failed).toBeUndefined();
+		expect(gh.issues.map((i) => i.labels)).toEqual([
+			['project:bees', 'agent:ivory-read'],
+			['project:bees']
+		]);
+		expect((await shelfProjectView(gh.client, 'bees'))?.issues).toHaveLength(2);
+	});
+
+	it('stops and says why when GitHub will not label at all, and files nothing twice', async () => {
+		const { gh, chatId, result } = await approveWith('refuse');
+		expect(gh.issues).toHaveLength(1);
+		expect(result.created.map((c) => c.number)).toEqual([gh.issues[0].number]);
+		expect(result.failed).toMatch(/would not give it project:bees, agent:ivory-read.*Contents and Issues read\/write/);
+		// The one not yet filed is still waiting for approval.
+		expect(getProposal(chatId)?.tasks.map((t) => t.title)).toEqual([TASKS[1].title]);
+	});
+});
+
 describe('rejecting a plan', () => {
 	it('creates nothing and clears the proposal', async () => {
 		const { gh, chatId, userId } = withPlan();
