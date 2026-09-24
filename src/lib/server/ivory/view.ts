@@ -1,5 +1,12 @@
 import { GithubError, type ShelfClient } from './github';
-import { listOpenIssues, projectIssueNumber, projectLabel, projectTasks, type ShelfIssue } from './board';
+import {
+	listOpenIssues,
+	listProjectIssues,
+	projectIssueNumber,
+	projectLabel,
+	projectTasks,
+	type ShelfIssue
+} from './board';
 import { getProject, groupByDiscipline, listProjects, repoInfo, type ShelfProject } from './shelf';
 import { readStatus, type ProjectStatus } from './status';
 
@@ -58,7 +65,11 @@ export function issueView(i: ShelfIssue): IssueView {
 export async function shelfProjectView(client: ShelfClient, slug: string) {
 	const detail = await getProject(client, slug);
 	if (!detail) return null;
-	const [issues, info] = await Promise.all([listOpenIssues(client), repoInfo(client)]);
+	const [issues, info, closed] = await Promise.all([
+		listOpenIssues(client),
+		repoInfo(client),
+		listProjectIssues(client, slug, 'closed')
+	]);
 	const parent = projectIssueNumber(detail.project, issues, client.repo);
 	return {
 		...detail,
@@ -66,6 +77,8 @@ export async function shelfProjectView(client: ShelfClient, slug: string) {
 		// Open and closed: the way back to a project's tasks when the view shows none.
 		issuesUrl: `${info.html_url}/issues?q=${encodeURIComponent(`is:issue label:"${projectLabel(slug)}"`)}`,
 		projectIssue: parent,
+		/** Tasks already done, which is what turns "Plan tasks" into "Plan next tasks". */
+		closedTasks: closed.filter((i) => i.number !== parent).length,
 		projectIssueUrl: issues.find((i) => i.number === parent)?.url ?? null,
 		status: statusOf(detail.project, issues, client.repo),
 		issues: projectTasks(detail.project, issues, client.repo).map(issueView)

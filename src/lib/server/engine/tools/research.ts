@@ -5,6 +5,7 @@ import { resolveShelfPath, type ShelfScope } from '$lib/server/ivory/scope';
 import { listPaths, writeShelfFile } from '$lib/server/ivory/shelf';
 import { setFrontmatterFields } from '$lib/server/ivory/frontmatter';
 import { comparable, parseNote, validateNote } from '$lib/server/ivory/notes';
+import { authoredFamily, modelFamily, parseClaim, validateClaim } from '$lib/server/ivory/claims';
 import { PLANNABLE_AGENTS, storeProposal, validateTasks } from '$lib/server/ivory/plan';
 import { readFullText, type Attempt, type FullTextResult, type PaperRef } from '$lib/server/ivory/fulltext';
 import { cleanStatus, STATUS_MAX_CHARS } from '$lib/server/ivory/status';
@@ -525,43 +526,130 @@ export function checkAgainstReading(text: string, reading: RunReading): string[]
 	return problems;
 }
 
+/**
+ * What a run writes. `note` is the reader's one note per source; `claim` is the
+ * synthesiser writing or revising a claim; `review` is the red-team updating a
+ * claim that already exists.
+ */
+export type ShelfWriteMode = 'note' | 'claim' | 'review';
+
+const claimWriteToolDef: ToolDef = {
+	...shelfWriteToolDef,
+	description:
+		"Write one mapping claim to this project's claims/ folder on the Shelf, as a commit. The path " +
+		'is relative to the project folder, e.g. claims/C-001.md. The claim must follow the claim ' +
+		'template: its frontmatter fields, every section heading, and a notes list naming only files ' +
+		"that exist in this project's notes/. status must be draft: a claim goes to review before it " +
+		'can be anything else. project and authored_by are filled in for you. If the check fails you ' +
+		'get the list of problems back; fix them and write again.',
+	parameters: {
+		type: 'object',
+		properties: {
+			path: { type: 'string', description: 'e.g. claims/C-001.md' },
+			content: { type: 'string', description: 'The whole claim, frontmatter included' }
+		},
+		required: ['path', 'content']
+	}
+};
+
+const reviewWriteToolDef: ToolDef = {
+	...claimWriteToolDef,
+	description:
+		"Save your review of an existing claim in this project's claims/ folder, as a commit: the whole " +
+		'claim with your entry added to its Red-team log and its status set by the template\'s gates ' +
+		'(challenged, survived, known or refuted; never draft). Only existing claims can be reviewed. ' +
+		"authored_by is kept as it was and you are added to reviewed_by for you. A claim written by a " +
+		'model from the same family as the one reviewing it is refused.'
+};
+
 export interface ShelfWriteContext {
+	/** Defaults to `note`. */
+	mode?: ShelfWriteMode;
 	task: string;
 	issueNumber: number;
 	issueUrl: string;
 	/** The model serving the turn right now, which failover can change. */
 	modelKey: () => string;
 	reading: RunReading;
-	onWrite?: (write: { path: string; commitUrl: string }) => void;
+	onWrite?: (write: { path: string; commitUrl: string; status?: string }) => void;
 }
 
 export function shelfWriteTool(client: ShelfClient, scope: ShelfScope, ctx: ShelfWriteContext): LoopTool {
+	const mode = ctx.mode ?? 'note';
+	const refuse = (problems: string[], report?: (m: Record<string, unknown>) => void): never => {
+		report?.({ rejected: problems.length });
+		throw new Error(`Not written. Fix these and write again:\n- ${problems.join('\n- ')}`);
+	};
 	return {
-		def: shelfWriteToolDef,
+		def: mode === 'note' ? shelfWriteToolDef : mode === 'claim' ? claimWriteToolDef : reviewWriteToolDef,
 		describe: (args) => String(args.path ?? ''),
 		execute: async (args, report) => {
 			const raw = String(args.path ?? '');
 			const path = resolveShelfPath(scope, raw, 'write');
-			const model = ctx.modelKey();
-			const stamped = setFrontmatterFields(String(args.content ?? ''), {
-				project: scope.slug,
-				read_by: `${ctx.task} + ${model}`,
-				task: ctx.issueUrl
-			});
-			const problems = [...validateNote(stamped, { project: scope.slug }), ...checkAgainstReading(stamped, ctx.reading)];
-			if (problems.length) {
-				report?.({ rejected: problems.length });
-				throw new Error(`Not written. Fix these and write again:\n- ${problems.join('\n- ')}`);
-			}
 			const rel = path.slice(`projects/${scope.slug}/`.length);
-			const { commitUrl, created } = await writeShelfFile(
-				client,
-				path,
-				stamped,
-				(isNew) => `${ctx.task} (${model}): ${isNew ? 'add' : 'update'} ${rel} for #${ctx.issueNumber}`
-			);
-			report?.({ path, commitUrl });
-			ctx.onWrite?.({ path, commitUrl });
+			const model = ctx.modelKey();
+			const content = String(args.content ?? '');
+			let stamped: string;
+			let status: string | undefined;
+			let message: (isNew: boolean) => string = (isNew) =>
+				`${ctx.task} (${model}): ${isNew ? 'add' : 'update'} ${rel} for #${ctx.issueNumber}`;
+
+			if (mode === 'note') {
+				stamped = setFrontmatterFields(content, {
+					project: scope.slug,
+					read_by: `${ctx.task} + ${model}`,
+					task: ctx.issueUrl
+				});
+				const problems = [...validateNote(stamped, { project: scope.slug }), ...checkAgainstReading(stamped, ctx.reading)];
+				if (problems.length) refuse(problems, report);
+			} else {
+				const existing = await client.file(path, { fresh: true });
+				const previous = existing === null ? null : parseClaim(existing);
+				const notesOnShelf = (await listPaths(client, { fresh: true })).filter((p) =>
+					p.startsWith(`projects/${scope.slug}/notes/`)
+				);
+				if (mode === 'claim') {
+					stamped = setFrontmatterFields(content, {
+						project: scope.slug,
+						authored_by: `${ctx.task} + ${model}`,
+						reviewed_by: previous?.reviewedBy ?? []
+					});
+				} else {
+					if (!previous) refuse([`${rel} does not exist. Only an existing claim can be reviewed.`], report);
+					// Checked against the model serving this turn, so a failover to a
+					// backup of the author's family is caught too.
+					const author = authoredFamily(previous!.authoredBy);
+					if (author && author === modelFamily(model)) {
+						report?.({ refused: 'same-family', author: previous!.authoredBy, reviewer: model });
+						throw new Error(
+							`Refused: ${rel} was written by ${previous!.authoredBy}, and ${model} is from the same model family (${author}). ` +
+								'A claim must be reviewed by a model from a different family. Pick another model for ivory-redteam in Admin → Tasks.'
+						);
+					}
+					stamped = setFrontmatterFields(content, {
+						project: scope.slug,
+						// Kept from the file, not taken from the review: authorship is
+						// what the family check reads, so a reviewer may not rewrite it.
+						authored_by: previous!.authoredBy,
+						reviewed_by: [...new Set([...previous!.reviewedBy, `${ctx.task} + ${model}`])]
+					});
+					message = () => `${ctx.task} (${model}): review ${rel} for #${ctx.issueNumber}`;
+				}
+				const parsed = parseClaim(stamped);
+				status = parsed.status;
+				const problems = validateClaim(stamped, { project: scope.slug, notesOnShelf });
+				if (mode === 'claim' && parsed.status !== 'draft') {
+					problems.push('status must be draft. A claim is reviewed before it can be anything else.');
+				}
+				if (mode === 'review' && parsed.status === 'draft') {
+					problems.push('A review sets status to challenged, survived, known or refuted, never draft.');
+				}
+				if (problems.length) refuse(problems, report);
+			}
+
+			const { commitUrl, created } = await writeShelfFile(client, path, stamped, message);
+			report?.({ path, commitUrl, ...(status ? { status } : {}) });
+			ctx.onWrite?.({ path, commitUrl, ...(status ? { status } : {}) });
 			return `Written to ${path} (${created ? 'new file' : 'replaced the previous version'}). Commit: ${commitUrl}`;
 		}
 	};

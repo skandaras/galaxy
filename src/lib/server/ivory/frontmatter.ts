@@ -123,9 +123,10 @@ export function fmList(v: FmValue | undefined): string[] {
  * which run, which issue): what an agent wrote there is overwritten rather than
  * trusted.
  */
-export function setFrontmatterFields(raw: string, fields: Record<string, string>): string {
+export function setFrontmatterFields(raw: string, fields: Record<string, string | string[]>): string {
 	const m = BLOCK.exec(raw);
-	const render = (k: string, v: string) => `${k}: ${JSON.stringify(v)}`;
+	const render = (k: string, v: string | string[]) =>
+		`${k}: ${Array.isArray(v) ? `[${v.map((x) => JSON.stringify(x)).join(', ')}]` : JSON.stringify(v)}`;
 	if (!m) {
 		const head = Object.entries(fields).map(([k, v]) => render(k, v));
 		return ['---', ...head, '---', raw].join('\n');

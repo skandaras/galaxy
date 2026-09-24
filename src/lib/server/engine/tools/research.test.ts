@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { fakeGithub, GOOD_NOTE } from '$lib/server/ivory/github-fixture';
+import { fakeGithub, GOOD_CLAIM, GOOD_NOTE } from '$lib/server/ivory/github-fixture';
+import { parseClaim } from '$lib/server/ivory/claims';
 import { routedFetch } from '$lib/server/ivory/scholarly-fixture';
 import {
 	checkAgainstReading,
@@ -326,5 +327,76 @@ describe('set_status', () => {
 		expect(await tool.execute({ summary: '  Two notes written.\n Next: #7. ' })).toMatch(/^Status recorded/);
 		expect(recorded).toBe('Two notes written.\nNext: #7.');
 		await expect(tool.execute({ summary: 'one\ntwo\nthree' })).rejects.toThrow('Status not set: Keep the status to one or two lines.');
+	});
+});
+
+describe('shelf_write for claims', () => {
+	const setup = (mode: 'claim' | 'review', model: string) => {
+		const gh = fakeGithub();
+		gh.files.set('projects/bees/brief.md', '---\ntitle: Bees\n---\n# Bees');
+		gh.files.set('projects/bees/notes/N-002-seeley-1995.md', GOOD_NOTE);
+		const writes: { path: string; status?: string }[] = [];
+		const tool = shelfWriteTool(gh.client, { slug: 'bees', writable: ['claims/'] }, {
+			mode,
+			task: mode === 'claim' ? 'ivory-synthesise' : 'ivory-redteam',
+			issueNumber: 5,
+			issueUrl: 'https://github.com/owner/shelf/issues/5',
+			modelKey: () => model,
+			reading: newRunReading(),
+			onWrite: (w) => writes.push(w)
+		});
+		return { gh, tool, writes };
+	};
+
+	it('lets the synthesiser write a draft, stamped as its own', async () => {
+		const { gh, tool, writes } = setup('claim', 'z-ai/glm-5.3');
+		const sneaky = GOOD_CLAIM.replace('authored_by: "ivory-synthesise + z-ai/glm-5.3"', 'authored_by: "Sam"');
+		await tool.execute({ path: 'claims/C-001.md', content: sneaky });
+		const stored = parseClaim(gh.files.get('projects/bees/claims/C-001.md')!);
+		expect(stored.authoredBy).toBe('ivory-synthesise + z-ai/glm-5.3');
+		expect(gh.commits[0].message).toBe('ivory-synthesise (z-ai/glm-5.3): add claims/C-001.md for #5');
+		expect(writes).toEqual([expect.objectContaining({ path: 'projects/bees/claims/C-001.md', status: 'draft' })]);
+	});
+
+	it('will not let the synthesiser mark its own claim anything but draft, or write outside claims/', async () => {
+		const { gh, tool } = setup('claim', 'z-ai/glm-5.3');
+		await expect(
+			tool.execute({ path: 'claims/C-001.md', content: GOOD_CLAIM.replace('status: draft', 'status: survived') })
+		).rejects.toThrow(/status must be draft/);
+		await expect(tool.execute({ path: 'notes/N-003.md', content: GOOD_CLAIM })).rejects.toThrow(/may write only/);
+		expect(gh.commits).toEqual([]);
+	});
+
+	it('lets a red-team from another family review, keeping authorship and adding itself', async () => {
+		const { gh, tool, writes } = setup('review', '~openai/gpt-luna-latest');
+		gh.files.set('projects/bees/claims/C-001.md', GOOD_CLAIM);
+		const review = GOOD_CLAIM.replace('status: draft', 'status: challenged')
+			.replace('authored_by: "ivory-synthesise + z-ai/glm-5.3"', 'authored_by: "Sam"')
+			.replace('## Red-team log\n', '## Red-team log\n### R1\n- Objection: proportional following is assumed.\n- Outcome: open\n');
+		await tool.execute({ path: 'claims/C-001.md', content: review });
+		const stored = parseClaim(gh.files.get('projects/bees/claims/C-001.md')!);
+		expect(stored).toMatchObject({
+			status: 'challenged',
+			authoredBy: 'ivory-synthesise + z-ai/glm-5.3',
+			reviewedBy: ['ivory-redteam + ~openai/gpt-luna-latest']
+		});
+		expect(gh.commits[0].message).toBe('ivory-redteam (~openai/gpt-luna-latest): review claims/C-001.md for #5');
+		expect(writes[0].status).toBe('challenged');
+	});
+
+	it('refuses a red-team from the author\'s own family, a new claim, and a draft', async () => {
+		const same = setup('review', 'z-ai/glm-4.6');
+		same.gh.files.set('projects/bees/claims/C-001.md', GOOD_CLAIM);
+		await expect(
+			same.tool.execute({ path: 'claims/C-001.md', content: GOOD_CLAIM.replace('status: draft', 'status: survived') })
+		).rejects.toThrow(/same model family \(z-ai\)/);
+
+		const other = setup('review', 'anthropic/claude-sonnet-5');
+		await expect(other.tool.execute({ path: 'claims/C-002.md', content: GOOD_CLAIM })).rejects.toThrow(
+			/Only an existing claim can be reviewed/
+		);
+		other.gh.files.set('projects/bees/claims/C-001.md', GOOD_CLAIM);
+		await expect(other.tool.execute({ path: 'claims/C-001.md', content: GOOD_CLAIM })).rejects.toThrow(/never draft/);
+		expect([...same.gh.commits, ...other.gh.commits]).toEqual([]);
 	});
 });

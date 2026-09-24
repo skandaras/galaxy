@@ -94,6 +94,19 @@ export async function listOpenIssues(client: ShelfClient, opts: { fresh?: boolea
 	return [...listed, ...missing];
 }
 
+/** A project's issues in one state, from one labelled listing. Pull requests are left out. */
+export async function listProjectIssues(
+	client: ShelfClient,
+	slug: string,
+	state: 'open' | 'closed'
+): Promise<ShelfIssue[]> {
+	const rows = await client.paged<RawIssue>(
+		`/issues?state=${state}&labels=${encodeURIComponent(projectLabel(slug))}`,
+		{ maxPages: 1 }
+	);
+	return rows.filter((r) => !r.pull_request).map(toIssue);
+}
+
 export async function getIssue(client: ShelfClient, number: number): Promise<ShelfIssue | null> {
 	try {
 		const r = await client.get<RawIssue>(`/issues/${number}`, { fresh: true });

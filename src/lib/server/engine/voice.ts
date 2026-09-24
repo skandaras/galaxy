@@ -125,7 +125,9 @@ export const PROSE_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[numb
 	'skill-optimiser',
 	'alignment-synthesis',
 	'ivory-read',
-	'ivory-plan'
+	'ivory-plan',
+	'ivory-synthesise',
+	'ivory-redteam'
 ]);
 
 /**
