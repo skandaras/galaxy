@@ -13,7 +13,13 @@
 	let compaction = $state({ ratio: 0.7, keepRecent: 8 });
 	let budget = $state({ enabled: false, limitUsd: 25, period: 'month' });
 	let github = $state({ token: '', hasToken: false });
-	let ivory = $state({ shelfRepo: '' });
+	let ivory = $state({
+		shelfRepo: '',
+		paperProvider: 'openalex',
+		openAlexMailto: '',
+		paperMaxResults: 8,
+		paperSearchesPerTurn: 12
+	});
 	let shelfBusy = $state(false);
 	let shelfMsg = $state<string | null>(null);
 	let hasSearchKey = $state(false);
@@ -460,6 +466,26 @@
 			<label>
 				repository
 				<input bind:value={ivory.shelfRepo} placeholder="owner/name" />
+			</label>
+			<label>
+				paper search
+				<select bind:value={ivory.paperProvider}>
+					<option value="openalex">OpenAlex (no key)</option>
+					<option value="none">disabled</option>
+				</select>
+			</label>
+			<label>
+				OpenAlex contact email
+				<input type="email" bind:value={ivory.openAlexMailto} placeholder="optional" />
+				<small>Moves requests into OpenAlex's faster pool. Sent with every search.</small>
+			</label>
+			<label>
+				results per search
+				<input type="number" min="1" max="25" bind:value={ivory.paperMaxResults} />
+			</label>
+			<label>
+				searches per turn
+				<input type="number" min="1" max="40" bind:value={ivory.paperSearchesPerTurn} />
 			</label>
 		</div>
 		<p class="hint">

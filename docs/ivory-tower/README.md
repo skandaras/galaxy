@@ -14,6 +14,28 @@ where the code disagreed with the brief.
   "Set up Shelf" writes whichever of these are missing. This folder is the only copy; the build
   reads it.
 
+## The reader (`ivory-read`)
+
+An open issue labelled `project:<slug>` and `agent:ivory-read` gets a Run button on its project
+page. The run opens an ordinary chat (so it streams, survives a closed tab and takes follow-ups)
+with the issue and the brief as its first message, fenced as material rather than instructions.
+
+- **Tools:** `paper_search` (OpenAlex; Admin → Settings → Shelf), `fetch_url`, `shelf_read`,
+  `shelf_write`, and nothing else. Admin → Tools can switch any of them off.
+- **Scope:** `shelf_read` reaches only `projects/<slug>/`; `shelf_write` only
+  `projects/<slug>/notes/*.md`. Anything else throws, and shows red in the Observatory.
+- **What a note must be before it is written** (`ivory/notes.ts`): the template's frontmatter,
+  every claim with a quote and a location, and each quote found word for word in something the
+  run actually read. `access: full-text` is refused unless `fetch_url` returned a page.
+  `project`, `read_by` and `task` are filled in by Galaxy. A rejected note goes back to the model
+  as a list of problems.
+- **Method:** the `ivory-tower/write-source-note` skill, placed in the reader's prompt at the
+  start of each turn. The run refuses to start if the skill is switched off.
+- **Commits** read `ivory-read (<model>): add notes/<file> for #<issue>`.
+- **When it ends**, Galaxy (not the agent) comments on the issue with links to the notes. The
+  issue stays open.
+- **Model:** left empty for the owner to pick in Admin → Tasks. A small model is enough.
+
 ## Where the brief and the code differ
 
 - **`fetch_page`** does not exist. The tool is `fetch_url`.
@@ -33,4 +55,5 @@ where the code disagreed with the brief.
 
 ## What Galaxy stores
 
-No tables were added. Project and task state stays on GitHub.
+No tables were added. Project and task state stays on GitHub. Each run's scope (repository,
+project, issue) is a settings row keyed to its chat, like a coding session's state.

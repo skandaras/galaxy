@@ -10,6 +10,7 @@ import { boardTools } from './boards';
 import { cortexTools } from './cortex';
 import { createPdfToolDef } from './documents';
 import { fetchUrlToolDef } from './fetch-url';
+import { paperSearchToolDef, shelfReadToolDef, shelfWriteToolDef } from './research';
 import { imageTools } from './images';
 import { knowledgeTools } from './knowledge';
 import { runHistoryToolDef } from '../run-history';
@@ -21,13 +22,14 @@ export type ToolSource = 'builtin' | 'mcp';
 
 /**
  * The only tasks that assemble a toolset and therefore consult applyToolPolicy:
- * `startChatTurn` (engine.ts) and `startCodingTurn` (coding/session.ts). Deep
+ * `startChatTurn` (engine.ts), `startCodingTurn` (coding/session.ts) and the
+ * Ivory Tower agents (ivory/run.ts). Deep
  * research runs a hardcoded pipeline, and the visual/memory/skill-optimiser
  * tasks never build a LoopTool array — offering those as scope options would be
  * a control that does nothing. Keep in step with the applyToolPolicy call sites.
 
  */
-export const TOOL_TASKS = ['chat', 'coding'] as const;
+export const TOOL_TASKS = ['chat', 'coding', 'ivory-read'] as const;
 export type ToolTask = (typeof TOOL_TASKS)[number];
 
 export interface ToolDescriptor {
@@ -98,8 +100,15 @@ export function builtinDescriptors(): ToolDescriptor[] {
 	add(
 		[{ def: fetchUrlToolDef, execute: async () => '' }],
 		'web',
-		['chat', 'coding'],
+		['chat', 'coding', 'ivory-read'],
 		'not tied to the composer’s web-search toggle'
+	);
+	// Declarations only: each live tool is built per run, scoped to one project.
+	add(
+		[paperSearchToolDef, shelfReadToolDef, shelfWriteToolDef].map((def) => ({ def, execute: async () => '' })),
+		'research',
+		['ivory-read'],
+		'Ivory Tower only; shelf tools reach a single project folder'
 	);
 	// The user id only scopes execution. The write tools are also gated at run
 	// time on the agentWrites setting, so the catalogue lists them either way

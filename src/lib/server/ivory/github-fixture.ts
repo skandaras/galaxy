@@ -173,3 +173,34 @@ Do honeybee recruitment dances allocate foragers the way a load balancer allocat
 ## Why this might be new
 A hunch.
 `;
+
+/** A source note that passes validation, with a quote from its abstract. */
+export const GOOD_NOTE = `---
+id: N-002
+project: bees
+title: "The Wisdom of the Hive"
+authors: [Thomas D. Seeley]
+year: 1995
+doi_or_url: "https://doi.org/10.4159/9780674043404"
+access: abstract-only
+read_by: "ivory-read + mock/one"
+task: "https://github.com/owner/shelf/issues/2"
+---
+
+# The Wisdom of the Hive
+
+## Summary
+Seeley describes how a colony allocates foragers among flower patches.
+
+## Claims extracted
+<!-- One entry per claim. -->
+
+### N-002.1
+- Claim: Foragers advertise richer patches with longer dances.
+- Quote: "dance duration scales with patch profitability"
+- Location: abstract
+- Confidence the source supports it: direct
+
+## Relevance to the project
+It is the allocation mechanism the brief asks about.
+`;

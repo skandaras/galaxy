@@ -123,7 +123,8 @@ export const PROSE_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[numb
 	'subagent',
 	'ux-audit',
 	'skill-optimiser',
-	'alignment-synthesis'
+	'alignment-synthesis',
+	'ivory-read'
 ]);
 
 /**

@@ -656,9 +656,25 @@ export const DEFAULT_BOARDS: BoardSettings = { maxBoardsPerUser: 20, agentWrites
 export interface IvorySettings {
 	/** The Shelf: `owner/name` of the GitHub repository Ivory Tower reads and writes. */
 	shelfRepo: string;
+	/** Where `paper_search` looks. OpenAlex needs no key. */
+	paperProvider: 'openalex' | 'none';
+	/**
+	 * Sent to OpenAlex as `mailto`, which moves requests into its faster
+	 * "polite pool". Empty by default: an address is the owner's to give out.
+	 */
+	openAlexMailto: string;
+	paperMaxResults: number;
+	/** Paper searches one agent turn may run. */
+	paperSearchesPerTurn: number;
 }
 
-export const DEFAULT_IVORY: IvorySettings = { shelfRepo: 'skandaras/ivorytower' };
+export const DEFAULT_IVORY: IvorySettings = {
+	shelfRepo: 'skandaras/ivorytower',
+	paperProvider: 'openalex',
+	openAlexMailto: '',
+	paperMaxResults: 8,
+	paperSearchesPerTurn: 12
+};
 
 /** `owner/name` from either that or a github.com URL, or null for anything else. */
 export function parseRepoSlug(raw: string): string | null {
@@ -676,7 +692,16 @@ export function parseRepoSlug(raw: string): string | null {
  */
 export function normaliseIvorySettings(raw: Record<string, unknown>): IvorySettings {
 	const repo = typeof raw.shelfRepo === 'string' ? parseRepoSlug(raw.shelfRepo) : null;
-	return { shelfRepo: repo ?? DEFAULT_IVORY.shelfRepo };
+	const mailto = typeof raw.openAlexMailto === 'string' ? raw.openAlexMailto.trim() : '';
+	const int = (v: unknown, fallback: number, lo: number, hi: number) =>
+		Number.isFinite(Number(v)) && v !== '' && v !== null ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : fallback;
+	return {
+		shelfRepo: repo ?? DEFAULT_IVORY.shelfRepo,
+		paperProvider: raw.paperProvider === 'none' ? 'none' : 'openalex',
+		openAlexMailto: /^[^\s@]+@[^\s@]+$/.test(mailto) ? mailto : '',
+		paperMaxResults: int(raw.paperMaxResults, DEFAULT_IVORY.paperMaxResults, 1, 25),
+		paperSearchesPerTurn: int(raw.paperSearchesPerTurn, DEFAULT_IVORY.paperSearchesPerTurn, 1, 40)
+	};
 }
 
 export function ivorySettings(): IvorySettings {

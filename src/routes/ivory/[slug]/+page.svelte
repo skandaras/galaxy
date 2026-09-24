@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import Markdown from '$lib/components/Markdown.svelte';
 
@@ -54,6 +55,28 @@
 	$effect(() => {
 		if (slug) void load(slug);
 	});
+
+	/** The agents that can be started from here. The rest are labels for later phases. */
+	const RUNNABLE = new Set(['ivory-read']);
+	let starting = $state<number | null>(null);
+	let runFailure = $state<string | null>(null);
+
+	async function run(issue: Issue) {
+		starting = issue.number;
+		runFailure = null;
+		const res = await fetch(
+			`/api/ivory/projects/${encodeURIComponent(slug ?? '')}/issues/${issue.number}/run`,
+			{ method: 'POST' }
+		);
+		const body = await res.json().catch(() => ({}));
+		starting = null;
+		if (!res.ok) {
+			runFailure = body.message ?? `The run did not start (${res.status})`;
+			return;
+		}
+		// The run is an ordinary chat, so it is followed there.
+		await goto(`/chat?chat=${body.chatId}`);
+	}
 </script>
 
 <div class="ivory-page">
@@ -82,6 +105,7 @@
 			<aside>
 				<section>
 					<h3>Open tasks</h3>
+					{#if runFailure}<p class="notice error" role="alert">{runFailure}</p>{/if}
 					{#if view.issues.length}
 						<ul>
 							{#each view.issues as issue (issue.number)}
@@ -91,6 +115,16 @@
 										{issue.title}
 									</a>
 									{#if issue.agent}<span class="tag">{issue.agent}</span>{/if}
+									{#if issue.agent && RUNNABLE.has(issue.agent)}
+										<button
+											class="run"
+											disabled={starting !== null}
+											onclick={() => run(issue)}
+											aria-label="Run {issue.agent} on #{issue.number}"
+										>
+											{starting === issue.number ? 'Starting…' : 'Run'}
+										</button>
+									{/if}
 								</li>
 							{/each}
 						</ul>
@@ -232,6 +266,21 @@
 	.num {
 		font-family: var(--font-mono);
 		color: var(--fg-dim);
+	}
+	.run {
+		background: var(--border);
+		color: var(--fg);
+		border: 1px solid var(--control-border);
+		border-radius: 5px;
+		padding: 0.15rem 0.6rem;
+		font-family: inherit;
+		font-size: var(--text-sm);
+		cursor: pointer;
+		min-height: 2rem;
+	}
+	.run:disabled {
+		opacity: 0.6;
+		cursor: default;
 	}
 	.empty {
 		font-size: var(--text-sm);

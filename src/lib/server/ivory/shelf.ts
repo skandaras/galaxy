@@ -200,7 +200,8 @@ export async function writeShelfFile(
 	client: ShelfClient,
 	path: string,
 	content: string,
-	message: string
+	/** A string, or built once it is known whether the file already existed. */
+	message: string | ((created: boolean) => string)
 ): Promise<{ commitUrl: string; created: boolean }> {
 	let sha: string | undefined;
 	try {
@@ -209,7 +210,7 @@ export async function writeShelfFile(
 		if (!(err instanceof GithubError && err.status === 404)) throw err;
 	}
 	const res = await client.send<{ commit: { html_url: string } }>('PUT', `/contents/${encodePath(path)}`, {
-		message,
+		message: typeof message === 'string' ? message : message(!sha),
 		content: Buffer.from(content, 'utf8').toString('base64'),
 		...(sha ? { sha } : {})
 	});
