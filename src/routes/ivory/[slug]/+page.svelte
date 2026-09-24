@@ -35,6 +35,7 @@
 		claims: Claim[];
 		projectIssue: number | null;
 		issues: Issue[];
+		issuesUrl: string;
 	}
 
 	interface PlannedTask {
@@ -68,6 +69,15 @@
 	let plans = $state<PendingPlan[]>([]);
 	let planBusy = $state<string | null>(null);
 	let planMsg = $state<string | null>(null);
+	/**
+	 * What the last approval put on the board, kept on screen until dismissed.
+	 * A one-line "2 task(s) added" with no links was all an approval used to
+	 * leave behind, and when the list below had not caught up either, the
+	 * owner had no way to find the tasks at all.
+	 */
+	let approved = $state<{ created: { number: number; url: string; title: string }[]; failed?: string } | null>(
+		null
+	);
 
 	async function loadPlans(s: string) {
 		const res = await fetch(`/api/ivory/projects/${encodeURIComponent(s)}/plans`);
@@ -91,6 +101,7 @@
 		if (decision === 'reject' && !confirm('Reject this plan? Nothing will be added to the board.')) return;
 		planBusy = plan.chatId;
 		planMsg = null;
+		approved = null;
 		const res = await fetch(`/api/ivory/plans/${plan.chatId}/${decision}`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
@@ -102,10 +113,8 @@
 			planMsg = body.message ?? `That did not work (${res.status})`;
 			return;
 		}
-		planMsg =
-			decision === 'reject'
-				? 'Plan rejected. Nothing was added to the board.'
-				: `${body.created.length} task(s) added to the board.${body.failed ? ` The rest failed (${body.failed}) and are still pending.` : ''}`;
+		if (decision === 'reject') planMsg = 'Plan rejected. Nothing was added to the board.';
+		else approved = { created: body.created, failed: body.failed };
 		if (slug) await load(slug);
 	}
 
@@ -159,6 +168,23 @@
 		<p class="notice">Reading the project…</p>
 	{:else}
 		{#if planMsg}<p class="notice" role="status">{planMsg}</p>{/if}
+		{#if approved}
+			<section class="approved" role="status" aria-label="Added to the board">
+				<h3>Added to the board</h3>
+				<ul>
+					{#each approved.created as c (c.number)}
+						<li>
+							<a href={c.url} target="_blank" rel="noopener"><span class="num">#{c.number}</span> {c.title}</a>
+						</li>
+					{/each}
+				</ul>
+				<p class="plan-meta">
+					They are GitHub issues on the Shelf, listed under Tasks below.
+					{#if approved.failed}The rest could not be created ({approved.failed}) and are still waiting for approval.{/if}
+				</p>
+				<button class="link" onclick={() => (approved = null)}>Dismiss</button>
+			</section>
+		{/if}
 		{#each plans as plan (plan.chatId)}
 			<section class="plan" aria-label="Plan waiting for approval">
 				<h3>Plan waiting for approval</h3>
@@ -193,6 +219,45 @@
 				</div>
 			</section>
 		{/each}
+		<section class="tasks">
+			<div class="tasks-head">
+				<h3>Tasks ({view.issues.length} open)</h3>
+				<a href={view.issuesUrl} target="_blank" rel="noopener">All of this project's issues on GitHub</a>
+			</div>
+			{#if plans.length}
+				<p class="plan-meta">
+					{plans.length} plan{plans.length === 1 ? '' : 's'} waiting for approval above.
+				</p>
+			{/if}
+			{#if runFailure}<p class="notice error" role="alert">{runFailure}</p>{/if}
+			{#if view.issues.length}
+				<ul>
+					{#each view.issues as issue (issue.number)}
+						<li class="issue">
+							<a href={issue.url} target="_blank" rel="noopener">
+								<span class="num">#{issue.number}</span>
+								{issue.title}
+							</a>
+							{#if issue.agent}<span class="tag">{issue.agent}</span>{/if}
+							{#if issue.agent && RUNNABLE.has(issue.agent)}
+								<button
+									class="run"
+									disabled={starting !== null}
+									onclick={() => run(issue)}
+									aria-label="Run {issue.agent} on #{issue.number}"
+								>
+									{starting === issue.number ? 'Starting…' : 'Run'}
+								</button>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			{:else}
+				<p class="empty">
+					No open issues labelled <code>project:{view.project.slug}</code>. “Plan tasks” proposes some.
+				</p>
+			{/if}
+		</section>
 		<div class="columns">
 			<article class="brief">
 				<p class="source"><a href={view.briefUrl} target="_blank" rel="noopener">brief.md on GitHub</a></p>
@@ -200,36 +265,6 @@
 			</article>
 
 			<aside>
-				<section>
-					<h3>Open tasks</h3>
-					{#if runFailure}<p class="notice error" role="alert">{runFailure}</p>{/if}
-					{#if view.issues.length}
-						<ul>
-							{#each view.issues as issue (issue.number)}
-								<li class="issue">
-									<a href={issue.url} target="_blank" rel="noopener">
-										<span class="num">#{issue.number}</span>
-										{issue.title}
-									</a>
-									{#if issue.agent}<span class="tag">{issue.agent}</span>{/if}
-									{#if issue.agent && RUNNABLE.has(issue.agent)}
-										<button
-											class="run"
-											disabled={starting !== null}
-											onclick={() => run(issue)}
-											aria-label="Run {issue.agent} on #{issue.number}"
-										>
-											{starting === issue.number ? 'Starting…' : 'Run'}
-										</button>
-									{/if}
-								</li>
-							{/each}
-						</ul>
-					{:else}
-						<p class="empty">No open issues labelled <code>project:{view.project.slug}</code>.</p>
-					{/if}
-				</section>
-
 				<section>
 					<h3>Claims</h3>
 					{#if view.claims.length}
@@ -384,6 +419,28 @@
 		justify-content: space-between;
 		gap: 0.8rem;
 		flex-wrap: wrap;
+	}
+	.tasks {
+		border-bottom: 1px solid var(--border);
+		padding-bottom: 0.8rem;
+		margin-bottom: 1rem;
+	}
+	.tasks-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 0.8rem;
+		flex-wrap: wrap;
+		font-size: var(--text-sm);
+	}
+	.approved {
+		border: 1px solid var(--accent);
+		border-radius: var(--radius);
+		padding: 0.8rem;
+		margin-bottom: 1rem;
+	}
+	.approved ul {
+		margin-bottom: 0.5rem;
 	}
 	.plan {
 		border: 1px solid var(--accent);

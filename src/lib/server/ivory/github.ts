@@ -40,6 +40,8 @@ interface Cached {
 
 export interface ShelfClient {
 	readonly repo: string;
+	/** The clock the cache runs on, so everything time-bound agrees with it. */
+	now(): number;
 	/** JSON from `/repos/<repo><path>`, cached unless `fresh`. */
 	get<T>(path: string, opts?: { fresh?: boolean }): Promise<T>;
 	/** A file's text from the default branch, cached unless `fresh`; null when it does not exist. */
@@ -90,6 +92,7 @@ export function createShelfClient(opts: ShelfClientOptions): ShelfClient {
 
 	const client: ShelfClient = {
 		repo: opts.repo,
+		now,
 		get: (path, o = {}) =>
 			cached(`GET ${path}`, o.fresh, async () => {
 				const res = await request('GET', path);

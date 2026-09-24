@@ -7,6 +7,8 @@ import type { ChatRequest, StreamEvent } from '$lib/server/providers/types';
 import { fakeGithub, SAMPLE_BRIEF } from './github-fixture';
 import { approvePlan, getProposal, listProposals, rejectPlan, storeProposal, validateTasks, type Proposal } from './plan';
 import { startPlanRun } from './run';
+import { RECENT_ISSUE_MS } from './board';
+import { shelfIndex, shelfProjectView } from './view';
 
 beforeAll(() => {
 	runMigrations();
@@ -100,6 +102,35 @@ describe('approving a plan', () => {
 		expect(() => rejectPlan({ chatId, userId: 'owner-b' })).toThrow(/No such plan/);
 		expect(listProposals('owner-b', gh.repo, 'bees')).toEqual([]);
 		expect(listProposals('owner-a', gh.repo, 'bees').map((p) => p.chatId)).toEqual([chatId]);
+	});
+});
+
+describe('after approval', () => {
+	it("shows the new tasks straight away, even while GitHub's list has not caught up", async () => {
+		const gh = fakeGithub('owner/shelf', { lagging: true });
+		gh.files.set('projects/bees/brief.md', BRIEF);
+		gh.addIssue({ title: 'Project', labels: ['project:bees', 'discipline:entomology'] });
+		const chat = createChat({ userId: 'lag', title: 'Ivory plan', agentTask: 'ivory-plan' });
+		storeProposal(chat.id, { repo: gh.repo, slug: 'bees', tasks: validateTasks(TASKS).tasks, proposedBy: 'p', at: 1 });
+
+		const { created } = await approvePlan(gh.client, { chatId: chat.id, userId: 'lag', tasks: TASKS });
+		// What the page does next: reload, while GitHub still lists none of them.
+		const view = await shelfProjectView(gh.client, 'bees');
+		expect(view?.issues.map((i) => i.number)).toEqual(created.map((c) => c.number));
+		expect((await shelfIndex(gh.client)).groups[0].projects[0].openTasks).toBe(2);
+		expect(view?.issuesUrl).toBe(
+			'https://github.com/owner/shelf/issues?q=is%3Aissue%20label%3A%22project%3Abees%22'
+		);
+
+		// Once GitHub has them, they are listed once, not twice.
+		gh.settle();
+		gh.clock.now += 61_000;
+		expect((await shelfProjectView(gh.client, 'bees'))?.issues).toHaveLength(2);
+
+		// And the stand-in lapses, so a task closed on GitHub does not linger.
+		gh.issues.find((i) => i.number === created[0].number)!.state = 'closed';
+		gh.clock.now += RECENT_ISSUE_MS;
+		expect((await shelfProjectView(gh.client, 'bees'))?.issues.map((i) => i.number)).toEqual([created[1].number]);
 	});
 });
 

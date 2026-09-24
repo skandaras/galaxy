@@ -11,6 +11,7 @@ describe('setupShelf', () => {
 			'projects/sample-pheromone-routing/brief.md',
 			'templates/brief.md',
 			'templates/claim-mapping.md',
+			'templates/examples/C-example-kin-selection.md',
 			'templates/note.md'
 		]);
 		expect(result.labelsCreated).toEqual(

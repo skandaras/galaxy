@@ -57,10 +57,39 @@ function toIssue(r: RawIssue): ShelfIssue {
 	};
 }
 
+/**
+ * Issues Galaxy filed in the last couple of minutes, per repository.
+ *
+ * Approving a plan used to make its tasks vanish. The page reloads the moment
+ * the issues are created, and GitHub's issue list can answer that first read
+ * without them; the client then cached the short list for a minute. So the
+ * proposal disappeared, the tasks it became were nowhere on the page, and the
+ * owner had no way to find them. What Galaxy has just created it now shows
+ * whether or not GitHub's list has caught up. The cost: one closed on GitHub
+ * inside those two minutes still shows until they pass.
+ */
+export const RECENT_ISSUE_MS = 2 * 60_000;
+// Keyed by client, which is one per repository and token (see shelfClient), so
+// changing the Shelf in Admin starts from nothing.
+const recent = new WeakMap<ShelfClient, { at: number; issue: ShelfIssue }[]>();
+
+function rememberCreated(client: ShelfClient, issue: ShelfIssue): void {
+	const now = client.now();
+	const list = (recent.get(client) ?? []).filter((r) => now - r.at < RECENT_ISSUE_MS);
+	list.push({ at: now, issue });
+	recent.set(client, list);
+}
+
 /** Every open issue, pull requests excluded (the issues endpoint returns both). */
 export async function listOpenIssues(client: ShelfClient, opts: { fresh?: boolean } = {}): Promise<ShelfIssue[]> {
 	const rows = await client.paged<RawIssue>('/issues?state=open', opts);
-	return rows.filter((r) => !r.pull_request).map(toIssue);
+	const listed = rows.filter((r) => !r.pull_request).map(toIssue);
+	const now = client.now();
+	const seen = new Set(listed.map((i) => i.number));
+	const missing = (recent.get(client) ?? [])
+		.filter((r) => now - r.at < RECENT_ISSUE_MS && !seen.has(r.issue.number))
+		.map((r) => r.issue);
+	return [...listed, ...missing];
 }
 
 export async function getIssue(client: ShelfClient, number: number): Promise<ShelfIssue | null> {
@@ -141,7 +170,9 @@ export async function createIssue(
 	client: ShelfClient,
 	issue: { title: string; body: string; labels: string[] }
 ): Promise<ShelfIssue> {
-	return toIssue(await client.send<RawIssue>('POST', '/issues', issue));
+	const created = toIssue(await client.send<RawIssue>('POST', '/issues', issue));
+	rememberCreated(client, created);
+	return created;
 }
 
 export async function commentOnIssue(client: ShelfClient, number: number, body: string): Promise<string> {

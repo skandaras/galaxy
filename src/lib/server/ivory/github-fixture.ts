@@ -30,11 +30,16 @@ export interface FakeGithub {
 	requests: { method: string; path: string; body?: unknown }[];
 	/** Clock for the client's cache, moved by the test. */
 	clock: { now: number };
+	/**
+	 * With `lagging`, issues created through the API stay out of `GET /issues`
+	 * until this is called, the way GitHub's list can trail a create.
+	 */
+	settle(): void;
 	client: ShelfClient;
 	addIssue(i: Partial<FakeIssue> & { title: string; labels: string[] }): FakeIssue;
 }
 
-export function fakeGithub(repo = 'owner/shelf', opts: { empty?: boolean } = {}): FakeGithub {
+export function fakeGithub(repo = 'owner/shelf', opts: { empty?: boolean; lagging?: boolean } = {}): FakeGithub {
 	const gh = {
 		repo,
 		files: new Map<string, string>(),
@@ -48,6 +53,8 @@ export function fakeGithub(repo = 'owner/shelf', opts: { empty?: boolean } = {})
 	} as FakeGithub;
 	let nextNumber = 1;
 	let empty = opts.empty ?? false;
+	const unlisted = new Set<number>();
+	gh.settle = () => unlisted.clear();
 
 	gh.addIssue = (i) => {
 		const issue: FakeIssue = {
@@ -118,11 +125,20 @@ export function fakeGithub(repo = 'owner/shelf', opts: { empty?: boolean } = {})
 		}
 		if (path === '/issues' && method === 'GET') {
 			const state = url.searchParams.get('state') ?? 'open';
-			return reply(200, paginate(gh.issues.filter((i) => state === 'all' || i.state === state).map(rawIssue)));
+			return reply(
+				200,
+				paginate(
+					gh.issues
+						.filter((i) => !unlisted.has(i.number) && (state === 'all' || i.state === state))
+						.map(rawIssue)
+				)
+			);
 		}
 		if (path === '/issues' && method === 'POST') {
 			for (const l of body.labels ?? []) gh.labels.add(l);
-			return reply(201, rawIssue(gh.addIssue({ title: body.title, body: body.body, labels: body.labels ?? [] })));
+			const made = gh.addIssue({ title: body.title, body: body.body, labels: body.labels ?? [] });
+			if (opts.lagging) unlisted.add(made.number);
+			return reply(201, rawIssue(made));
 		}
 		const one = /^\/issues\/(\d+)$/.exec(path);
 		if (one && method === 'GET') {
