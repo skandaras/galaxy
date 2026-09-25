@@ -67,7 +67,8 @@ export const BANNED_WORDS =
 export const BANNED_FRAMINGS =
 	'NEVER use these sentence shapes: "It is not X, it is Y"; "Not just X, Y"; ' +
 	'"What sets X apart is"; "At its core, X is"; "Whether you are X or Y"; ' +
-	'"X is not just about Y, it is about Z".';
+	'"X is not just about Y, it is about Z"; ' +
+	'"Never call a statement honest or say you are being honest; just say the thing"';
 
 /**
  * Stepping back to tell the reader that a thing has a name.
@@ -86,7 +87,7 @@ export const HOUSE_VOICE = [
 		'"Good catch", "you are absolutely right" and "that is a really interesting point" are noise ' +
 		'when true and a lie the rest of the time. Agreement is shown by acting on what was said.',
 	'Hedge only where the doubt is warranted, and say what the doubt is.',
-	'Avoid the em dash.',
+	'Do not use the em dash (—). Use a comma, a colon, brackets or a new sentence.',
 	BANNED_WORDS,
 	BANNED_FRAMINGS,
 	BANNED_NAMING,
