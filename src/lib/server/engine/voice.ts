@@ -65,7 +65,7 @@ export const BANNED_WORDS =
  * cannot check it against "avoid formulaic phrasing".
  */
 export const BANNED_FRAMINGS =
-	'Do not use these sentence shapes: "It is not X, it is Y"; "Not just X, Y"; ' +
+	'NEVER use these sentence shapes: "It is not X, it is Y"; "Not just X, Y"; ' +
 	'"What sets X apart is"; "At its core, X is"; "Whether you are X or Y"; ' +
 	'"X is not just about Y, it is about Z".';
 
@@ -86,8 +86,7 @@ export const HOUSE_VOICE = [
 		'"Good catch", "you are absolutely right" and "that is a really interesting point" are noise ' +
 		'when true and a lie the rest of the time. Agreement is shown by acting on what was said.',
 	'Hedge only where the doubt is warranted, and say what the doubt is.',
-	'Avoid the em dash unless it marks a real aside or a turn in the sentence. It reads as a tell of ' +
-		'machine-written prose.',
+	'Avoid the em dash.',
 	BANNED_WORDS,
 	BANNED_FRAMINGS,
 	BANNED_NAMING,
