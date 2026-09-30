@@ -17,6 +17,7 @@
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import { swipeToClose } from '$lib/list-sheet.svelte';
 	import AskSheet from '$lib/components/AskSheet.svelte';
+	import AskBar from '$lib/components/AskBar.svelte';
 	import GalaxyOrb from '$lib/components/GalaxyOrb.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import ResearchEffort from '$lib/components/ResearchEffort.svelte';
@@ -166,6 +167,8 @@
 	 * the question it names rather than the sheet reopening on every reattach.
 	 */
 	let question = $state<{ id: string; prompt: string; options: string[] } | null>(null);
+	/** The question sheet tucked into a bar in the composer, see AskBar. */
+	let askMinimised = $state(false);
 	let stopping = $state(false);
 	let streamText = $state('');
 	/**
@@ -345,12 +348,6 @@
 		// standing over a composer that could no longer be tapped, with nothing on
 		// screen to say why.
 		listOpen = false;
-		// Nothing staged for one conversation may follow you into another: files
-		// are uploaded against a chat id, and `canSend` counts them, so a leftover
-		// armed the send button over an empty box and then posted the wrong chat's
-		// attachments. /code has said this since it was written.
-		pendingFiles = [];
-		uploadedRefs = [];
 		const res = await fetch(`/api/chats/${id}`);
 		if (!res.ok) return;
 		const data = await res.json();
@@ -369,6 +366,16 @@
 		// A hidden choice belongs to the chat it was made for; opening another
 		// conversation is not that chat.
 		pendingHidden = false;
+		// Nothing staged for one conversation may follow you into another: files
+		// are uploaded against a chat id, and `canSend` counts them, so a leftover
+		// armed the send button over an empty box and then posted the wrong chat's
+		// attachments. /code has said this since it was written.
+		//
+		// This used to sit in loadChat, which createChat also goes through — so a
+		// new chat's first message lost its files between creating the chat and
+		// uploading them, and went out with no attachment at all.
+		pendingFiles = [];
+		uploadedRefs = [];
 		await loadChat(id);
 	}
 
@@ -633,6 +640,7 @@
 			} else if (chunk.type === 'notice') notices = [...notices, chunk.text];
 			else if (chunk.type === 'question') {
 				question = { id: chunk.id, prompt: chunk.prompt, options: chunk.options ?? [] };
+				askMinimised = false;
 			} else if (chunk.type === 'answer') {
 				if (question?.id === chunk.id) question = null;
 			}
@@ -883,12 +891,21 @@
 	 * server pushes back, not here — so what the screen shows is what the run
 	 * actually received.
 	 */
-	async function answerQuestion(answer: string): Promise<boolean> {
+	async function answerQuestion(answer: string, attachmentIds: string[]): Promise<boolean> {
+		return postAnswer({ answer, attachmentIds });
+	}
+
+	/** Close the question unanswered; the server tells the agent to carry on without it. */
+	async function skipQuestion(): Promise<boolean> {
+		return postAnswer({ skipped: true });
+	}
+
+	async function postAnswer(body: Record<string, unknown>): Promise<boolean> {
 		if (!activeJobId || !question) return false;
 		const res = await fetch(`/api/jobs/${activeJobId}/answer`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ questionId: question.id, answer })
+			body: JSON.stringify({ questionId: question.id, ...body })
 		}).catch(() => null);
 		if (res?.ok) return true;
 		// A 404 is the run itself being gone — the server restarted under it, or
@@ -1419,6 +1436,9 @@
 			{#if !scroll.pinned}
 				<button class="jump" onclick={() => scroll.toBottom('smooth')}>↓ Jump to latest</button>
 			{/if}
+			{#if question && askMinimised}
+				<AskBar prompt={question.prompt} onopen={() => (askMinimised = false)} />
+			{/if}
 			{#if pendingFiles.length || uploadedRefs.length}
 				<div class="pending-files">
 					{#each uploadedRefs as ref (ref.id)}
@@ -1558,8 +1578,17 @@
 	</section>
 </div>
 
-{#if question}
-	<AskSheet prompt={question.prompt} options={question.options} onanswer={answerQuestion} />
+{#if question && currentChat}
+	{#key question.id}
+		<AskSheet
+			prompt={question.prompt}
+			options={question.options}
+			chatId={currentChat.id}
+			onanswer={answerQuestion}
+			onskip={skipQuestion}
+			bind:minimised={askMinimised}
+		/>
+	{/key}
 {/if}
 
 <style>

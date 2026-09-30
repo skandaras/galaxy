@@ -18,6 +18,7 @@
 		planRecovery
 	} from '$lib/stream-recovery';
 	import AskSheet from '$lib/components/AskSheet.svelte';
+	import AskBar from '$lib/components/AskBar.svelte';
 	import GalaxyOrb from '$lib/components/GalaxyOrb.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
@@ -165,6 +166,8 @@
 	let activeJobId = $state<string | null>(null);
 	/** Open question from ask_user; cleared by the server's `answer` chunk. */
 	let question = $state<{ id: string; prompt: string; options: string[] } | null>(null);
+	/** The question sheet tucked into a bar in the composer, see AskBar. */
+	let askMinimised = $state(false);
 	let stopping = $state(false);
 	let streamText = $state('');
 	/**
@@ -520,6 +523,7 @@
 						: subAgents.map((a, i) => (i === at ? { ...a, ...row } : a));
 			} else if (chunk.type === 'question') {
 				question = { id: chunk.id, prompt: chunk.prompt, options: chunk.options ?? [] };
+				askMinimised = false;
 			} else if (chunk.type === 'answer') {
 				if (question?.id === chunk.id) question = null;
 			} else if (chunk.type === 'done') {
@@ -678,12 +682,21 @@
 	}
 
 	/** Resolves the waiting tool call; the sheet closes on the server's reply. */
-	async function answerQuestion(answer: string): Promise<boolean> {
+	async function answerQuestion(answer: string, attachmentIds: string[]): Promise<boolean> {
+		return postAnswer({ answer, attachmentIds });
+	}
+
+	/** Close the question unanswered; the server tells the agent to carry on without it. */
+	async function skipQuestion(): Promise<boolean> {
+		return postAnswer({ skipped: true });
+	}
+
+	async function postAnswer(body: Record<string, unknown>): Promise<boolean> {
 		if (!activeJobId || !question) return false;
 		const res = await fetch(`/api/jobs/${activeJobId}/answer`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ questionId: question.id, answer })
+			body: JSON.stringify({ questionId: question.id, ...body })
 		}).catch(() => null);
 		if (res?.ok) return true;
 		// The run that asked is gone, so nothing will ever accept this answer and
@@ -1217,6 +1230,9 @@
 				{#if !scroll.pinned}
 					<button class="jump" onclick={() => scroll.toBottom('smooth')}>↓ Jump to latest</button>
 				{/if}
+				{#if question && askMinimised}
+					<AskBar prompt={question.prompt} onopen={() => (askMinimised = false)} />
+				{/if}
 				{#if pendingFiles.length || uploadedRefs.length}
 					<div class="pending-files">
 						{#each uploadedRefs as ref (ref.id)}
@@ -1309,8 +1325,17 @@
 	</section>
 </div>
 
-{#if question}
-	<AskSheet prompt={question.prompt} options={question.options} onanswer={answerQuestion} />
+{#if question && current}
+	{#key question.id}
+		<AskSheet
+			prompt={question.prompt}
+			options={question.options}
+			chatId={current.chatId}
+			onanswer={answerQuestion}
+			onskip={skipQuestion}
+			bind:minimised={askMinimised}
+		/>
+	{/key}
 {/if}
 
 <script module lang="ts">

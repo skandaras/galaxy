@@ -3,6 +3,8 @@ import type { LoopTool } from './loop';
 import type { ToolDef } from '$lib/server/providers/types';
 import { pushChunk, type LiveJob } from './jobs';
 import { notify, resolveEntity } from '$lib/server/notifications';
+import { listAttachments } from '$lib/server/chats';
+import { withDocumentText } from './context';
 
 /**
  * Letting an agent stop and ask.
@@ -30,7 +32,7 @@ const MAX_OPTIONS = 6;
 interface Pending {
 	jobId: string;
 	userId: string;
-	settle: (answer: string) => void;
+	settle: (answer: string, note?: string) => void;
 }
 
 const pending = new Map<string, Pending>();
@@ -99,7 +101,7 @@ function waitForAnswer(job: LiveJob, prompt: string, options: string[]): Promise
 		const onAbort = () => finish('The run was stopped before this was answered.', '(run stopped)');
 		job.controller.signal.addEventListener('abort', onAbort, { once: true });
 
-		pending.set(id, { jobId: job.id, userId: job.userId, settle: (answer) => finish(answer) });
+		pending.set(id, { jobId: job.id, userId: job.userId, settle: (answer, note) => finish(answer, note) });
 		// Set before the chunk, so a job read the instant the question lands is
 		// already exempt from the staleness watchdog. A parked job produces no
 		// chunks by definition, which is exactly what the watchdog looks for.
@@ -122,15 +124,55 @@ function waitForAnswer(job: LiveJob, prompt: string, options: string[]): Promise
 }
 
 /**
+ * What the model is told when the person closes the question instead of
+ * answering it. The sheet used to have no way out at all, only a hint pointing
+ * at a Stop button it was drawn on top of.
+ */
+export const SKIPPED_ANSWER =
+	'They closed this question without answering. Carry on with your best judgement, and say in your reply what you assumed in place of an answer.';
+
+/**
+ * An answer with files attached to it, as the tool result the model reads and
+ * the short note the stream carries.
+ *
+ * The files are uploaded to the chat first, through the same endpoint as the
+ * composer's, so the ids are looked up against this chat alone and an id from
+ * anywhere else is dropped. Documents are inlined with the same labelled block
+ * a message attachment gets; a tool result is text, so an image is pointed at
+ * view_image rather than shown. The note keeps the extracted text off the
+ * stream, which only needs to close the question.
+ */
+export function composeAnswer(
+	chatId: string,
+	text: string,
+	attachmentIds: string[]
+): { answer: string; note: string; attached: number } {
+	const wanted = new Set(attachmentIds);
+	const files = listAttachments(chatId).filter((a) => wanted.has(a.id));
+	const docs = files.filter((a) => a.kind === 'document');
+	let answer = withDocumentText(chatId, text, docs);
+	for (const img of files.filter((a) => a.kind === 'image')) {
+		answer += `\n\n[Attached image: ${img.name} (${img.mime}). Call view_image with id="${img.id}" to see it.]`;
+	}
+	const note = [text, ...files.map((a) => `📎 ${a.name}`)].filter(Boolean).join(' ');
+	return { answer: answer.trim(), note, attached: files.length };
+}
+
+/**
  * Answer an open question. Returns false when there is nothing to answer —
  * already answered, the run was stopped, or it was never asked — which the
  * client treats as a lost race rather than an error.
  */
-export function answerQuestion(questionId: string, userId: string, answer: string): boolean {
+export function answerQuestion(
+	questionId: string,
+	userId: string,
+	answer: string,
+	note?: string
+): boolean {
 	const entry = pending.get(questionId);
 	// Same shape as an unknown question, so ids can't be probed for existence.
 	if (!entry || entry.userId !== userId) return false;
-	entry.settle(answer);
+	entry.settle(answer, note);
 	return true;
 }
 
