@@ -1,6 +1,13 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '$lib/server/db';
-import { answerQuestion, askUserTool, openQuestionCount } from './ask-user';
+import { addAttachment, createChat } from '$lib/server/chats';
+import {
+	answerQuestion,
+	askUserTool,
+	composeAnswer,
+	openQuestionCount,
+	SKIPPED_ANSWER
+} from './ask-user';
 import { createJob, subscribeJob, type JobChunk, type LiveJob } from './jobs';
 
 beforeAll(() => {
@@ -188,5 +195,77 @@ describe('what the model is told', () => {
 		job.controller.abort();
 
 		await expect(pending).resolves.toMatch(/stopped/);
+	});
+});
+
+/**
+ * The sheet used to take a line of text and nothing else, so an agent that
+ * asked for a form got told there was no way to send one, and there was no
+ * way to close the sheet short of a Stop button it covered.
+ */
+describe('answering with files, or not at all', () => {
+	const doc = (chatId: string, name: string, text: string) =>
+		addAttachment(chatId, {
+			name,
+			mime: 'application/pdf',
+			data: Buffer.from('x'),
+			kind: 'document',
+			text
+		});
+
+	it('inlines a document answer the way a message attachment is inlined', () => {
+		const chat = createChat({ userId: 'u1' });
+		const ref = doc(chat.id, 'form.pdf', 'Section A: name, date of birth');
+		const out = composeAnswer(chat.id, 'Here it is', [ref.id]);
+		expect(out.attached).toBe(1);
+		expect(out.answer).toContain('Here it is');
+		expect(out.answer).toContain('[Attached file: form.pdf');
+		expect(out.answer).toContain('Section A: name, date of birth');
+		// The stream only needs to close the question, not carry the document.
+		expect(out.note).toBe('Here it is 📎 form.pdf');
+	});
+
+	it('points the model at view_image for an image, since a tool result is text', () => {
+		const chat = createChat({ userId: 'u1' });
+		const ref = addAttachment(chat.id, {
+			name: 'shot.png',
+			mime: 'image/png',
+			data: Buffer.from('x'),
+			kind: 'image'
+		});
+		const out = composeAnswer(chat.id, '', [ref.id]);
+		expect(out.answer).toContain(`view_image with id="${ref.id}"`);
+		expect(out.note).toBe('📎 shot.png');
+	});
+
+	it('drops an id that belongs to another chat', () => {
+		const mine = createChat({ userId: 'u1' });
+		const theirs = createChat({ userId: 'u2' });
+		const ref = doc(theirs.id, 'secret.pdf', 'not yours');
+		const out = composeAnswer(mine.id, 'hi', [ref.id]);
+		expect(out.attached).toBe(0);
+		expect(out.answer).toBe('hi');
+		expect(out.answer).not.toContain('not yours');
+	});
+
+	it('closes the stream with the short note while the model gets the full answer', async () => {
+		const { chunks, tool } = harness();
+		const pending = tool.execute({ question: 'Which form?' });
+		const asked = questionIn(chunks);
+
+		answerQuestion(asked.id, 'u1', 'long answer with a document in it', '📎 form.pdf');
+		await expect(pending).resolves.toBe('long answer with a document in it');
+		expect(chunks.find((c) => c.type === 'answer')).toMatchObject({ text: '📎 form.pdf' });
+	});
+
+	it('tells the model a skipped question went unanswered, and the run carries on', async () => {
+		const { job, chunks, tool } = harness();
+		const pending = tool.execute({ question: 'Which form?' });
+		const asked = questionIn(chunks);
+
+		expect(answerQuestion(asked.id, 'u1', SKIPPED_ANSWER, '(skipped)')).toBe(true);
+		await expect(pending).resolves.toBe(SKIPPED_ANSWER);
+		expect(job.parked).toBe(false);
+		expect(chunks.find((c) => c.type === 'answer')).toMatchObject({ text: '(skipped)' });
 	});
 });

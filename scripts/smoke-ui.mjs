@@ -81,6 +81,10 @@ const app = spawn('node', ['build'], {
 		ADMIN_GROUP: 'galaxy-admins',
 		DATA_DIR: dataDir,
 		PORT: String(PORT),
+		// As in smoke-e2e.sh: unset, adapter-node assumes https, and SvelteKit's
+		// CSRF check refuses every multipart POST from the page. Nothing here
+		// uploaded a file from the browser until the ask-sheet checks below.
+		ORIGIN: B,
 		CODING_EXECUTOR: 'local'
 	},
 	stdio: ['ignore', 'pipe', 'pipe']
@@ -1000,6 +1004,74 @@ check(
 	check('and lights with a message already in the box', await lit());
 	check('none of which logged an error', problems, []);
 	if (fail.length) await shot('composer-paste');
+}
+
+// N+3. A new chat's first message keeps its file, and the agent's question can
+//      be answered with a file, skipped, or tucked away. The first message went
+//      out bare because creating the chat cleared what was staged; the sheet
+//      took a line of text and nothing else, drawn over the Stop button its
+//      own hint pointed at.
+{
+	problems = [];
+	await page.goto(`${B}/chat`);
+	await page.locator('.composer textarea').waitFor();
+	await page.getByRole('button', { name: '+ New chat' }).click();
+	const idle = () => page.locator('.composer .btn.send').waitFor({ timeout: 20_000 }).catch(() => {});
+	const text = (name, body) => ({ name, mimeType: 'text/plain', buffer: Buffer.from(body) });
+
+	await page.locator('.composer input[type=file]').setInputFiles(text('first.txt', 'FIRST-FILE'));
+	await page.locator('.composer textarea').fill('what is in this file?');
+	await page.keyboard.press('Enter');
+	await page.locator('.msg.assistant').first().waitFor({ timeout: 20_000 }).catch(() => {});
+	await idle();
+	const [newest] = await as(ALICE, '/api/chats');
+	const stored = (await as(ALICE, `/api/chats/${newest.id}`)).messages.find((m) => m.role === 'user');
+	check("a new chat's first message keeps its attachment", stored?.attachments?.length ?? 0, 1);
+
+	const sheet = page.locator('.sheet[role=dialog]');
+	const reply = (marker) =>
+		page.locator('.msg.assistant', { hasText: marker }).last().waitFor({ timeout: 20_000 }).then(
+			() => true,
+			() => false
+		);
+
+	await page.locator('.composer textarea').fill('ask-me');
+	await page.keyboard.press('Enter');
+	await sheet.waitFor({ timeout: 15_000 }).catch(() => {});
+	check('the question opens the sheet', await sheet.count(), 1);
+	await page.getByRole('button', { name: 'Minimise the question' }).click();
+	check('minimising takes the sheet down', await sheet.count(), 0);
+	// Corners as well as the middle: a floating bar anchored above the
+	// composer clipped the top of the Stop button and left its centre clear.
+	const uncovered = async (selector) => {
+		const box = await page.locator(selector).boundingBox();
+		if (!box) return false;
+		const pts = [0.1, 0.5, 0.9].flatMap((fx) =>
+			[0.1, 0.5, 0.9].map((fy) => ({ x: box.x + box.width * fx, y: box.y + box.height * fy }))
+		);
+		return page.evaluate(
+			({ pts, selector }) => pts.every(({ x, y }) => document.elementFromPoint(x, y)?.closest(selector)),
+			{ pts, selector }
+		);
+	};
+	check('and uncovers the Stop button', await uncovered('.composer .btn.stop'));
+	check('and the rest of the composer', await uncovered('.composer textarea'));
+	await page.locator('.composer .ask-bar').click();
+	check('the bar in the composer opens it again', await sheet.count(), 1);
+
+	await sheet.locator('input[type=file]').setInputFiles(text('form.txt', 'FORM-FIELD-7'));
+	await sheet.getByRole('button', { name: 'Answer', exact: true }).click();
+	check('a file alone answers, and reaches the model', await reply('FORM-FIELD-7'));
+	await idle();
+
+	await page.locator('.composer textarea').fill('ask-me');
+	await page.keyboard.press('Enter');
+	await sheet.waitFor({ timeout: 15_000 }).catch(() => {});
+	await sheet.getByRole('button', { name: 'Skip', exact: true }).click();
+	check('Skip closes it and the run carries on', await reply('without answering'));
+	await idle();
+	check('none of which logged an error', problems, []);
+	if (fail.length) await shot('ask-sheet');
 }
 
 // 8. The Cortex map. A canvas is the one thing on the page whose failure is
