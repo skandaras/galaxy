@@ -26,12 +26,12 @@
 	});
 
 	async function saveLimits() {
-		await fetch('/api/admin/settings', {
+		const res = await fetch('/api/admin/settings', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ key: 'boards', value: limits })
-		});
-		notice = 'Limits saved';
+		}).catch(() => null);
+		notice = res?.ok ? 'Limits saved' : 'Not saved. Try again.';
 		await load();
 	}
 
@@ -134,8 +134,8 @@
 	}
 	input {
 		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 5px;
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
 		color: var(--fg);
 		font-family: inherit;
 		font-size: var(--text-base);

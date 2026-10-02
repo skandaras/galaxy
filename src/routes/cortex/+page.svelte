@@ -131,6 +131,7 @@
 	let filter = $state('');
 	let busy = $state(false);
 	let error = $state('');
+	let imported = $state('');
 
 	// Editing state for the selected node, or a new one.
 	let name = $state('');
@@ -369,12 +370,15 @@
 		if (!file) return;
 		importing = true;
 		error = '';
+		imported = '';
 		try {
 			const payload = JSON.parse(await file.text());
 			const res = await send('/api/cortex/import', 'POST', payload);
+			// A success, so not in the red alert slot where it used to be shown.
 			if (res) {
-				error = `Imported ${res.nodes} concept(s), ${res.edges} connection(s)` +
-					(res.skipped ? ` — ${res.skipped} skipped` : '');
+				imported =
+					`Imported ${res.nodes} concept(s), ${res.edges} connection(s)` +
+					(res.skipped ? `, ${res.skipped} skipped` : '');
 			}
 			await load();
 		} catch {
@@ -534,6 +538,9 @@
 
 	async function remove() {
 		if (!selectedId) return;
+		// Undo in History brings the concept back but not its connections, which
+		// are cleared with it and not logged, so this is the last chance to keep them.
+		if (!confirm(`Delete "${selected?.name ?? 'this concept'}" and its connections?`)) return;
 		await send(`/api/cortex/nodes/${encodeURIComponent(selectedId)}`, 'DELETE', {});
 		await load();
 		startNew();
@@ -804,6 +811,7 @@
 					as one entry and can be undone from there.
 				</p>
 				{#if error}<p class="error" role="alert">{error}</p>{/if}
+				{#if imported}<p class="done" role="status">{imported}</p>{/if}
 				<div class="row">
 					<button class="btn" onclick={exportLattice}>Export</button>
 					<button class="btn" disabled={importing} onclick={() => fileInput?.click()}>
@@ -975,7 +983,7 @@
 										Most of that run was deliberation, not answer. This job asks for low
 										effort; a model that ignores it, or one whose provider does not
 										advertise the setting, is the thing to change — set
-										<strong>Reasoning</strong> on the model in Admin → Providers, or point
+										the model's <strong>Think</strong> column in Admin → Models, or point
 										the cortex-groom task at a model that does not reason.
 									</span>
 								{/if}
@@ -1470,6 +1478,10 @@
 	.error {
 		font-size: var(--text-sm);
 		color: var(--danger);
+	}
+	.done {
+		font-size: var(--text-sm);
+		color: var(--fg);
 	}
 	.tab {
 		background: none;

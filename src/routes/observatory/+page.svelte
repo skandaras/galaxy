@@ -31,13 +31,18 @@
 	 * since it was written; see components/Observatory.svelte.
 	 */
 	let connected = $state(false);
+	// "No events match." used to stand in for loading and for a failed load too.
+	let loadState = $state<'loading' | 'ready' | 'failed'>('loading');
 
 	async function load() {
 		const params = new URLSearchParams({ limit: '200' });
 		if (type) params.set('type', type);
 		if (status) params.set('status', status);
-		const res = await fetch(`/api/events?${params}`);
-		if (res.ok) rows = await res.json();
+		const res = await fetch(`/api/events?${params}`).catch(() => null);
+		if (res?.ok) {
+			rows = await res.json();
+			loadState = 'ready';
+		} else loadState = 'failed';
 	}
 
 	$effect(() => {
@@ -114,7 +119,15 @@
 				{/if}
 			</li>
 		{:else}
-			<li class="empty">No events match.</li>
+			<li class="empty">
+				{#if loadState === 'loading'}
+					Loading…
+				{:else if loadState === 'failed'}
+					Could not load events. Reload to try again.
+				{:else}
+					No events match.
+				{/if}
+			</li>
 		{/each}
 	</ul>
 </div>
@@ -150,8 +163,8 @@
 	}
 	select {
 		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 5px;
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
 		color: var(--fg);
 		font-family: inherit;
 		font-size: var(--text-base);
@@ -172,9 +185,10 @@
 		font-size: var(--text-sm);
 		align-self: center;
 	}
+	/* Accent, not danger: pausing is a choice, and red here read as a fault. */
 	.chip.on {
-		border-color: var(--danger);
-		color: var(--danger);
+		border-color: var(--accent);
+		color: var(--accent);
 	}
 	ul {
 		list-style: none;

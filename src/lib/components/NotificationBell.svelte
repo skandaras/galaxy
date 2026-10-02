@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 
 	interface Notification {
 		id: string;
@@ -111,6 +112,9 @@
 	// The tab title is the only signal that reaches a window in the background.
 	$effect(() => {
 		if (typeof document === 'undefined') return;
+		// The layout titles each section, and a navigation writes that title back
+		// without the count, so this has to run again after every one.
+		void page.url.pathname;
 		const base = document.title.replace(/^\(\d+\)\s*/, '');
 		document.title = unread > 0 ? `(${unread}) ${base}` : base;
 	});

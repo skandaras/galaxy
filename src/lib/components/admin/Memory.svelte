@@ -37,12 +37,12 @@
 	});
 
 	async function saveSettings() {
-		await fetch('/api/admin/settings', {
+		const res = await fetch('/api/admin/settings', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ key: 'memory', value: settings })
-		});
-		notice = 'Schedule saved';
+		}).catch(() => null);
+		notice = res?.ok ? 'Schedule saved' : 'Not saved. Try again.';
 		await load();
 	}
 
@@ -211,8 +211,8 @@
 	}
 	input[type='number'] {
 		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 5px;
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
 		color: var(--fg);
 		font-family: inherit;
 		padding: 0.3rem 0.5rem;

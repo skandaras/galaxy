@@ -34,6 +34,9 @@
 	// unreachable there, which docs/MOBILE.md claims it is not.
 	const barLinks = $derived([...links, { href: '/observatory', label: 'Observatory' }]);
 
+	// Every tab, history entry and bookmark used to read just "Galaxy".
+	const section = $derived(barLinks.find((l) => page.url.pathname.startsWith(l.href))?.label);
+
 	$effect(() =>
 		attachViewport(window, (name, value) =>
 			document.documentElement.style.setProperty(name, value)
@@ -42,6 +45,7 @@
 </script>
 
 <svelte:head>
+	<title>{section ? `${section} · Galaxy` : 'Galaxy'}</title>
 	<!-- Follows the theme rather than app.html's fixed #05060f, which is what
 	     colours the browser and status bar around an installed app. The manifest
 	     keeps the fixed value on purpose: it is read at install time, when there
@@ -71,6 +75,7 @@
 				<a
 					class="nav-item"
 					class:active={page.url.pathname.startsWith(link.href)}
+					aria-current={page.url.pathname.startsWith(link.href) ? 'page' : undefined}
 					href={link.href}>{link.label}</a
 				>
 			{/each}

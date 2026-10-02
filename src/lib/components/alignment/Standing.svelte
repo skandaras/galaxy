@@ -201,7 +201,7 @@
 
 		<article class="card">
 			<h3>The longer view</h3>
-			{#if notice}<p class="notice">{notice}</p>{/if}
+			{#if notice}<p class="notice" role="alert">{notice}</p>{/if}
 			{#if standing.latestSynthesis}
 				<p class="meta">Written {when(standing.latestSynthesis.createdAt)}</p>
 				<div class="letter">
@@ -291,7 +291,7 @@
 		margin: 0.6rem 0 0;
 	}
 	.notice {
-		color: var(--accent);
+		color: var(--danger);
 		font-size: var(--text-base);
 	}
 	.flag {

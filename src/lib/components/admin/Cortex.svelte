@@ -39,12 +39,12 @@
 	});
 
 	async function save(key: 'cortex' | 'cortexGroom', value: unknown) {
-		await fetch('/api/admin/settings', {
+		const res = await fetch('/api/admin/settings', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ key, value })
-		});
-		notice = 'Saved';
+		}).catch(() => null);
+		notice = res?.ok ? 'Saved' : 'Not saved. Try again.';
 		await load();
 	}
 

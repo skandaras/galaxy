@@ -45,6 +45,7 @@
 	/** `house` is served read-only, for editing against — it is never sent back. */
 	let style = $state({ text: '', house: '', layout: '' });
 	let saved = $state<string | null>(null);
+	let failed = $state<{ key: string; message: string } | null>(null);
 	let deployBusy = $state<string | null>(null);
 	let deployMsg = $state<string | null>(null);
 
@@ -201,11 +202,19 @@
 			| 'ivory',
 		value: unknown
 	) {
-		await fetch('/api/admin/settings', {
+		// This used to show "Saved ✓" whatever came back, so a value the server
+		// refused looked kept until the page was reloaded.
+		const res = await fetch('/api/admin/settings', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ key, value })
-		});
+		}).catch(() => null);
+		if (!res?.ok) {
+			const body = await res?.json().catch(() => null);
+			failed = { key, message: body?.message ?? 'Not saved. Try again.' };
+			return;
+		}
+		failed = null;
 		saved = key;
 		setTimeout(() => (saved = null), 1500);
 	}
@@ -305,6 +314,7 @@
 			<button class="btn" disabled={testing} onclick={testSearch}>
 				{testing ? 'Testing…' : 'Test search'}
 			</button>
+			{#if failed?.key === 'websearch'}<span class="save-error" role="alert">{failed.message}</span>{/if}
 		</div>
 		{#if testResult}
 			<pre class="test-result" class:bad={!testResult.ok}>{formatTest(testResult)}</pre>
@@ -382,6 +392,7 @@
 		<button class="btn primary" onclick={() => save('research', research)}>
 			{saved === 'research' ? 'Saved ✓' : 'Save'}
 		</button>
+		{#if failed?.key === 'research'}<span class="save-error" role="alert">{failed.message}</span>{/if}
 	</article>
 
 	<article class="card">
@@ -407,6 +418,7 @@
 		<button class="btn primary" onclick={() => save('coding', coding)}>
 			{saved === 'coding' ? 'Saved ✓' : 'Save'}
 		</button>
+		{#if failed?.key === 'coding'}<span class="save-error" role="alert">{failed.message}</span>{/if}
 	</article>
 
 	<article class="card">
@@ -442,6 +454,7 @@
 		<button class="btn primary" onclick={() => save('style', { text: style.text })}>
 			{saved === 'style' ? 'Saved ✓' : 'Save'}
 		</button>
+		{#if failed?.key === 'style'}<span class="save-error" role="alert">{failed.message}</span>{/if}
 	</article>
 
 	<article class="card">
@@ -463,6 +476,7 @@
 		<button class="btn primary" onclick={() => save('github', { token: github.token })}>
 			{saved === 'github' ? 'Saved ✓' : 'Save'}
 		</button>
+		{#if failed?.key === 'github'}<span class="save-error" role="alert">{failed.message}</span>{/if}
 	</article>
 
 	<article class="card">
@@ -528,6 +542,7 @@
 			<button class="btn primary" onclick={() => save('ivory', ivory)}>
 				{saved === 'ivory' ? 'Saved ✓' : 'Save'}
 			</button>
+			{#if failed?.key === 'ivory'}<span class="save-error" role="alert">{failed.message}</span>{/if}
 			<button class="btn" disabled={shelfBusy} onclick={setupShelf}>
 				{shelfBusy ? 'Setting up…' : 'Set up Shelf'}
 			</button>
@@ -541,7 +556,7 @@
 			Promote retags the current <code>:dev</code> image as <code>:stable</code> (keeping the
 			previous stable as <code>:stable-prev</code>) via the Promote workflow; prod follows
 			<code>:stable</code>. Rollback restores <code>:stable-prev</code>. Requires the GitHub
-			token below with workflow scope.
+			token above with workflow scope.
 		</p>
 		<div class="row-buttons">
 			<button class="btn primary" disabled={deployBusy !== null} onclick={() => deploy('promote')}>
@@ -580,6 +595,7 @@
 		<button class="btn primary" onclick={() => save('budget', budget)}>
 			{saved === 'budget' ? 'Saved ✓' : 'Save'}
 		</button>
+		{#if failed?.key === 'budget'}<span class="save-error" role="alert">{failed.message}</span>{/if}
 	</article>
 
 	<article class="card">
@@ -597,6 +613,7 @@
 		<button class="btn primary" onclick={() => save('compaction', compaction)}>
 			{saved === 'compaction' ? 'Saved ✓' : 'Save'}
 		</button>
+		{#if failed?.key === 'compaction'}<span class="save-error" role="alert">{failed.message}</span>{/if}
 	</article>
 
 	<article class="card">
@@ -626,6 +643,7 @@
 		<button class="btn primary" onclick={() => save('fetch', fetchCfg)}>
 			{saved === 'fetch' ? 'Saved ✓' : 'Save'}
 		</button>
+		{#if failed?.key === 'fetch'}<span class="save-error" role="alert">{failed.message}</span>{/if}
 	</article>
 
 	<article class="card">
@@ -662,6 +680,7 @@
 		<button class="btn primary" onclick={() => save('retention', retention)}>
 			{saved === 'retention' ? 'Saved ✓' : 'Save'}
 		</button>
+		{#if failed?.key === 'retention'}<span class="save-error" role="alert">{failed.message}</span>{/if}
 	</article>
 
 	<article class="card">
@@ -745,8 +764,8 @@
 	input,
 	select {
 		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 5px;
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
 		color: var(--fg);
 		font-family: inherit;
 		font-size: var(--text-md);
@@ -785,6 +804,10 @@
 		font-size: var(--text-sm);
 		color: var(--fg-dim);
 	}
+	.save-error {
+		font-size: var(--text-sm);
+		color: var(--danger);
+	}
 	.test-result {
 		background: var(--bg-pane);
 		border: 1px solid var(--border);
@@ -809,8 +832,8 @@
 		width: 100%;
 		box-sizing: border-box;
 		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 6px;
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
 		color: var(--fg);
 		font-family: inherit;
 		font-size: var(--text-md);

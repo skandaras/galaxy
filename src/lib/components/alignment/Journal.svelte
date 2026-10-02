@@ -129,6 +129,8 @@
 	}
 
 	async function remove(entry: Entry) {
+		if (!confirm(`Delete "${entry.title || 'Untitled'}" and any readings of it? This cannot be undone.`))
+			return;
 		await fetch(`/api/alignment/entries/${entry.id}`, { method: 'DELETE' });
 		await load();
 		onChanged();
@@ -140,7 +142,7 @@
 </script>
 
 <section class="journal">
-	{#if notice}<p class="notice">{notice}</p>{/if}
+	{#if notice}<p class="notice" role="alert">{notice}</p>{/if}
 
 	<article class="card composer">
 		<h3>Write</h3>
@@ -304,7 +306,7 @@
 		color: var(--danger);
 	}
 	.notice {
-		color: var(--accent);
+		color: var(--danger);
 		font-size: var(--text-base);
 	}
 	input,
@@ -313,8 +315,8 @@
 		box-sizing: border-box;
 		background: var(--bg);
 		color: var(--fg);
-		border: 1px solid var(--border);
-		border-radius: 5px;
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
 		padding: 0.45rem 0.55rem;
 		font-family: inherit;
 		font-size: var(--text-md);

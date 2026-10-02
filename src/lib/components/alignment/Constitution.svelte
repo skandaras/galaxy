@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { autoresize } from '$lib/autoresize';
 	import {
+		BAND_LABELS,
 		EXEMPLAR_HINTS,
 		EXEMPLAR_LABELS,
 		KIND_BLURBS,
@@ -8,6 +9,7 @@
 		KIND_ORDER,
 		KIND_PLACEHOLDERS,
 		PRINCIPLE_KINDS,
+		type AssessmentBand,
 		type Principle,
 		type PrincipleKind,
 		type PrincipleRevision,
@@ -52,8 +54,8 @@
 		| {
 				entryId: string;
 				title: string;
-				before: { band: string; standing: string } | null;
-				after: { band: string; standing: string } | null;
+				before: { band: AssessmentBand; standing: string } | null;
+				after: { band: AssessmentBand; standing: string } | null;
 				reason?: string;
 		  }[]
 	>(null);
@@ -119,6 +121,34 @@
 		comparison = null;
 	}
 
+	/**
+	 * What a person calls each field, for the two places that list changed ones.
+	 * They used to show the keys themselves, so a save read "counterExemplar".
+	 * The two example boxes are named generically because their labels change
+	 * with the kind, and a revision may predate a change of kind.
+	 */
+	const FIELD_NAMES: Record<string, string> = {
+		kind: 'kind',
+		title: 'title',
+		statement: 'statement',
+		exemplar: 'first example',
+		counterExemplar: 'second example',
+		body: 'notes',
+		weight: 'weight',
+		conviction: 'conviction',
+		origin: 'origin',
+		status: 'status'
+	};
+	const KIND_SINGULAR: Record<PrincipleKind, string> = {
+		value: 'value',
+		principle: 'principle',
+		belief: 'belief',
+		role: 'role',
+		'failure-mode': 'failure mode',
+		aspiration: 'aspiration'
+	};
+	const fieldNames = (keys: string[]) => keys.map((k) => FIELD_NAMES[k] ?? k).join(', ');
+
 	/** Which fields this save would change — shown before it is committed. */
 	const pending = $derived.by(() => {
 		if (!openId) return [];
@@ -148,7 +178,7 @@
 				});
 		saving = false;
 		if (!res.ok) {
-			notice = (await res.text()) || 'Could not save that.';
+			notice = (await res.json().catch(() => null))?.message ?? 'Could not save that.';
 			return;
 		}
 		const wasEdit = !!openId;
@@ -218,6 +248,7 @@
 	}
 
 	async function hardDelete(p: Principle) {
+		if (!confirm(`Erase "${p.title}" and its history? Retire it instead to keep the record.`)) return;
 		await fetch(`/api/alignment/principles/${p.id}?hard=1`, { method: 'DELETE' });
 		await load();
 		onChanged();
@@ -232,7 +263,7 @@
 			body: JSON.stringify({ aId: tensionA, bId: tensionB, note: tensionNote })
 		});
 		if (!res.ok) {
-			notice = (await res.text()) || 'Could not save that tension.';
+			notice = (await res.json().catch(() => null))?.message ?? 'Could not save that tension.';
 			return;
 		}
 		tensionA = '';
@@ -264,7 +295,7 @@
 </script>
 
 <section class="constitution">
-	{#if notice}<p class="notice">{notice}</p>{/if}
+	{#if notice}<p class="notice" role="alert">{notice}</p>{/if}
 
 	{#if !editing}
 		<p class="hint intro">
@@ -376,7 +407,7 @@
 	{:else}
 		<article class="card editor">
 			<div class="kind-head">
-				<h3>{openId ? 'Edit' : `New ${(form.kind as string) ?? 'value'}`}</h3>
+				<h3>{openId ? 'Edit' : `New ${KIND_SINGULAR[(form.kind as PrincipleKind) ?? 'value']}`}</h3>
 				<button class="btn" onclick={close}>Back</button>
 			</div>
 
@@ -500,7 +531,7 @@
 			{#if openId && pending.length}
 				<div class="diff">
 					<h4>This save changes</h4>
-					<p class="hint">{pending.join(', ')}</p>
+					<p class="hint">{fieldNames(pending)}</p>
 					<label>
 						<span class="label">Why?</span>
 						<span class="field-hint">
@@ -534,7 +565,7 @@
 					{#each revisions as r (r.id)}
 						<div class="revision">
 							<span class="rev-when num">{when(r.createdAt)}</span>
-							<span class="rev-fields">{(r.changedFields ?? []).join(', ')}</span>
+							<span class="rev-fields">{fieldNames(r.changedFields ?? [])}</span>
 							{#if r.note}<span class="rev-note">{r.note}</span>{/if}
 							{#if r.snapshot?.statement}
 								<span class="rev-statement">{r.snapshot.statement}</span>
@@ -580,12 +611,12 @@
 						<div class="compare-cols">
 							<div>
 								<span class="compare-label">before</span>
-								<span class="compare-band">{c.before?.band ?? '—'}</span>
+								<span class="compare-band">{c.before ? BAND_LABELS[c.before.band] : '—'}</span>
 								<p class="compare-standing">{c.before?.standing ?? ''}</p>
 							</div>
 							<div>
 								<span class="compare-label">after</span>
-								<span class="compare-band">{c.after?.band ?? '—'}</span>
+								<span class="compare-band">{c.after ? BAND_LABELS[c.after.band] : '—'}</span>
 								<p class="compare-standing">{c.after?.standing ?? ''}</p>
 							</div>
 						</div>
@@ -646,7 +677,7 @@
 		margin: 0;
 	}
 	.notice {
-		color: var(--accent);
+		color: var(--danger);
 		font-size: var(--text-base);
 	}
 	.row-item {
@@ -710,8 +741,8 @@
 		box-sizing: border-box;
 		background: var(--bg);
 		color: var(--fg);
-		border: 1px solid var(--border);
-		border-radius: 5px;
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
 		padding: 0.4rem 0.5rem;
 		font-family: inherit;
 		font-size: var(--text-md);
