@@ -83,9 +83,6 @@
 
 <style>
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-bottom: 0.9rem;
 	}
 	h3 {
@@ -96,14 +93,7 @@
 		color: var(--heading);
 	}
 	.hint {
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
-		line-height: 1.5;
 		margin: 0.5rem 0;
-	}
-	.notice {
-		color: var(--accent);
-		font-size: var(--text-base);
 	}
 	table {
 		width: 100%;

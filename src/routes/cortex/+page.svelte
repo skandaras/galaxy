@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	import { onMount } from 'svelte';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import { areaHueHex } from '$lib/cortex-colour';
@@ -540,7 +541,12 @@
 		if (!selectedId) return;
 		// Undo in History brings the concept back but not its connections, which
 		// are cleared with it and not logged, so this is the last chance to keep them.
-		if (!confirm(`Delete "${selected?.name ?? 'this concept'}" and its connections?`)) return;
+		if (!(await ask({
+				title: `Delete "${selected?.name ?? 'this concept'}" and its connections?`,
+				body: 'Undo in History brings the concept back but not its connections.',
+				confirm: 'Delete concept',
+				danger: true
+			}))) return;
 		await send(`/api/cortex/nodes/${encodeURIComponent(selectedId)}`, 'DELETE', {});
 		await load();
 		startNew();
@@ -1272,20 +1278,6 @@
 		gap: 0.3rem;
 		margin-bottom: 0.4rem;
 	}
-	.chip {
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		color: var(--fg-dim);
-		font-family: inherit;
-		font-size: var(--text-sm);
-		padding: 0.18rem 0.6rem;
-		cursor: pointer;
-	}
-	.chip.on {
-		border-color: var(--accent);
-		color: var(--accent);
-	}
 	/* The nested lists are bare `ul`s, which `.nodes` does not match. Indented
 	   so a concept reads as sitting under its heading rather than beside it. */
 	.groups ul {
@@ -1407,10 +1399,6 @@
 		flex-shrink: 0;
 	}
 	.badge {
-		font-size: 0.65rem;
-		padding: 0 0.3rem;
-		border: 1px solid var(--border);
-		color: var(--fg-dim);
 		/* The proposal rows are a column, so a badge without this stretches the
 		   full width and reads as an empty text field. */
 		align-self: start;
@@ -1465,16 +1453,6 @@
 		color: var(--fg-dim);
 		cursor: pointer;
 	}
-	.btn {
-		padding: 0.3rem 0.7rem;
-		background: var(--bg);
-		color: var(--fg);
-		border: 1px solid var(--control-border);
-		cursor: pointer;
-	}
-	.btn.danger {
-		color: var(--danger);
-	}
 	.error {
 		font-size: var(--text-sm);
 		color: var(--danger);
@@ -1524,10 +1502,6 @@
 		gap: 0.25rem;
 		padding: 0.5rem 0;
 		border-bottom: 1px solid var(--border);
-	}
-	.hint {
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
 	}
 	/* What accepting would do, as against why it was suggested. Set in the
 	   body colour because it is the substance of the row, not a footnote. */

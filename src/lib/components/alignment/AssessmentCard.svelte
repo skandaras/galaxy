@@ -246,7 +246,6 @@
 		color: var(--fg-dim);
 	}
 	.hint {
-		line-height: 1.5;
 		margin: 0 0 0.6rem;
 	}
 	.stale-tag {

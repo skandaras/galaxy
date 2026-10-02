@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	import { autoresize } from '$lib/autoresize';
 	import AssessmentCard from './AssessmentCard.svelte';
 
@@ -129,7 +130,12 @@
 	}
 
 	async function remove(entry: Entry) {
-		if (!confirm(`Delete "${entry.title || 'Untitled'}" and any readings of it? This cannot be undone.`))
+		if (!(await ask({
+				title: `Delete "${entry.title || 'Untitled'}"?`,
+				body: 'Any readings of it go too. This cannot be undone.',
+				confirm: 'Delete entry',
+				danger: true
+			})))
 			return;
 		await fetch(`/api/alignment/entries/${entry.id}`, { method: 'DELETE' });
 		await load();
@@ -142,7 +148,7 @@
 </script>
 
 <section class="journal">
-	{#if notice}<p class="notice" role="alert">{notice}</p>{/if}
+	{#if notice}<p class="notice error" role="alert">{notice}</p>{/if}
 
 	<article class="card composer">
 		<h3>Write</h3>
@@ -284,9 +290,6 @@
 		max-width: 46rem;
 	}
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-bottom: 0.9rem;
 	}
 	h3 {
@@ -297,17 +300,10 @@
 		color: var(--heading);
 	}
 	.hint {
-		font-size: var(--text-base);
-		color: var(--fg-dim);
-		line-height: 1.5;
 		margin: 0 0 0.7rem;
 	}
 	.hint.warn {
 		color: var(--danger);
-	}
-	.notice {
-		color: var(--danger);
-		font-size: var(--text-base);
 	}
 	input,
 	textarea {
@@ -386,27 +382,7 @@
 		width: auto;
 	}
 	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.3rem 0.6rem;
-		font-family: inherit;
-		font-size: var(--text-sm);
-		cursor: pointer;
 		white-space: nowrap;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
-	}
-	.btn.danger {
-		background: transparent;
-		border: 1px solid var(--danger);
-		color: var(--danger);
-	}
-	.btn:disabled {
-		opacity: 0.5;
 	}
 	.entry header {
 		display: flex;

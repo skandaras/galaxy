@@ -280,12 +280,6 @@
 		color: var(--fg-dim);
 	}
 	.badge {
-		display: inline-block;
-		border: 1px solid var(--accent);
-		color: var(--accent);
-		border-radius: 3px;
-		font-size: var(--text-xs);
-		padding: 0 0.25rem;
 		margin-right: 0.2rem;
 	}
 	.empty {

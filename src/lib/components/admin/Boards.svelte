@@ -11,6 +11,7 @@
 	let rows = $state<BoardRow[]>([]);
 	let limits = $state({ maxBoardsPerUser: 20, agentWrites: true });
 	let notice = $state<string | null>(null);
+	let noticeFailed = $state(false);
 
 	async function load() {
 		const [boardsRes, settingsRes] = await Promise.all([
@@ -32,6 +33,7 @@
 			body: JSON.stringify({ key: 'boards', value: limits })
 		}).catch(() => null);
 		notice = res?.ok ? 'Limits saved' : 'Not saved. Try again.';
+		noticeFailed = !res?.ok;
 		await load();
 	}
 
@@ -39,7 +41,7 @@
 </script>
 
 <section>
-	{#if notice}<p class="notice">{notice}</p>{/if}
+	{#if notice}<p class="notice" class:error={noticeFailed} role={noticeFailed ? 'alert' : 'status'}>{notice}</p>{/if}
 
 	<article class="card">
 		<h3>Model</h3>
@@ -96,9 +98,6 @@
 
 <style>
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-bottom: 0.9rem;
 	}
 	h3 {
@@ -109,9 +108,6 @@
 		color: var(--heading);
 	}
 	.hint {
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
-		line-height: 1.5;
 		margin: 0.4rem 0 0.6rem;
 	}
 	.grid {
@@ -165,19 +161,5 @@
 	.meta {
 		color: var(--fg-dim);
 		font-size: var(--text-sm);
-	}
-	.notice {
-		color: var(--accent);
-		font-size: var(--text-base);
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.35rem 0.7rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
 	}
 </style>

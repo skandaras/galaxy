@@ -5,6 +5,7 @@
 	import NotificationBell from '$lib/components/NotificationBell.svelte';
 	import GalaxyBackdrop from '$lib/components/GalaxyBackdrop.svelte';
 	import BottomNav from '$lib/components/BottomNav.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import { themeCss } from '$lib/theme';
 	import { reportClientError } from '$lib/client-report';
 	import { attachViewport } from '$lib/viewport.svelte';
@@ -52,15 +53,7 @@
 	     is no signed-in person to have a theme, and by Bubblewrap when it builds
 	     the Android package. -->
 	<meta name="theme-color" content={data.theme.bg} />
-	<!-- touch-action is here rather than on each control because the failure it
-	     fixes is not any one component's. iOS keeps double-tap-to-zoom on a
-	     width=device-width page — Chrome drops it, Safari does not — and the
-	     gesture recogniser can swallow the second tap of a quick pair on the same
-	     element. The tab bar's "tap the tab you are already on" *is* that pair, so
-	     whether it worked came down to how fast the thumb was. -->
-	{@html `<style id="galaxy-theme">${themeCss(data.theme)}
-	button, input, select, textarea { border-radius: var(--radius); }
-	button, a, input, select, textarea { touch-action: manipulation; }</style>`}
+	{@html `<style id="galaxy-theme">${themeCss(data.theme)}</style>`}
 </svelte:head>
 
 {#if data.theme.galaxyBg}
@@ -116,6 +109,8 @@
 	</main>
 	<BottomNav links={barLinks} />
 </div>
+
+<ConfirmDialog />
 
 <style>
 	:global(body) {

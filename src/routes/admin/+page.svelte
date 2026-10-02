@@ -11,9 +11,9 @@
 	import Cortex from '$lib/components/admin/Cortex.svelte';
 	import Settings from '$lib/components/admin/Settings.svelte';
 	import Usage from '$lib/components/admin/Usage.svelte';
-	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { tabFromUrl, tabUrl } from '$lib/url-tab';
+	import { tabFromUrl } from '$lib/url-tab';
+	import Tabs from '$lib/components/Tabs.svelte';
 
 	const tabs = [
 		'Users',
@@ -32,17 +32,11 @@
 	// In the URL rather than in $state, so Back steps through tabs, a tab can
 	// be linked to, and the phone's More sheet can point at one.
 	const active = $derived(tabFromUrl(page.url.searchParams, tabs));
-	const show = (tab: (typeof tabs)[number]) =>
-		void goto(tabUrl(page.url.pathname, tab, tabs), { keepFocus: true, noScroll: true });
 	let modelsRefreshKey = $state(0);
 </script>
 
 <div class="admin">
-	<nav class="tabs">
-		{#each tabs as tab (tab)}
-			<button class:active={active === tab} onclick={() => show(tab)}>{tab}</button>
-		{/each}
-	</nav>
+	<Tabs {tabs} label="Admin" />
 
 	<div class="body">
 		{#if active === 'Users'}
@@ -82,27 +76,6 @@
 		padding: 1rem 1.25rem;
 		overflow-y: auto;
 	}
-	.tabs {
-		display: flex;
-		gap: 0.3rem;
-		border-bottom: 1px solid var(--border);
-		margin-bottom: 1rem;
-		flex-wrap: wrap;
-	}
-	.tabs button {
-		background: none;
-		border: none;
-		border-bottom: 2px solid transparent;
-		color: var(--fg-dim);
-		font-family: inherit;
-		font-size: var(--text-md);
-		padding: 0.5rem 0.8rem;
-		cursor: pointer;
-	}
-	.tabs button.active {
-		color: var(--fg);
-		border-bottom-color: var(--accent);
-	}
 	.body {
 		max-width: 60rem;
 	}
@@ -111,7 +84,7 @@
 		.admin {
 			padding: 0.75rem 0.85rem;
 		}
-		.tabs button {
+		.admin :global(.tabs button) {
 			padding: 0.45rem 0.55rem;
 			font-size: var(--text-base);
 		}

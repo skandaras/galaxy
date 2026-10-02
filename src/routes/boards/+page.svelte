@@ -111,9 +111,10 @@
 
 	async function loadBoard() {
 		if (!selectedId) return (view = null);
-		const res = await fetch(`/api/boards/${selectedId}?archived=1`);
-		if (!res.ok) {
+		const res = await fetch(`/api/boards/${selectedId}?archived=1`).catch(() => null);
+		if (!res?.ok) {
 			view = null;
+			error = 'Could not load that board. Reload to try again.';
 			return;
 		}
 		view = await res.json();
@@ -145,19 +146,48 @@
 		if (selectedId) localStorage.setItem(HIDDEN_KEY(selectedId), JSON.stringify([...next]));
 	}
 
-	async function addProject() {
-		const name = prompt('Name this project');
-		if (!name?.trim() || !selectedId) return;
-		const res = await fetch(`/api/boards/${selectedId}/projects`, {
+	/**
+	 * Naming a new board or project, inline. These were prompt() dialogs, which
+	 * cannot say why a name was refused: the board limit or a duplicate came
+	 * back as an error banner after the dialog had already gone. Library moved
+	 * its folders off prompt() for the same reason.
+	 */
+	let naming = $state<'board' | 'project' | null>(null);
+	let nameText = $state('');
+
+	function startNaming(what: 'board' | 'project') {
+		naming = what;
+		nameText = '';
+		error = null;
+	}
+
+	async function commitName() {
+		const name = nameText.trim();
+		if (!name) {
+			naming = null;
+			return;
+		}
+		const url = naming === 'board' ? '/api/boards' : `/api/boards/${selectedId}/projects`;
+		const res = await fetch(url, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ name })
-		});
-		if (!res.ok) {
-			error = (await res.json().catch(() => ({}))).message ?? 'Could not add the project';
+		}).catch(() => null);
+		if (!res?.ok) {
+			error =
+				(await res?.json().catch(() => null))?.message ??
+				(naming === 'board' ? 'Could not create the board.' : 'Could not add the project.');
 			return;
 		}
-		await loadBoard();
+		const made = naming;
+		naming = null;
+		if (made === 'board') {
+			const board = (await res.json()) as Board;
+			boards = [...boards, board];
+			await select(board.id);
+		} else {
+			await loadBoard();
+		}
 	}
 
 	async function select(id: string) {
@@ -165,20 +195,6 @@
 		openCardId = null;
 		showArchive = false;
 		await loadBoard();
-	}
-
-	async function createBoard() {
-		const name = prompt('Name this board');
-		if (!name?.trim()) return;
-		const res = await fetch('/api/boards', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ name })
-		});
-		if (!res.ok) return;
-		const board = (await res.json()) as Board;
-		boards = [...boards, board];
-		await select(board.id);
 	}
 
 	async function addCard(laneId: string) {
@@ -199,20 +215,24 @@
 	}
 
 	async function moveTo(cardId: string, laneId: string, position?: number) {
-		await fetch(`/api/cards/${cardId}`, {
+		const res = await fetch(`/api/cards/${cardId}`, {
 			method: 'PATCH',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ laneId, position })
-		});
+		}).catch(() => null);
+		// Reload either way: a refused move snaps the card back to where it is.
+		error = res?.ok ? null : "Could not move that card.";
 		await loadBoard();
 	}
 
 	async function setStatus(cardId: string, statusId: string) {
-		await fetch(`/api/cards/${cardId}`, {
+		const res = await fetch(`/api/cards/${cardId}`, {
 			method: 'PATCH',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ statusId })
-		});
+		}).catch(() => null);
+		// Reload either way: a refused move snaps the card back to where it is.
+		error = res?.ok ? null : "Could not change that card's status.";
 		await loadBoard();
 	}
 
@@ -415,8 +435,27 @@
 				<option value={b.id}>{b.name}</option>
 			{/each}
 		</select>
-		<button class="btn" onclick={createBoard}>New board</button>
-		{#if view}<button class="btn" onclick={addProject}>+ Project</button>{/if}
+		{#if naming}
+			<!-- svelte-ignore a11y_autofocus -->
+			<input
+				class="name-field"
+				placeholder={naming === 'board' ? 'Board name' : 'Project name'}
+				aria-label={naming === 'board' ? 'New board name' : 'New project name'}
+				autofocus
+				bind:value={nameText}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') void commitName();
+					if (e.key === 'Escape') naming = null;
+				}}
+			/>
+			<button class="btn primary" onclick={() => void commitName()}>
+				{naming === 'board' ? 'Create board' : 'Add project'}
+			</button>
+			<button class="btn" onclick={() => (naming = null)}>Cancel</button>
+		{:else}
+			<button class="btn" onclick={() => startNaming('board')}>New board</button>
+			{#if view}<button class="btn" onclick={() => startNaming('project')}>+ Project</button>{/if}
+		{/if}
 		<span class="spacer"></span>
 		{#if view}
 			<button class="btn" disabled={running || !view.cards.length} onclick={() => boardAction('prioritise')}>
@@ -498,7 +537,7 @@
 				A board is a place to keep the things you actually need to do — errands, admin, projects —
 				where an agent can read them too. Make one to start.
 			</p>
-			<button class="btn primary" onclick={createBoard}>Create a board</button>
+			<button class="btn primary" onclick={() => startNaming('board')}>New board</button>
 		</div>
 	{:else if view}
 		<div class="surface">
@@ -517,7 +556,7 @@
 							{@const card = row.card}
 							{#if showDropLine(lane.id, row.slot)}<div class="drop-line"></div>{/if}
 							<article
-								class="card"
+								class="board-card"
 								class:projected={!!projectOf(card)}
 								class:lifted={row.lifted}
 								style={`--project:${projectOf(card)?.colour ?? 'transparent'}`}
@@ -664,10 +703,11 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.picker {
+	.picker,
+	.name-field {
 		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 5px;
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
 		color: var(--fg);
 		font-family: inherit;
 		font-size: var(--text-md);
@@ -715,7 +755,7 @@
 		letter-spacing: normal;
 	}
 
-	.card {
+	.board-card {
 		background: var(--bg);
 		border: 1px solid var(--border);
 		border-radius: 6px;
@@ -724,12 +764,12 @@
 	}
 	/* Press and hold, so a press that is going to become a drag should not also
 	   start a text selection. */
-	.card {
+	.board-card {
 		user-select: none;
 		-webkit-user-select: none;
 	}
 	/* Left in place so the lane keeps its shape while the ghost is out. */
-	.card.lifted {
+	.board-card.lifted {
 		opacity: 0.3;
 	}
 	/* Where the card would land. Sized to leave the gap the card will fill, so
@@ -775,7 +815,7 @@
 	}
 	/* The project reads as the card's edge, so a board is scannable by colour
 	   without a label on every card. */
-	.card.projected {
+	.board-card.projected {
 		border-color: var(--project);
 	}
 
@@ -969,40 +1009,10 @@
 		line-height: 1.6;
 		margin-bottom: 1rem;
 	}
-	.hint {
-		color: var(--fg-dim);
-		font-size: var(--text-base);
-	}
 	.error {
 		color: var(--danger);
 		font-size: var(--text-base);
 		padding: 0 1rem;
-	}
-
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.35rem 0.7rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-		text-decoration: none;
-		display: inline-block;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
-	}
-	.btn.ghost {
-		background: transparent;
-		border: 1px dashed var(--fg-dim);
-		color: var(--fg-dim);
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
 	}
 
 	@media (hover: none) {

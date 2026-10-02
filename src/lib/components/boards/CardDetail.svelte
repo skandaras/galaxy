@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	import { goto } from '$app/navigation';
 	import {
 		PRIORITIES,
@@ -137,7 +138,7 @@
 	}
 
 	async function removeAttachment(id: string) {
-		if (!confirm('Remove this attachment from the card?')) return;
+		if (!(await ask({ title: 'Remove this attachment from the card?', confirm: 'Remove', danger: true }))) return;
 		const res = await fetch(`/api/cards/${cardId}/attachments/${id}`, {
 			method: 'DELETE'
 		}).catch(() => null);
@@ -188,7 +189,12 @@
 	}
 
 	async function remove() {
-		if (!confirm('Delete this card and its log? This cannot be undone.')) return;
+		if (!(await ask({
+				title: 'Delete this card and its log?',
+				body: 'This cannot be undone.',
+				confirm: 'Delete card',
+				danger: true
+			}))) return;
 		const res = await fetch(`/api/cards/${cardId}`, { method: 'DELETE' }).catch(() => null);
 		// Closing regardless said the card was gone and left it on the board: the
 		// drawer shut, the board refreshed behind it, and the card was still
@@ -515,30 +521,6 @@
 		margin-top: 1.2rem;
 		padding-top: 0.6rem;
 		border-top: 1px solid var(--border);
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.35rem 0.7rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
-	}
-	.btn.danger {
-		background: transparent;
-		border: 1px solid var(--danger);
-		color: var(--danger);
-	}
-	.btn.ghost {
-		background: transparent;
-		border: 1px dashed var(--fg-dim);
-		color: var(--fg-dim);
 	}
 	.upload {
 		display: inline-flex;

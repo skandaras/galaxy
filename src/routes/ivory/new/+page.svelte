@@ -247,22 +247,4 @@
 		gap: 0.5rem;
 		flex-wrap: wrap;
 	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: 1px solid var(--control-border);
-		border-radius: 5px;
-		padding: 0.45rem 0.9rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-		min-height: 2.5rem;
-	}
-	.btn.primary {
-		border-color: var(--accent);
-	}
-	.btn:disabled {
-		opacity: 0.6;
-		cursor: default;
-	}
 </style>

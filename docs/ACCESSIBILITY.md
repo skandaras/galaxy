@@ -128,6 +128,46 @@ Library's tree carets do the same, sitting in an indent gutter in a pane that
 starts at 290px. Height is where a thumb misses in a list, so height is what is
 held to the floor. Anything wider than a gutter takes both.
 
+### Shared controls
+
+`.btn` (with `primary`, `ghost`, `danger`, `wide`), `.chip` (with `on`), `.card`,
+`.hint`, `.notice` (with `error`), `.badge` and `.tabs` are declared once, in
+`themeCss()`. Before that each was a scoped copy in every component that used
+it: 25 files for `.btn` alone, with five paddings, and most of them naming 5px
+and `--border` so the theme's radius and the control border above never
+reached them. `.btn` and `.chip` take `--tap` as their minimum height, which is
+how every button meets the touch floor without being told.
+
+A component adds its own modifier (`.btn.send`) but does not restate one of
+these. Its scoped `.btn` compiles to two classes and ties with `.btn.primary`,
+and then stylesheet order decides which wins.
+
+`Tabs.svelte` is the one tab strip, with `role="tablist"` and `aria-selected`.
+The three copies it replaced told a screen reader nothing about either.
+
+### Feedback and confirmation
+
+What a person is told after they act follows one rule everywhere:
+
+1. **Content** (a document, a card, a journal entry) saves as it is typed and
+   shows a status line, as the Library does.
+2. **Configuration** has a Save per card, and the button reports what the
+   server said. "Saved" without reading the response is how a refused value
+   looked kept until the next reload, on nine screens.
+3. **A failure** is said beside the control that failed, in `.notice.error`
+   with `role="alert"`. A success uses `role="status"`. Nothing fails without a
+   word: a failed load names what did not load.
+4. **Anything that cannot be taken back** asks first, through `ask()` in
+   `$lib/confirm.svelte`. The question names the thing and the button names the
+   action ("Delete chat", never OK). Destructive questions start focus on
+   Cancel. Anything that can be taken back gets an Undo instead of a question.
+
+`ask()` replaced `window.confirm()`, which could not name its buttons, looked
+foreign in an installed app, and was dismissed unasked by Playwright, so no
+smoke check could exercise a delete. Its host is a native `<dialog>` opened with
+`showModal()`: the only real modal in the tree, so focus stays inside it and
+the page behind is inert.
+
 ## Open — worth doing next
 
 Not fixed here, in rough priority order.

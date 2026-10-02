@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	import { autoresize } from '$lib/autoresize';
 	import {
 		BAND_LABELS,
@@ -248,7 +249,12 @@
 	}
 
 	async function hardDelete(p: Principle) {
-		if (!confirm(`Erase "${p.title}" and its history? Retire it instead to keep the record.`)) return;
+		if (!(await ask({
+				title: `Erase "${p.title}" and its history?`,
+				body: 'Retire it instead to keep the record.',
+				confirm: 'Erase',
+				danger: true
+			}))) return;
 		await fetch(`/api/alignment/principles/${p.id}?hard=1`, { method: 'DELETE' });
 		await load();
 		onChanged();
@@ -295,7 +301,7 @@
 </script>
 
 <section class="constitution">
-	{#if notice}<p class="notice" role="alert">{notice}</p>{/if}
+	{#if notice}<p class="notice error" role="alert">{notice}</p>{/if}
 
 	{#if !editing}
 		<p class="hint intro">
@@ -633,9 +639,6 @@
 		max-width: 46rem;
 	}
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-bottom: 0.9rem;
 	}
 	.kind-head {
@@ -675,10 +678,6 @@
 	}
 	.empty {
 		margin: 0;
-	}
-	.notice {
-		color: var(--danger);
-		font-size: var(--text-base);
 	}
 	.row-item {
 		display: flex;
@@ -898,27 +897,7 @@
 		margin: 0.2rem 0 0;
 	}
 	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.3rem 0.6rem;
-		font-family: inherit;
-		font-size: var(--text-sm);
-		cursor: pointer;
 		white-space: nowrap;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
-	}
-	.btn.danger {
-		background: transparent;
-		border: 1px solid var(--danger);
-		color: var(--danger);
-	}
-	.btn:disabled {
-		opacity: 0.5;
 	}
 	.link {
 		background: none;

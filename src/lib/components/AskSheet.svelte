@@ -362,27 +362,11 @@
 	}
 	.hint {
 		margin: 0.4rem 0 0;
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
 	}
 	.failed {
 		margin: 0.4rem 0 0;
 		font-size: var(--text-sm);
 		color: var(--danger);
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.45rem 0.9rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
 	}
 	.btn.attach {
 		padding: 0.45rem 0.6rem;
