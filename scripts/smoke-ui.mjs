@@ -921,7 +921,7 @@ check(
 		};
 		new MutationObserver(snap).observe(document.body, { subtree: true, childList: true });
 	});
-	await page.getByRole('button', { name: /Deep research/ }).click();
+	await page.getByRole('button', { name: /Research$/ }).click();
 	await page.getByRole('textbox').first().fill('How do nebulae form?');
 	await page.keyboard.press('Enter');
 	await page
@@ -1030,14 +1030,19 @@ check(
 	);
 	await page.locator('.composer .att-chip button').click();
 
-	const hiddenChip = page.locator('.composer').getByRole('button', { name: 'Hidden' });
-	const lit = () => hiddenChip.evaluate((el) => el.classList.contains('on'));
-	await page.locator('.composer textarea').fill('typed before choosing');
-	check('the Hidden chip starts off', await lit(), false);
-	await hiddenChip.click();
+	// Hidden lives in the thread header now. It was a chip under the box, which
+	// made hiding a stored chat (and moving its files) one unconfirmed tap.
+	const head = page.locator('.thread-head');
+	const badge = head.locator('.hidden-badge');
+	check('a new chat is not hidden', await badge.count(), 0);
+	await page.getByRole('button', { name: '+ Hidden' }).click();
+	await page.locator('.composer textarea').fill('typed after choosing');
 	await page.waitForTimeout(200);
-	// The exact case the placeholder could never cover: there is text over it.
-	check('and lights with a message already in the box', await lit());
+	check('+ Hidden shows in the header, over text in the box', await badge.isVisible());
+	check('and names itself', await head.locator('.head-title').innerText(), 'New hidden chat');
+	await head.getByRole('button', { name: 'Keep this chat' }).click();
+	await page.waitForTimeout(200);
+	check('Keep this chat takes it back out of Hidden', await badge.count(), 0);
 	check('none of which logged an error', problems, []);
 	if (fail.length) await shot('composer-paste');
 }

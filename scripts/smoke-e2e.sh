@@ -404,6 +404,9 @@ SID=$(api -X POST $B/api/code/sessions -d "{\"repoUrl\":\"$ORIGIN.git\",\"repoNa
 CJOB=$(api -X POST $B/api/code/sessions/$SID/messages -d '{"content":"Update the README"}' | jqn .jobId)
 CSTREAM=$(curl -sN --max-time 90 $B/api/jobs/$CJOB/stream)
 check "coding pushed to origin" "$(git -C $ORIGIN.git log --all --oneline)" "Add project description"
+# Sessions were all titled with their repo, so two on one repo looked the same
+# in the list. The first request names the session instead.
+check "the first request names the session" "$(api $B/api/code/sessions/$SID | jqn .session.title)" "Update the README"
 
 # A lead-in that runs to a paragraph belongs on its step, not in the reply. It
 # used to land on both sides of a 200-character line from one leg to the next,
