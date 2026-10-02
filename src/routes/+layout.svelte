@@ -9,34 +9,40 @@
 	import { themeCss } from '$lib/theme';
 	import { reportClientError } from '$lib/client-report';
 	import { attachViewport } from '$lib/viewport.svelte';
+	import { groupNav, type NavLink } from '$lib/mobile-nav';
 
 	let { data, children } = $props();
 
-	const links = $derived([
-		{ href: '/chat', label: 'Chat' },
+	const links = $derived<NavLink[]>([
+		{ href: '/chat', label: 'Chat', group: 'work' },
 		// Coding is a per-user grant, because it pushes with a shared GitHub
 		// token; the API refuses it either way, this just stops offering it.
-		...(data.user?.canCode ? [{ href: '/code', label: 'Code' }] : []),
-		{ href: '/boards', label: 'Boards' },
-		{ href: '/library', label: 'Library' },
-		{ href: '/cortex', label: 'Cortex' },
+		...(data.user?.canCode ? [{ href: '/code', label: 'Code', group: 'work' as const }] : []),
+		{ href: '/boards', label: 'Boards', group: 'work' },
+		{ href: '/library', label: 'Library', group: 'knowledge' },
+		{ href: '/cortex', label: 'Cortex', group: 'knowledge' },
+		{ href: '/memory', label: 'Memory', group: 'knowledge' },
 		// Behind the coding grant for the same reason as Code: the Shelf is read
 		// and written with the shared GitHub token.
-		...(data.user?.canCode ? [{ href: '/ivory', label: 'Ivory Tower' }] : []),
+		...(data.user?.canCode
+			? [{ href: '/ivory', label: 'Ivory Tower', group: 'reflect' as const }]
+			: []),
 		// A private feature, off by default and turned on per person in Settings.
-		...(data.alignmentEnabled ? [{ href: '/alignment', label: 'Alignment' }] : []),
-		{ href: '/settings', label: 'Settings' },
-		...(data.user?.isAdmin ? [{ href: '/admin', label: 'Admin' }] : [])
+		...(data.alignmentEnabled
+			? [{ href: '/alignment', label: 'Alignment', group: 'reflect' as const }]
+			: []),
+		// Called Activity rather than Observatory where people read it: it is
+		// where their own runs, failures and crashes are reported, and the old
+		// name said nothing about that. It was also the one destination the phone
+		// bar had and the desktop rail did not.
+		{ href: '/observatory', label: 'Activity', group: 'system' },
+		{ href: '/settings', label: 'Settings', group: 'system' },
+		...(data.user?.isAdmin ? [{ href: '/admin', label: 'Admin', group: 'system' as const }] : [])
 	]);
-
-	// The rail is unchanged; the bar gets one destination the rail never had.
-	// /observatory is linked only from the docked feed's "open full view", and
-	// that dock is display:none on a phone — so the full view has been
-	// unreachable there, which docs/MOBILE.md claims it is not.
-	const barLinks = $derived([...links, { href: '/observatory', label: 'Observatory' }]);
+	const clusters = $derived(groupNav(links));
 
 	// Every tab, history entry and bookmark used to read just "Galaxy".
-	const section = $derived(barLinks.find((l) => page.url.pathname.startsWith(l.href))?.label);
+	const section = $derived(links.find((l) => page.url.pathname.startsWith(l.href))?.label);
 
 	$effect(() =>
 		attachViewport(window, (name, value) =>
@@ -64,20 +70,25 @@
 	<aside class="pane">
 		<div class="brand">✦ GALAXY</div>
 		<nav class="nav" aria-label="Sections">
-			{#each links as link (link.href)}
-				<a
-					class="nav-item"
-					class:active={page.url.pathname.startsWith(link.href)}
-					aria-current={page.url.pathname.startsWith(link.href) ? 'page' : undefined}
-					href={link.href}>{link.label}</a
-				>
+			{#each clusters as cluster (cluster.id)}
+				<div class="cluster" role="group" aria-label={cluster.label ?? 'More'}>
+					{#if cluster.label}<span class="cluster-label" aria-hidden="true">{cluster.label}</span>{/if}
+					{#each cluster.links as link (link.href)}
+						<a
+							class="nav-item"
+							class:active={page.url.pathname.startsWith(link.href)}
+							aria-current={page.url.pathname.startsWith(link.href) ? 'page' : undefined}
+							href={link.href}>{link.label}</a
+						>
+					{/each}
+				</div>
 			{/each}
 		</nav>
 		<div class="pane-bottom">
 			{#if data.user}
 				<div class="bell-dock"><NotificationBell /></div>
 				<div class="obs-dock"><Observatory /></div>
-				<div class="budget-dock"><BudgetBar /></div>
+				<div class="budget-dock"><BudgetBar isAdmin={!!data.user?.isAdmin} /></div>
 			{/if}
 			<div class="pane-footer">
 				<span class="env-badge">{data.galaxyEnv}</span>
@@ -102,12 +113,12 @@
 						<button onclick={reset}>Try again</button>
 						<button onclick={() => location.reload()}>Reload</button>
 					</p>
-					<p class="boundary-note">It has been recorded — you can find it in Observatory.</p>
+					<p class="boundary-note">It has been recorded, and you can find it in Activity.</p>
 				</div>
 			{/snippet}
 		</svelte:boundary>
 	</main>
-	<BottomNav links={barLinks} />
+	<BottomNav {links} />
 </div>
 
 <ConfirmDialog />
@@ -230,21 +241,37 @@
 	.nav {
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
+		gap: 1rem;
+	}
+	.cluster {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+	}
+	.cluster-label {
+		font-size: var(--text-xs);
+		letter-spacing: 0.15em;
+		text-transform: uppercase;
+		color: var(--label);
+		padding: 0 0.6rem 0.2rem;
 	}
 	.nav-item {
 		color: var(--fg-dim);
-		font-size: var(--text-lg);
-		padding: 0.4rem 0.6rem;
-		border-radius: 4px;
+		font-size: var(--text-md);
+		padding: 0.35rem 0.6rem;
+		border-radius: var(--radius);
 		text-decoration: none;
 	}
 	.nav-item:hover {
 		color: var(--fg);
 	}
+	/* The background alone is --border, about 1.2:1 against the rail, so where
+	   you are rested on a tint most people could not see. The accent edge is
+	   what says it. */
 	.nav-item.active {
 		color: var(--fg);
 		background: var(--border);
+		box-shadow: inset 3px 0 0 var(--accent);
 	}
 	.bell-dock {
 		border-top: 1px solid var(--border);
@@ -370,15 +397,6 @@
 			letter-spacing: 0.2em;
 			flex-shrink: 0;
 		}
-		.nav {
-			flex-direction: row;
-			gap: 0.15rem;
-		}
-		.nav-item {
-			font-size: var(--text-base);
-			padding: 0.3rem 0.45rem;
-			white-space: nowrap;
-		}
 		/* The docked feed needs vertical room it doesn't have in a top bar;
 		   the full view at /observatory stays available. */
 		.obs-dock {
@@ -398,7 +416,9 @@
 		.budget-dock {
 			margin-top: 0;
 		}
-		.budget-dock :global(.track) {
+		.budget-dock :global(.track),
+		.budget-dock :global(.when),
+		.budget-dock :global(.unpriced) {
 			display: none;
 		}
 		.pane-bottom {

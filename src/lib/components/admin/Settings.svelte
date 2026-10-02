@@ -388,7 +388,7 @@
 			These are ceilings. The effort control beside the composer's Deep research toggle scales down
 			from them per message — Exhaustive spends the full ceiling. Results are always deduplicated
 			and spread across sites before reading; the checkbox adds a model call on top of that, which
-			costs a round-trip per round and is worth watching in the Observatory before leaving on.
+			costs a round-trip per round and is worth watching in Activity before leaving on.
 		</p>
 		<p class="hint">
 			<strong>Also search in</strong> makes the planner write at least one query per round in each
@@ -658,7 +658,7 @@
 		<h3>History retention</h3>
 		<div class="grid">
 			<label>
-				keep Observatory events (days)
+				keep Activity events (days)
 				<input type="number" min="0" max="3650" bind:value={retention.eventDays} />
 			</label>
 			<label>

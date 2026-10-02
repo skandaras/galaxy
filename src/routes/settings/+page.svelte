@@ -1,6 +1,5 @@
 <script lang="ts">
 	import Theme from '$lib/components/settings/Theme.svelte';
-	import Memory from '$lib/components/settings/Memory.svelte';
 	import Boards from '$lib/components/settings/Boards.svelte';
 	import Cortex from '$lib/components/settings/Cortex.svelte';
 	import Notifications from '$lib/components/settings/Notifications.svelte';
@@ -9,7 +8,7 @@
 	import { tabFromUrl } from '$lib/url-tab';
 	import Tabs from '$lib/components/Tabs.svelte';
 
-	const tabs = ['Theme', 'Boards', 'Cortex', 'Notifications', 'Memory', 'Alignment'] as const;
+	const tabs = ['Theme', 'Boards', 'Cortex', 'Notifications', 'Alignment'] as const;
 	// In the URL rather than in $state, so Back steps through tabs, a tab can
 	// be linked to, and the phone's More sheet can point at one.
 	const active = $derived(tabFromUrl(page.url.searchParams, tabs));
@@ -27,8 +26,6 @@
 			<Cortex />
 		{:else if active === 'Notifications'}
 			<Notifications />
-		{:else if active === 'Memory'}
-			<Memory />
 		{:else}
 			<Alignment />
 		{/if}

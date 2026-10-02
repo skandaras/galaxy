@@ -310,7 +310,7 @@
 				<label class="wide font-field">
 					code font
 					<span class="field-hint">
-						Code blocks, diffs, the Observatory and every number in the interface, so figures in a
+						Code blocks, diffs, Activity and every number in the interface, so figures in a
 						column line up. The ASCII backdrop keeps its own font and is not affected by this.
 					</span>
 					<select bind:value={draft.fontMono}>
