@@ -1308,7 +1308,10 @@
 			{/if}
 			<span class="head-model">
 				{#if deepResearch}
-					<span class="research-model" title="Set for the deep-research task in Admin → Tasks">
+					<span
+						class="research-model"
+						title={`Set for the deep-research task in ${taskPath('deep-research')}`}
+					>
 						Research uses {researchModelName ?? 'the research model'}
 					</span>
 				{:else}
