@@ -3,12 +3,10 @@
 	import { ask } from '$lib/confirm.svelte';
 	import { onDestroy, onMount } from 'svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
-	import { ATTACHMENT_ACCEPT, attachmentIcon, screenFiles } from '$lib/attachment-types';
-	import { carriesFiles, filesFrom, nameArrival } from '$lib/composer-files';
+	import { attachmentIcon } from '$lib/attachment-types';
+	import { uploadStaged, type AttachmentRef } from '$lib/composer-upload';
 	import { clearDraft, draftKey, getDraft, setDraft } from '$lib/composer-drafts.svelte';
 	import { createAutoscroll } from '$lib/autoscroll.svelte';
-	import { autoresize } from '$lib/autoresize';
-	import { hasFinePointer } from '$lib/pointer';
 	import { copyText } from '$lib/clipboard';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import { swipeToClose } from '$lib/list-sheet.svelte';
@@ -25,6 +23,8 @@
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
 	import ListPill from '$lib/components/ListPill.svelte';
+	import Composer from '$lib/components/thread/Composer.svelte';
+	import ModelSelect from '$lib/components/thread/ModelSelect.svelte';
 	import {
 		applyChunk,
 		applyStreamText,
@@ -44,16 +44,12 @@
 		/** An agent is working on this session right now — see /api/chats. */
 		running?: boolean;
 	}
-	interface AttachmentRef {
-		id: string;
-		name: string;
-		mime: string;
-		kind?: 'image' | 'document';
-		textChars?: number;
-	}
 	interface Session {
 		chatId: string;
 		modelId?: string | null;
+		/** From the first request; the repo name until then. */
+		title?: string;
+		prUrl?: string | null;
 		repoName: string;
 		baseBranch: string;
 		workBranch: string;
@@ -114,7 +110,8 @@
 	let pendingFiles = $state<File[]>([]);
 	/** Uploads that already succeeded, so a failed send can retry cheaply. */
 	let uploadedRefs = $state<AttachmentRef[]>([]);
-	let fileInput: HTMLInputElement | null = $state(null);
+	/** Set when a send was refused because another run holds this session. */
+	let blockingJobId = $state<string | null>(null);
 
 	interface DiffFile {
 		path: string;
@@ -334,6 +331,7 @@
 		}
 		const data = await res.json();
 		current = data.session;
+		prUrl = data.session.prUrl ?? null;
 		applySessionModel(current);
 		messages = data.messages.filter((m: Msg) => m.role !== 'tool');
 		creating = false;
@@ -382,26 +380,19 @@
 		if (!content && !pendingFiles.length && !uploadedRefs.length) return;
 		errorBanner = null;
 
-		const failed: File[] = [];
-		for (const file of pendingFiles) {
-			const form = new FormData();
-			form.append('file', file);
-			// A code session is a chat row, so the chat attachment endpoint serves
-			// both modes.
-			const res = await fetch(`/api/chats/${current.chatId}/attachments`, {
-				method: 'POST',
-				body: form
-			});
-			if (res.ok) {
-				uploadedRefs = [...uploadedRefs, await res.json()];
-			} else {
-				const err = await res.json().catch(() => ({ message: res.statusText }));
-				errorBanner = `${file.name}: ${err.message ?? 'upload failed'}`;
-				failed.push(file);
-			}
+		// A code session is a chat row, so the chat attachment endpoint serves
+		// both modes.
+		const up = await uploadStaged(
+			`/api/chats/${current.chatId}/attachments`,
+			pendingFiles,
+			uploadedRefs
+		);
+		uploadedRefs = up.uploaded;
+		pendingFiles = up.failed;
+		if (up.error) {
+			errorBanner = up.error;
+			return;
 		}
-		pendingFiles = failed;
-		if (failed.length) return;
 
 		const attachments = uploadedRefs;
 		const res = await fetch(`/api/code/sessions/${current.chatId}/messages`, {
@@ -415,7 +406,11 @@
 			})
 		});
 		if (!res.ok) {
-			errorBanner = (await res.json().catch(() => ({})))?.message ?? 'Failed to send';
+			const err = await res.json().catch(() => ({}));
+			errorBanner = err?.message ?? 'Failed to send';
+			// As in Chat: a session held by a run that will not end is only fixed
+			// by stopping that run, so offer it rather than a dead end.
+			blockingJobId = res.status === 409 && err?.jobId ? err.jobId : null;
 			return;
 		}
 		messages = [
@@ -642,6 +637,14 @@
 		// The user may have switched sessions while this was in flight.
 		if (current?.chatId !== chatId) return;
 		messages = data.messages.filter((m: Msg) => m.role !== 'tool');
+		// The first request retitles the session, and the agent may have opened
+		// the pull request itself.
+		current = { ...current, title: data.session.title, prUrl: data.session.prUrl ?? null };
+		prUrl = data.session.prUrl ?? prUrl;
+		sessions = sessions.map((s) => (s.id === chatId ? { ...s, title: data.session.title } : s));
+		// The diff panel showed the branch as it stood when it was opened, and
+		// stayed that way through every later run with nothing to say so.
+		if (diff !== null) void fetchDiff();
 	}
 
 	function appendLocalAssistant(content: string, modelKey: string) {
@@ -763,21 +766,45 @@
 
 	const setMode = (mode: 'plan' | 'implement') => changeMode(mode);
 
+	/** Stop the run that refused this send, so the session is usable again. */
+	async function stopBlockingRun() {
+		const jobId = blockingJobId;
+		if (!jobId) return;
+		const res = await fetch(`/api/jobs/${jobId}/cancel`, { method: 'POST' }).catch(() => null);
+		const failure = cancelFailureBanner(res);
+		if (failure) {
+			errorBanner = failure;
+			return;
+		}
+		blockingJobId = null;
+		errorBanner = 'Stopping that run. Try again in a moment.';
+	}
+
 	async function loadDiff() {
 		if (!current) return;
 		if (diff !== null) {
 			diff = null;
 			return;
 		}
-		const res = await fetch(`/api/code/sessions/${current.chatId}/diff`);
-		if (!res.ok) {
+		await fetchDiff();
+	}
+
+	async function fetchDiff() {
+		if (!current) return;
+		const res = await fetch(`/api/code/sessions/${current.chatId}/diff`).catch(() => null);
+		if (!res?.ok) {
 			errorBanner = 'Could not read the diff for this session.';
 			return;
 		}
-		diff = await res.json();
+		const fresh = await res.json();
+		const keepOpen = diff !== null;
+		diff = fresh;
 		// One changed file is the common case and there is nothing to choose
-		// between, so open it rather than making them click.
-		openFiles = diff && diff.files.length === 1 ? new Set([diff.files[0].path]) : new Set();
+		// between, so open it rather than making them click. A refresh keeps
+		// whatever was already open.
+		if (!keepOpen) {
+			openFiles = fresh && fresh.files.length === 1 ? new Set([fresh.files[0].path]) : new Set();
+		}
 	}
 
 	function toggleFile(path: string) {
@@ -830,86 +857,15 @@
 	}
 
 	/** The one way in for the picker, a paste and a drop alike. */
-	function acceptFiles(files: File[]) {
-		const { accepted, rejected } = screenFiles(files);
-		if (accepted.length) pendingFiles = [...pendingFiles, ...accepted];
-		errorBanner = rejected.length ? rejected.join(' ') : null;
-	}
-
-	function onFilesPicked(ev: Event) {
-		const target = ev.target as HTMLInputElement;
-		acceptFiles([...(target.files ?? [])]);
-		target.value = '';
-	}
-
-	/**
-	 * A screenshot in the clipboard, attached as though it had been picked.
-	 *
-	 * The paste *event* rather than navigator.clipboard.read(): the async
-	 * Clipboard API only exists in a secure context and Galaxy is routinely
-	 * served over plain HTTP on a LAN, which is the same reason copyText keeps
-	 * its execCommand fallback.
-	 */
-	function onPaste(ev: ClipboardEvent) {
-		const files = filesFrom(ev.clipboardData).map((f) => nameArrival(f, new Date()));
-		// Only a paste actually carrying a file is ours. Calling preventDefault
-		// before this check swallowed every ordinary paste of text into the box.
-		if (!files.length) return;
-		ev.preventDefault();
-		acceptFiles(files);
-	}
-
-	/**
-	 * Depth, not a boolean: dragleave fires every time the pointer crosses into
-	 * a child, so the highlight flickered off over the send button and over each
-	 * attachment chip on the way past.
-	 */
-	let dragDepth = $state(0);
-
-	function onDragEnter(ev: DragEvent) {
-		if (!carriesFiles(ev.dataTransfer)) return;
-		dragDepth++;
-	}
-
-	function onDragOver(ev: DragEvent) {
-		if (!carriesFiles(ev.dataTransfer)) return;
-		// Without this the browser takes the drop itself and navigates away from
-		// the conversation to display the file.
-		ev.preventDefault();
-		if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy';
-	}
-
-	function onDragLeave(ev: DragEvent) {
-		if (!carriesFiles(ev.dataTransfer)) return;
-		dragDepth = Math.max(0, dragDepth - 1);
-	}
-
-	function onDrop(ev: DragEvent) {
-		dragDepth = 0;
-		const files = filesFrom(ev.dataTransfer).map((f) => nameArrival(f, new Date()));
-		if (!files.length) return;
-		ev.preventDefault();
-		acceptFiles(files);
+	/** Files the composer refused by type or size, said in the page's banner. */
+	function rejectFiles(reasons: string | null) {
+		errorBanner = reasons;
 	}
 
 	async function copyDiff() {
 		if (!diff) return;
 		diffCopied = await copyText(diff.files.map((f) => f.patch).join('\n'));
 		setTimeout(() => (diffCopied = false), 2000);
-	}
-
-	/**
-	 * Enter sends on a keyboard, and inserts a newline on a touch screen — where
-	 * there is no Shift-Enter, so Enter-to-send left no way to write a second
-	 * line at all. Coding briefs are the longest thing anyone types here, which
-	 * makes it the worse place to lose multi-line input.
-	 */
-	function onKeydown(ev: KeyboardEvent) {
-		// Mid-composition Enter commits the IME candidate; it must never send.
-		if (ev.key !== 'Enter' || ev.isComposing) return;
-		if (ev.shiftKey || !hasFinePointer()) return;
-		ev.preventDefault();
-		void send();
 	}
 
 	// One interval for the whole pane, and only while something is running.
@@ -1033,7 +989,14 @@
 		<!-- Notices used to stack here as full-width banners, detached in space and
 		     time from the step that raised them. They are now inline in the
 		     timeline; only a terminal error still earns the top of the page. -->
-		{#if errorBanner}<div class="banner error" role="alert">{errorBanner}</div>{/if}
+		{#if errorBanner}
+			<div class="banner error" role="alert">
+				{errorBanner}
+				{#if blockingJobId}
+					<button class="banner-action" onclick={stopBlockingRun}>Stop it</button>
+				{/if}
+			</div>
+		{/if}
 
 		{#if creating}
 			<div class="new-session">
@@ -1074,6 +1037,9 @@
 		{:else if current}
 			<header class="session-head">
 				<div class="head-main">
+					{#if current.title && current.title !== current.repoName}
+						<span class="session-title" title={current.title}>{current.title}</span>
+					{/if}
 					<span class="repo">{current.repoName}</span>
 					<span class="branch">{current.workBranch}</span>
 					<span class="mode-badge {current.mode}">{current.mode}</span>
@@ -1088,6 +1054,7 @@
 							{prBusy ? 'Opening…' : 'Open pull request'}
 						</button>
 					{/if}
+					<ModelSelect {models} bind:value={selectedModelId} kind="tool-capable" />
 				</div>
 
 				<!-- What this session has working right now. Session-scoped on purpose:
@@ -1237,109 +1204,40 @@
 				{/if}
 			</div>
 
-			<!-- The whole composer is the drop target, not just the box: a
-			     screenshot dragged at a two-line textarea mostly misses it. The
-			     paperclip stays the route that needs no pointer at all. -->
-			<footer
-				class="composer"
-				class:dragging={dragDepth > 0}
-				ondragenter={onDragEnter}
-				ondragover={onDragOver}
-				ondragleave={onDragLeave}
-				ondrop={onDrop}
+			<Composer
+				bind:text={input}
+				bind:files={pendingFiles}
+				bind:uploaded={uploadedRefs}
+				placeholder={current.mode === 'plan' ? 'What should we build?' : 'What should we do?'}
+				{canSend}
+				{streaming}
+				{stopping}
+				{visionWarning}
+				onsend={() => void send()}
+				onstop={() => void stopRun()}
+				oninput={stashDraft}
+				onreject={rejectFiles}
 			>
-				{#if !scroll.pinned}
-					<button class="jump" onclick={() => scroll.toBottom('smooth')}>↓ Jump to latest</button>
-				{/if}
-				{#if question && askMinimised}
-					<AskBar prompt={question.prompt} onopen={() => (askMinimised = false)} />
-				{/if}
-				{#if pendingFiles.length || uploadedRefs.length}
-					<div class="pending-files">
-						{#each uploadedRefs as ref (ref.id)}
-							<span class="att-chip uploaded" title="Uploaded — will be sent with your message">
-								{attachmentIcon(ref.kind)}
-								{ref.name}
-								<button
-									class="icon"
-									aria-label="Remove {ref.name}"
-									onclick={() => (uploadedRefs = uploadedRefs.filter((r) => r.id !== ref.id))}
-									>×</button
-								>
-							</span>
-						{/each}
-						{#each pendingFiles as file, i (file.name + i)}
-							<span class="att-chip">
-								{file.type.startsWith('image/') ? '🖼' : '📄'}
-								{file.name}
-								<button
-									class="icon"
-									aria-label="Remove {file.name}"
-									onclick={() => (pendingFiles = pendingFiles.filter((_, j) => j !== i))}>×</button
-								>
-							</span>
-						{/each}
-					</div>
-				{/if}
-				{#if visionWarning}
-					<div class="composer-hint">{visionWarning}</div>
-				{/if}
-				<div class="composer-row">
-					<textarea
-						rows="2"
-						placeholder={current.mode === 'plan' ? 'What should we build?' : 'What should we do?'}
-						bind:value={input}
-						use:autoresize={input}
-						oninput={stashDraft}
-						onkeydown={onKeydown}
-						onpaste={onPaste}
-					></textarea>
-					{#if streaming}
-						<button
-							class="btn stop"
-							onclick={stopRun}
-							disabled={stopping}
-							title="Stop the run"
-							aria-label="Stop the run">{stopping ? '…' : '■'}</button
-						>
-					{:else}
-						<button
-							class="btn send"
-							onclick={() => send()}
-							disabled={!canSend}
-							title={canSend ? 'Send message' : 'Type a message or attach a file first'}
-							aria-label="Send message">➤</button
-						>
+				{#snippet top()}
+					{#if !scroll.pinned}
+						<button class="jump" onclick={() => scroll.toBottom('smooth')}>↓ Jump to latest</button>
 					{/if}
-				</div>
-				<div class="composer-opts">
-					<input
-						type="file"
-						accept={ATTACHMENT_ACCEPT}
-						multiple
-						hidden
-						bind:this={fileInput}
-						onchange={onFilesPicked}
-					/>
+					{#if question && askMinimised}
+						<AskBar prompt={question.prompt} onopen={() => (askMinimised = false)} />
+					{/if}
+				{/snippet}
+				{#snippet options()}
 					<button
 						class="chip"
-						title="Attach images, PDFs, Word docs, markdown or text files"
-						aria-label="Attach files"
-						onclick={() => fileInput?.click()}>📎</button
+						class:on={webSearch}
+						aria-pressed={webSearch}
+						title="Let the agent search the web for this request"
+						onclick={() => (webSearch = !webSearch)}
 					>
-					<button class="chip" class:on={webSearch} onclick={() => (webSearch = !webSearch)}>
 						Web search
 					</button>
-					<select class="model-select" bind:value={selectedModelId}>
-						{#if !models.length}
-							<option value="">No tool-capable models enabled</option>
-						{/if}
-						{#each models as model (model.id)}
-							<option value={model.id}>{model.displayName} · {model.providerName}</option>
-						{/each}
-					</select>
-				</div>
-			</footer>
+				{/snippet}
+			</Composer>
 		{:else}
 			<div class="empty center">Select a session or start a new one.</div>
 		{/if}
@@ -1595,8 +1493,27 @@
 	.agent-doing.sub {
 		padding-left: 1.75rem;
 	}
+	.session-title {
+		font-size: var(--text-md);
+		color: var(--fg);
+		max-width: 24rem;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
 	.repo {
 		font-size: var(--text-md);
+	}
+	.banner-action {
+		background: transparent;
+		border: 1px solid currentColor;
+		border-radius: var(--radius);
+		color: inherit;
+		font-family: inherit;
+		font-size: var(--text-sm);
+		padding: 0.1rem 0.5rem;
+		margin-left: 0.5rem;
+		cursor: pointer;
 	}
 	.branch {
 		color: var(--fg-dim);
@@ -1835,21 +1752,7 @@
 		padding: 0.2rem 0 0.2rem 0.6rem;
 	}
 
-	.composer {
-		border-top: 1px solid var(--border);
-		/* The bottom inset moved to .shell when the tab bar took the bottom of
-		   the screen. Two elements both paying env(safe-area-inset-bottom) is a
-		   double gap on a notched phone and a wrong one on every other device. */
-		padding: 0.7rem 1rem 0.9rem;
-	}
 
-	/* Outlined inwards, and an outline rather than a border, so lighting up
-	   cannot change the composer's size and shove the thread up a line every
-	   time a file passes over it. */
-	.composer.dragging {
-		outline: 2px dashed var(--accent);
-		outline-offset: -4px;
-	}
 	.jump {
 		display: block;
 		margin: 0 auto 0.5rem;
@@ -1866,12 +1769,6 @@
 		color: var(--fg);
 		border-color: var(--accent);
 	}
-	.pending-files {
-		display: flex;
-		gap: 0.4rem;
-		flex-wrap: wrap;
-		margin-bottom: 0.4rem;
-	}
 	.att-chip {
 		display: inline-flex;
 		align-items: center;
@@ -1883,75 +1780,7 @@
 		padding: 0.15rem 0.4rem;
 		margin-top: 0.3rem;
 	}
-	.att-chip.uploaded {
-		border-color: var(--accent);
-	}
-	.composer-hint {
-		color: var(--fg-dim);
-		font-size: var(--text-sm);
-		margin-bottom: 0.4rem;
-	}
-	.composer-row {
-		display: flex;
-		gap: 0.5rem;
-		align-items: flex-end;
-	}
-	textarea {
-		flex: 1;
-		box-sizing: border-box;
-		background: var(--bg-pane);
-		border: 1px solid var(--control-border);
-		border-radius: var(--radius);
-		color: var(--fg);
-		font-family: inherit;
-		font-size: var(--text-lg);
-		line-height: 1.45;
-		padding: 0.6rem 0.8rem;
-		/* Grows with the text (see $lib/autoresize) from the two rows it starts
-		   at up to roughly eight, then scrolls. Coding briefs are the longest
-		   thing anyone types here, so this is the composer that needed it most.
-		   The cap is here rather than in JS so it holds before hydration. */
-		max-height: 12rem;
-		resize: none;
-		overflow-y: auto;
-	}
-	textarea:focus {
-		border-color: var(--accent);
-	}
-	.composer-opts {
-		display: flex;
-		align-items: center;
-		gap: 0.45rem;
-		margin-top: 0.5rem;
-	}
-	.model-select {
-		margin-left: auto;
-		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 5px;
-		color: var(--fg);
-		font-family: inherit;
-		font-size: var(--text-base);
-		padding: 0.3rem 0.4rem;
-		max-width: 16rem;
-	}
 
-	/* --tap, not a padding that happens to come out near it — see the same rule on
-	   the chat page for the measurement and the reason. */
-	.btn {
-		min-width: var(--tap);
-	}
-	.btn.send {
-		background: var(--accent);
-		color: var(--bg);
-	}
-	.btn.stop {
-		background: var(--danger);
-		color: var(--bg);
-	}
-	.chip {
-		min-width: var(--tap);
-	}
 
 	@media (max-width: 720px) {
 		/* One column: the pane drops full width under the chips rather than
