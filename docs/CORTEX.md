@@ -39,7 +39,7 @@ they will drift into disagreement.
 
 - **`memory_items` stays the record of discrete observations** — preferences,
   patterns, single facts. It is written by the memory job and shown to the user
-  in Settings → Memory. It is the source of truth for "what is true".
+  on the Memory page (`/memory`). It is the source of truth for "what is true".
 - **Cortex holds concepts and their relationships.** A node is not a fact; it
   is a thing facts can be about. "Prefers dark themes" is a memory item.
   "Visual design" is a node.

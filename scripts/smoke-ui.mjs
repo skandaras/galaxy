@@ -280,7 +280,7 @@ const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
 
 // 1. Every page renders, and renders quietly. A page that throws during
 //    hydration still answers 200, so the bash smoke calls it healthy.
-for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/ivory', '/ivory/new', '/settings', '/observatory', '/alignment']) {
+for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/memory', '/ivory', '/ivory/new', '/settings', '/observatory', '/alignment']) {
 	problems = [];
 	// Not networkidle: the app holds SSE streams open (notifications, the
 	// Observatory feed), so the network is never idle and every goto would sit
@@ -332,7 +332,6 @@ check(
 		'Boards',
 		'Cortex',
 		'Notifications',
-		'Memory',
 		'Alignment'
 	]);
 
@@ -354,7 +353,7 @@ check(
 		await page.locator('.tabs button[aria-selected="true"]').innerText(),
 		'Notifications'
 	);
-	await page.locator('.tabs button', { hasText: 'Memory' }).click();
+	await page.locator('.tabs button', { hasText: 'Cortex' }).click();
 	await page.waitForTimeout(200);
 	await page.goBack();
 	await page.waitForTimeout(200);
@@ -372,6 +371,32 @@ check(
 		})(),
 		'Theme'
 	);
+
+	// Memory left Settings for a page of its own; an old link to its tab still
+	// lands somewhere rather than on nothing.
+	await page.goto(`${B}/settings?tab=memory`);
+	await page.locator('.tabs button[aria-selected="true"]').waitFor();
+	check(
+		'the old Memory tab link falls back to the first tab',
+		await page.locator('.tabs button[aria-selected="true"]').innerText(),
+		'Theme'
+	);
+	problems = [];
+	await page.goto(`${B}/memory`);
+	await page.locator('.memory-page h1').waitFor();
+	check('Memory is a page of its own', await page.locator('.memory-page .card').count() > 0);
+	check('and renders quietly', problems, []);
+	check(
+		'the rail groups it under Knowledge',
+		await page.locator('.nav .cluster', { hasText: 'Knowledge' }).getByRole('link', { name: 'Memory' }).count(),
+		1
+	);
+	check(
+		'the rail marks it as the current page',
+		await page.locator('.nav a[aria-current="page"]').innerText(),
+		'Memory'
+	);
+	await page.goto(`${B}/settings`);
 
 	// The specific regression: Boards must not be carrying the Cortex pane.
 	await page.locator('.tabs button', { hasText: 'Boards' }).click();
@@ -1821,15 +1846,15 @@ check(
 		const items = (await phone.locator('.more-sheet .more-item').allTextContents()).map((s) =>
 			s.replace(/\s+/g, ' ').trim()
 		);
-		// Observatory is in here because its only other link is the docked feed,
-		// which is display:none at this width — so the full view has been
-		// unreachable on a phone.
+		// Activity is the Observatory's page, under the name people read. The
+		// docked feed is display:none at this width, so this is the way there.
 		check('More holds everything the bar could not', items, [
 			'✧ Cortex',
+			'◇ Memory',
 			'▲ Ivory Tower',
 			'◉ Alignment',
 			'⚙ Settings',
-			'◎ Observatory'
+			'◎ Activity'
 		]);
 		check('every entry is a thumb tall', await undersized(phone, '.more-sheet .more-item'), []);
 		await phoneShot('more');
@@ -1847,7 +1872,7 @@ check(
 		await phone.goto(`${B}/chat`);
 		await phone.locator('nav.tabbar .tab.more').tap();
 		await phone.locator('.more-sheet').waitFor();
-		await phone.locator('.more-sheet .more-item', { hasText: 'Observatory' }).tap();
+		await phone.locator('.more-sheet .more-item', { hasText: 'Activity' }).tap();
 		await phone.waitForURL(/\/observatory/);
 		check('and it navigates', new URL(phone.url()).pathname, '/observatory');
 		check('closing behind itself', await phone.locator('.more-sheet').count(), 0);

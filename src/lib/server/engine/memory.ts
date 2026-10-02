@@ -148,7 +148,7 @@ export function decideCandidate(id: string, approve: boolean): SkillCandidate | 
  * another person's system prompt.
  */
 /**
- * Active memories carried into a system prompt. Surfaced so Settings → Memory
+ * Active memories carried into a system prompt. Surfaced so the Memory page
  * can show what is actually in context rather than only what is stored — the
  * gap between the two is the thing worth watching as the list grows.
  */

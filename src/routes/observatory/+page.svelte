@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
 
 	interface Ev {
 		id: string;
@@ -81,7 +82,13 @@
 
 <div class="obs-page">
 	<header>
-		<h2>Observatory</h2>
+		<div class="title">
+			<h2>Activity</h2>
+			<p class="hint">
+				Your runs, tool calls and errors as they happen.{#if page.data.user?.isAdmin}
+					As an admin you see everyone's.{/if}
+			</p>
+		</div>
 		<div class="filters">
 			<select bind:value={type}>
 				{#each TYPES as t (t)}
@@ -156,6 +163,9 @@
 		font-size: var(--text-lg);
 		letter-spacing: 0.3em;
 		color: var(--heading);
+	}
+	.title .hint {
+		margin: 0.2rem 0 0;
 	}
 	.filters {
 		display: flex;

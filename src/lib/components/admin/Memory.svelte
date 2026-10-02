@@ -106,7 +106,7 @@
 		</div>
 		<p class="hint">
 			Applies to every user. Each person can opt their own audit out and run it on demand from
-			Settings → Memory; an audit only reads that user's own activity, and never hidden chats.
+			the Memory page; an audit only reads that user's own activity, and never hidden chats.
 		</p>
 		<p class="hint">
 			The number kept is a hard ceiling, not a target: past it a new memory has to displace one

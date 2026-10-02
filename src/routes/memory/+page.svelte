@@ -147,6 +147,11 @@
 	});
 </script>
 
+<!-- A page of its own, in the rail's Knowledge group beside Library and
+     Cortex. As a Settings tab it sat between Theme and Notifications, away from
+     the other places that feed what the agents know. -->
+<div class="memory-page">
+<h1>Memory</h1>
 <section class="memory-section">
 	{#if notice}<p class="notice">{notice}</p>{/if}
 
@@ -179,7 +184,9 @@
 			</button>
 			<span class="meta">
 				last run {when(lastRun)}
-				{#if enabled && scheduleEnabled} · next {when(nextDue)}{/if}
+				<!-- Counted from the last run, so before the first one it came out as
+				     1970. Until then the next scheduled check is the first run. -->
+				{#if enabled && scheduleEnabled && lastRun} · next {when(nextDue)}{/if}
 				{#if !scheduleEnabled} · automatic runs are off platform-wide{/if}
 			</span>
 		</div>
@@ -310,10 +317,28 @@
 		</article>
 	{/if}
 </section>
+</div>
 
 <style>
+	.memory-page {
+		flex: 1;
+		min-width: 0;
+		padding: 1rem 1.25rem;
+		overflow-y: auto;
+	}
+	h1 {
+		margin: 0 0 1rem;
+		font-size: var(--text-lg);
+		letter-spacing: 0.3em;
+		color: var(--heading);
+	}
 	.memory-section {
 		max-width: 46rem;
+	}
+	@media (max-width: 720px) {
+		.memory-page {
+			padding: 0.75rem 0.85rem;
+		}
 	}
 	.card {
 		margin-bottom: 0.9rem;

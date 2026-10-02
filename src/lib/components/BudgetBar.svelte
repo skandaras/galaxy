@@ -10,9 +10,31 @@
 		unpricedCalls: number;
 	}
 
+	interface Props {
+		isAdmin: boolean;
+	}
+	let { isAdmin }: Props = $props();
+
 	// Backstop only: the event stream below is what normally keeps this current.
 	const POLL_MS = 120_000;
 	let status = $state<Status | null>(null);
+
+	/**
+	 * Everyone sees the figure once it matters, and admins always do.
+	 *
+	 * The cap blocks everyone's turns, so the figure is not admin-only (see
+	 * /api/usage/budget). But a dollar amount on every page, explained only by a
+	 * hover tooltip a phone cannot show, told most people nothing they could act
+	 * on until the day it said everything. Half the cap is when it starts to.
+	 */
+	const SHOW_AT = 0.5;
+	const visible = (s: Status) =>
+		isAdmin || s.blocked || (s.enabled && s.limitUsd > 0 && s.spentUsd / s.limitUsd >= SHOW_AT);
+	const PERIOD_WORDS: Record<Status['period'], string> = {
+		day: 'today',
+		week: 'this week',
+		month: 'this month'
+	};
 
 	async function load() {
 		const res = await fetch('/api/usage/budget');
@@ -63,20 +85,26 @@
 	};
 </script>
 
-{#if status}
+{#if status && visible(status)}
 	<div class="budget" class:blocked={status.blocked} title={title(status)}>
 		<span class="amount">
-			<span class="num">{money(status.spentUsd)}</span>{#if status.enabled}<span class="of num"
-					>/{money(status.limitUsd)}</span
-				>{/if}
+			<span class="num">{money(status.spentUsd)}</span>
+			{#if status.enabled}<span class="of">of <span class="num">{money(status.limitUsd)}</span></span>{/if}
+			<span class="when">{PERIOD_WORDS[status.period]}{#if !status.enabled}, no cap{/if}</span>
 		</span>
 		{#if status.enabled}
 			<span class="track" aria-hidden="true">
 				<span class="fill" style="width: {pct(status)}%"></span>
 			</span>
 		{/if}
-		{#if status.unpricedCalls}<span class="warn" aria-hidden="true">*</span>{/if}
 	</div>
+	<!-- Said in words rather than as a bare asterisk explained only on hover,
+	     and only to the people who can price a model. -->
+	{#if isAdmin && status.unpricedCalls}
+		<div class="unpriced">
+			{status.unpricedCalls} call{status.unpricedCalls === 1 ? '' : 's'} not priced
+		</div>
+	{/if}
 {/if}
 
 <style>
@@ -88,10 +116,13 @@
 		color: var(--fg-dim);
 	}
 	.amount {
-		white-space: nowrap;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0 0.3rem;
 	}
-	.of {
-		opacity: 0.6;
+	.of,
+	.when {
+		opacity: 0.75;
 	}
 	.track {
 		flex: 1;
@@ -112,7 +143,9 @@
 	.blocked .fill {
 		background: var(--danger);
 	}
-	.warn {
-		color: var(--accent);
+	.unpriced {
+		font-size: var(--text-xs);
+		color: var(--fg-dim);
+		margin-top: 0.15rem;
 	}
 </style>

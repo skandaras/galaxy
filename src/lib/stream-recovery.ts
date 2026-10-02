@@ -136,7 +136,7 @@ export function planRecovery(input: RecoveryInput): RecoveryAction {
 	}
 	return {
 		kind: 'no-reply',
-		banner: 'That run ended without a reply. Check the Observatory for the reason.'
+		banner: 'That run ended without a reply. Activity has the reason.'
 	};
 }
 
