@@ -407,9 +407,8 @@
 		uploadedRefs = [];
 		// The buttons that call this live *inside* the drawer on a phone, so
 		// leaving it open put its scrim over the composer you were just sent to —
-		// every tap on the box or the send arrow hit the scrim instead. Chat was
-		// the only one of the three list pages whose new-thing button forgot this;
-		// /library and /code have always closed it.
+		// every tap on the box or the send arrow hit the scrim instead. /code's
+		// "+ New session" had the same fault until it was given the same line.
 		listOpen = false;
 	}
 
@@ -1315,7 +1314,7 @@
 		<div class="thread" bind:this={threadEl}>
 			{#if !currentChat && !messages.length}
 				<div class="empty">
-					<p>Start a conversation — it will appear in the pane on the left.</p>
+					<p>Ask anything to start a new chat.</p>
 				</div>
 			{/if}
 			{#each messages as msg (msg.id)}
@@ -1324,7 +1323,10 @@
 						{#if msg.role === 'assistant'}
 							{#if msg.trace?.steps?.length}
 								<details class="past-run">
-									<summary>{msg.trace.summary || `${msg.trace.steps.length} steps`}</summary>
+									<summary>
+										{msg.trace.summary ||
+											`${msg.trace.steps.length} ${msg.trace.steps.length === 1 ? 'step' : 'steps'}`}
+									</summary>
 									<RunTimeline items={itemsFromTrace(msg.trace)} />
 								</details>
 							{/if}

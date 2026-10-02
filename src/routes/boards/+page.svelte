@@ -428,7 +428,7 @@
 			<span class="members" title="Everyone who can see this board">
 				{view.members.map((m) => m.username).join(', ')}
 			</span>
-			<a class="btn ghost" href="/settings">Configure</a>
+			<a class="btn ghost" href="/settings?tab=boards">Configure</a>
 		{/if}
 	</header>
 

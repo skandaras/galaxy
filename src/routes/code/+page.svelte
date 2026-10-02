@@ -982,7 +982,10 @@
 		style={`--list-width:${listPane.width}px`}
 		use:swipeToClose={() => (listOpen = false)}
 	>
-		<button class="btn primary wide" onclick={() => ((creating = true), (current = null))}>
+		<button
+			class="btn primary wide"
+			onclick={() => ((creating = true), (current = null), (listOpen = false))}
+		>
 			+ New session
 		</button>
 		<ul>
@@ -1058,14 +1061,14 @@
 					<span class="branch">{current.workBranch}</span>
 					<span class="mode-badge {current.mode}">{current.mode}</span>
 					{#if current.mode === 'implement'}
-						<button class="chip" onclick={() => setMode('plan')}>back to plan</button>
+						<button class="chip" onclick={() => setMode('plan')}>Back to plan</button>
 					{/if}
-					<button class="chip" onclick={loadDiff}>{diff === null ? 'view diff' : 'hide diff'}</button>
+					<button class="chip" onclick={loadDiff}>{diff === null ? 'View diff' : 'Hide diff'}</button>
 					{#if prUrl}
-						<a class="chip pr-link" href={prUrl} target="_blank" rel="noreferrer">pull request ↗</a>
+						<a class="chip pr-link" href={prUrl} target="_blank" rel="noreferrer">Pull request ↗</a>
 					{:else}
 						<button class="chip" disabled={prBusy} onclick={openPr}>
-							{prBusy ? 'opening…' : 'open pull request'}
+							{prBusy ? 'Opening…' : 'Open pull request'}
 						</button>
 					{/if}
 				</div>
@@ -1162,7 +1165,8 @@
 							{#if msg.trace?.steps?.length}
 								<details class="past-run">
 									<summary>
-										{msg.trace.summary || `${msg.trace.steps.length} steps`}
+										{msg.trace.summary ||
+											`${msg.trace.steps.length} ${msg.trace.steps.length === 1 ? 'step' : 'steps'}`}
 									</summary>
 									<RunTimeline items={itemsFromTrace(msg.trace)} />
 								</details>

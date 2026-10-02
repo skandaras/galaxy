@@ -152,7 +152,7 @@
 					? `${heavy[0].task} wrote on ${heavy[0].modelKey}`
 					: `${heavy.length} task/model pairs wrote`} was deliberation, not answer. Reasoning
 				tokens are output tokens: they are the wall clock, and max tokens does not govern them.
-				Set <strong>Reasoning</strong> on the model in Admin → Providers, or point the task at a
+				Set the model's <strong>Think</strong> column in Admin → Models, or point the task at a
 				model that does not reason.
 			</p>
 		{/if}
