@@ -26,12 +26,12 @@
 	});
 
 	async function saveLimits() {
-		await fetch('/api/admin/settings', {
+		const res = await fetch('/api/admin/settings', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ key: 'boards', value: limits })
-		});
-		notice = 'Limits saved';
+		}).catch(() => null);
+		notice = res?.ok ? 'Limits saved' : 'Not saved. Try again.';
 		await load();
 	}
 

@@ -45,7 +45,7 @@
 			body: JSON.stringify(body)
 		});
 		if (!res.ok) {
-			notice = (await res.text()) || 'Could not save';
+			notice = (await res.json().catch(() => null))?.message ?? 'Could not save';
 			return false;
 		}
 		return true;

@@ -137,6 +137,7 @@
 	}
 
 	async function removeAttachment(id: string) {
+		if (!confirm('Remove this attachment from the card?')) return;
 		const res = await fetch(`/api/cards/${cardId}/attachments/${id}`, {
 			method: 'DELETE'
 		}).catch(() => null);

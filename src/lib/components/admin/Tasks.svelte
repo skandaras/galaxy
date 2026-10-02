@@ -39,6 +39,7 @@
 	let historyTask = $state<string | null>(null);
 	let versions = $state<PromptVersion[]>([]);
 	let savedTask = $state<string | null>(null);
+	let failedTask = $state<string | null>(null);
 
 	async function load() {
 		const [cfgRes, modelRes] = await Promise.all([
@@ -53,11 +54,17 @@
 	});
 
 	async function save(cfg: TaskConfig) {
-		await fetch('/api/admin/task-configs', {
+		const res = await fetch('/api/admin/task-configs', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify(cfg)
-		});
+		}).catch(() => null);
+		// Without this a refused prompt still showed "Saved ✓" and the edited badge.
+		if (!res?.ok) {
+			failedTask = cfg.task;
+			return;
+		}
+		failedTask = null;
 		// The route clears the override when the text matches the default, so the
 		// badge has to be recomputed here rather than left as it was.
 		cfg.overridden = cfg.systemPrompt !== cfg.defaultPrompt;
@@ -103,8 +110,8 @@
 		The agents that write prose also carry a shared house style, which is not shown in these boxes
 		and is not editable here — how they sound reaches chat, coding, deep research, the board, the
 		sub-agent and the background reviewers, and how their replies are shaped reaches the ones that
-		answer in prose rather than JSON. Read it, and add your own rules to it, under Settings &rarr;
-		House style.
+		answer in prose rather than JSON. Read it, and add your own rules to it, under Admin &rarr; Settings
+		&rarr; House style.
 	</p>
 	{#each configs as cfg (cfg.task)}
 		<article class="card">
@@ -145,6 +152,9 @@
 				</button>
 				{#if cfg.systemPrompt !== cfg.defaultPrompt}
 					<button class="btn" onclick={() => resetToDefault(cfg)}>Reset to default</button>
+				{/if}
+				{#if failedTask === cfg.task}
+					<span class="save-error" role="alert">Not saved. Try again.</span>
 				{/if}
 			</footer>
 			{#if historyTask === cfg.task}
@@ -275,6 +285,11 @@
 	.meta {
 		color: var(--fg-dim);
 		white-space: nowrap;
+	}
+	.save-error {
+		align-self: center;
+		font-size: var(--text-sm);
+		color: var(--danger);
 	}
 	.preview {
 		flex: 1;

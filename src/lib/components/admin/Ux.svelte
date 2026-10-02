@@ -38,12 +38,12 @@
 	});
 
 	async function saveSettings() {
-		await fetch('/api/admin/settings', {
+		const res = await fetch('/api/admin/settings', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ key: 'uxaudit', value: settings })
-		});
-		notice = 'Schedule saved';
+		}).catch(() => null);
+		notice = res?.ok ? 'Schedule saved' : 'Not saved. Try again.';
 		await load();
 	}
 

@@ -9,6 +9,7 @@
 	let custom = $state<Record<string, Theme>>({});
 	let saveName = $state('');
 	let saved = $state(false);
+	let problem = $state('');
 
 	$effect(() => {
 		void (async () => {
@@ -115,12 +116,17 @@
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ theme: draft, saveAs })
-		});
-		if (res.ok) {
-			const data = await res.json();
-			custom = data.custom ?? custom;
-			if (saveAs) saveName = '';
+		}).catch(() => null);
+		// "Saved ✓" used to follow whatever came back, so a refused save looked
+		// kept until the next reload put the old theme back.
+		if (!res?.ok) {
+			problem = 'The theme was not saved. Try again.';
+			return;
 		}
+		const data = await res.json();
+		custom = data.custom ?? custom;
+		if (saveAs) saveName = '';
+		problem = '';
 		saved = true;
 		setTimeout(() => (saved = false), 1500);
 		await invalidateAll();
@@ -156,8 +162,9 @@
 		reader.onload = () => {
 			try {
 				draft = { ...draft!, ...JSON.parse(String(reader.result)) };
+				problem = '';
 			} catch {
-				/* not json */
+				problem = `${file.name} is not a theme export.`;
 			}
 		};
 		reader.readAsText(file);
@@ -388,6 +395,7 @@
 				Import
 				<input type="file" accept="application/json" hidden onchange={importTheme} />
 			</label>
+			{#if problem}<span class="problem" role="alert">{problem}</span>{/if}
 		</div>
 	{/if}
 </div>
@@ -603,6 +611,11 @@
 		display: flex;
 		gap: 0.5rem;
 		align-items: center;
+		flex-wrap: wrap;
+	}
+	.problem {
+		font-size: var(--text-sm);
+		color: var(--danger);
 	}
 	.btn {
 		background: var(--border);
