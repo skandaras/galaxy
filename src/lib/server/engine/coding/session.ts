@@ -97,6 +97,7 @@ export async function createSession(opts: {
 		workBranch: ws.workBranch,
 		workspaceRel: ws.workspaceRel,
 		mode: opts.mode,
+		prUrl: null,
 		createdAt: new Date()
 	};
 	db.insert(codeSessions).values(row).run();
@@ -247,6 +248,13 @@ export function startCodingTurn(opts: {
 		content: opts.content,
 		attachments: opts.attachments
 	});
+	// A session is created titled with its repo, so every session on one repo
+	// looked the same in the list. The first request names it instead, as a
+	// chat's first message does (see startChatTurn). titleCustom stays set, as
+	// createChat left it, so the auto-titler still keeps away.
+	if (chat.title === session.repoName && opts.content) {
+		updateChat(chat.id, { title: opts.content.slice(0, 48) });
+	}
 	// Remember the model for this session (see startChatTurn).
 	updateChat(chat.id, { modelId: choice.model.id });
 	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'coding', persist: true });

@@ -14,10 +14,15 @@ export const GET: RequestHandler = ({ locals, params }) => {
 	// chat, and a coding session is a chat underneath.
 	resolveOpened(user.id, session.chatId);
 	const running = findRunningJobForChat(session.chatId);
+	const chat = getChat(session.chatId, user.id);
 	return json({
-		// modelId lives on the chat row, not the code session, but the client
-		// wants it alongside the rest of the session state.
-		session: { ...session, modelId: getChat(session.chatId, user.id)?.modelId ?? null },
+		// modelId and the title live on the chat row, not the code session, but
+		// the client wants them alongside the rest of the session state.
+		session: {
+			...session,
+			modelId: chat?.modelId ?? null,
+			title: chat?.title ?? session.repoName
+		},
 		messages: getMessages(session.chatId),
 		runningJobId: running?.id ?? null,
 		// Server time, so a page reopened mid-run shows how long the agent has
