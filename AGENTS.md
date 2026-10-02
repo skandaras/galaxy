@@ -102,6 +102,11 @@ Colours, fonts, spacing and radii come from the theme tokens in `src/lib/theme.t
 is a tested constraint, not a preference: `theme.test.ts` asserts AA for every preset. See
 `docs/ACCESSIBILITY.md`.
 
+Buttons, chips, cards, hints, notices, badges and tab strips use the shared classes
+`themeCss()` emits; do not restate them in a component. Saves, errors and confirmations
+follow the feedback rule in `docs/ACCESSIBILITY.md`, and an irreversible action asks
+through `ask()` from `$lib/confirm.svelte`, never `window.confirm()`.
+
 A leading underscore means deliberately unused, and the linter is configured to agree.
 
 ## Writing prose

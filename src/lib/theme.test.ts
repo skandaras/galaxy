@@ -394,6 +394,45 @@ describe('controlBorder', () => {
 	});
 });
 
+describe('shared controls', () => {
+	const css = themeCss(DEFAULT_THEME);
+
+	it('declares every base control once, here', () => {
+		const rules = [
+			'.btn{',
+			'.btn.primary{',
+			'.btn.danger{',
+			'.chip{',
+			'.chip.on{',
+			'.card{',
+			'.hint{',
+			'.notice.error{',
+			'.badge{',
+			'.tabs button[aria-selected="true"]{'
+		];
+		for (const rule of rules) {
+			expect(css).toContain(rule);
+		}
+	});
+
+	it('holds buttons and chips to the touch floor', () => {
+		expect(css).toMatch(/\.btn\{[^}]*min-height:var\(--tap\)/);
+		expect(css).toMatch(/\.chip\{[^}]*min-height:var\(--tap\)/);
+	});
+
+	it('takes corners from the theme, so a square preset stays square', () => {
+		// The scoped copies hard-coded 5px and 8px, which is why Void never
+		// reached most of the buttons and cards in the app.
+		expect(css).toMatch(/\.btn\{[^}]*border-radius:var\(--radius\)/);
+		expect(css).toMatch(/\.card\{[^}]*border-radius:var\(--radius-lg\)/);
+		expect(css).toContain('--radius-lg:calc(var(--radius) * 1.6)');
+	});
+
+	it('gives a chip the control border, since it is a toggle', () => {
+		expect(css).toMatch(/\.chip\{[^}]*border:1px solid var\(--control-border\)/);
+	});
+});
+
 describe('shipped palettes', () => {
 	it('clear AA for dim text and field labels on both surfaces', () => {
 		// These carry .hint, .meta and .field-hint across the whole app at

@@ -3,6 +3,7 @@
 	import Journal from '$lib/components/alignment/Journal.svelte';
 	import Constitution from '$lib/components/alignment/Constitution.svelte';
 	import RubricView from '$lib/components/alignment/RubricView.svelte';
+	import Tabs from '$lib/components/Tabs.svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { tabFromUrl, tabUrl } from '$lib/url-tab';
@@ -61,11 +62,7 @@
 </script>
 
 <div class="alignment">
-	<nav class="tabs">
-		{#each tabs as tab (tab)}
-			<button class:active={active === tab} onclick={() => show(tab)}>{tab}</button>
-		{/each}
-	</nav>
+	<Tabs {tabs} label="Alignment" />
 
 	<div class="body">
 		{#key revision}
@@ -96,27 +93,6 @@
 		min-width: 0;
 		padding: 1rem 1.25rem;
 		overflow-y: auto;
-	}
-	.tabs {
-		display: flex;
-		gap: 0.3rem;
-		border-bottom: 1px solid var(--border);
-		margin-bottom: 1rem;
-		flex-wrap: wrap;
-	}
-	.tabs button {
-		background: none;
-		border: none;
-		border-bottom: 2px solid transparent;
-		color: var(--fg-dim);
-		font-family: inherit;
-		font-size: var(--text-md);
-		padding: 0.5rem 0.8rem;
-		cursor: pointer;
-	}
-	.tabs button.active {
-		color: var(--fg);
-		border-bottom-color: var(--accent);
 	}
 	@media (max-width: 720px) {
 		.alignment {

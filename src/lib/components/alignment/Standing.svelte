@@ -201,7 +201,7 @@
 
 		<article class="card">
 			<h3>The longer view</h3>
-			{#if notice}<p class="notice" role="alert">{notice}</p>{/if}
+			{#if notice}<p class="notice error" role="alert">{notice}</p>{/if}
 			{#if standing.latestSynthesis}
 				<p class="meta">Written {when(standing.latestSynthesis.createdAt)}</p>
 				<div class="letter">
@@ -268,9 +268,6 @@
 		color: var(--fg-dim);
 	}
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-top: 0.9rem;
 	}
 	h3 {
@@ -289,10 +286,6 @@
 	}
 	.unscored {
 		margin: 0.6rem 0 0;
-	}
-	.notice {
-		color: var(--danger);
-		font-size: var(--text-base);
 	}
 	.flag {
 		border-left: 2px solid var(--danger);
@@ -374,19 +367,6 @@
 		font-size: var(--text-md);
 		line-height: 1.6;
 		margin-bottom: 0.7rem;
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.3rem 0.6rem;
-		font-family: inherit;
-		font-size: var(--text-sm);
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
 	}
 	.link {
 		background: none;

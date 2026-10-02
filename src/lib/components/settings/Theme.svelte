@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	import { invalidateAll } from '$app/navigation';
 	import { contrastGrade, contrastRatio, type Theme } from '$lib/theme';
 	import { fontStack, optionsFor, type FontRole } from '$lib/fonts';
@@ -134,7 +135,7 @@
 
 	async function deleteCustom(name: string, ev: Event) {
 		ev.stopPropagation();
-		if (!confirm(`Delete saved theme "${name}"?`)) return;
+		if (!(await ask({ title: `Delete the saved theme "${name}"?`, confirm: 'Delete theme', danger: true }))) return;
 		const res = await fetch(`/api/settings/theme?name=${encodeURIComponent(name)}`, {
 			method: 'DELETE'
 		});
@@ -405,9 +406,6 @@
 		max-width: 46rem;
 	}
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-bottom: 0.9rem;
 	}
 	h3 {
@@ -574,9 +572,6 @@
 		overflow-x: auto;
 	}
 	.hint {
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
-		line-height: 1.5;
 		margin: -0.3rem 0 0.7rem;
 	}
 	.size-row {
@@ -616,21 +611,6 @@
 	.problem {
 		font-size: var(--text-sm);
 		color: var(--danger);
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		padding: 0.4rem 0.8rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-		display: inline-flex;
-		align-items: center;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
 	}
 	@media (max-width: 720px) {
 		.grid {

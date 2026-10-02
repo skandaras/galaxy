@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	import { onDestroy, onMount } from 'svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
 	import { ATTACHMENT_ACCEPT, attachmentIcon, screenFiles } from '$lib/attachment-types';
@@ -204,13 +205,20 @@
 	let viewGeneration = 0;
 
 	onMount(async () => {
+		// Each one may fail on its own. A failure here used to throw out of
+		// onMount and take the whole page to the error screen; Chat has always
+		// said what went wrong and kept the rest of the page.
 		const [chatsRes, modelsRes, reposRes] = await Promise.all([
-			fetch('/api/chats'),
-			fetch('/api/models?task=coding'),
-			fetch('/api/github/repos')
+			fetch('/api/chats').catch(() => null),
+			fetch('/api/models?task=coding').catch(() => null),
+			fetch('/api/github/repos').catch(() => null)
 		]);
-		sessions = ((await chatsRes.json()) as ChatMeta[]).filter((c) => c.mode === 'code');
-		const m = await modelsRes.json();
+		if (chatsRes?.ok) {
+			sessions = ((await chatsRes.json()) as ChatMeta[]).filter((c) => c.mode === 'code');
+		} else {
+			errorBanner = 'Could not load your sessions. Reload to try again.';
+		}
+		const m = modelsRes?.ok ? await modelsRes.json() : { models: [], defaultModelId: null };
 		models = m.models.filter((x: ModelOption) => x.supportsTools);
 		// The default must itself be tool-capable, or coding refuses the turn.
 		const preferred = m.defaultModelId;
@@ -219,7 +227,7 @@
 				? preferred
 				: (models[0]?.id ?? '');
 		selectedModelId = defaultModelId;
-		const g = await reposRes.json().catch(() => ({ configured: false, repos: [] }));
+		const g = (await reposRes?.json().catch(() => null)) ?? { configured: false, repos: [] };
 		githubConfigured = g.configured;
 		repos = g.repos;
 
@@ -312,13 +320,21 @@
 		// survive into the one being opened.
 		subAgents = [];
 		runStartedAt = null;
-		const res = await fetch(`/api/code/sessions/${chatId}`);
-		if (!res.ok) return;
+		// Before the fetch, as Chat does, so a failed open does not leave the
+		// drawer's scrim over the page with nothing to say why.
+		listOpen = false;
+		const res = await fetch(`/api/code/sessions/${chatId}`).catch(() => null);
+		if (!res?.ok) {
+			errorBanner =
+				res?.status === 404
+					? 'That session no longer exists.'
+					: 'Could not open that session. Try again in a moment.';
+			return;
+		}
 		const data = await res.json();
 		current = data.session;
 		applySessionModel(current);
 		messages = data.messages.filter((m: Msg) => m.role !== 'tool');
-		listOpen = false;
 		creating = false;
 		pendingFiles = [];
 		uploadedRefs = [];
@@ -789,7 +805,7 @@
 
 	async function removeSession(chatId: string, ev?: Event) {
 		ev?.stopPropagation();
-		if (!confirm('Delete this session and its workspace?')) return;
+		if (!(await ask({ title: 'Delete this session and its workspace?', confirm: 'Delete session', danger: true }))) return;
 		const res = await fetch(`/api/code/sessions/${chatId}`, { method: 'DELETE' }).catch(
 			() => null
 		);
@@ -1922,23 +1938,7 @@
 	/* --tap, not a padding that happens to come out near it — see the same rule on
 	   the chat page for the measurement and the reason. */
 	.btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		min-height: var(--tap);
 		min-width: var(--tap);
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.4rem 0.7rem;
-		font-family: inherit;
-		font-size: var(--text-md);
-		cursor: pointer;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
 	}
 	.btn.send {
 		background: var(--accent);
@@ -1948,30 +1948,8 @@
 		background: var(--danger);
 		color: var(--bg);
 	}
-	.btn.wide {
-		width: 100%;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-	}
 	.chip {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		min-height: var(--tap);
 		min-width: var(--tap);
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		color: var(--fg-dim);
-		font-family: inherit;
-		font-size: var(--text-sm);
-		padding: 0.22rem 0.65rem;
-		cursor: pointer;
-	}
-	.chip.on {
-		border-color: var(--accent);
-		color: var(--accent);
 	}
 
 	@media (max-width: 720px) {

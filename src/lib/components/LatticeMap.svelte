@@ -889,7 +889,7 @@
 		oncontextmenu={(e) => e.preventDefault()}
 	></canvas>
 	{#if nodes.length}
-		<div class="hint">
+		<div class="map-hint">
 			<span class="fine">drag to pan · middle-drag or shift-drag to rotate · scroll to zoom</span>
 			<span class="coarse">drag to pan · pinch to zoom · twist to turn · double-tap to zoom in</span>
 		</div>
@@ -965,7 +965,7 @@
 	canvas:active {
 		cursor: grabbing;
 	}
-	.hint {
+	.map-hint {
 		position: absolute;
 		left: 0.75rem;
 		bottom: 0.6rem;
@@ -980,14 +980,14 @@
 		display: flex;
 		gap: 0.3rem;
 	}
-	.hint .coarse {
+	.map-hint .coarse {
 		display: none;
 	}
 	@media not (pointer: fine) {
-		.hint .fine {
+		.map-hint .fine {
 			display: none;
 		}
-		.hint .coarse {
+		.map-hint .coarse {
 			display: inline;
 		}
 	}
@@ -1003,7 +1003,7 @@
 			justify-content: center;
 			flex-wrap: wrap;
 		}
-		.hint {
+		.map-hint {
 			top: 0.6rem;
 			bottom: auto;
 			right: 0.6rem;

@@ -24,6 +24,7 @@
 	let lastRun = $state(0);
 	let busy = $state(false);
 	let notice = $state<string | null>(null);
+	let noticeFailed = $state(false);
 
 	async function load() {
 		const [settings, status] = await Promise.all([
@@ -45,12 +46,14 @@
 			body: JSON.stringify({ key, value })
 		}).catch(() => null);
 		notice = res?.ok ? 'Saved' : 'Not saved. Try again.';
+		noticeFailed = !res?.ok;
 		await load();
 	}
 
 	async function runNow(mode: 'harvest' | 'review') {
 		busy = true;
 		notice = null;
+		noticeFailed = false;
 		const result = await (
 			await fetch('/api/cortex/groom', {
 				method: 'POST',
@@ -208,7 +211,7 @@
 		<button class="btn primary" onclick={() => save('cortex', cortex)}>Save lattice</button>
 	</div>
 
-	{#if notice}<p class="notice" role="status">{notice}</p>{/if}
+	{#if notice}<p class="notice" class:error={noticeFailed} role={noticeFailed ? 'alert' : 'status'}>{notice}</p>{/if}
 </section>
 
 <style>
@@ -249,24 +252,6 @@
 		margin: 0.5rem 0 0.2rem;
 	}
 	.hint {
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
-		line-height: 1.5;
 		max-width: 60ch;
-	}
-	.notice {
-		font-size: var(--text-sm);
-		color: var(--accent);
-	}
-	.btn {
-		padding: 0.35rem 0.8rem;
-		background: var(--bg);
-		color: var(--fg);
-		border: 1px solid var(--control-border);
-		cursor: pointer;
-	}
-	.btn.primary {
-		border-color: var(--accent);
-		color: var(--heading);
 	}
 </style>

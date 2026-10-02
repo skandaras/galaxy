@@ -31,13 +31,22 @@
 		void load();
 	});
 
+	let failed = $state(false);
+
 	async function savePrefs(next: typeof prefs) {
 		const res = await fetch('/api/alignment/settings', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ rubric: next })
-		});
-		if (res.ok) prefs = (await res.json()).rubric;
+		}).catch(() => null);
+		// The slider has already moved, so a refusal has to say so or the screen
+		// shows a weight the next reading will not use.
+		if (!res?.ok) {
+			failed = true;
+			return;
+		}
+		failed = false;
+		prefs = (await res.json()).rubric;
 	}
 
 	const toggle = (id: string) =>
@@ -55,6 +64,7 @@
 </script>
 
 <section class="rubric">
+	{#if failed}<p class="notice error" role="alert">That change was not saved. Try again.</p>{/if}
 	<p class="hint intro">
 		What an entry is read against. Every dimension comes from somewhere — a tradition in moral
 		philosophy or a body of psychological work — and the source is named because something
@@ -131,9 +141,6 @@
 		max-width: 46rem;
 	}
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-bottom: 0.7rem;
 	}
 	.card.off {
@@ -174,9 +181,6 @@
 		margin: 0 0 0.6rem;
 	}
 	.hint {
-		font-size: var(--text-base);
-		color: var(--fg-dim);
-		line-height: 1.5;
 		margin: 0 0 0.7rem;
 	}
 	.intro {

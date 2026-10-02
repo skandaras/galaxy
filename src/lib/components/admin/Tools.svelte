@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	interface CatalogEntry {
 		name: string;
 		source: 'builtin' | 'mcp';
@@ -211,7 +212,7 @@
 	}
 
 	async function removeServer(s: Server) {
-		if (!confirm(`Remove MCP server "${s.name}" and its tools?`)) return;
+		if (!(await ask({ title: `Remove MCP server "${s.name}" and its tools?`, confirm: 'Remove server', danger: true }))) return;
 		await fetch(`/api/admin/mcp-servers/${s.id}`, { method: 'DELETE' });
 		await load();
 	}
@@ -422,8 +423,6 @@
 		gap: 0.4rem;
 	}
 	.hint {
-		color: var(--fg-dim);
-		font-size: var(--text-base);
 		margin: 0.2rem 0 0.6rem;
 		max-width: 46rem;
 	}
@@ -477,14 +476,6 @@
 	.linkish:hover {
 		color: var(--accent);
 	}
-	.badge {
-		font-size: var(--text-xs);
-		border: 1px solid var(--accent);
-		color: var(--accent);
-		border-radius: 3px;
-		padding: 0 0.25rem;
-		text-transform: uppercase;
-	}
 	.note,
 	.dim {
 		color: var(--fg-dim);
@@ -524,22 +515,12 @@
 		font-size: var(--text-sm);
 	}
 	.chip {
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		color: var(--fg-dim);
-		font-family: inherit;
 		font-size: var(--text-sm);
 		padding: 0.15rem 0.55rem;
-		cursor: pointer;
 		/* Without these a hyphenated label like "deep-research" wraps mid-word
 		   inside the pill, turning it into a circle that overlaps its neighbours. */
 		white-space: nowrap;
 		flex-shrink: 0;
-	}
-	.chip.on {
-		border-color: var(--accent);
-		color: var(--accent);
 	}
 	.params {
 		display: flex;
@@ -607,26 +588,5 @@
 		display: flex;
 		gap: 0.4rem;
 		margin-top: 0.7rem;
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 4px;
-		padding: 0.3rem 0.6rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
-	}
-	.btn.danger {
-		color: var(--danger);
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
 	}
 </style>

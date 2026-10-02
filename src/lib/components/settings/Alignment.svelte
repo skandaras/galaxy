@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { invalidateAll } from '$app/navigation';
 	interface RubricDimension {
 		id: string;
 		name: string;
@@ -18,6 +19,7 @@
 	let prefs = $state<Prefs>({ disabled: [], weights: {} });
 	let dimensions = $state<RubricDimension[]>([]);
 	let notice = $state<string | null>(null);
+	let noticeFailed = $state(false);
 	let confirmingWipe = $state(false);
 	let busy = $state(false);
 
@@ -46,6 +48,7 @@
 		});
 		if (!res.ok) {
 			notice = (await res.json().catch(() => null))?.message ?? 'Could not save';
+			noticeFailed = true;
 			return false;
 		}
 		return true;
@@ -54,11 +57,13 @@
 	async function toggleEnabled() {
 		const next = !enabled;
 		notice = null;
+		noticeFailed = false;
 		if (await save({ enabled: next })) {
 			enabled = next;
 			await load();
-			// The nav link is rendered from the layout load, which has already run.
-			if (next) notice = 'Alignment is on — reload to see it in the sidebar.';
+			// The nav link comes from the layout load, which has already run, so
+			// rerun it rather than telling the person to reload the page.
+			await invalidateAll();
 		}
 	}
 
@@ -81,6 +86,7 @@
 		busy = false;
 		confirmingWipe = false;
 		notice = res.ok ? 'Everything in Alignment has been deleted.' : 'Could not delete.';
+		noticeFailed = !res.ok;
 		await load();
 	}
 
@@ -89,7 +95,7 @@
 </script>
 
 <section class="alignment-section">
-	{#if notice}<p class="notice">{notice}</p>{/if}
+	{#if notice}<p class="notice" class:error={noticeFailed} role={noticeFailed ? 'alert' : 'status'}>{notice}</p>{/if}
 
 	<article class="card">
 		<h3>Alignment</h3>
@@ -193,9 +199,6 @@
 		max-width: 46rem;
 	}
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-bottom: 0.9rem;
 	}
 	h3 {
@@ -206,17 +209,10 @@
 		color: var(--heading);
 	}
 	.hint {
-		font-size: var(--text-base);
-		color: var(--fg-dim);
-		line-height: 1.5;
 		margin: 0 0 0.7rem;
 	}
 	.hint.warn {
 		color: var(--danger);
-	}
-	.notice {
-		color: var(--accent);
-		font-size: var(--text-base);
 	}
 	.row {
 		display: flex;
@@ -271,26 +267,6 @@
 	.weight-value {
 		color: var(--accent);
 		width: 0.8rem;
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.3rem 0.6rem;
-		font-family: inherit;
-		font-size: var(--text-sm);
-		cursor: pointer;
-		text-decoration: none;
-		display: inline-block;
-	}
-	.btn.danger {
-		background: transparent;
-		border: 1px solid var(--danger);
-		color: var(--danger);
-	}
-	.btn:disabled {
-		opacity: 0.5;
 	}
 	@media (max-width: 720px) {
 		.dim {

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	interface MemoryItem {
 		id: string;
 		kind: string;
@@ -77,7 +78,18 @@
 	}
 
 	async function act(item: MemoryItem, method: 'PATCH' | 'DELETE') {
-		await fetch(`/api/memory/items/${item.id}`, { method });
+		if (
+			method === 'DELETE' &&
+			!(await ask({
+				title: 'Delete this memory?',
+				body: 'Archive keeps it out of your agents\' context without losing it.',
+				confirm: 'Delete memory',
+				danger: true
+			}))
+		)
+			return;
+		const res = await fetch(`/api/memory/items/${item.id}`, { method }).catch(() => null);
+		if (!res?.ok) notice = method === 'DELETE' ? 'Could not delete that memory.' : 'Could not archive that memory.';
 		await load();
 	}
 
@@ -304,9 +316,6 @@
 		max-width: 46rem;
 	}
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-bottom: 0.9rem;
 	}
 	h3 {
@@ -317,14 +326,7 @@
 		color: var(--heading);
 	}
 	.hint {
-		font-size: var(--text-base);
-		color: var(--fg-dim);
-		line-height: 1.5;
 		margin: 0 0 0.7rem;
-	}
-	.notice {
-		color: var(--accent);
-		font-size: var(--text-base);
 	}
 	.row {
 		display: flex;
@@ -379,10 +381,6 @@
 	.proposal-actions {
 		margin-top: 0.7rem;
 	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
-	}
 	table {
 		width: 100%;
 		border-collapse: collapse;
@@ -405,24 +403,6 @@
 	.actions {
 		white-space: nowrap;
 		text-align: right;
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.3rem 0.6rem;
-		font-family: inherit;
-		font-size: var(--text-sm);
-		cursor: pointer;
-	}
-	.btn.danger {
-		background: transparent;
-		border: 1px solid var(--danger);
-		color: var(--danger);
-	}
-	.btn:disabled {
-		opacity: 0.5;
 	}
 	details summary {
 		font-size: var(--text-base);

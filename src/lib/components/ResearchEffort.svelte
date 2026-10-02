@@ -195,23 +195,6 @@
 	.effort-wrap {
 		display: inline-flex;
 	}
-	.chip {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.3rem;
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		color: var(--fg-dim);
-		font-family: inherit;
-		font-size: var(--text-base);
-		padding: 0.25rem 0.7rem;
-		cursor: pointer;
-	}
-	.chip.on {
-		border-color: var(--accent);
-		color: var(--accent);
-	}
 	.glyph {
 		flex-shrink: 0;
 	}
@@ -273,9 +256,6 @@
 	}
 	.hint {
 		margin: 0.35rem 0 0;
-		font-size: var(--text-sm);
-		line-height: 1.45;
-		color: var(--fg-dim);
 	}
 	.hint.warn {
 		color: var(--fg);

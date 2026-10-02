@@ -25,6 +25,7 @@
 	let expandedCand = $state<string | null>(null);
 	let busy = $state(false);
 	let notice = $state<string | null>(null);
+	let noticeFailed = $state(false);
 
 	async function load() {
 		const data = await (await fetch('/api/admin/memory')).json();
@@ -43,12 +44,14 @@
 			body: JSON.stringify({ key: 'memory', value: settings })
 		}).catch(() => null);
 		notice = res?.ok ? 'Schedule saved' : 'Not saved. Try again.';
+		noticeFailed = !res?.ok;
 		await load();
 	}
 
 	async function runOptimiser() {
 		busy = true;
 		notice = null;
+		noticeFailed = false;
 		const result = await (
 			await fetch('/api/admin/memory/run?kind=optimise', { method: 'POST' })
 		).json();
@@ -74,7 +77,7 @@
 </script>
 
 <section>
-	{#if notice}<p class="notice">{notice}</p>{/if}
+	{#if notice}<p class="notice" class:error={noticeFailed} role={noticeFailed ? 'alert' : 'status'}>{notice}</p>{/if}
 
 	<article class="card">
 		<h3>Schedule</h3>
@@ -178,9 +181,6 @@
 
 <style>
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-bottom: 0.9rem;
 	}
 	h3 {
@@ -224,36 +224,7 @@
 		flex-wrap: wrap;
 	}
 	.hint {
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
-		line-height: 1.5;
 		margin: 0.5rem 0 0;
-	}
-	.notice {
-		color: var(--accent);
-		font-size: var(--text-base);
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.32rem 0.65rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
-	}
-	.btn.danger {
-		background: transparent;
-		border: 1px solid var(--danger);
-		color: var(--danger);
-	}
-	.btn:disabled {
-		opacity: 0.5;
 	}
 	.link {
 		background: none;

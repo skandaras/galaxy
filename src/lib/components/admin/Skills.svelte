@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	interface Skill {
 		id: string;
 		name: string;
@@ -108,7 +109,7 @@
 	}
 
 	async function remove(s: Skill) {
-		if (!confirm(`Delete skill "${s.name}"?`)) return;
+		if (!(await ask({ title: `Delete skill "${s.name}"?`, body: 'Its history stays in the skills repository.', confirm: 'Delete skill', danger: true }))) return;
 		await fetch(`/api/skills/${s.name}`, { method: 'DELETE' });
 		if (editing === s.name) editing = null;
 		await load();
@@ -328,25 +329,6 @@
 		display: flex;
 		gap: 0.5rem;
 		margin-top: 0.6rem;
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.35rem 0.7rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
-	}
-	.btn.danger {
-		color: var(--danger);
-		background: transparent;
-		border: 1px solid var(--danger);
 	}
 	@media (max-width: 720px) {
 		.grid {

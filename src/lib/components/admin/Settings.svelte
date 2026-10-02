@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	let websearch = $state({
 		provider: 'none',
 		fallbackProvider: 'none',
@@ -101,7 +102,11 @@
 	}
 
 	async function deploy(action: 'promote' | 'rollback') {
-		if (!confirm(action === 'promote' ? 'Promote the current dev build to prod?' : 'Roll prod back to the previous stable image?'))
+		if (!(await ask(
+				action === 'promote'
+					? { title: 'Promote the current dev build to prod?', confirm: 'Promote' }
+					: { title: 'Roll prod back to the previous stable image?', confirm: 'Roll back', danger: true }
+			)))
 			return;
 		deployBusy = action;
 		deployMsg = null;
@@ -159,9 +164,12 @@
 		// Regenerating orphans every registration, so make the person say so.
 		if (
 			push.configured &&
-			!confirm(
-				`Generating new keys signs out all ${push.devices} registered device(s) — everyone has to enable notifications again. Continue?`
-			)
+			!(await ask({
+				title: 'Generate new push keys?',
+				body: `This signs out all ${push.devices} registered device(s), and everyone has to enable notifications again.`,
+				confirm: 'Generate keys',
+				danger: true
+			}))
 		) {
 			return;
 		}
@@ -721,9 +729,6 @@
 
 <style>
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-bottom: 0.9rem;
 	}
 	h3 {
@@ -757,8 +762,6 @@
 		font-size: var(--text-sm);
 	}
 	.hint {
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
 		margin: 0 0 0.7rem;
 	}
 	input,
@@ -771,28 +774,6 @@
 		font-size: var(--text-md);
 		padding: 0.35rem 0.5rem;
 		max-width: 14rem;
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.35rem 0.7rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
-	}
-	.btn.danger {
-		background: transparent;
-		border: 1px solid var(--danger);
-		color: var(--danger);
-	}
-	.btn:disabled {
-		opacity: 0.5;
 	}
 	.row-buttons {
 		display: flex;
