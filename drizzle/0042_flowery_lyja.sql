@@ -1,0 +1,1 @@
+ALTER TABLE `code_sessions` ADD `pr_url` text;
