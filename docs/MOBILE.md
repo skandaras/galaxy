@@ -97,8 +97,9 @@ installed app and the browser.
   width, so there is always a strip beside it to tap to dismiss, and it can be
   dragged off to the left. It stops above the tab bar rather than running under
   it, so its last rows stay reachable.
-- The left rail becomes a slim top strip carrying identity and status only —
-  wordmark, Alerts, budget, environment, username.
+- The left rail becomes a slim top strip carrying identity and status only:
+  wordmark, the alerts bell and its count, spend (once it passes half the cap,
+  or always for an admin), environment and username.
 - The app becomes **one screen** rather than a document that scrolls: the
   conversation scrolls, the composer and the bar stay put, and the keyboard
   does not cover the input. Neither platform shrinks the page for a software
@@ -109,7 +110,8 @@ installed app and the browser.
   notch (`viewport-fit=cover` + safe-area insets).
 - **If something in the browser throws, you find out.** A crash is caught by
   `src/hooks.client.ts`, recorded as a `client` event, and shown in
-  **Observatory** — which is in the **More** sheet. A failure that breaks the
+  **Activity** (the Observatory's page, at `/observatory`), which is in the
+  **More** sheet. A failure that breaks the
   page shows a message and a Reload button rather than a screen that looks
   perfect and answers nothing, which is what it used to do: an uncaught error
   inside a Svelte flush abandons every update queued behind it, and an installed
@@ -119,10 +121,9 @@ installed app and the browser.
   the device you are holding actually has.
 - Admin tables scroll horizontally inside their panel instead of stretching the
   page, and multi-column forms collapse to one column.
-- The docked Observatory feed is hidden below 720px — it needs vertical room the
-  strip doesn't have. The full view at `/observatory` is in the **More** sheet,
-  and is itself responsive. (Until recently it was only linked from that hidden
-  dock, which meant it could not be reached on a phone at all.)
+- The docked Activity feed is hidden below 720px; it needs vertical room the
+  strip doesn't have. The full view at `/observatory` is **Activity** in the
+  **More** sheet, and is itself responsive.
 - Long model lists page in with **Show more / Show all** rather than rendering
   thousands of rows on a phone.
 

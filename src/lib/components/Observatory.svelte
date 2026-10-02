@@ -51,9 +51,9 @@
 </script>
 
 <div class="observatory" class:open>
-	<button class="head" onclick={toggle} title="Observatory — live view of the machinery">
+	<button class="head" onclick={toggle} title="Activity: runs, tool calls and errors as they happen">
 		<span class="pulse" class:live></span>
-		<span class="label">OBSERVATORY</span>
+		<span class="label">Activity</span>
 		{#if unseenErrors}<span class="err-badge">{unseenErrors}</span>{/if}
 		<span class="caret">{open ? '▾' : '▸'}</span>
 	</button>
@@ -93,6 +93,7 @@
 		font-family: inherit;
 		font-size: var(--text-xs);
 		letter-spacing: 0.25em;
+		text-transform: uppercase;
 		cursor: pointer;
 		padding: 0.2rem 0;
 	}

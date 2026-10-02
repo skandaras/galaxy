@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { KNOWN_HREFS, navGlyph, splitNav, TAB_SLOTS, type NavLink } from './mobile-nav';
+import { groupNav, KNOWN_HREFS, navGlyph, splitNav, TAB_SLOTS, type NavLink } from './mobile-nav';
 
 /** The rail as +layout.svelte builds it for the plainest account. */
 const BASE: NavLink[] = [
@@ -7,8 +7,9 @@ const BASE: NavLink[] = [
 	{ href: '/boards', label: 'Boards' },
 	{ href: '/library', label: 'Library' },
 	{ href: '/cortex', label: 'Cortex' },
+	{ href: '/memory', label: 'Memory' },
 	{ href: '/settings', label: 'Settings' },
-	{ href: '/observatory', label: 'Observatory' }
+	{ href: '/observatory', label: 'Activity' }
 ];
 
 const withCode: NavLink[] = [
@@ -23,13 +24,13 @@ describe('splitNav', () => {
 	it('fills the tabs by priority, not by the order the rail gave', () => {
 		const { tabs, more } = splitNav(BASE);
 		expect(hrefs(tabs)).toEqual(['/chat', '/boards', '/library', '/cortex']);
-		expect(hrefs(more)).toEqual(['/settings', '/observatory']);
+		expect(hrefs(more)).toEqual(['/memory', '/settings', '/observatory']);
 	});
 
 	it('gives Code a tab when the grant is there, and Cortex the seat it took', () => {
 		const { tabs, more } = splitNav(withCode);
 		expect(hrefs(tabs)).toEqual(['/chat', '/code', '/boards', '/library']);
-		expect(hrefs(more)).toEqual(['/cortex', '/settings', '/observatory']);
+		expect(hrefs(more)).toEqual(['/cortex', '/memory', '/settings', '/observatory']);
 	});
 
 	it('does not move a taught tab when a new destination arrives', () => {
@@ -104,5 +105,37 @@ describe('navGlyph', () => {
 	it('gives each destination a distinct glyph', () => {
 		const seen = KNOWN_HREFS.map(navGlyph);
 		expect(new Set(seen).size).toBe(seen.length);
+	});
+});
+
+describe('groupNav', () => {
+	const rail: NavLink[] = [
+		{ href: '/chat', label: 'Chat', group: 'work' },
+		{ href: '/library', label: 'Library', group: 'knowledge' },
+		{ href: '/memory', label: 'Memory', group: 'knowledge' },
+		{ href: '/settings', label: 'Settings', group: 'system' },
+		{ href: '/boards', label: 'Boards', group: 'work' }
+	];
+
+	it('clusters the rail in a fixed order, keeping each link’s place within its cluster', () => {
+		const clusters = groupNav(rail);
+		expect(clusters.map((c) => c.id)).toEqual(['work', 'knowledge', 'system']);
+		expect(hrefs(clusters[0].links)).toEqual(['/chat', '/boards']);
+	});
+
+	it('drops a cluster with nothing in it, so Reflect is absent until something is', () => {
+		// Alignment is off by default and Ivory needs the coding grant, so for
+		// most people Reflect would be a heading over nothing.
+		expect(groupNav(rail).some((c) => c.id === 'reflect')).toBe(false);
+	});
+
+	it('puts a link with no group at the end rather than losing it', () => {
+		const clusters = groupNav([...rail, { href: '/telescope', label: 'Telescope' }]);
+		expect(hrefs(clusters.at(-1)!.links)).toContain('/telescope');
+	});
+
+	it('labels every cluster but the rail’s own furniture', () => {
+		const labels = groupNav(rail).map((c) => c.label);
+		expect(labels).toEqual(['Work', 'Knowledge', null]);
 	});
 });

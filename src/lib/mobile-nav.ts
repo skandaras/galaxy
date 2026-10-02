@@ -9,9 +9,13 @@
  * never there.
  */
 
+export type NavGroup = 'work' | 'knowledge' | 'reflect' | 'system';
+
 export interface NavLink {
 	href: string;
 	label: string;
+	/** Which cluster of the desktop rail it sits in; the phone bar ignores it. */
+	group?: NavGroup;
 }
 
 export interface NavSplit {
@@ -25,7 +29,8 @@ export const TAB_SLOTS = 4;
 /**
  * Promotion order. Admin and Observatory sit at the bottom deliberately: both
  * appear for some people and not others, and neither may displace a tab the
- * rest of the interface has taught.
+ * rest of the interface has taught. Memory sits beside Cortex, after the four
+ * slots, so giving it a page of its own moved no one's tabs.
  */
 const PRIORITY = [
 	'/chat',
@@ -33,6 +38,7 @@ const PRIORITY = [
 	'/boards',
 	'/library',
 	'/cortex',
+	'/memory',
 	'/ivory',
 	'/alignment',
 	'/settings',
@@ -69,6 +75,7 @@ const GLYPHS: Record<string, string> = {
 	'/boards': '▦',
 	'/library': '▤',
 	'/cortex': '✧',
+	'/memory': '◇',
 	'/ivory': '▲',
 	'/alignment': '◉',
 	'/settings': '⚙',
@@ -85,3 +92,31 @@ export function navGlyph(href: string): string {
 
 /** Exported for the test that keeps GLYPHS and PRIORITY from drifting apart. */
 export const KNOWN_HREFS: readonly string[] = PRIORITY;
+
+/**
+ * The rail's clusters, in order, and what each is called. Ten destinations in
+ * one undivided list was the first thing the UX review named: the places that
+ * hold what the agents know sat between the places you work in, with nothing
+ * to say which was which. System has no heading; it is the rail's furniture.
+ */
+export const NAV_GROUPS: readonly { id: NavGroup; label: string | null }[] = [
+	{ id: 'work', label: 'Work' },
+	{ id: 'knowledge', label: 'Knowledge' },
+	{ id: 'reflect', label: 'Reflect' },
+	{ id: 'system', label: null }
+];
+
+export interface NavCluster {
+	id: NavGroup;
+	label: string | null;
+	links: NavLink[];
+}
+
+/** The rail's links in their clusters, dropping any cluster left empty. */
+export function groupNav(links: NavLink[]): NavCluster[] {
+	return NAV_GROUPS.map((g) => ({
+		...g,
+		// A link with no group still shows, at the end, rather than vanishing.
+		links: links.filter((l) => (l.group ?? 'system') === g.id)
+	})).filter((g) => g.links.length);
+}
