@@ -128,7 +128,7 @@
 		{:else if item.kind === 'stage'}
 			<li class="stage">{item.name}{item.detail ? ` · ${item.detail}` : ''}</li>
 		{:else}
-			<li class="notice">{item.text}</li>
+			<li class="tl-notice">{item.text}</li>
 		{/if}
 	{/each}
 </ul>
@@ -302,7 +302,7 @@
 	}
 	/* Inline and in position, rather than a banner at the top of the page
 	   detached from the step that raised it. */
-	.notice {
+	.tl-notice {
 		color: var(--fg-dim);
 		border-left: 2px solid var(--border);
 		padding: 0.1rem 0 0.1rem 0.5rem;

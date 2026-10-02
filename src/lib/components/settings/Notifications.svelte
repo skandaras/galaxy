@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	interface Device {
 		id: string;
 		endpoint: string;
@@ -150,6 +151,15 @@
 	}
 
 	async function remove(device: Device) {
+		if (
+			!(await ask({
+				title: 'Stop notifications on this device?',
+				body: 'It has to be enabled again from that device to get them back.',
+				confirm: 'Remove device',
+				danger: true
+			}))
+		)
+			return;
 		await fetch(`/api/push/subscriptions/${device.id}`, { method: 'DELETE' });
 		// If it was this browser, drop the local registration too, otherwise the
 		// button would say "enabled" with nothing on the server.
@@ -234,9 +244,6 @@
 
 <style>
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-bottom: 0.9rem;
 	}
 	h3 {
@@ -247,9 +254,6 @@
 		color: var(--heading);
 	}
 	.hint {
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
-		line-height: 1.5;
 		margin: 0.4rem 0 0.6rem;
 	}
 	.row {
@@ -268,34 +272,11 @@
 		font-size: var(--text-xs);
 		margin-top: 0.1rem;
 	}
-	.notice {
-		color: var(--accent);
-		font-size: var(--text-base);
-	}
 	.error {
 		color: var(--danger);
 		font-size: var(--text-base);
 	}
 	.hint.enabled {
 		color: var(--accent);
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.35rem 0.7rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
-	}
-	.btn.danger {
-		background: transparent;
-		border: 1px solid var(--danger);
-		color: var(--danger);
 	}
 </style>

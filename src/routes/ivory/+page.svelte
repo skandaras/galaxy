@@ -147,7 +147,6 @@
 		color: var(--fg-dim);
 	}
 	.notice {
-		color: var(--fg-dim);
 		max-width: 60ch;
 	}
 	.notice.error {

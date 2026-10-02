@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	interface Provider {
 		id: string;
 		kind: string;
@@ -69,7 +70,7 @@
 	}
 
 	async function remove(p: Provider) {
-		if (!confirm(`Delete provider "${p.name}" and its models?`)) return;
+		if (!(await ask({ title: `Delete provider "${p.name}" and its models?`, confirm: 'Delete provider', danger: true }))) return;
 		await fetch(`/api/admin/providers/${p.id}`, { method: 'DELETE' });
 		await load();
 		onchanged?.();
@@ -174,10 +175,6 @@
 	.empty {
 		color: var(--fg-dim);
 	}
-	.notice {
-		color: var(--accent);
-		font-size: var(--text-md);
-	}
 	h3 {
 		font-size: var(--text-md);
 		color: var(--heading);
@@ -211,26 +208,6 @@
 		font-family: inherit;
 		font-size: var(--text-md);
 		padding: 0.35rem 0.5rem;
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.35rem 0.6rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
-	}
-	.btn.danger {
-		color: var(--danger);
-	}
-	.btn:disabled {
-		opacity: 0.5;
 	}
 	.link {
 		background: none;

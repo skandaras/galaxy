@@ -325,8 +325,8 @@ check(
 //     clicking through it is.
 {
 	await page.goto(`${B}/settings`);
-	await page.locator('nav.tabs button').first().waitFor();
-	const tabs = await page.locator('nav.tabs button').allTextContents();
+	await page.locator('.tabs button').first().waitFor();
+	const tabs = await page.locator('.tabs button').allTextContents();
 	check('settings offers every pane a tab', tabs, [
 		'Theme',
 		'Boards',
@@ -338,7 +338,7 @@ check(
 
 	for (const tab of tabs) {
 		problems = [];
-		await page.locator('nav.tabs button', { hasText: tab }).click();
+		await page.locator('.tabs button', { hasText: tab }).click();
 		await page.waitForTimeout(200);
 		const body = await page.locator('.body').boundingBox();
 		check(`the ${tab} tab shows something`, (body?.height ?? 0) > 40);
@@ -348,33 +348,33 @@ check(
 	// A tab is a place now, not a variable: it survives a reload, and Back steps
 	// through tabs rather than leaving the page.
 	await page.goto(`${B}/settings?tab=notifications`);
-	await page.locator('nav.tabs button.active').waitFor();
+	await page.locator('.tabs button[aria-selected="true"]').waitFor();
 	check(
 		'a tab can be linked to',
-		await page.locator('nav.tabs button.active').innerText(),
+		await page.locator('.tabs button[aria-selected="true"]').innerText(),
 		'Notifications'
 	);
-	await page.locator('nav.tabs button', { hasText: 'Memory' }).click();
+	await page.locator('.tabs button', { hasText: 'Memory' }).click();
 	await page.waitForTimeout(200);
 	await page.goBack();
 	await page.waitForTimeout(200);
 	check(
 		'and Back returns to the tab you were on',
-		await page.locator('nav.tabs button.active').innerText(),
+		await page.locator('.tabs button[aria-selected="true"]').innerText(),
 		'Notifications'
 	);
 	check(
 		'an unknown tab still opens the page',
 		await (async () => {
 			await page.goto(`${B}/settings?tab=telescope`);
-			await page.locator('nav.tabs button.active').waitFor();
-			return page.locator('nav.tabs button.active').innerText();
+			await page.locator('.tabs button[aria-selected="true"]').waitFor();
+			return page.locator('.tabs button[aria-selected="true"]').innerText();
 		})(),
 		'Theme'
 	);
 
 	// The specific regression: Boards must not be carrying the Cortex pane.
-	await page.locator('nav.tabs button', { hasText: 'Boards' }).click();
+	await page.locator('.tabs button', { hasText: 'Boards' }).click();
 	await page.waitForTimeout(200);
 	const boardsPane = await page.locator('.body').innerText();
 	check('the Boards tab does not also render Cortex', /cortex/i.test(boardsPane), false);
@@ -496,7 +496,7 @@ check(
 	};
 
 	const boxOf = async (title) =>
-		page.locator('article.card', { hasText: title }).first().boundingBox();
+		page.locator('article.board-card', { hasText: title }).first().boundingBox();
 
 	async function press(title, to) {
 		const box = await boxOf(title);
@@ -556,7 +556,7 @@ check(
 	check('a drop outside every lane changes nothing', await layout(), before);
 
 	// And a plain click still opens a card rather than being eaten by the drag.
-	await page.locator('article.card', { hasText: 'charlie' }).first().click();
+	await page.locator('article.board-card', { hasText: 'charlie' }).first().click();
 	await page.waitForTimeout(400);
 	check('a click still opens the card', await page.locator('.card-detail, dialog, aside').count() > 0);
 }
@@ -570,7 +570,7 @@ check(
 	await page.locator('.assignee select').waitFor();
 	await page.waitForTimeout(400);
 
-	const titles = () => page.locator('article.card .card-title').allTextContents();
+	const titles = () => page.locator('article.board-card .card-title').allTextContents();
 	check('the board starts unfiltered', (await titles()).length > 0);
 
 	await page.selectOption('.assignee select', { label: `${ALICE} (me)` });
@@ -596,7 +596,7 @@ check(
 	await page.locator('.filters .chip').first().waitFor();
 	await page.waitForTimeout(400);
 
-	const visible = () => page.locator('article.card').count();
+	const visible = () => page.locator('article.board-card').count();
 	check('the board starts with its cards showing', (await visible()) > 0);
 
 	await page.locator('.filters .link:text-is("Turn all off")').click();
@@ -858,7 +858,7 @@ check(
 {
 	await page.goto(`${B}/admin`);
 	await page.locator('.tabs, nav').first().waitFor();
-	await page.getByRole('button', { name: 'Usage' }).click();
+	await page.getByRole('tab', { name: 'Usage' }).click();
 	await page.waitForTimeout(500);
 	const cell = page.locator('td.num').first();
 	if (await cell.count()) {
@@ -964,6 +964,42 @@ check(
 	}
 	check('sending creates exactly one', await mine(), before + 1);
 	if (fail.length) await shot('new-chat');
+}
+
+// N+1b. A delete asks first, and only yes deletes. This was window.confirm(),
+//       which Playwright dismisses unasked, so no check here could reach the
+//       question at all — let alone see that Cancel and Escape keep the chat.
+{
+	problems = [];
+	const created = await as(ALICE, '/api/chats', { method: 'POST', body: '{}' });
+	await as(ALICE, `/api/chats/${created.id}`, {
+		method: 'PATCH',
+		body: JSON.stringify({ title: 'Delete me' })
+	});
+	const exists = async () => (await as(ALICE, '/api/chats')).some((c) => c.id === created.id);
+	await page.goto(`${B}/chat`);
+	const row = page.locator('.chat-list li', { hasText: 'Delete me' }).first();
+	await row.hover();
+	await row.locator('button[title="Delete"]').click();
+	const dialog = page.locator('dialog.confirm');
+	await dialog.waitFor();
+	check('the question names the chat', /Delete me/.test(await dialog.innerText()));
+	check('focus starts on Cancel for a destructive question', await page.evaluate(() => document.activeElement?.textContent?.trim()), 'Cancel');
+	await dialog.getByRole('button', { name: 'Cancel' }).click();
+	check('Cancel keeps the chat', await exists());
+	await row.hover();
+	await row.locator('button[title="Delete"]').click();
+	await dialog.waitFor();
+	await page.keyboard.press('Escape');
+	await page.waitForTimeout(200);
+	check('Escape keeps the chat', await exists());
+	await row.hover();
+	await row.locator('button[title="Delete"]').click();
+	await dialog.getByRole('button', { name: 'Delete chat' }).click();
+	for (let i = 0; i < 20 && (await exists()); i++) await page.waitForTimeout(150);
+	check('confirming deletes it', await exists(), false);
+	check('the delete question raised no errors', problems, []);
+	if (fail.length) await shot('confirm-delete');
 }
 
 // N+2. The composer's two newest affordances, neither of which any other check
@@ -1817,7 +1853,7 @@ check(
 		await phone.locator('.map canvas').waitFor();
 		await phone.waitForTimeout(900);
 
-		check('the hint names a gesture a phone has', /pinch/.test(await phone.locator('.map .hint').innerText()));
+		check('the hint names a gesture a phone has', /pinch/.test(await phone.locator('.map .map-hint').innerText()));
 		check('the map controls are thumb-sized', await undersized(phone, '.map .ctl'), []);
 
 		/**

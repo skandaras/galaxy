@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import Markdown from '$lib/components/Markdown.svelte';
@@ -103,7 +104,7 @@
 	}
 
 	async function decide(plan: PendingPlan, decision: 'approve' | 'reject') {
-		if (decision === 'reject' && !confirm('Reject this plan? Nothing will be added to the board.')) return;
+		if (decision === 'reject' && !(await ask({ title: 'Reject this plan?', body: 'No issues will be created.', confirm: 'Reject plan', danger: true }))) return;
 		planBusy = plan.chatId;
 		planMsg = null;
 		approved = null;
@@ -375,7 +376,6 @@
 		border-color: var(--danger);
 	}
 	.notice {
-		color: var(--fg-dim);
 		max-width: 60ch;
 	}
 	.notice.error {

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	interface TaskConfig {
 		task: string;
 		/** What the task will run on: the override where there is one, else the default. */
@@ -80,6 +81,14 @@
 	 * reset once and every future reword arrives without being asked for.
 	 */
 	async function resetToDefault(cfg: TaskConfig) {
+		if (
+			!(await ask({
+				title: `Reset the ${cfg.task} prompt to the shipped wording?`,
+				body: 'Your version stays in its history and can be restored.',
+				confirm: 'Reset prompt'
+			}))
+		)
+			return;
 		cfg.systemPrompt = cfg.defaultPrompt;
 		await save(cfg);
 	}
@@ -183,9 +192,6 @@
 		color: var(--fg-dim);
 	}
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-bottom: 0.9rem;
 	}
 	header {
@@ -229,15 +235,9 @@
 		color: var(--fg-dim);
 		margin: 0 0 0.9rem;
 	}
-	/* Same shape as the scoped badge in Tools.svelte, for the same kind of fact:
-	   this row is not on its default any more. */
+	/* Sits on the heading line beside the task name, which is set larger than
+	   the badge, so it is centred on that line rather than its baseline. */
 	.badge {
-		font-size: var(--text-xs);
-		border: 1px solid var(--accent);
-		color: var(--accent);
-		border-radius: 3px;
-		padding: 0 0.25rem;
-		text-transform: uppercase;
 		vertical-align: middle;
 		margin-left: 0.4rem;
 	}
@@ -253,20 +253,6 @@
 		padding: 0.5rem 0.65rem;
 		margin: 0.5rem 0;
 		resize: vertical;
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.32rem 0.65rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
 	}
 	.history {
 		list-style: none;

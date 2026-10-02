@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	import { onMount } from 'svelte';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import { swipeToClose } from '$lib/list-sheet.svelte';
@@ -315,8 +316,15 @@
 	async function open(id: string) {
 		// The outgoing document's last edit has to land before its state is gone.
 		await flush();
-		const res = await fetch(`/api/library/${id}`);
-		if (!res.ok) return;
+		const res = await fetch(`/api/library/${id}`).catch(() => null);
+		if (!res?.ok) {
+			listOpen = false;
+			error =
+				res?.status === 404
+					? 'That document no longer exists.'
+					: 'Could not open that document. Try again in a moment.';
+			return;
+		}
 		const doc = await res.json();
 		currentId = doc.meta.id;
 		title = doc.meta.title;
@@ -513,7 +521,7 @@
 	}
 
 	async function remove() {
-		if (!currentId || !confirm(`Delete "${title}"?`)) return;
+		if (!currentId || !(await ask({ title: `Delete "${title}"?`, confirm: 'Delete document', danger: true }))) return;
 		// Nothing pending may re-create what is about to be deleted.
 		clearTimers();
 		saveSeq += 1;
@@ -616,7 +624,11 @@
 	}
 
 	async function dropFolder(name: string) {
-		if (!confirm(`Delete the folder "${name}"? Its documents move to ${UNFILED}.`)) return;
+		if (!(await ask({
+				title: `Delete the folder "${name}"?`,
+				body: `Its documents move to ${UNFILED}.`,
+				confirm: 'Delete folder'
+			}))) return;
 		const res = await fetch(`/api/library/folders/${encodeURIComponent(name)}`, {
 			method: 'DELETE'
 		}).catch(() => null);
@@ -1431,14 +1443,6 @@
 		gap: 0.3rem;
 		margin-left: auto;
 	}
-	.badge {
-		font-size: var(--text-xs);
-		border: 1px solid var(--accent);
-		border-radius: 3px;
-		padding: 0 0.25rem;
-		color: var(--accent);
-		text-transform: uppercase;
-	}
 	.doc-snippet {
 		display: block;
 		color: var(--fg-dim);
@@ -1594,50 +1598,9 @@
 		font-size: var(--text-lg);
 	}
 
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		min-height: var(--tap);
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.35rem 0.7rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-	}
-	.btn.primary {
-		background: var(--accent);
-		color: var(--bg);
-	}
-	.btn.danger {
-		background: transparent;
-		border: 1px solid var(--danger);
-		color: var(--danger);
-	}
-	.btn.ghost {
-		background: transparent;
-		border: 1px dashed var(--fg-dim);
-		color: var(--fg-dim);
-	}
 	.upload {
 		display: inline-flex;
 		align-items: center;
-	}
-	.chip {
-		display: inline-flex;
-		align-items: center;
-		min-height: var(--tap);
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		color: var(--fg-dim);
-		font-family: inherit;
-		font-size: var(--text-sm);
-		padding: 0.22rem 0.65rem;
-		cursor: pointer;
 	}
 	/* Set from the drag handle and remembered per browser — see PaneResizer, which
 	   also draws the dividing line this used to carry as a border. Desktop only:

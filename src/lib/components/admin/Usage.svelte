@@ -220,8 +220,6 @@
 		margin-bottom: 1.1rem;
 	}
 	.hint {
-		color: var(--fg-dim);
-		font-size: var(--text-sm);
 		margin: 0.5rem 0 0;
 		max-width: 46rem;
 	}

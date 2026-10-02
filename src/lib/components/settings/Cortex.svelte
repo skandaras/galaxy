@@ -53,9 +53,6 @@
 		color: var(--label);
 	}
 	.hint {
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
-		line-height: 1.5;
 		max-width: 60ch;
 	}
 	.check {

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
+	import { ask } from '$lib/confirm.svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
 	import { ATTACHMENT_ACCEPT, attachmentIcon, screenFiles } from '$lib/attachment-types';
 	import { carriesFiles, filesFrom, nameArrival } from '$lib/composer-files';
@@ -348,8 +349,14 @@
 		// standing over a composer that could no longer be tapped, with nothing on
 		// screen to say why.
 		listOpen = false;
-		const res = await fetch(`/api/chats/${id}`);
-		if (!res.ok) return;
+		const res = await fetch(`/api/chats/${id}`).catch(() => null);
+		if (!res?.ok) {
+			errorBanner =
+				res?.status === 404
+					? 'That chat no longer exists.'
+					: 'Could not open that chat. Try again in a moment.';
+			return;
+		}
 		const data = await res.json();
 		currentChat = { ...data.chat };
 		messages = data.messages;
@@ -955,11 +962,13 @@
 				title: (currentChat?.title ?? 'Chat output').replace(/^🔭 /, ''),
 				content: msg.content
 			})
-		});
-		if (res.ok) {
-			savedDocId = msg.id;
-			setTimeout(() => (savedDocId = null), 2000);
+		}).catch(() => null);
+		if (!res?.ok) {
+			errorBanner = 'Could not save that reply to the Library.';
+			return;
 		}
+		savedDocId = msg.id;
+		setTimeout(() => (savedDocId = null), 2000);
 	}
 
 	function closeStream() {
@@ -1023,7 +1032,10 @@
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ title })
 		}).catch(() => null);
-		if (!res?.ok) return;
+		if (!res?.ok) {
+			errorBanner = 'Could not rename that chat.';
+			return;
+		}
 		await refreshChats();
 		if (currentChat?.id === id) currentChat = { ...currentChat, title };
 	}
@@ -1112,7 +1124,12 @@
 		ev?.stopPropagation();
 		// The row actions are always visible on touch (no hover to reveal them),
 		// which puts an unlabelled × a thumb's width from the row you meant to open.
-		if (!confirm(`Delete "${chat.title}"? This cannot be undone.`)) return;
+		if (!(await ask({
+				title: `Delete "${chat.title}"?`,
+				body: 'This cannot be undone.',
+				confirm: 'Delete chat',
+				danger: true
+			}))) return;
 		const res = await fetch(`/api/chats/${chat.id}`, { method: 'DELETE' }).catch(() => null);
 		if (!res?.ok) {
 			errorBanner = 'Could not delete this chat.';
@@ -1617,24 +1634,7 @@
 	   way to tell a miss from a dead control. The Library page has been sized
 	   this way all along; chat and code were left behind. */
 	.btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		min-height: var(--tap);
 		min-width: var(--tap);
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.4rem 0.7rem;
-		font-family: inherit;
-		font-size: var(--text-md);
-		cursor: pointer;
-	}
-	.btn.ghost {
-		background: transparent;
-		border: 1px dashed var(--fg-dim);
-		color: var(--fg-dim);
 	}
 	.btn.send {
 		background: var(--accent);
@@ -1643,10 +1643,6 @@
 	.btn.stop {
 		background: var(--danger);
 		color: var(--bg);
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
 	}
 	.chat-list ul {
 		list-style: none;
@@ -2086,29 +2082,9 @@
 		flex-wrap: wrap;
 	}
 	.chip {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		/* Same floor as .btn above. These measured 28px tall, and the icon-only
-		   one — the paperclip — 42 wide, which is why both axes are named. */
-		min-height: var(--tap);
+		/* The icon-only chip, the paperclip, measured 42px wide against a 44px
+		   floor, which is why the width is named as well as the height. */
 		min-width: var(--tap);
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		color: var(--fg-dim);
-		font-family: inherit;
-		font-size: var(--text-base);
-		padding: 0.25rem 0.7rem;
-		cursor: pointer;
-	}
-	.chip.on {
-		border-color: var(--accent);
-		color: var(--accent);
-	}
-	.chip:disabled {
-		opacity: 0.45;
-		cursor: default;
 	}
 	.model-select {
 		margin-left: auto;

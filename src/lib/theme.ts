@@ -175,6 +175,44 @@ if (DEFAULT_THEME.fontUi !== DEFAULT_UI_FONT || DEFAULT_THEME.fontMono !== DEFAU
 	throw new Error('DEFAULT_THEME must use the catalogue defaults');
 }
 
+/**
+ * The controls every page draws, declared once.
+ *
+ * Each of these lived as a scoped copy in every component that used it: `.btn`
+ * in 25 files, `.card` in 16, with five paddings, three disabled treatments and
+ * two meanings of "danger" between them. Worse than the drift was what a scoped
+ * copy overrides: the corner radius and the control border the theme sets never
+ * reached a button whose own rule named 5px and --border.
+ *
+ * A component may still add a modifier of its own (`.btn.send`), but must not
+ * restate one of these: a scoped `.btn` compiles to two classes and ties with
+ * `.btn.primary` here, so which one wins comes down to stylesheet order.
+ */
+const BASE_CONTROLS = [
+	':root{--radius-lg:calc(var(--radius) * 1.6);}',
+	// min-height is --tap, so a button meets 32px with a mouse and the 44px
+	// docs/ACCESSIBILITY.md commits to under a finger, without each page
+	// remembering to ask for it.
+	'.btn{display:inline-flex;align-items:center;justify-content:center;gap:.35rem;box-sizing:border-box;min-height:var(--tap);padding:.35rem .7rem;background:var(--border);color:var(--fg);border:1px solid transparent;border-radius:var(--radius);font-family:inherit;font-size:var(--text-base);line-height:1.2;text-decoration:none;cursor:pointer;}',
+	'.btn.primary{background:var(--accent);color:var(--bg);}',
+	'.btn.ghost{background:transparent;border:1px dashed var(--fg-dim);color:var(--fg-dim);}',
+	'.btn.danger{background:transparent;border-color:var(--danger);color:var(--danger);}',
+	'.btn.wide{width:100%;}',
+	'.btn:disabled,.chip:disabled{opacity:.5;cursor:default;}',
+	// A chip is a toggle, so its outline is a control boundary and takes the
+	// 3:1 border rather than the separator colour it used to borrow.
+	'.chip{display:inline-flex;align-items:center;gap:.3rem;box-sizing:border-box;min-height:var(--tap);padding:.25rem .7rem;background:transparent;border:1px solid var(--control-border);border-radius:999px;color:var(--fg-dim);font-family:inherit;font-size:var(--text-base);cursor:pointer;}',
+	'.chip.on{border-color:var(--accent);color:var(--accent);}',
+	'.card{border:1px solid var(--border);border-radius:var(--radius-lg);padding:.9rem;margin-bottom:.9rem;}',
+	'.hint{font-size:var(--text-sm);color:var(--fg-dim);line-height:1.5;}',
+	'.notice{font-size:var(--text-base);color:var(--accent);}',
+	'.notice.error{color:var(--danger);}',
+	'.badge{display:inline-block;font-size:var(--text-xs);border:1px solid var(--accent);color:var(--accent);border-radius:3px;padding:0 .25rem;text-transform:uppercase;}',
+	'.tabs{display:flex;flex-wrap:wrap;gap:.3rem;border-bottom:1px solid var(--border);margin-bottom:1rem;}',
+	'.tabs button{background:none;border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--fg-dim);font-family:inherit;font-size:var(--text-md);padding:.5rem .8rem;cursor:pointer;}',
+	'.tabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent);}'
+];
+
 export function themeCss(t: Theme): string {
 	return [
 		FONT_FACE_CSS,
@@ -308,7 +346,19 @@ export function themeCss(t: Theme): string {
 		'button:not(:disabled):hover{box-shadow:0 0 var(--glow-size) var(--glow);}',
 		// The glow itself is not motion; the fade to it is. Anyone who has asked
 		// for less motion gets the state change without the animation.
-		'@media (prefers-reduced-motion: no-preference){button{transition:box-shadow .15s ease;}}'
+		'@media (prefers-reduced-motion: no-preference){button{transition:box-shadow .15s ease;}}',
+		// These two used to be appended by +layout.svelte inside the same style
+		// tag, which made the claim above that this is the only place emitting
+		// global CSS untrue.
+		'button,input,select,textarea{border-radius:var(--radius);}',
+		// touch-action is here rather than on each control because the failure
+		// it fixes is not any one component's. iOS keeps double-tap-to-zoom on a
+		// width=device-width page (Chrome drops it, Safari does not) and the
+		// gesture recogniser can swallow the second tap of a quick pair on the
+		// same element. The tab bar's "tap the tab you are already on" is that
+		// pair, so whether it worked came down to how fast the thumb was.
+		'button,a,input,select,textarea{touch-action:manipulation;}',
+		...BASE_CONTROLS
 	].join('');
 }
 

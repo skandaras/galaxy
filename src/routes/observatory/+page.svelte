@@ -170,25 +170,10 @@
 		font-size: var(--text-base);
 		padding: 0.3rem 0.45rem;
 	}
-	.chip {
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		color: var(--fg-dim);
-		font-family: inherit;
-		font-size: var(--text-sm);
-		padding: 0.25rem 0.7rem;
-		cursor: pointer;
-	}
 	.offline {
 		color: var(--danger);
 		font-size: var(--text-sm);
 		align-self: center;
-	}
-	/* Accent, not danger: pausing is a choice, and red here read as a fault. */
-	.chip.on {
-		border-color: var(--accent);
-		color: var(--accent);
 	}
 	ul {
 		list-style: none;

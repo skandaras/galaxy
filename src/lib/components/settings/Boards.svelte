@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ask } from '$lib/confirm.svelte';
 	import { page } from '$app/state';
 	import type { Board, BoardView, Lane, Member, Project, Status } from '$lib/board-types';
 
@@ -80,7 +81,12 @@
 
 	async function deleteBoard() {
 		if (!selectedId || !view) return;
-		if (!confirm(`Delete "${view.board.name}" and every card on it? This cannot be undone.`)) return;
+		if (!(await ask({
+				title: `Delete "${view.board.name}" and every card on it?`,
+				body: 'This cannot be undone.',
+				confirm: 'Delete board',
+				danger: true
+			}))) return;
 		if (await call(`/api/boards/${selectedId}`, { method: 'DELETE' }, 'Board deleted')) {
 			selectedId = null;
 			await loadBoards();
@@ -103,7 +109,11 @@
 	}
 
 	async function removeLane(lane: Lane) {
-		if (!confirm(`Remove "${lane.name}"? Its cards move to the next lane along.`)) return;
+		if (!(await ask({
+				title: `Remove the lane "${lane.name}"?`,
+				body: 'Its cards move to the next lane along.',
+				confirm: 'Remove lane'
+			}))) return;
 		await call(`/api/boards/${selectedId}/lanes/${lane.id}`, { method: 'DELETE' }, 'Lane removed');
 		await loadBoard();
 	}
@@ -129,7 +139,11 @@
 	}
 
 	async function removeStatus(status: Status) {
-		if (!confirm(`Remove "${status.name}"? Its cards move to the first status.`)) return;
+		if (!(await ask({
+				title: `Remove the status "${status.name}"?`,
+				body: 'Its cards move to the first status.',
+				confirm: 'Remove status'
+			}))) return;
 		await call(
 			`/api/boards/${selectedId}/statuses/${status.id}`,
 			{ method: 'DELETE' },
@@ -159,7 +173,11 @@
 	}
 
 	async function removeProject(project: Project) {
-		if (!confirm(`Remove "${project.name}"? Its cards stay on the board, they just lose the label.`))
+		if (!(await ask({
+				title: `Remove the project "${project.name}"?`,
+				body: 'Its cards stay on the board and lose the label.',
+				confirm: 'Remove project'
+			})))
 			return;
 		await call(
 			`/api/boards/${selectedId}/projects/${project.id}`,
@@ -185,6 +203,24 @@
 	}
 
 	async function removeMember(member: Member) {
+		const leaving = member.userId === me;
+		if (
+			!(await ask(
+				leaving
+					? {
+							title: `Leave "${view?.board.name ?? 'this board'}"?`,
+							body: 'You will need an invitation to see it again.',
+							confirm: 'Leave board',
+							danger: true
+						}
+					: {
+							title: `Remove ${member.username} from this board?`,
+							confirm: 'Remove',
+							danger: true
+						}
+			))
+		)
+			return;
 		await call(
 			`/api/boards/${selectedId}/members?userId=${encodeURIComponent(member.userId)}`,
 			{ method: 'DELETE' },
@@ -378,9 +414,6 @@
 
 <style>
 	.card {
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.9rem;
 		margin-bottom: 0.9rem;
 	}
 	h3 {
@@ -391,9 +424,6 @@
 		color: var(--heading);
 	}
 	.hint {
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
-		line-height: 1.5;
 		margin: 0.4rem 0 0.6rem;
 	}
 	.row {
@@ -441,27 +471,8 @@
 		font-size: var(--text-xs);
 		margin-left: 0.4rem;
 	}
-	.notice {
-		color: var(--accent);
-		font-size: var(--text-base);
-	}
 	.error {
 		color: var(--danger);
 		font-size: var(--text-base);
-	}
-	.btn {
-		background: var(--border);
-		color: var(--fg);
-		border: none;
-		border-radius: 5px;
-		padding: 0.35rem 0.7rem;
-		font-family: inherit;
-		font-size: var(--text-base);
-		cursor: pointer;
-	}
-	.btn.danger {
-		background: transparent;
-		border: 1px solid var(--danger);
-		color: var(--danger);
 	}
 </style>
