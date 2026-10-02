@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { DEFAULT_BUDGET, getSetting, type BudgetSettings } from '$lib/server/settings';
 import { emitEvent } from './events';
+import { ADMIN_PATHS } from '$lib/admin-sections';
 
 export interface BudgetStatus {
 	enabled: boolean;
@@ -55,7 +56,7 @@ export function getBudgetStatus(now = new Date()): BudgetStatus {
 export class BudgetExceededError extends Error {
 	constructor(public status: BudgetStatus) {
 		super(
-			`Budget cap reached: $${status.spentUsd.toFixed(2)} of $${status.limitUsd.toFixed(2)} spent this ${status.period}. Raise or disable the cap in Admin → Settings.`
+			`Budget cap reached: $${status.spentUsd.toFixed(2)} of $${status.limitUsd.toFixed(2)} spent this ${status.period}. Raise or disable the cap in ${ADMIN_PATHS.budget}.`
 		);
 		this.name = 'BudgetExceededError';
 	}

@@ -45,7 +45,7 @@ buzz you.
 Two steps, in order:
 
 1. **An admin generates the keys once** for the whole instance, in
-   **Admin → Settings → Push**. Regenerating them later signs out every
+   **Admin → Deployment → Push**. Regenerating them later signs out every
    registered device, so do it once and leave it alone.
 2. **Each person enables it per device**, in **Settings → Notifications**.
    Your phone and your laptop are separate registrations, and the browser only

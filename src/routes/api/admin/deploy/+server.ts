@@ -4,6 +4,7 @@ import { env } from '$env/dynamic/private';
 import { requireAdmin } from '$lib/server/api';
 import { githubToken } from '$lib/server/engine/coding/workspace';
 import { emitEvent } from '$lib/server/engine/events';
+import { ADMIN_PATHS } from '$lib/admin-sections';
 
 // Promote/rollback: dispatches the Promote workflow, which retags images in
 // GHCR; prod follows the :stable tag. Before promoting, the dev instance's
@@ -14,7 +15,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	const action = body.action === 'rollback' ? 'rollback' : 'promote';
 
 	const token = githubToken();
-	if (!token) error(400, 'Set a GitHub token (with workflow scope) in Settings first');
+	if (!token) error(400, `Set a GitHub token (with workflow scope) in ${ADMIN_PATHS.github} first`);
 	const repo = env.GITHUB_REPO || 'skandaras/galaxy';
 
 	if (action === 'promote' && env.DEV_HEALTH_URL) {

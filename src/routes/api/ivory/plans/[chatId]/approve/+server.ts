@@ -5,12 +5,13 @@ import { emitEvent } from '$lib/server/engine/events';
 import { GithubError, shelfClient } from '$lib/server/ivory/github';
 import { approvePlan, PlanError } from '$lib/server/ivory/plan';
 import { shelfErrorMessage } from '$lib/server/ivory/view';
+import { ADMIN_PATHS } from '$lib/admin-sections';
 
 // Approve a plan, as edited by the owner. This handler, never the planner, creates the issues.
 export const POST: RequestHandler = async ({ locals, params, request }) => {
 	const user = requireCoder(locals);
 	const client = shelfClient();
-	if (!client) error(409, 'No GitHub token is configured. Add one in Admin → Settings → GitHub.');
+	if (!client) error(409, `No GitHub token is configured. Add one in ${ADMIN_PATHS.github}.`);
 	const body = await request.json().catch(() => ({}));
 	try {
 		const result = await approvePlan(client, { chatId: params.chatId, userId: user.id, tasks: body.tasks });

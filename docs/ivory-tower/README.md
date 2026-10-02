@@ -10,7 +10,7 @@ where the code disagreed with the brief.
   the page view models (`view.ts`).
 - `src/routes/ivory/` and `src/routes/api/ivory/`: the pages and their API, all behind
   `requireCoder` except setup, which is admin-only.
-- `seed/`: the Shelf's README, templates, the kin-selection example claim and a sample project. Admin → Settings → Shelf →
+- `seed/`: the Shelf's README, templates, the kin-selection example claim and a sample project. Admin → Ivory Tower → Shelf →
   "Set up Shelf" writes whichever of these are missing. This folder is the only copy; the build
   reads it.
 
@@ -39,7 +39,7 @@ with the issue and the brief as its first message, fenced as material rather tha
 - **Tools:** `paper_search`, `read_paper`, `fetch_url`, `shelf_read`, `shelf_write`, `set_status`,
   and nothing else. Admin → Tools can switch any of them off.
 - **Search** (`paper_search`) is OpenAlex, falling back to Semantic Scholar when it fails (or the
-  other way round, in Admin → Settings → Shelf). Records with no authors are completed from
+  other way round, in Admin → Ivory Tower → Shelf). Records with no authors are completed from
   Crossref.
 - **Full texts** (`read_paper`, `ivory/fulltext.ts`) come from APIs that hand over the text before
   any publisher site is tried: Europe PMC (PubMed Central's open-access articles), arXiv, CORE
@@ -61,7 +61,7 @@ with the issue and the brief as its first message, fenced as material rather tha
 - **Commits** read `ivory-read (<model>): add notes/<file> for #<issue>`.
 - **When it ends**, Galaxy (not the agent) comments on the issue with links to the notes. The
   issue stays open.
-- **Model:** left empty for the owner to pick in Admin → Tasks. A small model is enough.
+- **Model:** left empty for the owner to pick in Admin → Ivory Tower. A small model is enough.
 
 ## The planner (`ivory-plan`)
 

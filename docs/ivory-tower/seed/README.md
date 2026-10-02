@@ -42,7 +42,7 @@ GitHub supports it.
 Galaxy never closes issues. A person dispatches every agent run from Galaxy's Shelf view, the run
 comments on its issue when it finishes, and the owner closes the issue.
 
-Galaxy creates the labels itself: Admin → Settings → Shelf → "Set up Shelf" creates the fixed
+Galaxy creates the labels itself: Admin → Ivory Tower → Shelf → "Set up Shelf" creates the fixed
 `agent:` labels and a `project:` and `discipline:` label for every brief it finds. It can be run
 again at any time and changes nothing that is already there.
 

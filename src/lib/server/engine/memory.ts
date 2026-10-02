@@ -19,6 +19,7 @@ import { getTaskConfig, pickModel, systemPromptFor } from './engine';
 import { emitEvent } from './events';
 import { extractJson } from './json';
 import { logUsage } from './usage';
+import { ADMIN_PATHS } from '$lib/admin-sections';
 
 const WATERMARK_KEY = 'memory.watermark';
 const LAST_RUN_KEY = 'memory.lastRun';
@@ -703,7 +704,7 @@ export async function runMemory(
 		return {
 			ran: false,
 			reason: timedOut
-				? `${choice.model.displayName} did not answer within the ${Math.round(limitMs / 1000)}s it was given. Raise the time limit in Admin → Memory, or point the memory task at a faster model`
+				? `${choice.model.displayName} did not answer within the ${Math.round(limitMs / 1000)}s it was given. Raise the time limit in ${ADMIN_PATHS.memory}, or point the memory task at a faster model`
 				: message
 		};
 	}

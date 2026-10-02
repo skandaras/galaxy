@@ -1,3 +1,4 @@
+import { ADMIN_PATHS } from '$lib/admin-sections';
 import { describe, expect, it } from 'vitest';
 import {
 	arxivIdFrom,
@@ -69,7 +70,7 @@ describe('keyed sources', () => {
 		const { impl, asked } = routedFetch([]);
 		expect(await coreFullText('10.1/x', { ...CFG, fetchImpl: impl })).toEqual({
 			ok: false,
-			reason: 'skipped, no API key (Admin → Settings → Shelf)'
+			reason: `skipped, no API key (${ADMIN_PATHS.shelf})`
 		});
 		expect((await semanticScholarPaper('10.1/x', { ...CFG, fetchImpl: impl })).ok).toBe(false);
 		expect(asked).toEqual([]);

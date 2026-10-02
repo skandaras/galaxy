@@ -2,6 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
 import { listSubscriptions, publicKey, saveSubscription } from '$lib/server/push';
+import { ADMIN_PATHS } from '$lib/admin-sections';
 
 /** The browser needs the VAPID public key before it can subscribe. */
 export const GET: RequestHandler = ({ locals }) => {
@@ -22,7 +23,7 @@ export const GET: RequestHandler = ({ locals }) => {
 
 export const POST: RequestHandler = async ({ locals, request }) => {
 	const user = requireUser(locals);
-	if (!publicKey()) error(409, 'Push is not set up yet — an admin generates the keys in Admin → Settings');
+	if (!publicKey()) error(409, `Push is not set up yet: an admin generates the keys in ${ADMIN_PATHS.push}`);
 
 	const body = await request.json().catch(() => ({}));
 	const endpoint = typeof body.endpoint === 'string' ? body.endpoint : '';

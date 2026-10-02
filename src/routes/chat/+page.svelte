@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { taskPath } from '$lib/admin-sections';
 	import { onDestroy, onMount } from 'svelte';
 	import { ask } from '$lib/confirm.svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
@@ -1582,7 +1583,7 @@
 					bind:value={selectedModelId}
 					disabled={deepResearch}
 					title={deepResearch
-						? 'Deep research uses the model configured for it in Admin → Tasks'
+						? `Deep research uses the model set in ${taskPath('deep-research')}`
 						: 'Model for this conversation'}
 				>
 					{#if !models.length}

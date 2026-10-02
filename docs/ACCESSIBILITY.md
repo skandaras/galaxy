@@ -93,7 +93,7 @@ cannot have one at all.
 - **Admin → Providers**, the whole Add-provider form — visible captions, since
   four adjacent boxes distinguished only by grey hint text is a usability
   problem as much as an accessibility one
-- **Admin → Usage**, the period select — it previously had no accessible name of
+- **Admin → Spend → Usage**, the period select — it previously had no accessible name of
   any kind
 - **Admin → Models**, the filter box; **Settings → Theme**, the preset name;
   **Alignment**, the journal composer's title/body/tags and the tension row's

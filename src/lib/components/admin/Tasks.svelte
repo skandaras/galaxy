@@ -1,4 +1,13 @@
 <script lang="ts">
+	import { ADMIN_PATHS } from '$lib/admin-sections';
+
+	interface Props {
+		/** The tasks this admin section edits; see $lib/admin-sections. */
+		only: readonly string[];
+		/** The explanation of overrides and the house style, once, in General tasks. */
+		intro?: boolean;
+	}
+	let { only, intro = false }: Props = $props();
 	import { ask } from '$lib/confirm.svelte';
 	interface TaskConfig {
 		task: string;
@@ -110,6 +119,7 @@
 </script>
 
 <section>
+	{#if intro}
 	<p class="preamble">
 		A box left at the shipped wording keeps tracking it, so a prompt improved in a later release
 		arrives on its own. Save anything else and the task is marked <em>edited</em>: it is yours from
@@ -119,10 +129,11 @@
 		The agents that write prose also carry a shared house style, which is not shown in these boxes
 		and is not editable here — how they sound reaches chat, coding, deep research, the board, the
 		sub-agent and the background reviewers, and how their replies are shaped reaches the ones that
-		answer in prose rather than JSON. Read it, and add your own rules to it, under Admin &rarr; Settings
-		&rarr; House style.
+		answer in prose rather than JSON. Read it, and add your own rules to it, under
+		{ADMIN_PATHS.houseStyle}.
 	</p>
-	{#each configs as cfg (cfg.task)}
+	{/if}
+	{#each configs.filter((c) => only.includes(c.task)) as cfg (cfg.task)}
 		<article class="card">
 			<header>
 				<h3>

@@ -1,5 +1,6 @@
 import { getExecutor } from './executor';
 import { gitAuthArgs, githubToken, scrubSecrets } from './workspace';
+import { ADMIN_PATHS } from '$lib/admin-sections';
 
 /**
  * Opening the pull request, which is where a coding session was stopping one
@@ -62,7 +63,7 @@ export async function openPullRequest(
 		);
 	}
 	const token = githubToken();
-	if (!token) throw new Error('No GitHub token configured (Admin → Settings → GitHub)');
+	if (!token) throw new Error(`No GitHub token configured (${ADMIN_PATHS.github})`);
 	const title = opts.title.trim();
 	if (!title) throw new Error('title is required');
 

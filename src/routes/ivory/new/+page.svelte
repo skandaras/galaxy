@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ADMIN_PATHS } from '$lib/admin-sections';
 	import { goto } from '$app/navigation';
 
 	/** The brief template's sections, in its order, with its own guidance as the hints. */
@@ -55,7 +56,7 @@
 			const res = await fetch('/api/ivory/projects');
 			const body = await res.json().catch(() => ({}));
 			if (!res.ok) failure = body.message ?? `The Shelf could not be read (${res.status})`;
-			else if (!body.configured) failure = `No GitHub token is configured, so there is nowhere to create a project. An admin can add one in Admin → Settings → GitHub.`;
+			else if (!body.configured) failure = `No GitHub token is configured, so there is nowhere to create a project. An admin can add one in ${ADMIN_PATHS.github}.`;
 			else known = (body.groups ?? []).map((g: { discipline: string }) => g.discipline).filter((d: string) => d !== 'unfiled');
 		})();
 	});

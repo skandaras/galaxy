@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ADMIN_PATHS } from '$lib/admin-sections';
 	import { ask } from '$lib/confirm.svelte';
 	interface Device {
 		id: string;
@@ -204,7 +205,7 @@
 		{:else if !publicKey}
 			<p class="hint">
 				Not set up on this instance yet. An admin needs to generate the keys in
-				<strong>Admin → Settings → Push</strong>.
+				<strong>{ADMIN_PATHS.push}</strong>.
 			</p>
 		{:else}
 			{#if thisDeviceId}

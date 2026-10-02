@@ -44,14 +44,6 @@
 	{#if notice}<p class="notice" class:error={noticeFailed} role={noticeFailed ? 'alert' : 'status'}>{notice}</p>{/if}
 
 	<article class="card">
-		<h3>Model</h3>
-		<p class="hint">
-			The model and prompt for board work live in <strong>Tasks → board</strong>, with every other
-			task's. They were editable here too, which just meant two controls writing the same row.
-		</p>
-	</article>
-
-	<article class="card">
 		<h3>Limits</h3>
 		<div class="grid">
 			<label>

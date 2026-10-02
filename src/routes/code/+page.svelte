@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ADMIN_PATHS } from '$lib/admin-sections';
 	import { ask } from '$lib/confirm.svelte';
 	import { onDestroy, onMount } from 'svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
@@ -1050,7 +1051,7 @@
 					<p class="dim">or paste a git URL:</p>
 				{:else}
 					<p class="dim">
-						No GitHub token configured (Admin → Settings → GitHub) — paste a git URL:
+						No GitHub token configured ({ADMIN_PATHS.github}). Paste a git URL:
 					</p>
 				{/if}
 				<input placeholder="https://github.com/owner/repo.git" bind:value={manualUrl} />
