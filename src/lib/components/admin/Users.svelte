@@ -75,7 +75,7 @@
 		</table>
 		<p class="hint">
 			<strong>Coding</strong> lets a user clone and push through the coding agent, which uses the
-			single GitHub token in the Settings tab — so it grants write access to every repository that token
+			single GitHub token in the Coding section — so it grants write access to every repository that token
 			can reach. Off by default for new accounts.
 		</p>
 	</article>

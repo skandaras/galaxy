@@ -154,11 +154,15 @@ Migrations run automatically on boot. Visit the **dev** subdomain first:
    paste the API key, hit **Sync models**.
 2. **Admin → Models**: enable the models you want (synced models start
    disabled on purpose — aggregators list hundreds).
-3. **Admin → Tasks**: pick primary + backup models per task (coding needs a
-   tool-capable model — the `T` badge).
-4. **Admin → Settings**: web search provider, budget cap, GitHub PAT
-   (fine-grained; Contents read/write on the repos you'll code in, plus
-   workflow scope if you want the Promote button), memory schedule.
+3. **Pick models per task**: each feature's Admin section holds its own tasks
+   (Research holds deep-research, Coding holds coding, and so on), and
+   **Admin → General tasks** holds chat and the rest. Coding needs a
+   tool-capable model, the `T` badge.
+4. **Admin → Research** for the web search provider, **Admin → Spend** for
+   the budget cap, **Admin → Coding** for the GitHub PAT (fine-grained;
+   Contents read/write on the repos you'll code in, plus workflow scope if you
+   want the Promote button), and **Admin → Memory and skills** for the memory
+   schedule.
 
 ## 5. Coding runners (sandbox)
 
@@ -236,7 +240,7 @@ docker compose pull galaxy-dev && docker compose up -d galaxy-dev
   Promote. `containrrr/watchtower` is also unmaintained and crash-loops against
   current Docker Engine.)
 
-- **Promote** (Admin → Settings → Deployment) dispatches the Promote
+- **Promote** (Admin → Deployment) dispatches the Promote
   workflow: it retags `stable → stable-prev`, then `dev → stable`. Prod
   follows `:stable`. **Rollback** restores `stable-prev`. Apply either with
   `docker compose pull galaxy-prod && docker compose up -d galaxy-prod`.
@@ -354,7 +358,7 @@ that flap.
 **How much would you actually use?** One deep-research run opens with a single
 query and then makes at most `queries per round` per later round: 11 searches at
 Exhaustive effort on the shipped defaults, 7 at Balanced, with the ceilings set
-in Admin → Settings → Deep research. An ordinary chat turn makes at most
+in Admin → Research → Deep research. An ordinary chat turn makes at most
 `searches per turn`, default 6, and at most `searches per model turn` — default
 1 — in any one of them. Divide whatever allowance a provider currently offers by
 those numbers before assuming you need a paid tier: a personal instance often
@@ -376,7 +380,7 @@ every read — so raising a default in a new version reaches only installs that
 have never saved these settings. Galaxy closes that gap once, at startup: a
 value still equal to the default it replaces is raised and the row is stamped,
 while anything you chose yourself is left alone. After that the stored value is
-yours, and Admin → Settings is the only thing that changes it.
+yours, and Admin → Research is the only thing that changes it.
 
 `max results` is not part of that arithmetic. Providers bill the request, not
 the row: Brave returns up to 20 for the same call, and SearXNG and DuckDuckGo
@@ -417,7 +421,7 @@ default engine running as well.
 
 ### Wiring it up
 
-In **Admin → Settings → Web search**, set the provider (paste an API key for a
+In **Admin → Research → Web search**, set the provider (paste an API key for a
 keyed one, or `http://searxng:8080` for SearXNG), pick a fallback, save, and
 press **Test search**. It reports the provider, the result count, any engine
 that did not answer, and — when something is wrong — the HTTP status, response
@@ -500,10 +504,10 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | `401 Unauthorized: no identity headers` | Authelia isn't injecting `Remote-User` — check `copy_headers` / forward-auth config |
 | Model dropdown empty | Provider added but models not synced, or none enabled in Admin → Models |
 | Coding refuses model | The selected model lacks tool support — pick one with the `T` badge |
-| `Budget cap reached` | Raise/disable in Admin → Settings, or wait for the period to roll over |
+| `Budget cap reached` | Raise/disable in Admin → Spend, or wait for the period to roll over |
 | Promote button errors | GitHub PAT missing workflow scope, or `GITHUB_REPO` wrong, or dev unhealthy (gate) |
 | Search returns zero results for everything, but the same queries work in a browser | Ask the instance which engines failed and why (§7c, "When search returns nothing"). **CAPTCHA / too many requests** means the container connects fine and the engines are refusing it — the fix is a keyed primary, not more configuration. **DNS errors / connection refused** means it cannot get out; confirm with a TCP connect rather than a name lookup, because Docker's resolver answers lookups even with no route out |
-| A search returns one Wikipedia result and nothing else | The scraped engines are benched. SearXNG suspends a blocked engine for 180s–1h, so runs get progressively thinner. Admin → Settings → **Test search** names them. Expected on SearXNG alone; it is why a keyed API is the recommended primary |
+| A search returns one Wikipedia result and nothing else | The scraped engines are benched. SearXNG suspends a blocked engine for 180s–1h, so runs get progressively thinner. Admin → Research → Web search → **Test search** names them. Expected on SearXNG alone; it is why a keyed API is the recommended primary |
 | Search results are thinner than expected | **Test search** lists any engine that did not answer. Scraped engines (DuckDuckGo, Brave, Startpage) periodically refuse datacenter IPs; `searxng/settings.yml` enables several so one being blocked thins the results rather than emptying them. A keyed provider (Brave, Tavily) as the **fallback** is not IP-blocked |
 | `searxng` container won't start | `searxng/settings.yml` missing next to `docker-compose.yml` (§2) — the service bind-mounts it |
 | `No such file or directory` writing `.env` | You're not in the project directory. `docker compose ls` shows where the compose file actually is (§2); `/opt/galaxy` in this guide is only an example |
@@ -511,21 +515,21 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | Installed Android app shows a browser address bar | Digital Asset Links did not verify. `curl` `/.well-known/assetlinks.json` signed out from outside — a login page means the proxy bypass above is missing; JSON means the fingerprint does not match the installed APK. See [MOBILE.md](./MOBILE.md) |
 | Attachment upload fails / 403 on form posts | `ORIGIN` not set to this instance's public URL (SvelteKit CSRF check) |
 | Small attachments upload but larger ones fail with `413` / `exceeds the server's request limit` | `BODY_SIZE_LIMIT` too low (or missing, so adapter-node's 512K default applies). Set it to `32M`. A reverse proxy can impose its own cap too — nginx's `client_max_body_size` defaults to 1 MB |
-| Memory never runs | Admin → Memory: enabled? interval? It also skips when there's no new activity |
+| Memory never runs | Admin → Memory and skills: enabled? interval? It also skips when there's no new activity |
 | Deep research returns nothing, or always searches "1 queries" | A reasoning model spending its whole token budget thinking. Both the planner and the synthesis now retry with more room automatically; if it persists, raise Max tokens in Admin → Research or pick a non-reasoning model |
-| Deep research reports "no sources could be retrieved" | Search returned nothing — check the provider in Admin → Settings with the Test button. The answer that follows is general knowledge, not research |
+| Deep research reports "no sources could be retrieved" | Search returned nothing — check the provider in Admin → Research with the Test button. The answer that follows is general knowledge, not research |
 | Deep research says "Consolidation returned no usable JSON" | The model could not produce the between-rounds brief in the shape asked for. The run falls back to searching the gaps it already had and only stops after two failures in a row, so the answer still lands — but a model that cannot follow a JSON contract will research shallowly. Pick a different one for the deep-research task |
-| Deep research says the brief "ran out of room mid-brief" | The reply was cut off before it closed, so there was no complete brief to read. Consolidation asks again with double the allowance, and salvages whatever findings were finished if that is cut off too — so this is a warning, not a lost round. Persisting means the model writes far past the limits it is given: raise **Max tokens** in Admin → Settings → Deep research, or pick a model that keeps to the shape |
+| Deep research says the brief "ran out of room mid-brief" | The reply was cut off before it closed, so there was no complete brief to read. Consolidation asks again with double the allowance, and salvages whatever findings were finished if that is cut off too — so this is a warning, not a lost round. Persisting means the model writes far past the limits it is given: raise **Max tokens** in Admin → Research → Deep research, or pick a model that keeps to the shape |
 | Deep research says "Consolidation timed out" and stops after one round | Framing, planning and consolidation are bounded by *silence* rather than by total time, so a slow model is no longer cut off while it is still working; a call that does stall is retried once with a larger token budget, which is what a reasoning model needs to finish thinking and still answer. Round one gets a second attempt on the same sources — it has no brief yet, so it has no open gaps to continue from. Persisting past that means the model cannot produce the brief: pick another for the deep-research task |
-| Deep research always runs one round whatever the effort slider says | Admin → Settings → Deep research → "rounds per run" is the ceiling; effort spends a fraction of it, so a ceiling of 1 makes every level identical. The run says so in chat when that happens |
+| Deep research always runs one round whatever the effort slider says | Admin → Research → Deep research → "rounds per run" is the ceiling; effort spends a fraction of it, so a ceiling of 1 makes every level identical. The run says so in chat when that happens |
 | Deep research ignored the toggle and just did a web search | Fixed in this version. Creating a chat by pressing send used to clear the composer's per-message choices before the request was built, so the first message of a *new* chat silently lost Deep research, the effort level and the model picked in the dropdown |
 | Deep research seems to ignore the conversation | It no longer does: a follow-up is first restated as a standalone question (the `framing` stage, skipped on a chat's first message). If it still looks wrong, the chat shows the resolved question as a `Researching: …` notice — that is exactly what was searched |
 | Lots of sources say "search snippet only" | The Sources list now names the cause. "the site refused the request" is bot-blocking or a paywall; "the page carried no readable text" is usually a JavaScript-rendered page. Research sends a browser user-agent and retries rate limits once, but a site determined to refuse will still refuse. The per-cause counts are on the `research.rounds` event in the Observatory |
 | A research answer repeats something the conversation already settled | Should no longer happen: the round that decides what is still missing now sees the original message, the resolved question and what the conversation established, not just the restated question |
 | A source is cited but the quote is not on the page | Look for "search snippet only" in the Sources list. That page could not be read — a paywall, a JS-only shell, or a refused content type — so only the search engine's summary was available. The answer is told not to rest a claim on one |
 | Deep research is slower or costlier than it was | Expected: it now runs up to 4 rounds by default rather than 2, consolidating what it read between them. Use the Quick effort level per message, or lower "rounds per run" |
-| Coding agent stops mid-task with nothing committed | It ran out of steps. It now says so, checkpoints the work and carries on by itself (Admin → Settings → Coding agent). Raise `CODING_MAX_STEPS` if it still needs more room per leg |
-| Coding session has `WIP checkpoint (auto)` commits | Work a turn left uncommitted, committed locally so it is not invisible. Nothing is pushed. Turn it off under Admin → Settings → Coding agent |
+| Coding agent stops mid-task with nothing committed | It ran out of steps. It now says so, checkpoints the work and carries on by itself (Admin → Coding → Coding agent). Raise `CODING_MAX_STEPS` if it still needs more room per leg |
+| Coding session has `WIP checkpoint (auto)` commits | Work a turn left uncommitted, committed locally so it is not invisible. Nothing is pushed. Turn it off under Admin → Coding → Coding agent |
 | Resuming a coding session re-reads the whole repo | Should no longer happen: each turn carries a session-state block listing files already read and changed plus current git status. Check the Observatory shows the turn ending with a `stopReason` |
 | Coding agent fails with `TimeoutError` on a big repo | Fixed in this version — calls are now bounded by silence rather than total duration. If it recurs against a genuinely slow provider, raise `STREAM_IDLE_TIMEOUT_MS` |
 | Coding run reports dropping earlier tool results | Working as intended: the turn exceeded `TOOL_OUTPUT_BUDGET_CHARS` and shed its oldest tool output to keep the request sane. Raise it if the model needs more history at once |

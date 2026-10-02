@@ -48,6 +48,7 @@ import {
 	type Pacer,
 	type SearchResult
 } from './tools/web-search';
+import { ADMIN_PATHS } from '$lib/admin-sections';
 
 export interface Evidence {
 	n: number;
@@ -103,7 +104,7 @@ export function startResearchTurn(opts: {
 
 	const searchCfg = resolveSearchCfg();
 	if (searchCfg.provider === 'none') {
-		throw new EngineError('Deep research needs web search configured in admin settings');
+		throw new EngineError(`Deep research needs web search configured in ${ADMIN_PATHS.webSearch}`);
 	}
 
 	// Read before this turn's message is appended, so the framing step sees the
@@ -277,7 +278,7 @@ async function runResearch(
 	if (effort !== 'quick' && budget.rounds === roundBudget(cfg, 'quick').rounds) {
 		pushChunk(job, {
 			type: 'notice',
-			text: `Admin allows ${plural(budget.rounds, 'research round')}, so ${effort} and quick run the same. Raise "rounds per run" in Admin → Settings.`
+			text: `Admin allows ${plural(budget.rounds, 'research round')}, so ${effort} and quick run the same. Raise "rounds per run" in ${ADMIN_PATHS.deepResearch}.`
 		});
 	}
 	// What the platform already holds on this, for aiming rather than for citing.
@@ -702,7 +703,7 @@ async function runResearch(
 		// before it streams rather than letting it pass as a sourced result.
 		pushChunk(job, {
 			type: 'notice',
-			text: 'No sources could be retrieved — answering from general knowledge. Check the search provider in Admin → Settings.'
+			text: `No sources could be retrieved — answering from general knowledge. Check the search provider in ${ADMIN_PATHS.webSearch}.`
 		});
 	}
 	pushChunk(job, { type: 'stage', name: 'synthesising' });
@@ -838,9 +839,9 @@ async function runResearch(
 	// like a run that "finished" with nothing to show.
 	if (!answer.trim() && !job.controller.signal.aborted) {
 		const why = reasoningChars
-			? `The model spent its entire ${cfg.maxTokens}-token budget reasoning and produced no answer. Raise Max tokens in Admin → Research, or choose a model that is not reasoning-only.`
+			? `The model spent its entire ${cfg.maxTokens}-token budget reasoning and produced no answer. Raise synthesis max tokens in ${ADMIN_PATHS.deepResearch}, or choose a model that is not reasoning-only.`
 			: finishReason === 'length'
-				? `The model hit its ${cfg.maxTokens}-token limit before writing anything. Raise Max tokens in Admin → Research.`
+				? `The model hit its ${cfg.maxTokens}-token limit before writing anything. Raise synthesis max tokens in ${ADMIN_PATHS.deepResearch}.`
 				: 'The model returned an empty answer.';
 		emitEvent(
 			{
@@ -1180,7 +1181,7 @@ const STOP_NOTICE: Partial<
 	'no-new-sources': (s) =>
 		`Round ${s.round} found nothing that had not already been read — moving to the answer.`,
 	'search-budget': (s) =>
-		`Used all ${plural(s.searches, 'search', 'searches')} allowed for this run before the round budget ran out. Raise "searches per run" in Admin → Settings.`,
+		`Used all ${plural(s.searches, 'search', 'searches')} allowed for this run before the round budget ran out. Raise "searches per run" in ${ADMIN_PATHS.deepResearch}.`,
 	sufficient: (s) => `Evidence judged sufficient after ${s.round} of ${s.rounds} rounds.`,
 	'no-gaps': (s) => `No open gaps left to search after ${plural(s.round, 'round')}.`,
 	budget: (s) =>
@@ -1227,7 +1228,7 @@ function consolidateFailureReason(outcome: ConsolidateOutcome): string {
 			// refused, rambled, or simply ran out of room mid-brief — and only the
 			// last of those is worth changing a setting over.
 			return outcome.finishReason === 'length'
-				? `ran out of room mid-brief (${outcome.chars} characters). Raise Max tokens in Admin → Settings → Deep research, or pick a model that keeps to the shape`
+				? `ran out of room mid-brief (${outcome.chars} characters). Raise synthesis max tokens in ${ADMIN_PATHS.deepResearch}, or pick a model that keeps to the shape`
 				: 'returned no usable JSON';
 		case 'empty':
 			return outcome.reasonedOnly

@@ -4,6 +4,7 @@ import { addAttachment, attachmentDataUrl, listAttachments } from '$lib/server/c
 import { getTaskConfig } from '../engine';
 import { resolveModel } from '$lib/server/providers/registry';
 import { logUsage } from '../usage';
+import { taskPath } from '$lib/admin-sections';
 
 /**
  * A drawing takes far longer than a sentence, and there is nothing to stream —
@@ -110,7 +111,7 @@ export function imageTools(chatId: string, userId: string): LoopTool[] {
 				if (!images.length) {
 					throw new Error(
 						`${choice.model.displayName} returned no image${res.text ? `, and replied: ${res.text.slice(0, 300)}` : ''}. ` +
-							'It may not actually generate images; check Admin → Tasks → visual.'
+							`It may not actually generate images; check ${taskPath('visual')}.`
 					);
 				}
 
@@ -190,12 +191,12 @@ function imageModel() {
 	const choice = cfg?.primaryModelId ? resolveModel(cfg.primaryModelId) : null;
 	if (!choice) {
 		throw new Error(
-			'No image model is configured. Set Admin → Tasks → visual to a model that generates images.'
+			`No image model is configured. Set ${taskPath('visual')} to a model that generates images.`
 		);
 	}
 	if (!choice.model.supportsImageOutput) {
 		throw new Error(
-			`${choice.model.displayName} does not generate images. Point Admin → Tasks → visual at a model badged “I” in Admin → Models.`
+			`${choice.model.displayName} does not generate images. Point ${taskPath('visual')} at a model badged “I” in Admin → Models.`
 		);
 	}
 	return choice;

@@ -4,6 +4,7 @@ import type { SearchProvider, WebSearchSettings } from '$lib/server/settings';
 import { decryptSecret } from '$lib/server/crypto';
 import { searchConcurrency, searchProviderGapMs, searchThrottledGapMs } from '../limits';
 import type { LoopTool } from '../loop';
+import { ADMIN_PATHS } from '$lib/admin-sections';
 
 export interface SearchResult {
 	title: string;
@@ -912,7 +913,7 @@ async function searchWith(
 		default:
 			throw new SearchProviderError(
 				provider,
-				'web search is not configured: set a provider in admin settings'
+				`web search is not configured: set a provider in ${ADMIN_PATHS.webSearch}`
 			);
 	}
 }

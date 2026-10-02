@@ -1,5 +1,53 @@
 <script lang="ts">
 	import { ask } from '$lib/confirm.svelte';
+	import { ADMIN_PATHS } from '$lib/admin-sections';
+
+	/**
+	 * The platform settings cards, each shown in the admin section of the
+	 * feature it belongs to. This was one tab holding all twelve, which is how
+	 * the GitHub token, the push keys and the compaction ratio came to share a
+	 * page called Settings.
+	 */
+	type Card =
+		| 'websearch'
+		| 'research'
+		| 'fetch'
+		| 'coding'
+		| 'github'
+		| 'style'
+		| 'compaction'
+		| 'ivory'
+		| 'deploy'
+		| 'budget'
+		| 'retention'
+		| 'push';
+	type RetentionField = 'eventDays' | 'usageDays' | 'uxIdeaDays' | 'cortexChangeDays';
+	interface Props {
+		cards: Card[];
+		/** Which history windows the retention card shows, for this section. */
+		retentionFields?: RetentionField[];
+	}
+	let { cards, retentionFields = [] }: Props = $props();
+	const has = (c: Card) => cards.includes(c);
+
+	const RETENTION: Record<RetentionField, { label: string; hint: string }> = {
+		eventDays: {
+			label: 'keep Activity events (days)',
+			hint: 'The fastest-growing table: one row per model call, tool call and job.'
+		},
+		usageDays: {
+			label: 'keep usage history (days)',
+			hint: 'At least as long as the longest window you look at in Usage (up to 365 days). The budget cap reads the same rows.'
+		},
+		uxIdeaDays: {
+			label: 'keep UX ideas on dev (days)',
+			hint: 'Non-production instances only. On prod the backlog is kept, because it is what stops the audit proposing again what you dismissed.'
+		},
+		cortexChangeDays: {
+			label: 'keep Cortex change history (days)',
+			hint: 'Each change keeps a snapshot of what it replaced so it can be undone.'
+		}
+	};
 	let websearch = $state({
 		provider: 'none',
 		fallbackProvider: 'none',
@@ -229,502 +277,507 @@
 </script>
 
 <section>
-	<article class="card">
-		<h3>Web search</h3>
-		<div class="grid">
-			<label>
-				provider
-				<select bind:value={websearch.provider}>
-					<option value="none">disabled</option>
-					<option value="duckduckgo">DuckDuckGo (no key)</option>
-					<option value="brave">Brave</option>
-					<option value="tavily">Tavily</option>
-					<option value="searxng">SearXNG (self-hosted)</option>
-				</select>
-			</label>
-			{#if websearch.provider === 'brave' || websearch.provider === 'tavily'}
+	{#if has('websearch')}
+		<article class="card">
+			<h3>Web search</h3>
+			<div class="grid">
 				<label>
-					API key
+					provider
+					<select bind:value={websearch.provider}>
+						<option value="none">disabled</option>
+						<option value="duckduckgo">DuckDuckGo (no key)</option>
+						<option value="brave">Brave</option>
+						<option value="tavily">Tavily</option>
+						<option value="searxng">SearXNG (self-hosted)</option>
+					</select>
+				</label>
+				{#if websearch.provider === 'brave' || websearch.provider === 'tavily'}
+					<label>
+						API key
+						<input
+							type="password"
+							bind:value={websearch.apiKey}
+							placeholder={hasSearchKey ? '(saved — leave blank to keep)' : 'key'}
+						/>
+					</label>
+				{/if}
+				{#if websearch.provider === 'searxng'}
+					<label>
+						instance URL
+						<input bind:value={websearch.baseUrl} placeholder="http://searxng:8080" />
+					</label>
+				{/if}
+				<label>
+					fallback
+					<select bind:value={websearch.fallbackProvider}>
+						<option value="none">none</option>
+						<option value="duckduckgo">DuckDuckGo (no key)</option>
+						<option value="brave">Brave</option>
+						<option value="tavily">Tavily</option>
+						<option value="searxng">SearXNG (self-hosted)</option>
+					</select>
+				</label>
+				<label>
+					max results
+					<input type="number" min="1" max="20" bind:value={websearch.maxResults} />
+				</label>
+				<label>
+					timeout (ms)
+					<input type="number" min="1000" step="1000" bind:value={websearch.timeoutMs} />
+				</label>
+				<label>
+					searches per turn
+					<input type="number" min="1" max="20" bind:value={websearch.maxSearchesPerTurn} />
+				</label>
+				<label>
+					searches per model turn
+					<input type="number" min="1" max="5" bind:value={websearch.searchesPerStep} />
+					<small>
+						One means a search is always read before the next is written; a second query in the
+						same model turn is refused without spending the allowance.
+					</small>
+				</label>
+				<label>
+					default language
+					<input bind:value={websearch.defaultLanguage} placeholder="auto" />
+				</label>
+			</div>
+			<p class="hint">
+				<strong>Searches per turn</strong> caps how many live searches one reply may make, and the
+				allowance is per request — a new message always starts with a full one. Repeats of a query
+				already run in the same turn are answered from memory and don't count against it.
+			</p>
+			<p class="hint">
+				<strong>Default language</strong> is a BCP-47 code (<code>de</code>, <code>ja</code>,
+				<code>pt-br</code>) used when a search doesn't name one; leave it blank for no constraint.
+				Agents can set the language per search regardless, and should — the query's own wording
+				matters as much as the setting. Each provider names languages its own way and Galaxy
+				translates: Brave calls Chinese <code>zh-hans</code>/<code>zh-hant</code> and Japanese
+				<code>jp</code>, so write the ordinary code here and let it map. A code the provider has no
+				equivalent for is dropped rather than sent — the search still runs, unconstrained — and
+				<strong>Test search</strong> names any you have configured.
+				Tavily has no language parameter at all, so results there are steered by the query alone.
+			</p>
+			<p class="hint">
+				The fallback is used only when the primary <em>fails</em> — blocked, unreachable or
+				unparseable — never when it legitimately finds nothing. SearXNG is the most reliable
+				choice when self-hosted: no key, no quota, and unlike DuckDuckGo it won't block your
+				server for being in a datacenter.
+			</p>
+			<div class="row-buttons">
+				<button class="btn primary" onclick={() => save('websearch', websearch)}>
+					{saved === 'websearch' ? 'Saved ✓' : 'Save'}
+				</button>
+				<button class="btn" disabled={testing} onclick={testSearch}>
+					{testing ? 'Testing…' : 'Test search'}
+				</button>
+				{#if failed?.key === 'websearch'}<span class="save-error" role="alert">{failed.message}</span>{/if}
+			</div>
+			{#if testResult}
+				<pre class="test-result" class:bad={!testResult.ok}>{formatTest(testResult)}</pre>
+			{/if}
+		</article>
+	{/if}
+
+	{#if has('research')}
+		<article class="card">
+			<h3>Deep research</h3>
+			<div class="grid">
+				<label>
+					search engine
+					<select bind:value={research.provider}>
+						<option value="inherit">same as web search</option>
+						<option value="duckduckgo">DuckDuckGo (no key)</option>
+						<option value="searxng">dedicated SearXNG</option>
+					</select>
+				</label>
+				{#if research.provider === 'searxng'}
+					<label>
+						SearXNG URL
+						<input bind:value={research.baseUrl} placeholder="http://searxng:8080" />
+					</label>
+				{/if}
+				<label>
+					queries a round
+					<input type="number" min="1" max="10" bind:value={research.maxQueries} />
+					<small>
+						Kept low on purpose: a round answers one thing and hands the next round a sharper
+						question. Effort buys more rounds, not wider ones. The first round always runs a
+						single orienting query.
+					</small>
+				</label>
+				<label>
+					max pages per round
+					<input type="number" min="1" max="20" bind:value={research.maxPages} />
+				</label>
+				<label>
+					searches per run
+					<input type="number" min="1" max="40" bind:value={research.maxSearchesPerRun} />
+				</label>
+				<label>
+					also search in
+					<input bind:value={research.extraLanguages} placeholder="de, ja" />
+				</label>
+				<label>
+					synthesis max tokens
+					<input type="number" min="256" step="256" bind:value={research.maxTokens} />
+				</label>
+				<label>
+					page timeout (ms)
+					<input type="number" min="2000" step="1000" bind:value={research.timeoutMs} />
+				</label>
+				<label>
+					rounds per run
+					<input type="number" min="1" max="8" bind:value={research.maxRounds} />
+				</label>
+				<label class="row">
+					<input type="checkbox" bind:checked={research.modelTriage} />
+					let the model choose which search results to open
+				</label>
+			</div>
+			<p class="hint">
+				These are ceilings. The effort control beside the composer's Deep research toggle scales down
+				from them per message — Exhaustive spends the full ceiling. Results are always deduplicated
+				and spread across sites before reading; the checkbox adds a model call on top of that, which
+				costs a round-trip per round and is worth watching in Activity before leaving on.
+			</p>
+			<p class="hint">
+				<strong>Also search in</strong> makes the planner write at least one query per round in each
+				language listed, as ordinary BCP-47 codes — Galaxy translates them to whatever the search
+				provider calls them. Use <strong>Test search</strong> above to check: it names any code the
+				configured provider has no equivalent for, and those searches run unconstrained rather than
+				failing.
+			</p>
+			<button class="btn primary" onclick={() => save('research', research)}>
+				{saved === 'research' ? 'Saved ✓' : 'Save'}
+			</button>
+			{#if failed?.key === 'research'}<span class="save-error" role="alert">{failed.message}</span>{/if}
+		</article>
+	{/if}
+
+	{#if has('coding')}
+		<article class="card">
+			<h3>Coding agent</h3>
+			<div class="grid">
+				<label class="row">
+					<input type="checkbox" bind:checked={coding.autoCheckpoint} />
+					commit unfinished work at the end of a turn
+				</label>
+				<label class="row">
+					<input type="checkbox" bind:checked={coding.autoContinue} />
+					carry on automatically when a turn runs out of steps
+				</label>
+				<label>
+					max legs per request
+					<input type="number" min="1" max="10" bind:value={coding.maxLegs} />
+				</label>
+			</div>
+			<p class="hint">
+				A checkpoint commit is local only — nothing is pushed. Steps per leg are set with
+				<code>CODING_MAX_STEPS</code>.
+			</p>
+			<button class="btn primary" onclick={() => save('coding', coding)}>
+				{saved === 'coding' ? 'Saved ✓' : 'Save'}
+			</button>
+			{#if failed?.key === 'coding'}<span class="save-error" role="alert">{failed.message}</span>{/if}
+		</article>
+	{/if}
+
+	{#if has('style')}
+		<article class="card">
+			<h3>House style</h3>
+			<label class="full">
+				your additions to how the agents write
+				<textarea
+					rows="4"
+					maxlength="1000"
+					bind:value={style.text}
+					placeholder="e.g. British spelling throughout. Never use the word &quot;utilise&quot;."
+				></textarea>
+			</label>
+			<p class="hint">
+				Appended to the built-in house style on every turn of chat, coding, deep research and the
+				board, plus the sub-agent and the background reviewers. Where the two disagree, yours wins.
+				It does not reach the agents whose reply is a fixed shape — chat titles, run summaries, the
+				memory audit or the alignment assessor. Up to 1,000 characters: it rides every prose turn,
+				and past that it is a second system prompt with none of the history a task prompt keeps.
+			</p>
+			<details>
+				<summary class="hint">Read the built-in house style</summary>
+				<pre class="voice">{style.house}</pre>
+			</details>
+			<details>
+				<summary class="hint">Read the built-in layout rules</summary>
+				<p class="hint">
+					These reach the agents that answer in prose: chat and coding.
+					The ones that answer with JSON get the voice above and none of this.
+				</p>
+				<pre class="voice">{style.layout}</pre>
+			</details>
+			<button class="btn primary" onclick={() => save('style', { text: style.text })}>
+				{saved === 'style' ? 'Saved ✓' : 'Save'}
+			</button>
+			{#if failed?.key === 'style'}<span class="save-error" role="alert">{failed.message}</span>{/if}
+		</article>
+	{/if}
+
+	{#if has('github')}
+		<article class="card">
+			<h3>GitHub</h3>
+			<div class="grid">
+				<label>
+					personal access token
 					<input
 						type="password"
-						bind:value={websearch.apiKey}
-						placeholder={hasSearchKey ? '(saved — leave blank to keep)' : 'key'}
+						bind:value={github.token}
+						placeholder={github.hasToken ? '(saved — leave blank to keep)' : 'fine-grained PAT'}
 					/>
 				</label>
-			{/if}
-			{#if websearch.provider === 'searxng'}
-				<label>
-					instance URL
-					<input bind:value={websearch.baseUrl} placeholder="http://searxng:8080" />
-				</label>
-			{/if}
-			<label>
-				fallback
-				<select bind:value={websearch.fallbackProvider}>
-					<option value="none">none</option>
-					<option value="duckduckgo">DuckDuckGo (no key)</option>
-					<option value="brave">Brave</option>
-					<option value="tavily">Tavily</option>
-					<option value="searxng">SearXNG (self-hosted)</option>
-				</select>
-			</label>
-			<label>
-				max results
-				<input type="number" min="1" max="20" bind:value={websearch.maxResults} />
-			</label>
-			<label>
-				timeout (ms)
-				<input type="number" min="1000" step="1000" bind:value={websearch.timeoutMs} />
-			</label>
-			<label>
-				searches per turn
-				<input type="number" min="1" max="20" bind:value={websearch.maxSearchesPerTurn} />
-			</label>
-			<label>
-				searches per model turn
-				<input type="number" min="1" max="5" bind:value={websearch.searchesPerStep} />
-				<small>
-					One means a search is always read before the next is written; a second query in the
-					same model turn is refused without spending the allowance.
-				</small>
-			</label>
-			<label>
-				default language
-				<input bind:value={websearch.defaultLanguage} placeholder="auto" />
-			</label>
-		</div>
-		<p class="hint">
-			<strong>Searches per turn</strong> caps how many live searches one reply may make, and the
-			allowance is per request — a new message always starts with a full one. Repeats of a query
-			already run in the same turn are answered from memory and don't count against it.
-		</p>
-		<p class="hint">
-			<strong>Default language</strong> is a BCP-47 code (<code>de</code>, <code>ja</code>,
-			<code>pt-br</code>) used when a search doesn't name one; leave it blank for no constraint.
-			Agents can set the language per search regardless, and should — the query's own wording
-			matters as much as the setting. Each provider names languages its own way and Galaxy
-			translates: Brave calls Chinese <code>zh-hans</code>/<code>zh-hant</code> and Japanese
-			<code>jp</code>, so write the ordinary code here and let it map. A code the provider has no
-			equivalent for is dropped rather than sent — the search still runs, unconstrained — and
-			<strong>Test search</strong> names any you have configured.
-			Tavily has no language parameter at all, so results there are steered by the query alone.
-		</p>
-		<p class="hint">
-			The fallback is used only when the primary <em>fails</em> — blocked, unreachable or
-			unparseable — never when it legitimately finds nothing. SearXNG is the most reliable
-			choice when self-hosted: no key, no quota, and unlike DuckDuckGo it won't block your
-			server for being in a datacenter.
-		</p>
-		<div class="row-buttons">
-			<button class="btn primary" onclick={() => save('websearch', websearch)}>
-				{saved === 'websearch' ? 'Saved ✓' : 'Save'}
-			</button>
-			<button class="btn" disabled={testing} onclick={testSearch}>
-				{testing ? 'Testing…' : 'Test search'}
-			</button>
-			{#if failed?.key === 'websearch'}<span class="save-error" role="alert">{failed.message}</span>{/if}
-		</div>
-		{#if testResult}
-			<pre class="test-result" class:bad={!testResult.ok}>{formatTest(testResult)}</pre>
-		{/if}
-	</article>
-
-	<article class="card">
-		<h3>Deep research</h3>
-		<div class="grid">
-			<label>
-				search engine
-				<select bind:value={research.provider}>
-					<option value="inherit">same as web search</option>
-					<option value="duckduckgo">DuckDuckGo (no key)</option>
-					<option value="searxng">dedicated SearXNG</option>
-				</select>
-			</label>
-			{#if research.provider === 'searxng'}
-				<label>
-					SearXNG URL
-					<input bind:value={research.baseUrl} placeholder="http://searxng:8080" />
-				</label>
-			{/if}
-			<label>
-				queries a round
-				<input type="number" min="1" max="10" bind:value={research.maxQueries} />
-				<small>
-					Kept low on purpose: a round answers one thing and hands the next round a sharper
-					question. Effort buys more rounds, not wider ones. The first round always runs a
-					single orienting query.
-				</small>
-			</label>
-			<label>
-				max pages per round
-				<input type="number" min="1" max="20" bind:value={research.maxPages} />
-			</label>
-			<label>
-				searches per run
-				<input type="number" min="1" max="40" bind:value={research.maxSearchesPerRun} />
-			</label>
-			<label>
-				also search in
-				<input bind:value={research.extraLanguages} placeholder="de, ja" />
-			</label>
-			<label>
-				synthesis max tokens
-				<input type="number" min="256" step="256" bind:value={research.maxTokens} />
-			</label>
-			<label>
-				page timeout (ms)
-				<input type="number" min="2000" step="1000" bind:value={research.timeoutMs} />
-			</label>
-			<label>
-				rounds per run
-				<input type="number" min="1" max="8" bind:value={research.maxRounds} />
-			</label>
-			<label class="row">
-				<input type="checkbox" bind:checked={research.modelTriage} />
-				let the model choose which search results to open
-			</label>
-		</div>
-		<p class="hint">
-			These are ceilings. The effort control beside the composer's Deep research toggle scales down
-			from them per message — Exhaustive spends the full ceiling. Results are always deduplicated
-			and spread across sites before reading; the checkbox adds a model call on top of that, which
-			costs a round-trip per round and is worth watching in Activity before leaving on.
-		</p>
-		<p class="hint">
-			<strong>Also search in</strong> makes the planner write at least one query per round in each
-			language listed, as ordinary BCP-47 codes — Galaxy translates them to whatever the search
-			provider calls them. Use <strong>Test search</strong> above to check: it names any code the
-			configured provider has no equivalent for, and those searches run unconstrained rather than
-			failing.
-		</p>
-		<button class="btn primary" onclick={() => save('research', research)}>
-			{saved === 'research' ? 'Saved ✓' : 'Save'}
-		</button>
-		{#if failed?.key === 'research'}<span class="save-error" role="alert">{failed.message}</span>{/if}
-	</article>
-
-	<article class="card">
-		<h3>Coding agent</h3>
-		<div class="grid">
-			<label class="row">
-				<input type="checkbox" bind:checked={coding.autoCheckpoint} />
-				commit unfinished work at the end of a turn
-			</label>
-			<label class="row">
-				<input type="checkbox" bind:checked={coding.autoContinue} />
-				carry on automatically when a turn runs out of steps
-			</label>
-			<label>
-				max legs per request
-				<input type="number" min="1" max="10" bind:value={coding.maxLegs} />
-			</label>
-		</div>
-		<p class="hint">
-			A checkpoint commit is local only — nothing is pushed. Steps per leg are set with
-			<code>CODING_MAX_STEPS</code>.
-		</p>
-		<button class="btn primary" onclick={() => save('coding', coding)}>
-			{saved === 'coding' ? 'Saved ✓' : 'Save'}
-		</button>
-		{#if failed?.key === 'coding'}<span class="save-error" role="alert">{failed.message}</span>{/if}
-	</article>
-
-	<article class="card">
-		<h3>House style</h3>
-		<label class="full">
-			your additions to how the agents write
-			<textarea
-				rows="4"
-				maxlength="1000"
-				bind:value={style.text}
-				placeholder="e.g. British spelling throughout. Never use the word &quot;utilise&quot;."
-			></textarea>
-		</label>
-		<p class="hint">
-			Appended to the built-in house style on every turn of chat, coding, deep research and the
-			board, plus the sub-agent and the background reviewers. Where the two disagree, yours wins.
-			It does not reach the agents whose reply is a fixed shape — chat titles, run summaries, the
-			memory audit or the alignment assessor. Up to 1,000 characters: it rides every prose turn,
-			and past that it is a second system prompt with none of the history Admin &rarr; Tasks keeps.
-		</p>
-		<details>
-			<summary class="hint">Read the built-in house style</summary>
-			<pre class="voice">{style.house}</pre>
-		</details>
-		<details>
-			<summary class="hint">Read the built-in layout rules</summary>
+			</div>
 			<p class="hint">
-				These reach the agents that answer in prose: chat and coding.
-				The ones that answer with JSON get the voice above and none of this.
+				Used by the coding agent to list repositories, clone and push. A fine-grained token with
+				Contents read/write on the repos you work in is enough.
 			</p>
-			<pre class="voice">{style.layout}</pre>
-		</details>
-		<button class="btn primary" onclick={() => save('style', { text: style.text })}>
-			{saved === 'style' ? 'Saved ✓' : 'Save'}
-		</button>
-		{#if failed?.key === 'style'}<span class="save-error" role="alert">{failed.message}</span>{/if}
-	</article>
-
-	<article class="card">
-		<h3>GitHub</h3>
-		<div class="grid">
-			<label>
-				personal access token
-				<input
-					type="password"
-					bind:value={github.token}
-					placeholder={github.hasToken ? '(saved — leave blank to keep)' : 'fine-grained PAT'}
-				/>
-			</label>
-		</div>
-		<p class="hint">
-			Used by the coding agent to list repositories, clone and push. A fine-grained token with
-			Contents read/write on the repos you work in is enough.
-		</p>
-		<button class="btn primary" onclick={() => save('github', { token: github.token })}>
-			{saved === 'github' ? 'Saved ✓' : 'Save'}
-		</button>
-		{#if failed?.key === 'github'}<span class="save-error" role="alert">{failed.message}</span>{/if}
-	</article>
-
-	<article class="card">
-		<h3>Shelf</h3>
-		<div class="grid">
-			<label>
-				repository
-				<input bind:value={ivory.shelfRepo} placeholder="owner/name" />
-			</label>
-			<label>
-				paper search
-				<select bind:value={ivory.paperProvider}>
-					<option value="openalex">OpenAlex (no key)</option>
-					<option value="semanticscholar">Semantic Scholar</option>
-					<option value="none">disabled</option>
-				</select>
-			</label>
-			<label>
-				OpenAlex contact email
-				<input type="email" bind:value={ivory.openAlexMailto} placeholder="optional" />
-				<small>Moves requests into OpenAlex's faster pool. Sent with every search.</small>
-			</label>
-			<label>
-				results per search
-				<input type="number" min="1" max="25" bind:value={ivory.paperMaxResults} />
-			</label>
-			<label>
-				searches per turn
-				<input type="number" min="1" max="40" bind:value={ivory.paperSearchesPerTurn} />
-			</label>
-			<label>
-				CORE API key
-				<input
-					type="password"
-					bind:value={ivory.coreApiKey}
-					placeholder={ivory.hasCoreApiKey ? '(saved — leave blank to keep)' : 'optional'}
-				/>
-				<small>
-					Full texts from university repositories. Free from
-					<a href="https://core.ac.uk/services/api" target="_blank" rel="noopener">core.ac.uk</a>.
-				</small>
-			</label>
-			<label>
-				Semantic Scholar API key
-				<input
-					type="password"
-					bind:value={ivory.semanticScholarApiKey}
-					placeholder={ivory.hasSemanticScholarApiKey ? '(saved — leave blank to keep)' : 'optional'}
-				/>
-				<small>
-					Open-access PDFs and a second search engine. Free from
-					<a href="https://www.semanticscholar.org/product/api" target="_blank" rel="noopener">semanticscholar.org</a>.
-				</small>
-			</label>
-		</div>
-		<p class="hint">
-			The GitHub repository Ivory Tower keeps its projects, notes and claims in, and whose Issues
-			are its board. It is read and written with the token above, so the token needs Contents and
-			Issues read/write on it. “Set up Shelf” writes any missing templates (and a sample project
-			while there are no projects) and creates the labels; it never overwrites a file.
-		</p>
-		<div class="row-buttons">
-			<button class="btn primary" onclick={() => save('ivory', ivory)}>
-				{saved === 'ivory' ? 'Saved ✓' : 'Save'}
+			<button class="btn primary" onclick={() => save('github', { token: github.token })}>
+				{saved === 'github' ? 'Saved ✓' : 'Save'}
 			</button>
-			{#if failed?.key === 'ivory'}<span class="save-error" role="alert">{failed.message}</span>{/if}
-			<button class="btn" disabled={shelfBusy} onclick={setupShelf}>
-				{shelfBusy ? 'Setting up…' : 'Set up Shelf'}
+			{#if failed?.key === 'github'}<span class="save-error" role="alert">{failed.message}</span>{/if}
+		</article>
+	{/if}
+
+	{#if has('ivory')}
+		<article class="card">
+			<h3>Shelf</h3>
+			<div class="grid">
+				<label>
+					repository
+					<input bind:value={ivory.shelfRepo} placeholder="owner/name" />
+				</label>
+				<label>
+					paper search
+					<select bind:value={ivory.paperProvider}>
+						<option value="openalex">OpenAlex (no key)</option>
+						<option value="semanticscholar">Semantic Scholar</option>
+						<option value="none">disabled</option>
+					</select>
+				</label>
+				<label>
+					OpenAlex contact email
+					<input type="email" bind:value={ivory.openAlexMailto} placeholder="optional" />
+					<small>Moves requests into OpenAlex's faster pool. Sent with every search.</small>
+				</label>
+				<label>
+					results per search
+					<input type="number" min="1" max="25" bind:value={ivory.paperMaxResults} />
+				</label>
+				<label>
+					searches per turn
+					<input type="number" min="1" max="40" bind:value={ivory.paperSearchesPerTurn} />
+				</label>
+				<label>
+					CORE API key
+					<input
+						type="password"
+						bind:value={ivory.coreApiKey}
+						placeholder={ivory.hasCoreApiKey ? '(saved — leave blank to keep)' : 'optional'}
+					/>
+					<small>
+						Full texts from university repositories. Free from
+						<a href="https://core.ac.uk/services/api" target="_blank" rel="noopener">core.ac.uk</a>.
+					</small>
+				</label>
+				<label>
+					Semantic Scholar API key
+					<input
+						type="password"
+						bind:value={ivory.semanticScholarApiKey}
+						placeholder={ivory.hasSemanticScholarApiKey ? '(saved — leave blank to keep)' : 'optional'}
+					/>
+					<small>
+						Open-access PDFs and a second search engine. Free from
+						<a href="https://www.semanticscholar.org/product/api" target="_blank" rel="noopener">semanticscholar.org</a>.
+					</small>
+				</label>
+			</div>
+			<p class="hint">
+				The GitHub repository Ivory Tower keeps its projects, notes and claims in, and whose Issues
+				are its board. It is read and written with the token in {ADMIN_PATHS.github}, which needs Contents and
+				Issues read/write on it. “Set up Shelf” writes any missing templates (and a sample project
+				while there are no projects) and creates the labels; it never overwrites a file.
+			</p>
+			<div class="row-buttons">
+				<button class="btn primary" onclick={() => save('ivory', ivory)}>
+					{saved === 'ivory' ? 'Saved ✓' : 'Save'}
+				</button>
+				{#if failed?.key === 'ivory'}<span class="save-error" role="alert">{failed.message}</span>{/if}
+				<button class="btn" disabled={shelfBusy} onclick={setupShelf}>
+					{shelfBusy ? 'Setting up…' : 'Set up Shelf'}
+				</button>
+				{#if shelfMsg}<span class="deploy-msg">{shelfMsg}</span>{/if}
+			</div>
+		</article>
+	{/if}
+
+	{#if has('deploy')}
+		<article class="card">
+			<h3>Deployment</h3>
+			<p class="hint">
+				Promote retags the current <code>:dev</code> image as <code>:stable</code> (keeping the
+				previous stable as <code>:stable-prev</code>) via the Promote workflow; prod follows
+				<code>:stable</code>. Rollback restores <code>:stable-prev</code>. Requires the GitHub
+				token in {ADMIN_PATHS.github}, with workflow scope.
+			</p>
+			<div class="row-buttons">
+				<button class="btn primary" disabled={deployBusy !== null} onclick={() => deploy('promote')}>
+					{deployBusy === 'promote' ? 'Dispatching…' : '🚀 Promote dev → prod'}
+				</button>
+				<button class="btn danger" disabled={deployBusy !== null} onclick={() => deploy('rollback')}>
+					{deployBusy === 'rollback' ? 'Dispatching…' : 'Rollback'}
+				</button>
+				{#if deployMsg}<span class="deploy-msg">{deployMsg}</span>{/if}
+			</div>
+		</article>
+	{/if}
+
+	{#if has('budget')}
+		<article class="card">
+			<h3>Budget cap</h3>
+			<div class="grid">
+				<label class="row">
+					<input type="checkbox" bind:checked={budget.enabled} /> enforce a spending cap
+				</label>
+				<label>
+					limit (USD)
+					<input type="number" min="0" step="1" bind:value={budget.limitUsd} />
+				</label>
+				<label>
+					per
+					<select bind:value={budget.period}>
+						<option value="day">day</option>
+						<option value="week">week (Mon–Sun)</option>
+						<option value="month">calendar month</option>
+					</select>
+				</label>
+			</div>
+			<p class="hint">
+				When the estimated spend for the current period reaches the limit, all new model calls are
+				refused until the period rolls over (or the cap is raised here).
+			</p>
+			<button class="btn primary" onclick={() => save('budget', budget)}>
+				{saved === 'budget' ? 'Saved ✓' : 'Save'}
 			</button>
-			{#if shelfMsg}<span class="deploy-msg">{shelfMsg}</span>{/if}
-		</div>
-	</article>
+			{#if failed?.key === 'budget'}<span class="save-error" role="alert">{failed.message}</span>{/if}
+		</article>
+	{/if}
 
-	<article class="card">
-		<h3>Deployment</h3>
-		<p class="hint">
-			Promote retags the current <code>:dev</code> image as <code>:stable</code> (keeping the
-			previous stable as <code>:stable-prev</code>) via the Promote workflow; prod follows
-			<code>:stable</code>. Rollback restores <code>:stable-prev</code>. Requires the GitHub
-			token above with workflow scope.
-		</p>
-		<div class="row-buttons">
-			<button class="btn primary" disabled={deployBusy !== null} onclick={() => deploy('promote')}>
-				{deployBusy === 'promote' ? 'Dispatching…' : '🚀 Promote dev → prod'}
+	{#if has('compaction')}
+		<article class="card">
+			<h3>Conversation compaction</h3>
+			<div class="grid">
+				<label>
+					trigger at share of context window
+					<input type="number" min="0.2" max="0.95" step="0.05" bind:value={compaction.ratio} />
+				</label>
+				<label>
+					keep recent messages verbatim
+					<input type="number" min="2" max="50" bind:value={compaction.keepRecent} />
+				</label>
+			</div>
+			<button class="btn primary" onclick={() => save('compaction', compaction)}>
+				{saved === 'compaction' ? 'Saved ✓' : 'Save'}
 			</button>
-			<button class="btn danger" disabled={deployBusy !== null} onclick={() => deploy('rollback')}>
-				{deployBusy === 'rollback' ? 'Dispatching…' : 'Rollback'}
+			{#if failed?.key === 'compaction'}<span class="save-error" role="alert">{failed.message}</span>{/if}
+		</article>
+	{/if}
+
+	{#if has('fetch')}
+		<article class="card">
+			<h3>Reading links</h3>
+			<div class="grid">
+				<label>
+					timeout (ms)
+					<input type="number" min="1000" step="1000" bind:value={fetchCfg.timeoutMs} />
+				</label>
+				<label>
+					characters per page
+					<input type="number" min="1000" step="1000" bind:value={fetchCfg.maxChars} />
+				</label>
+				<label>
+					pages per turn
+					<input type="number" min="1" max="20" bind:value={fetchCfg.maxFetchesPerTurn} />
+				</label>
+			</div>
+			<p class="hint">
+				Governs the <code>fetch_url</code> tool, which both the chat and coding agents use to read an
+				address you give them instead of searching for it. It is deliberately independent of the
+				composer's web-search toggle — turning search off shouldn't make the agent guess at a link
+				you handed it. To remove the capability entirely, disable <code>fetch_url</code> in
+				<strong>Tools</strong>. Re-reading an address already read in the same turn is free and
+				doesn't count against the per-turn limit.
+			</p>
+			<button class="btn primary" onclick={() => save('fetch', fetchCfg)}>
+				{saved === 'fetch' ? 'Saved ✓' : 'Save'}
 			</button>
-			{#if deployMsg}<span class="deploy-msg">{deployMsg}</span>{/if}
-		</div>
-	</article>
+			{#if failed?.key === 'fetch'}<span class="save-error" role="alert">{failed.message}</span>{/if}
+		</article>
+	{/if}
 
-	<article class="card">
-		<h3>Budget cap</h3>
-		<div class="grid">
-			<label class="row">
-				<input type="checkbox" bind:checked={budget.enabled} /> enforce a spending cap
-			</label>
-			<label>
-				limit (USD)
-				<input type="number" min="0" step="1" bind:value={budget.limitUsd} />
-			</label>
-			<label>
-				per
-				<select bind:value={budget.period}>
-					<option value="day">day</option>
-					<option value="week">week (Mon–Sun)</option>
-					<option value="month">calendar month</option>
-				</select>
-			</label>
-		</div>
-		<p class="hint">
-			When the estimated spend for the current period reaches the limit, all new model calls are
-			refused until the period rolls over (or the cap is raised here).
-		</p>
-		<button class="btn primary" onclick={() => save('budget', budget)}>
-			{saved === 'budget' ? 'Saved ✓' : 'Save'}
-		</button>
-		{#if failed?.key === 'budget'}<span class="save-error" role="alert">{failed.message}</span>{/if}
-	</article>
+	{#if has('retention')}
+		<article class="card">
+			<h3>History retention</h3>
+			<div class="grid">
+				{#each retentionFields as field (field)}
+					<label>
+						{RETENTION[field].label}
+						<input type="number" min="0" max="3650" bind:value={retention[field]} />
+						<small>{RETENTION[field].hint}</small>
+					</label>
+				{/each}
+			</div>
+			<p class="hint">Older rows are trimmed by the background scheduler; 0 keeps everything.</p>
+			<button class="btn primary" onclick={() => save('retention', retention)}>
+				{saved === 'retention' ? 'Saved ✓' : 'Save'}
+			</button>
+			{#if failed?.key === 'retention'}<span class="save-error" role="alert">{failed.message}</span>{/if}
+		</article>
+	{/if}
 
-	<article class="card">
-		<h3>Conversation compaction</h3>
-		<div class="grid">
-			<label>
-				trigger at share of context window
-				<input type="number" min="0.2" max="0.95" step="0.05" bind:value={compaction.ratio} />
-			</label>
-			<label>
-				keep recent messages verbatim
-				<input type="number" min="2" max="50" bind:value={compaction.keepRecent} />
-			</label>
-		</div>
-		<button class="btn primary" onclick={() => save('compaction', compaction)}>
-			{saved === 'compaction' ? 'Saved ✓' : 'Save'}
-		</button>
-		{#if failed?.key === 'compaction'}<span class="save-error" role="alert">{failed.message}</span>{/if}
-	</article>
-
-	<article class="card">
-		<h3>Reading links</h3>
-		<div class="grid">
-			<label>
-				timeout (ms)
-				<input type="number" min="1000" step="1000" bind:value={fetchCfg.timeoutMs} />
-			</label>
-			<label>
-				characters per page
-				<input type="number" min="1000" step="1000" bind:value={fetchCfg.maxChars} />
-			</label>
-			<label>
-				pages per turn
-				<input type="number" min="1" max="20" bind:value={fetchCfg.maxFetchesPerTurn} />
-			</label>
-		</div>
-		<p class="hint">
-			Governs the <code>fetch_url</code> tool, which both the chat and coding agents use to read an
-			address you give them instead of searching for it. It is deliberately independent of the
-			composer's web-search toggle — turning search off shouldn't make the agent guess at a link
-			you handed it. To remove the capability entirely, disable <code>fetch_url</code> in
-			<strong>Tools</strong>. Re-reading an address already read in the same turn is free and
-			doesn't count against the per-turn limit.
-		</p>
-		<button class="btn primary" onclick={() => save('fetch', fetchCfg)}>
-			{saved === 'fetch' ? 'Saved ✓' : 'Save'}
-		</button>
-		{#if failed?.key === 'fetch'}<span class="save-error" role="alert">{failed.message}</span>{/if}
-	</article>
-
-	<article class="card">
-		<h3>History retention</h3>
-		<div class="grid">
-			<label>
-				keep Activity events (days)
-				<input type="number" min="0" max="3650" bind:value={retention.eventDays} />
-			</label>
-			<label>
-				keep usage history (days)
-				<input type="number" min="0" max="3650" bind:value={retention.usageDays} />
-			</label>
-			<label>
-				keep UX ideas on dev (days)
-				<input type="number" min="0" max="3650" bind:value={retention.uxIdeaDays} />
-			</label>
-			<label>
-				keep Cortex change history (days)
-				<input type="number" min="0" max="3650" bind:value={retention.cortexChangeDays} />
-			</label>
-		</div>
-		<p class="hint">
-			Older rows are trimmed by the background scheduler; 0 keeps everything. Events are the
-			fastest-growing table — one row per model call, tool call and job. Keep usage history at
-			least as long as the longest window you look at in Usage (up to 365 days), since the budget
-			cap and those charts read the same rows. Cortex keeps a snapshot of what each change
-			replaced so it can be undone, which makes it the fastest-growing thing the lattice owns —
-			and unlike the UX backlog it prunes everywhere, because nothing in it suppresses a future
-			suggestion. The UX window applies to
-			<strong>non-production instances only</strong> — on prod the backlog's decision history is
-			kept permanently, because it is what stops the audit re-proposing what you already dismissed.
-		</p>
-		<button class="btn primary" onclick={() => save('retention', retention)}>
-			{saved === 'retention' ? 'Saved ✓' : 'Save'}
-		</button>
-		{#if failed?.key === 'retention'}<span class="save-error" role="alert">{failed.message}</span>{/if}
-	</article>
-
-	<article class="card">
-		<h3>Push</h3>
-		{#if pushNotice}<p class="notice">{pushNotice}</p>{/if}
-		<p class="hint">
-			Web Push needs one VAPID key pair for the whole instance. Generate it once here; each person
-			then turns notifications on per device in <strong>Settings → Notifications</strong>. The
-			private half is stored encrypted and never leaves the server. Only notifications that hold
-			work up are pushed — currently an agent waiting on an answer.
-		</p>
-		<div class="grid">
-			<label>
-				contact (VAPID subject)
-				<input
-					type="text"
-					placeholder="mailto:you@example.com"
-					bind:value={push.subject}
-					onblur={savePushSubject}
-				/>
-			</label>
-			<label>
-				status
-				<input
-					type="text"
-					readonly
-					value={push.configured
-						? `configured · ${push.devices} device(s)`
-						: 'not set up'}
-				/>
-			</label>
-		</div>
-		<button class="btn primary" onclick={generateKeys}>
-			{push.configured ? 'Regenerate keys' : 'Generate keys'}
-		</button>
-	</article>
+	{#if has('push')}
+		<article class="card">
+			<h3>Push</h3>
+			{#if pushNotice}<p class="notice">{pushNotice}</p>{/if}
+			<p class="hint">
+				Web Push needs one VAPID key pair for the whole instance. Generate it once here; each person
+				then turns notifications on per device in <strong>Settings → Notifications</strong>. The
+				private half is stored encrypted and never leaves the server. Only notifications that hold
+				work up are pushed — currently an agent waiting on an answer.
+			</p>
+			<div class="grid">
+				<label>
+					contact (VAPID subject)
+					<input
+						type="text"
+						placeholder="mailto:you@example.com"
+						bind:value={push.subject}
+						onblur={savePushSubject}
+					/>
+				</label>
+				<label>
+					status
+					<input
+						type="text"
+						readonly
+						value={push.configured
+							? `configured · ${push.devices} device(s)`
+							: 'not set up'}
+					/>
+				</label>
+			</div>
+			<button class="btn primary" onclick={generateKeys}>
+				{push.configured ? 'Regenerate keys' : 'Generate keys'}
+			</button>
+		</article>
+	{/if}
 </section>
 
 <style>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ADMIN_PATHS } from '$lib/admin-sections';
 	interface Project {
 		slug: string;
 		title: string;
@@ -52,12 +53,12 @@
 	{:else if !data.configured}
 		<p class="notice">
 			The Shelf is <code>{data.repo}</code>, but no GitHub token is configured. An admin can add one
-			in Admin → Settings → GitHub.
+			in {ADMIN_PATHS.github}.
 		</p>
 	{:else if !data.projectCount}
 		<p class="notice">
 			No projects on the Shelf yet. <a href="/ivory/new">Create one</a>, or run “Set up Shelf” in
-			Admin → Settings to write the templates and a sample project to <code>{data.repo}</code>.
+			{ADMIN_PATHS.shelf} to write the templates and a sample project to <code>{data.repo}</code>.
 		</p>
 	{:else}
 		{#each data.groups ?? [] as group (group.discipline)}

@@ -5,6 +5,7 @@ import { getBudgetStatus } from '../budget';
 import { getTaskConfig } from '../engine';
 import { listEnabledModels, reasoningFor, resolveModel } from '$lib/server/providers/registry';
 import { logUsage } from '../usage';
+import { taskPath } from '$lib/admin-sections';
 
 /** Long enough for a dense screenshot, short of a model that will not stop. */
 const VISION_TIMEOUT_MS = 90_000;
@@ -123,7 +124,7 @@ export function visionTools(chatId: string, userId: string): LoopTool[] {
 				const answer = res.text.trim();
 				if (!answer) {
 					throw new Error(
-						`${choice.model.displayName} returned nothing for ${image.name}. Try a narrower question, or point Admin → Tasks → vision at another model.`
+						`${choice.model.displayName} returned nothing for ${image.name}. Try a narrower question, or point ${taskPath('vision')} at another model.`
 					);
 				}
 				const body =
@@ -182,7 +183,7 @@ function visionModel() {
 		const choice = resolveModel(configured);
 		if (choice && !choice.model.supportsVision) {
 			throw new Error(
-				`${choice.model.displayName} cannot read images. Point Admin → Tasks → vision at a model badged “V” in Admin → Models.`
+				`${choice.model.displayName} cannot read images. Point ${taskPath('vision')} at a model badged “V” in Admin → Models.`
 			);
 		}
 		if (choice) return choice;
@@ -191,7 +192,7 @@ function visionModel() {
 	const choice = fallback ? resolveModel(fallback.id) : null;
 	if (!choice) {
 		throw new Error(
-			'No model here can read images. Enable one badged “V” in Admin → Models, then point Admin → Tasks → vision at it.'
+			`No model here can read images. Enable one badged “V” in Admin → Models, then point ${taskPath('vision')} at it.`
 		);
 	}
 	return choice;

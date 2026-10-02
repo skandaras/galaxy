@@ -6,6 +6,7 @@ import { shelfErrorMessage, shelfIndex } from '$lib/server/ivory/view';
 import { ivorySettings } from '$lib/server/settings';
 import { emitEvent } from '$lib/server/engine/events';
 import { createProject, ProjectError } from '$lib/server/ivory/create';
+import { ADMIN_PATHS } from '$lib/admin-sections';
 
 // The Shelf index: projects grouped by discipline, with open-task counts from the board.
 export const GET: RequestHandler = async ({ locals }) => {
@@ -23,7 +24,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 export const POST: RequestHandler = async ({ locals, request }) => {
 	const user = requireCoder(locals);
 	const client = shelfClient();
-	if (!client) error(409, 'No GitHub token is configured. Add one in Admin → Settings → GitHub.');
+	if (!client) error(409, `No GitHub token is configured. Add one in ${ADMIN_PATHS.github}.`);
 	const body = await request.json().catch(() => ({}));
 	try {
 		const result = await createProject(client, body);

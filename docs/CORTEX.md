@@ -62,7 +62,7 @@ A prompt change only reaches an install through `migrateTaskPrompts()`.
 `seedTaskConfigs()` writes a task's prompt once and never again, so editing a
 default reaches nobody who has ever booted the app — a rewritten prompt would
 ship as dead text. The migration replaces a stored prompt only while it still
-equals the default it supersedes, so one edited in Admin → Tasks is never
+equals the default it supersedes, so one edited in Admin is never
 touched.
 
 ---
@@ -463,7 +463,7 @@ is how a lattice fills with things that seemed worth noting on the day — and
 gained the bar instead: it would still matter in six months.
 
 Worth stating plainly, because it is the first thing anyone asks: **none of this
-is tunable from the prompt in Admin → Tasks.** The chat prompt says nothing about
+is tunable from the chat prompt in Admin → General tasks.** The chat prompt says nothing about
 Cortex. All of the pressure came from `cortexDigest()` and the two tool
 descriptions, which are code. `cortex.test.ts` now holds the replacement down.
 

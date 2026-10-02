@@ -5,12 +5,13 @@ import { emitEvent } from '$lib/server/engine/events';
 import { shelfClient } from '$lib/server/ivory/github';
 import { setupShelf } from '$lib/server/ivory/setup';
 import { shelfErrorMessage } from '$lib/server/ivory/view';
+import { ADMIN_PATHS } from '$lib/admin-sections';
 
 // Seed the Shelf's missing templates and create its labels. Idempotent.
 export const POST: RequestHandler = async ({ locals }) => {
 	const admin = requireAdmin(locals);
 	const client = shelfClient();
-	if (!client) error(409, 'No GitHub token is configured. Add one in Admin → Settings → GitHub.');
+	if (!client) error(409, `No GitHub token is configured. Add one in ${ADMIN_PATHS.github}.`);
 	try {
 		const result = await setupShelf(client);
 		emitEvent({

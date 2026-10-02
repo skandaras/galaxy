@@ -7,6 +7,7 @@ import { exploreMaxSteps } from '../limits';
 import { runAgentLoop, type LoopTool } from '../loop';
 import type { ToolDef } from '$lib/server/providers/types';
 import { readOnlyCodingTools, type CodingToolContext } from './tools';
+import { taskPath } from '$lib/admin-sections';
 
 /**
  * A sub-agent that reads the repository and answers one question.
@@ -32,7 +33,7 @@ import { readOnlyCodingTools, type CodingToolContext } from './tools';
  *   can be a cheap one.
  * - **Hard caps** on steps and on the size of what it hands back.
  * - **Its own usage rows**, under task 'subagent', so what it costs is visible
- *   in Admin → Usage from the first run rather than hidden inside coding.
+ *   in Admin → Spend from the first run rather than hidden inside coding.
  */
 
 /** Longest answer handed back to the parent. Past this it is not a summary. */
@@ -106,7 +107,7 @@ async function explore(ctx: ExploreContext, question: string, hint: string): Pro
 	const choice = pickModel(cfg?.primaryModelId ?? null, 'subagent');
 	if (!choice) throw new Error('No model configured for sub-agents');
 	if (!choice.model.supportsTools) {
-		throw new Error(`${choice.model.displayName} cannot call tools — pick another in Admin → Tasks`);
+		throw new Error(`${choice.model.displayName} cannot call tools — pick another in ${taskPath('subagent')}`);
 	}
 
 	// A chat id of its own so the sub-agent never appears to be the run holding
