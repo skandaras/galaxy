@@ -19,6 +19,7 @@ import {
 	type S2Paper,
 	type ScholarlyConfig
 } from '$lib/server/ivory/scholarly';
+import { taskPath } from '$lib/admin-sections';
 
 /**
  * The `research` toolset: scholarly search and the Shelf.
@@ -623,7 +624,7 @@ export function shelfWriteTool(client: ShelfClient, scope: ShelfScope, ctx: Shel
 						report?.({ refused: 'same-family', author: previous!.authoredBy, reviewer: model });
 						throw new Error(
 							`Refused: ${rel} was written by ${previous!.authoredBy}, and ${model} is from the same model family (${author}). ` +
-								'A claim must be reviewed by a model from a different family. Pick another model for ivory-redteam in Admin → Tasks.'
+								`A claim must be reviewed by a model from a different family. Pick another model for ivory-redteam in ${taskPath('ivory-redteam')}.`
 						);
 					}
 					stamped = setFrontmatterFields(content, {

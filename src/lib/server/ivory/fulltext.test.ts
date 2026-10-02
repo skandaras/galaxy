@@ -1,3 +1,4 @@
+import { ADMIN_PATHS } from '$lib/admin-sections';
 import { describe, expect, it } from 'vitest';
 import { PageFetchError } from '$lib/server/engine/research';
 import { readFullText, unusable } from './fulltext';
@@ -105,8 +106,8 @@ describe('readFullText', () => {
 			ok: false,
 			attempts: [
 				{ source: 'Europe PMC', outcome: 'not in its open-access full-text set' },
-				{ source: 'CORE', outcome: 'skipped, no API key (Admin → Settings → Shelf)' },
-				{ source: 'Semantic Scholar', outcome: 'skipped, no API key (Admin → Settings → Shelf)' },
+				{ source: 'CORE', outcome: `skipped, no API key (${ADMIN_PATHS.shelf})` },
+				{ source: 'Semantic Scholar', outcome: `skipped, no API key (${ADMIN_PATHS.shelf})` },
 				{ source: 'Publisher', outcome: 'refused (HTTP 403)' }
 			]
 		});

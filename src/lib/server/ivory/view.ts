@@ -9,6 +9,7 @@ import {
 } from './board';
 import { getProject, groupByDiscipline, listProjects, repoInfo, type ShelfProject } from './shelf';
 import { readStatus, type ProjectStatus } from './status';
+import { ADMIN_PATHS } from '$lib/admin-sections';
 
 /** What the Shelf pages are served. Assembled here so the routes stay thin. */
 
@@ -89,7 +90,7 @@ export async function shelfProjectView(client: ShelfClient, slug: string) {
 export function shelfErrorMessage(err: unknown, repo: string): string {
 	if (err instanceof GithubError) {
 		if (err.status === 404) return `The Shelf repository ${repo} was not found, or the GitHub token cannot see it.`;
-		if (err.status === 401) return 'GitHub refused the stored token. Replace it in Admin → Settings → GitHub.';
+		if (err.status === 401) return `GitHub refused the stored token. Replace it in ${ADMIN_PATHS.github}.`;
 		if (err.status === 403) return `GitHub refused the request (rate limit or token scope): ${err.message}`;
 		return err.message;
 	}

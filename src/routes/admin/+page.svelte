@@ -11,58 +11,68 @@
 	import Cortex from '$lib/components/admin/Cortex.svelte';
 	import Settings from '$lib/components/admin/Settings.svelte';
 	import Usage from '$lib/components/admin/Usage.svelte';
+	import AdminNav from '$lib/components/admin/AdminNav.svelte';
 	import { page } from '$app/state';
 	import { tabFromUrl } from '$lib/url-tab';
-	import Tabs from '$lib/components/Tabs.svelte';
+	import { ADMIN_SECTIONS, ADMIN_SECTION_LABELS } from '$lib/admin-sections';
 
-	const tabs = [
-		'Users',
-		'Providers',
-		'Models',
-		'Tasks',
-		'Tools',
-		'Skills',
-		'Memory',
-		'Boards',
-		'Cortex',
-		'UX',
-		'Settings',
-		'Usage'
-	] as const;
-	// In the URL rather than in $state, so Back steps through tabs, a tab can
-	// be linked to, and the phone's More sheet can point at one.
-	const active = $derived(tabFromUrl(page.url.searchParams, tabs));
+	// An unknown section, including the old tab names, lands on the first.
+	const active = $derived(tabFromUrl(page.url.searchParams, ADMIN_SECTION_LABELS));
+	const tasks = $derived(ADMIN_SECTIONS.find((s) => s.label === active)?.tasks ?? []);
 	let modelsRefreshKey = $state(0);
 </script>
 
 <div class="admin">
-	<Tabs {tabs} label="Admin" />
+	<AdminNav {active} />
 
+	<!-- Each feature's section holds everything that configures it: its own
+	     settings, its task prompts and models, and how long its history is kept.
+	     These were spread across Tasks, Tools, Settings and the feature's own tab. -->
 	<div class="body">
+		<h1>{active}</h1>
 		{#if active === 'Users'}
 			<Users />
 		{:else if active === 'Providers'}
 			<Providers onchanged={() => modelsRefreshKey++} />
 		{:else if active === 'Models'}
 			<Models refreshKey={modelsRefreshKey} />
-		{:else if active === 'Tasks'}
-			<Tasks />
 		{:else if active === 'Tools'}
 			<Tools />
-		{:else if active === 'Skills'}
-			<Skills />
-		{:else if active === 'Memory'}
+		{:else if active === 'General tasks'}
+			<Tasks only={tasks} intro />
+		{:else if active === 'Research'}
+			<Settings cards={['websearch', 'research', 'fetch']} />
+			<Tasks only={tasks} />
+		{:else if active === 'Coding'}
+			<Settings cards={['coding', 'github']} />
+			<Tasks only={tasks} />
+		{:else if active === 'Memory and skills'}
 			<Memory />
-		{:else if active === 'Cortex'}
-			<Cortex />
+			<Skills />
+			<Tasks only={tasks} />
 		{:else if active === 'Boards'}
 			<Boards />
-		{:else if active === 'UX'}
+			<Tasks only={tasks} />
+		{:else if active === 'Cortex'}
+			<Cortex />
+			<Tasks only={tasks} />
+			<Settings cards={['retention']} retentionFields={['cortexChangeDays']} />
+		{:else if active === 'Ivory Tower'}
+			<Settings cards={['ivory']} />
+			<Tasks only={tasks} />
+		{:else if active === 'Alignment'}
+			<Tasks only={tasks} />
+		{:else if active === 'UX audit'}
 			<Ux />
-		{:else if active === 'Settings'}
-			<Settings />
-		{:else}
+			<Tasks only={tasks} />
+			<Settings cards={['retention']} retentionFields={['uxIdeaDays']} />
+		{:else if active === 'Spend'}
+			<Settings cards={['budget', 'retention']} retentionFields={['usageDays']} />
 			<Usage />
+		{:else if active === 'Conversations'}
+			<Settings cards={['compaction', 'style']} />
+		{:else}
+			<Settings cards={['deploy', 'push', 'retention']} retentionFields={['eventDays']} />
 		{/if}
 	</div>
 </div>
@@ -71,24 +81,30 @@
 	.admin {
 		flex: 1;
 		display: flex;
-		flex-direction: column;
+		gap: 1.5rem;
 		min-width: 0;
 		padding: 1rem 1.25rem;
 		overflow-y: auto;
 	}
 	.body {
+		flex: 1;
+		min-width: 0;
 		max-width: 60rem;
+	}
+	h1 {
+		margin: 0 0 1rem;
+		font-size: var(--text-lg);
+		letter-spacing: 0.3em;
+		color: var(--heading);
 	}
 
 	@media (max-width: 720px) {
 		.admin {
+			flex-direction: column;
+			gap: 0;
 			padding: 0.75rem 0.85rem;
 		}
-		.admin :global(.tabs button) {
-			padding: 0.45rem 0.55rem;
-			font-size: var(--text-base);
-		}
-		/* Admin tab bodies are rendered by child components, so their tables
+		/* Admin section bodies are rendered by child components, so their tables
 		   need reaching into: let each section scroll horizontally rather than
 		   crushing columns or blowing out the page width. */
 		.body :global(section) {

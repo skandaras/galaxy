@@ -7,7 +7,7 @@ import { getBudgetStatus } from '$lib/server/engine/budget';
  * The spend the cap actually measures, for the whole instance.
  *
  * Deliberately not admin-only: the cap blocks everyone's turns, so everyone
- * needs to see how close it is. Admin → Usage stays admin-only — it exposes
+ * needs to see how close it is. the Usage card in Admin → Spend stays admin-only — it exposes
  * per-user and per-model breakdowns, which this does not.
  */
 export const GET: RequestHandler = ({ locals }) => {

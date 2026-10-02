@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { taskPath } from '$lib/admin-sections';
 	import { ask } from '$lib/confirm.svelte';
 	import { onMount } from 'svelte';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
@@ -920,7 +921,7 @@
 							{#if !lastRun.ran}
 								<span class="error">Did not reach the model: {lastRun.reason}</span>
 								{#if lastRun.reason === 'no model configured'}
-									<span class="hint">Set one for the cortex-groom task in Admin → Tasks.</span>
+									<span class="hint">Set one for the cortex-groom task in {taskPath('cortex-groom')}.</span>
 								{/if}
 							{:else if lastRun.survey && !lastRun.survey.candidates}
 								<!-- Nothing to say about a reply that was a correct, empty

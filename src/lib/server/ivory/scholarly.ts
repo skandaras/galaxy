@@ -8,6 +8,8 @@
  * *from* their answers (a PDF link, a repository copy) do, in fulltext.ts.
  */
 
+import { ADMIN_PATHS } from '$lib/admin-sections';
+
 export interface ScholarlyConfig {
 	/** Contact address for the polite pools (OpenAlex, Crossref). Optional. */
 	mailto: string;
@@ -223,7 +225,7 @@ export async function europePmcFullText(pmcid: string, cfg: ScholarlyConfig): Pr
 // CORE
 
 export async function coreFullText(doi: string, cfg: ScholarlyConfig): Promise<Got<string>> {
-	if (!cfg.coreKey) return { ok: false, reason: 'skipped, no API key (Admin → Settings → Shelf)' };
+	if (!cfg.coreKey) return { ok: false, reason: `skipped, no API key (${ADMIN_PATHS.shelf})` };
 	const url = new URL('https://api.core.ac.uk/v3/search/works');
 	url.searchParams.set('q', `doi:"${doi}"`);
 	url.searchParams.set('limit', '5');
@@ -258,7 +260,7 @@ function s2Headers(cfg: ScholarlyConfig): Record<string, string> {
 }
 
 export async function semanticScholarPaper(doi: string, cfg: ScholarlyConfig): Promise<Got<S2Paper>> {
-	if (!cfg.s2Key) return { ok: false, reason: 'skipped, no API key (Admin → Settings → Shelf)' };
+	if (!cfg.s2Key) return { ok: false, reason: `skipped, no API key (${ADMIN_PATHS.shelf})` };
 	const url = new URL(`${S2}/paper/DOI:${doiPath(doi)}`);
 	url.searchParams.set('fields', 'openAccessPdf,externalIds,authors');
 	return getJson<S2Paper>(cfg, url, s2Headers(cfg));

@@ -290,9 +290,15 @@ const uiSources = {
 	...import.meta.glob('/src/lib/components/**/*.svelte', { query: '?raw', import: 'default' })
 } as Record<string, () => Promise<string>>;
 
-/** Pages before components, and the two surfaces in daily use before either. */
+/**
+ * Pages before components, and the two surfaces in daily use before either.
+ * Their shared composer and model picker count as part of them: once the
+ * composer moved out of the pages, ranking it with the other components left
+ * the audit reading Chat and Code with no composer in sight.
+ */
 function uiPriority(path: string): number {
 	if (path.includes('/routes/chat/') || path.includes('/routes/code/')) return 0;
+	if (path.includes('/components/thread/')) return 0;
 	if (path.includes('/routes/+layout')) return 1;
 	if (path.includes('/routes/')) return 2;
 	return 3;

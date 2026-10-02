@@ -107,7 +107,7 @@
 		<p class="hint">
 			168 hours is weekly. The audit reads aggregated usage telemetry and the interface source —
 			never the content of anyone's chats or coding sessions. Choose its model and edit its brief
-			under <strong>Tasks → ux-audit</strong>; a large-context reasoning model suits it best,
+			in the ux-audit card below; a large-context reasoning model suits it best,
 			since a run sends most of the UI in one call.
 		</p>
 	</article>

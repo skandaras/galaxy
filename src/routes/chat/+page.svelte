@@ -1,9 +1,10 @@
 <script lang="ts">
+	import { taskPath } from '$lib/admin-sections';
 	import { onDestroy, onMount } from 'svelte';
 	import { ask } from '$lib/confirm.svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
-	import { ATTACHMENT_ACCEPT, attachmentIcon, screenFiles } from '$lib/attachment-types';
-	import { carriesFiles, filesFrom, nameArrival } from '$lib/composer-files';
+	import { attachmentIcon } from '$lib/attachment-types';
+	import { uploadStaged, type AttachmentRef } from '$lib/composer-upload';
 	import { clearDraft, draftKey, getDraft, renameDraft, setDraft } from '$lib/composer-drafts.svelte';
 	import {
 		beginAttach,
@@ -13,7 +14,6 @@
 		planRecovery
 	} from '$lib/stream-recovery';
 	import { createAutoscroll } from '$lib/autoscroll.svelte';
-	import { autoresize } from '$lib/autoresize';
 	import { hasFinePointer } from '$lib/pointer';
 	import { createResizablePane } from '$lib/resizable-pane.svelte';
 	import { swipeToClose } from '$lib/list-sheet.svelte';
@@ -24,6 +24,8 @@
 	import ResearchEffort from '$lib/components/ResearchEffort.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
 	import ListPill from '$lib/components/ListPill.svelte';
+	import Composer from '$lib/components/thread/Composer.svelte';
+	import ModelSelect from '$lib/components/thread/ModelSelect.svelte';
 	import type { ResearchEffort as Effort } from '$lib/research-effort';
 	import {
 		applyChunk,
@@ -43,13 +45,6 @@
 		titleCustom?: boolean;
 		archivedAt?: number | null;
 		updatedAt: number;
-	}
-	interface AttachmentRef {
-		id: string;
-		name: string;
-		mime: string;
-		kind?: 'image' | 'document';
-		textChars?: number;
 	}
 	interface ResearchBudget {
 		rounds: number;
@@ -96,7 +91,7 @@
 	/**
 	 * Whether what is in the composer is going somewhere hidden — the open chat's
 	 * own flag, or the choice made before there is a chat to hang it on. Read by
-	 * the placeholder, the chip and the draft store, which each used to work it
+	 * the placeholder, the header and the draft store, which each used to work it
 	 * out for themselves.
 	 */
 	const isHidden = $derived(currentChat?.hidden ?? pendingHidden);
@@ -116,6 +111,8 @@
 	let researchEffort = $state<Effort>('balanced');
 	/** What each level resolves to, from the server. Null until loaded. */
 	let researchLevels = $state<Record<Effort, ResearchBudget> | null>(null);
+	/** The model a research run uses, which the chat's own picker does not choose. */
+	let researchModelName = $state<string | null>(null);
 	let pendingFiles = $state<File[]>([]);
 	/**
 	 * Attachments already uploaded for the pending message. Kept so a failed
@@ -123,7 +120,6 @@
 	 * uploading — and orphaning — the same files again.
 	 */
 	let uploadedRefs = $state<AttachmentRef[]>([]);
-	let fileInput: HTMLInputElement | null = $state(null);
 
 	const scroll = createAutoscroll();
 	let threadEl = $state<HTMLElement | null>(null);
@@ -269,11 +265,15 @@
 		defaultModelId = m.defaultModelId ?? models[0]?.id ?? '';
 		selectedModelId = defaultModelId;
 
-		// Only feeds the numbers in the effort popover, so a failure here must not
-		// hold up the page — the control degrades to bare labels.
+		// Only feeds the numbers in the effort popover and the research model's
+		// name in the header, so a failure here must not hold up the page — the
+		// control degrades to bare labels.
 		void fetch('/api/research/effort')
 			.then((res) => (res.ok ? res.json() : null))
-			.then((data) => (researchLevels = data?.levels ?? null))
+			.then((data) => {
+				researchLevels = data?.levels ?? null;
+				researchModelName = data?.modelName ?? null;
+			})
 			.catch(() => (researchLevels = null));
 
 		// ?chat=<id> is how the board hands work over: it starts the turn, then
@@ -330,6 +330,9 @@
 	function resetComposerIntent() {
 		deepResearch = false;
 		researchEffort = 'balanced';
+		// Notices are about the conversation they were raised in. They used to
+		// outlive it, so "Deep research finished" sat over the next chat opened.
+		notices = [];
 	}
 
 	/**
@@ -400,6 +403,7 @@
 		// job keeps going server-side and is re-read on the way back; closing the
 		// socket without this left `streaming` stuck true and the composer dead.
 		if (streaming) finalizeStream(false);
+		resetComposerIntent();
 		currentChat = null;
 		messages = [];
 		pendingHidden = hidden;
@@ -470,24 +474,13 @@
 
 		// Files already uploaded on a previous attempt are reused rather than
 		// sent again, so a retry doesn't leave duplicates behind.
-		const failed: File[] = [];
-		for (const file of pendingFiles) {
-			const form = new FormData();
-			form.append('file', file);
-			const res = await fetch(`/api/chats/${chat.id}/attachments`, {
-				method: 'POST',
-				body: form
-			});
-			if (res.ok) {
-				uploadedRefs = [...uploadedRefs, await res.json()];
-			} else {
-				const err = await res.json().catch(() => ({ message: res.statusText }));
-				errorBanner = `${file.name}: ${err.message ?? 'upload failed'}`;
-				failed.push(file);
-			}
+		const up = await uploadStaged(`/api/chats/${chat.id}/attachments`, pendingFiles, uploadedRefs);
+		uploadedRefs = up.uploaded;
+		pendingFiles = up.failed;
+		if (up.error) {
+			errorBanner = up.error;
+			return;
 		}
-		pendingFiles = failed;
-		if (failed.length) return;
 
 		const attachments = uploadedRefs;
 		const res = await fetch(`/api/chats/${chat.id}/messages`, {
@@ -666,7 +659,7 @@
 					researchEffort = 'balanced';
 					notices = [
 						...notices,
-						'Deep research finished — the toggle is off. Turn it back on for another research run.'
+						'Deep research finished. Back in Chat mode; switch to Research for another run.'
 					];
 				}
 				finalizeStream();
@@ -675,9 +668,9 @@
 			}
 			else if (chunk.type === 'error') {
 				errorBanner = chunk.message;
-				// A failed research run leaves the toggle on — the work did not
+				// A failed research run stays in Research mode — the work did not
 				// happen, so retrying should not need it switched back — but the
-				// flag must not survive to clear the toggle after some later run.
+				// flag must not survive to leave Research mode after some later run.
 				researchRunning = false;
 				finalizeStream(false);
 			}
@@ -1072,9 +1065,11 @@
 	 * This was a button on every row of the list, which meant it could act on a
 	 * conversation you were not looking at, and its only feedback near the box
 	 * you were typing in was a placeholder — invisible the moment there was text
-	 * to hide it. The single control is now the chip under the composer, so the
-	 * subject is always the open conversation, and there are two cases because a
-	 * chat that does not exist yet has nothing to PATCH.
+	 * to hide it. It then moved to a chip under the composer, which made hiding a
+	 * stored chat, with its file moves, one unconfirmed tap. It now lives in the
+	 * thread header: Keep this chat is immediate, Make hidden asks first (see
+	 * makeHidden). The subject is always the open conversation, and there are two
+	 * cases because a chat that does not exist yet has nothing to PATCH.
 	 */
 	async function toggleHidden() {
 		if (!currentChat) {
@@ -1120,6 +1115,33 @@
 		await refreshChats();
 	}
 
+	/**
+	 * Hiding a stored chat is not a toggle in the way it looks: its attachments
+	 * are moved into memory and any whose file is already missing are dropped.
+	 * It sat one tap away as a chip under the box, with nothing to say so.
+	 */
+	async function makeHidden() {
+		if (
+			!(await ask({
+				title: 'Make this chat hidden?',
+				body: 'It stops being stored and memory never sees it. Its files move into memory, and any already missing are dropped.',
+				confirm: 'Make hidden'
+			}))
+		)
+			return;
+		await toggleHidden();
+	}
+
+	let headerRenaming = $state(false);
+
+	/** The header's rename, through the same save the list's inline rename uses. */
+	function commitHeaderRename() {
+		if (!headerRenaming || !currentChat) return;
+		headerRenaming = false;
+		renamingId = currentChat.id;
+		void commitRename();
+	}
+
 	async function removeChat(chat: ChatMeta, ev?: Event) {
 		ev?.stopPropagation();
 		// The row actions are always visible on touch (no hover to reveal them),
@@ -1138,7 +1160,7 @@
 		clearDraft(draftKey('chat', chat.id));
 		if (currentChat?.id === chat.id) {
 			currentChat = null;
-			// Or the chip stays lit over the blank composer and the next chat is
+			// Or the header still says Hidden over the blank composer and the next chat is
 			// created hidden by a choice made for one that no longer exists.
 			pendingHidden = false;
 			messages = [];
@@ -1151,82 +1173,10 @@
 	}
 
 	/** The one way in for the picker, a paste and a drop alike. */
-	function acceptFiles(files: File[]) {
-		const { accepted, rejected } = screenFiles(files);
-		if (accepted.length) pendingFiles = [...pendingFiles, ...accepted];
-		errorBanner = rejected.length ? rejected.join(' ') : null;
+	/** Files the composer refused by type or size, said in the page's banner. */
+	function rejectFiles(reasons: string | null) {
+		errorBanner = reasons;
 	}
-
-	function onFilesPicked(ev: Event) {
-		const target = ev.target as HTMLInputElement;
-		acceptFiles([...(target.files ?? [])]);
-		target.value = '';
-	}
-
-	/**
-	 * A screenshot in the clipboard, attached as though it had been picked.
-	 *
-	 * The paste *event* rather than navigator.clipboard.read(): the async
-	 * Clipboard API only exists in a secure context and Galaxy is routinely
-	 * served over plain HTTP on a LAN, which is the same reason copyText keeps
-	 * its execCommand fallback.
-	 */
-	function onPaste(ev: ClipboardEvent) {
-		const files = filesFrom(ev.clipboardData).map((f) => nameArrival(f, new Date()));
-		// Only a paste actually carrying a file is ours. Calling preventDefault
-		// before this check swallowed every ordinary paste of text into the box.
-		if (!files.length) return;
-		ev.preventDefault();
-		acceptFiles(files);
-	}
-
-	/**
-	 * Depth, not a boolean: dragleave fires every time the pointer crosses into
-	 * a child, so the highlight flickered off over the send button and over each
-	 * attachment chip on the way past.
-	 */
-	let dragDepth = $state(0);
-
-	function onDragEnter(ev: DragEvent) {
-		if (!carriesFiles(ev.dataTransfer)) return;
-		dragDepth++;
-	}
-
-	function onDragOver(ev: DragEvent) {
-		if (!carriesFiles(ev.dataTransfer)) return;
-		// Without this the browser takes the drop itself and navigates away from
-		// the conversation to display the file.
-		ev.preventDefault();
-		if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy';
-	}
-
-	function onDragLeave(ev: DragEvent) {
-		if (!carriesFiles(ev.dataTransfer)) return;
-		dragDepth = Math.max(0, dragDepth - 1);
-	}
-
-	function onDrop(ev: DragEvent) {
-		dragDepth = 0;
-		const files = filesFrom(ev.dataTransfer).map((f) => nameArrival(f, new Date()));
-		if (!files.length) return;
-		ev.preventDefault();
-		acceptFiles(files);
-	}
-
-	/**
-	 * Enter sends on a keyboard, and inserts a newline on a touch screen — where
-	 * there is no Shift-Enter, so Enter-to-send left no way to write a second
-	 * line at all. On touch the send button is the only way to send, which is
-	 * what every phone messaging app does.
-	 */
-	function onKeydown(ev: KeyboardEvent) {
-		// Mid-composition Enter commits the IME candidate; it must never send.
-		if (ev.key !== 'Enter' || ev.isComposing) return;
-		if (ev.shiftKey || !hasFinePointer()) return;
-		ev.preventDefault();
-		void send();
-	}
-
 </script>
 
 <div class="chat-shell">
@@ -1310,9 +1260,65 @@
 	<PaneResizer pane={listPane} label="Resize the chat list" />
 
 	<section class="thread-area">
-		<div class="page-actions">
-			<ListPill bind:open={listOpen} label="Chats" count={chats.length} />
-		</div>
+		<!-- Chat had no header at all: the open chat's name was only in the list,
+		     so on a phone nothing said which conversation you were in. The model
+		     picker and the Hidden control move up here from the composer, which
+		     had seven controls around one box. -->
+		<header class="thread-head">
+			<div class="page-actions">
+				<ListPill bind:open={listOpen} label="Chats" count={chats.length} />
+			</div>
+			{#if headerRenaming && currentChat}
+				<!-- svelte-ignore a11y_autofocus -->
+				<input
+					class="head-rename"
+					aria-label="Chat name"
+					maxlength="120"
+					autofocus
+					bind:value={renameText}
+					onblur={commitHeaderRename}
+					onkeydown={(e) => {
+						if (e.key === 'Enter') commitHeaderRename();
+						if (e.key === 'Escape') headerRenaming = false;
+					}}
+				/>
+			{:else}
+				<h1 class="head-title" title={currentChat?.title}>
+					{currentChat?.title ?? (isHidden ? 'New hidden chat' : 'New chat')}
+				</h1>
+				{#if currentChat}
+					<button
+						class="head-icon"
+						title="Rename"
+						aria-label="Rename this chat"
+						onclick={() => {
+							renameText = currentChat?.title ?? '';
+							headerRenaming = true;
+						}}>✎</button
+					>
+				{/if}
+			{/if}
+			{#if isHidden}
+				<span class="hidden-badge" title="Nothing here is stored, and memory never sees it">
+					◌ Hidden
+				</span>
+				<button class="btn ghost keep" onclick={() => void toggleHidden()}>Keep this chat</button>
+			{:else if currentChat}
+				<button class="btn ghost" onclick={() => void makeHidden()}>Make hidden</button>
+			{/if}
+			<span class="head-model">
+				{#if deepResearch}
+					<span
+						class="research-model"
+						title={`Set for the deep-research task in ${taskPath('deep-research')}`}
+					>
+						Research uses {researchModelName ?? 'the research model'}
+					</span>
+				{:else}
+					<ModelSelect {models} bind:value={selectedModelId} />
+				{/if}
+			</span>
+		</header>
 		{#if errorBanner}
 			<div class="banner error" role="alert">
 				{errorBanner}
@@ -1441,159 +1447,67 @@
 			{/if}
 		</div>
 
-		<!-- The whole composer is the drop target, not just the box: a
-		     screenshot dragged at a two-line textarea mostly misses it. The
-		     paperclip stays the route that needs no pointer at all. -->
-		<footer
-			class="composer"
-			class:dragging={dragDepth > 0}
-			ondragenter={onDragEnter}
-			ondragover={onDragOver}
-			ondragleave={onDragLeave}
-			ondrop={onDrop}
+		<Composer
+			bind:text={input}
+			bind:files={pendingFiles}
+			bind:uploaded={uploadedRefs}
+			placeholder={isHidden ? 'Hidden chat: nothing here is stored' : 'Message Galaxy…'}
+			{canSend}
+			{streaming}
+			{stopping}
+			{visionWarning}
+			onsend={() => void send()}
+			onstop={() => void stopRun()}
+			oninput={stashDraft}
+			onreject={rejectFiles}
 		>
-			{#if !scroll.pinned}
-				<button class="jump" onclick={() => scroll.toBottom('smooth')}>↓ Jump to latest</button>
-			{/if}
-			{#if question && askMinimised}
-				<AskBar prompt={question.prompt} onopen={() => (askMinimised = false)} />
-			{/if}
-			{#if pendingFiles.length || uploadedRefs.length}
-				<div class="pending-files">
-					{#each uploadedRefs as ref (ref.id)}
-						<span class="att-chip uploaded" title="Uploaded — will be sent with your message">
-							{attachmentIcon(ref.kind)}
-							{ref.name}
-							<button
-								class="icon"
-								aria-label="Remove {ref.name}"
-								onclick={() => (uploadedRefs = uploadedRefs.filter((r) => r.id !== ref.id))}
-								>×</button
-							>
-						</span>
-					{/each}
-					{#each pendingFiles as file, i (file.name + i)}
-						<span class="att-chip">
-							{file.type.startsWith('image/') ? '🖼' : '📄'}
-							{file.name}
-							<button
-								class="icon"
-								aria-label="Remove {file.name}"
-								onclick={() => (pendingFiles = pendingFiles.filter((_, j) => j !== i))}>×</button
-							>
-						</span>
-					{/each}
-				</div>
-			{/if}
-			{#if visionWarning}
-				<div class="composer-hint">{visionWarning}</div>
-			{/if}
-			<div class="composer-row">
-				<textarea
-					rows="2"
-					placeholder={isHidden ? 'Hidden chat — nothing here is stored' : 'Message Galaxy…'}
-					bind:value={input}
-					use:autoresize={input}
-					oninput={stashDraft}
-					onkeydown={onKeydown}
-					onpaste={onPaste}
-				></textarea>
-				{#if streaming}
-					<button
-						class="btn stop"
-						onclick={stopRun}
-						disabled={stopping}
-						title="Stop generating"
-						aria-label="Stop generating">{stopping ? '…' : '■'}</button
-					>
-				{:else}
-					<!-- The reason is in the label as well as the title: a title needs a
-					     hover, and a phone has none — so the only explanation of why the
-					     arrow was greyed was one a thumb could never reach. -->
-					<button
-						class="btn send"
-						onclick={() => send()}
-						disabled={!canSend}
-						title={canSend ? 'Send message' : 'Type a message or attach a file first'}
-						aria-label={canSend ? 'Send message' : 'Send message — type something first'}
-						>➤</button
-					>
+			{#snippet top()}
+				{#if !scroll.pinned}
+					<button class="jump" onclick={() => scroll.toBottom('smooth')}>↓ Jump to latest</button>
 				{/if}
-			</div>
-			<div class="composer-opts">
-				<input
-					type="file"
-					accept={ATTACHMENT_ACCEPT}
-					multiple
-					hidden
-					bind:this={fileInput}
-					onchange={onFilesPicked}
-				/>
-				<button
-					class="chip"
-					title="Attach images, PDFs, Word docs, markdown or text files"
-					aria-label="Attach files"
-					onclick={() => fileInput?.click()}>📎</button
-				>
-				<button class="chip" class:on={webSearch} onclick={() => (webSearch = !webSearch)}>
-					Web search
-				</button>
-				<button
-					class="chip"
-					class:on={deepResearch}
-					title="Multi-step research with sources and citations"
-					onclick={() => (deepResearch = !deepResearch)}
-				>
-					🔭 Deep research
-				</button>
+				{#if question && askMinimised}
+					<AskBar prompt={question.prompt} onopen={() => (askMinimised = false)} />
+				{/if}
+			{/snippet}
+			{#snippet options()}
+				<!-- One switch instead of two toggles that interacted: Deep research
+				     greyed out the model picker and made Web search meaningless, and
+				     neither said so. Each mode now shows only the control that
+				     applies to it. -->
+				<div class="mode" role="group" aria-label="Mode">
+					<button
+						class="chip"
+						class:on={!deepResearch}
+						aria-pressed={!deepResearch}
+						onclick={() => (deepResearch = false)}>Chat</button
+					>
+					<button
+						class="chip"
+						class:on={deepResearch}
+						aria-pressed={deepResearch}
+						title="Multi-step research with sources and citations"
+						onclick={() => (deepResearch = true)}>🔭 Research</button
+					>
+				</div>
 				{#if deepResearch}
 					<ResearchEffort
 						effort={researchEffort}
 						levels={researchLevels}
 						onchange={(next) => (researchEffort = next)}
 					/>
+				{:else}
+					<button
+						class="chip"
+						class:on={webSearch}
+						aria-pressed={webSearch}
+						title="Let the model search the web for this reply"
+						onclick={() => (webSearch = !webSearch)}
+					>
+						Web search
+					</button>
 				{/if}
-				<!-- The only Hidden control there is, and beside the box rather than in
-				     the list on purpose: the placeholder that used to be the sole
-				     feedback stops being drawn the moment there is text to hide it, so
-				     turning Hidden on with a half-written message looked like nothing
-				     had happened. Lit exactly like Web search above it.
-
-				     Deliberately not disabled while a reply runs. It was, and
-				     .chip:disabled fades to 45% — so the one indicator that a
-				     conversation is hidden went grey for the whole of every reply,
-				     which is when you are most likely to be looking at it. The server
-				     refuses the flip with a 409 that names the run and offers to stop
-				     it; that is better feedback than a grey button whose only
-				     explanation is a title a phone cannot show. -->
-				<button
-					class="chip"
-					class:on={isHidden}
-					aria-pressed={isHidden}
-					title={isHidden
-						? 'Hidden: nothing here is stored, and memory never sees it. Click to keep this chat.'
-						: 'Make this chat hidden — nothing stored, invisible to memory'}
-					onclick={() => toggleHidden()}
-				>
-					◌ Hidden
-				</button>
-				<select
-					class="model-select"
-					bind:value={selectedModelId}
-					disabled={deepResearch}
-					title={deepResearch
-						? 'Deep research uses the model configured for it in Admin → Tasks'
-						: 'Model for this conversation'}
-				>
-					{#if !models.length}
-						<option value="">No models — add a provider in Admin</option>
-					{/if}
-					{#each models as model (model.id)}
-						<option value={model.id}>{model.displayName} · {model.providerName}</option>
-					{/each}
-				</select>
-			</div>
-		</footer>
+			{/snippet}
+		</Composer>
 	</section>
 </div>
 
@@ -1626,23 +1540,6 @@
 		display: flex;
 		gap: 0.4rem;
 		margin-bottom: 0.75rem;
-	}
-	/* --tap, not a padding that happens to come out near it. This measured 36x33
-	   on a phone against a floor of 44 (docs/ACCESSIBILITY.md), and on touch the
-	   send button is the *only* way to send — Enter inserts a newline when the
-	   pointer is coarse — so a thumb that missed it had no second route and no
-	   way to tell a miss from a dead control. The Library page has been sized
-	   this way all along; chat and code were left behind. */
-	.btn {
-		min-width: var(--tap);
-	}
-	.btn.send {
-		background: var(--accent);
-		color: var(--bg);
-	}
-	.btn.stop {
-		background: var(--danger);
-		color: var(--bg);
 	}
 	.chat-list ul {
 		list-style: none;
@@ -1742,6 +1639,77 @@
 	}
 	.archive .chat-row {
 		color: var(--fg-dim);
+	}
+
+	.thread-head {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		padding: 0.5rem 1rem;
+		border-bottom: 1px solid var(--border);
+		min-height: var(--tap);
+	}
+	/* The pill keeps its global sheet behaviour; in here it is one item in the
+	   row rather than a strip of its own, which cost a phone a whole line. */
+	.thread-head .page-actions {
+		padding: 0;
+	}
+	.head-title {
+		flex: 1;
+		min-width: 0;
+		margin: 0;
+		font-size: var(--text-md);
+		font-weight: 500;
+		color: var(--fg);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.head-rename {
+		flex: 1;
+		min-width: 0;
+		background: var(--bg-pane);
+		border: 1px solid var(--accent);
+		border-radius: var(--radius);
+		color: var(--fg);
+		font-family: inherit;
+		font-size: var(--text-md);
+		padding: 0.25rem 0.4rem;
+	}
+	.head-icon {
+		min-height: var(--tap);
+		min-width: var(--tap);
+		background: none;
+		border: none;
+		color: var(--fg-dim);
+		font-size: var(--text-lg);
+		cursor: pointer;
+	}
+	.head-icon:hover {
+		color: var(--fg);
+	}
+	.hidden-badge {
+		color: var(--accent);
+		font-size: var(--text-sm);
+		white-space: nowrap;
+	}
+	.head-model {
+		display: flex;
+		margin-left: auto;
+		min-width: 0;
+	}
+	.research-model {
+		color: var(--fg-dim);
+		font-size: var(--text-sm);
+	}
+	.mode {
+		display: inline-flex;
+		gap: 0.25rem;
+	}
+	.mode .chip {
+		/* Read as one control of two halves rather than two separate toggles. */
+		border-radius: var(--radius);
 	}
 
 	.thread-area {
@@ -1991,21 +1959,7 @@
 		}
 	}
 
-	.composer {
-		border-top: 1px solid var(--border);
-		/* The bottom inset moved to .shell when the tab bar took the bottom of
-		   the screen. Two elements both paying env(safe-area-inset-bottom) is a
-		   double gap on a notched phone and a wrong one on every other device. */
-		padding: 0.7rem 1rem 0.9rem;
-	}
 
-	/* Outlined inwards, and an outline rather than a border, so lighting up
-	   cannot change the composer's size and shove the thread up a line every
-	   time a file passes over it. */
-	.composer.dragging {
-		outline: 2px dashed var(--accent);
-		outline-offset: -4px;
-	}
 	.jump {
 		display: block;
 		margin: 0 auto 0.5rem;
@@ -2022,20 +1976,6 @@
 		color: var(--fg);
 		border-color: var(--accent);
 	}
-	.pending-files {
-		display: flex;
-		gap: 0.4rem;
-		flex-wrap: wrap;
-		margin-bottom: 0.4rem;
-	}
-	.att-chip.uploaded {
-		border-color: var(--accent);
-	}
-	.composer-hint {
-		color: var(--fg-dim);
-		font-size: var(--text-sm);
-		margin-bottom: 0.4rem;
-	}
 	.att-chip {
 		display: inline-flex;
 		align-items: center;
@@ -2046,56 +1986,6 @@
 		font-size: var(--text-sm);
 		padding: 0.15rem 0.4rem;
 		margin-top: 0.3rem;
-	}
-	.composer-row {
-		display: flex;
-		gap: 0.5rem;
-		align-items: flex-end;
-	}
-	textarea {
-		flex: 1;
-		box-sizing: border-box;
-		background: var(--bg-pane);
-		border: 1px solid var(--control-border);
-		border-radius: var(--radius);
-		color: var(--fg);
-		font-family: inherit;
-		font-size: var(--text-lg);
-		line-height: 1.45;
-		padding: 0.6rem 0.8rem;
-		/* Grows with the text (see $lib/autoresize) from the two rows it starts
-		   at up to roughly eight, then scrolls — so pasting a long brief doesn't
-		   leave you typing through a letterbox, and doesn't swallow the thread
-		   either. The cap is here rather than in JS so it holds before hydration. */
-		max-height: 12rem;
-		resize: none;
-		overflow-y: auto;
-	}
-	textarea:focus {
-		border-color: var(--accent);
-	}
-	.composer-opts {
-		display: flex;
-		align-items: center;
-		gap: 0.45rem;
-		margin-top: 0.5rem;
-		flex-wrap: wrap;
-	}
-	.chip {
-		/* The icon-only chip, the paperclip, measured 42px wide against a 44px
-		   floor, which is why the width is named as well as the height. */
-		min-width: var(--tap);
-	}
-	.model-select {
-		margin-left: auto;
-		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 5px;
-		color: var(--fg);
-		font-family: inherit;
-		font-size: var(--text-base);
-		padding: 0.3rem 0.4rem;
-		max-width: 16rem;
 	}
 
 	/* Set from the drag handle and remembered per browser — see PaneResizer — and

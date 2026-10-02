@@ -1,3 +1,4 @@
+import { ADMIN_PATHS } from '$lib/admin-sections';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
@@ -333,7 +334,7 @@ describe('when the model does not answer', () => {
 
 		expect(res.ran).toBe(false);
 		expect(res.reason).toMatch(/did not answer within the 180s/);
-		expect(res.reason).toContain('Admin → Memory');
+		expect(res.reason).toContain(ADMIN_PATHS.memory);
 		// Held back, so the next run re-reads the same window instead of losing it.
 		const after = await import('./memory').then((m) => m.getMemoryStatus(ALICE).watermark);
 		expect(after).toBe(before);

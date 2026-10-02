@@ -141,7 +141,7 @@ describe('generate_image', () => {
 		modelRow = { ...modelRow, supportsImageOutput: false };
 		const { tools: t } = tools();
 		await expect(byName(t, 'generate_image').execute({ prompt: 'a barn' })).rejects.toThrow(
-			/Admin → Tasks → visual/
+			/Admin → General tasks → visual/
 		);
 	});
 

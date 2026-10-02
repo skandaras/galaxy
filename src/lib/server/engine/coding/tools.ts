@@ -3,7 +3,7 @@ import { dirname, join, relative } from 'node:path';
 import type { LoopTool } from '../loop';
 import { toolResultMaxChars } from '../limits';
 import { getExecutor } from './executor';
-import { openPullRequest } from './pull-request';
+import { openPullRequest, recordPullRequest } from './pull-request';
 import { setPlan, type PlanItem } from './state';
 import { gitAuthArgs, safeJoin, scrubSecrets, shellQuote, workspaceAbs } from './workspace';
 
@@ -479,6 +479,7 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 					title: String(a.title ?? ''),
 					body: a.body === undefined ? undefined : String(a.body)
 				});
+				if (ctx.chatId) recordPullRequest(ctx.chatId, pr.url);
 				return pr.existing
 					? `This branch already had an open pull request: ${pr.url}`
 					: `Opened pull request #${pr.number}: ${pr.url}`;

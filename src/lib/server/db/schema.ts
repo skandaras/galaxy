@@ -354,6 +354,12 @@ export const codeSessions = sqliteTable('code_sessions', {
 	/** Workspace path relative to DATA_DIR (shared with runner containers). */
 	workspaceRel: text('workspace_rel').notNull(),
 	mode: text('mode', { enum: ['plan', 'implement'] }).notNull().default('plan'),
+	/**
+	 * The pull request opened for this branch, by the button or the agent's
+	 * tool. Not stored before, so switching sessions and back put "Open pull
+	 * request" over a branch that already had one.
+	 */
+	prUrl: text('pr_url'),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 });
 

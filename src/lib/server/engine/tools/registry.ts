@@ -25,6 +25,7 @@ import { runHistoryToolDef } from '../run-history';
 import { setChatTitleToolDef } from '../chat-title';
 import { viewImageToolDef } from './vision';
 import { webSearchToolDef } from './web-search';
+import { ADMIN_PATHS } from '$lib/admin-sections';
 
 export type ToolSource = 'builtin' | 'mcp';
 
@@ -129,7 +130,7 @@ export function builtinDescriptors(): ToolDescriptor[] {
 		declared([readPaperToolDef]),
 		'research',
 		['ivory-read', 'ivory-redteam'],
-		'Europe PMC, arXiv, CORE, Semantic Scholar, then open copies; CORE and Semantic Scholar need keys (Admin → Settings → Shelf)'
+		'Europe PMC, arXiv, CORE, Semantic Scholar, then open copies; CORE and Semantic Scholar need keys (' + ADMIN_PATHS.shelf + ')'
 	);
 	// The planner's only output. It records a proposal; creating issues is left
 	// to the approval, which is why no planner tool can write to the board.

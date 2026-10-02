@@ -881,9 +881,8 @@ check(
 // 7. Numbers line up. Digits in a proportional face are not equal width, so a
 //    figure in a column has to opt into the monospace font.
 {
-	await page.goto(`${B}/admin`);
-	await page.locator('.tabs, nav').first().waitFor();
-	await page.getByRole('tab', { name: 'Usage' }).click();
+	await page.goto(`${B}/admin?tab=spend`);
+	await page.locator('.admin .body h1').waitFor();
 	await page.waitForTimeout(500);
 	const cell = page.locator('td.num').first();
 	if (await cell.count()) {
@@ -901,6 +900,54 @@ check(
 		});
 		check('the .num utility resolves to the code font', declared.includes('Source Code Pro'));
 	}
+}
+
+// 7b. Admin, as an admin. Everything else here browses as Alice, who is not
+//     one, so every admin section was only ever exercised as a refusal. Each
+//     feature's section now holds that feature's settings, task prompts and
+//     retention together; every one has to render, quietly, with something in
+//     it, and the old tab names have to land somewhere.
+{
+	const adminContext = await browser.newContext({
+		viewport: { width: 1400, height: 900 },
+		extraHTTPHeaders: { 'Remote-User': 'root', 'Remote-Groups': 'galaxy-admins' }
+	});
+	const admin = await adminContext.newPage();
+	const adminProblems = [];
+	admin.on('pageerror', (e) => adminProblems.push(`uncaught: ${e.message}`));
+	admin.on('console', (m) => {
+		if (m.type() === 'error') adminProblems.push(`console: ${m.text()}`);
+	});
+	await admin.goto(`${B}/admin`);
+	// The page renders client-side, so read the list only once it is drawn.
+	await admin.locator('.admin-nav .item').first().waitFor();
+	const sections = await admin.locator('.admin-nav .item').allTextContents();
+	check('admin has a section per feature', sections.length, 16);
+	check('admin lists its sections in three groups', await admin.locator('.admin-nav .group').count(), 3);
+	for (const label of sections) {
+		adminProblems.length = 0;
+		await admin.locator('.admin-nav .item', { hasText: label }).first().click();
+		await admin.locator('.admin .body h1', { hasText: label }).waitFor();
+		await admin.waitForTimeout(400);
+		const body = await admin.locator('.admin .body').boundingBox();
+		check(`admin ${label} shows something`, (body?.height ?? 0) > 80);
+		check(`admin ${label} renders quietly`, adminProblems, []);
+	}
+	await admin.goto(`${B}/admin?tab=cortex`);
+	await admin.locator('.admin .body h1').waitFor();
+	await admin.waitForTimeout(400);
+	check(
+		'Cortex holds its own task prompt',
+		await admin.locator('.admin .body h3', { hasText: 'cortex-groom' }).count(),
+		1
+	);
+	await admin.goto(`${B}/admin?tab=settings`);
+	check(
+		'an old tab name lands on the first section',
+		await admin.locator('.admin .body h1').innerText(),
+		'Users'
+	);
+	await adminContext.close();
 }
 
 // N. A run's searches are drawn, live and afterwards.
@@ -946,7 +993,7 @@ check(
 		};
 		new MutationObserver(snap).observe(document.body, { subtree: true, childList: true });
 	});
-	await page.getByRole('button', { name: /Deep research/ }).click();
+	await page.getByRole('button', { name: /Research$/ }).click();
 	await page.getByRole('textbox').first().fill('How do nebulae form?');
 	await page.keyboard.press('Enter');
 	await page
@@ -1055,14 +1102,19 @@ check(
 	);
 	await page.locator('.composer .att-chip button').click();
 
-	const hiddenChip = page.locator('.composer').getByRole('button', { name: 'Hidden' });
-	const lit = () => hiddenChip.evaluate((el) => el.classList.contains('on'));
-	await page.locator('.composer textarea').fill('typed before choosing');
-	check('the Hidden chip starts off', await lit(), false);
-	await hiddenChip.click();
+	// Hidden lives in the thread header now. It was a chip under the box, which
+	// made hiding a stored chat (and moving its files) one unconfirmed tap.
+	const head = page.locator('.thread-head');
+	const badge = head.locator('.hidden-badge');
+	check('a new chat is not hidden', await badge.count(), 0);
+	await page.getByRole('button', { name: '+ Hidden' }).click();
+	await page.locator('.composer textarea').fill('typed after choosing');
 	await page.waitForTimeout(200);
-	// The exact case the placeholder could never cover: there is text over it.
-	check('and lights with a message already in the box', await lit());
+	check('+ Hidden shows in the header, over text in the box', await badge.isVisible());
+	check('and names itself', await head.locator('.head-title').innerText(), 'New hidden chat');
+	await head.getByRole('button', { name: 'Keep this chat' }).click();
+	await page.waitForTimeout(200);
+	check('Keep this chat takes it back out of Hidden', await badge.count(), 0);
 	check('none of which logged an error', problems, []);
 	if (fail.length) await shot('composer-paste');
 }

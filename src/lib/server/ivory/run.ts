@@ -54,6 +54,7 @@ import { shelfClient, type ShelfClient } from './github';
 import { WRITE_SOURCE_NOTE_SKILL } from './notes';
 import { writeProjectStatus } from './status';
 import { blobUrl, listPaths, projectFromBrief, repoInfo, SLUG, type ShelfProject } from './shelf';
+import { ADMIN_PATHS, taskPath } from '$lib/admin-sections';
 
 /**
  * Starting an Ivory Tower agent on a task from the Shelf's board.
@@ -123,7 +124,7 @@ export class IvoryRunError extends Error {
 
 function clientFor(deps: IvoryDeps): ShelfClient {
 	const client = deps.client ?? shelfClient();
-	if (!client) throw new IvoryRunError('No GitHub token is configured. Add one in Admin → Settings → GitHub.', 409);
+	if (!client) throw new IvoryRunError(`No GitHub token is configured. Add one in ${ADMIN_PATHS.github}.`, 409);
 	return client;
 }
 
@@ -199,7 +200,7 @@ async function redteamPrecheck(
 		const author = authoredFamily(parseClaim((await client.file(path, { fresh: true })) ?? '').authoredBy);
 		if (author && author === modelFamily(choice.model.modelKey)) {
 			throw new IvoryRunError(
-				`${id} was written by a ${author} model, and ivory-redteam is set to ${choice.model.modelKey}, from the same family. Pick a model from another family for ivory-redteam in Admin → Tasks.`,
+				`${id} was written by a ${author} model, and ivory-redteam is set to ${choice.model.modelKey}, from the same family. Pick a model from another family for ivory-redteam in ${taskPath('ivory-redteam')}.`,
 				409
 			);
 		}
@@ -392,7 +393,7 @@ function noteMethod(): string {
 	const skill = getSkill(WRITE_SOURCE_NOTE_SKILL);
 	if (!skill || !skill.meta.enabled) {
 		throw new IvoryRunError(
-			`The ${WRITE_SOURCE_NOTE_SKILL} skill is missing or switched off. Restore it in Admin → Skills to run the reader.`,
+			`The ${WRITE_SOURCE_NOTE_SKILL} skill is missing or switched off. Restore it in ${ADMIN_PATHS.skills} to run the reader.`,
 			409
 		);
 	}
@@ -425,7 +426,7 @@ export function startIvoryTurn(
 	const choice = deps.choice ?? pickModel(cfg?.primaryModelId ?? null, task);
 	if (!choice) throw new EngineError('No usable model — add a provider and enable a model in admin');
 	if (!choice.model.supportsTools) {
-		throw new EngineError(`${choice.model.displayName} cannot call tools. Pick another model for ${task} in Admin → Tasks.`);
+		throw new EngineError(`${choice.model.displayName} cannot call tools. Pick another model for ${task} in ${taskPath(task)}.`);
 	}
 	const backup = deps.backup !== undefined ? deps.backup : cfg?.backupModelId ? resolveModel(cfg.backupModelId) : null;
 	const systemPrompt =

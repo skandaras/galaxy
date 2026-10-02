@@ -2,7 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireCoder } from '$lib/server/api';
 import { getSession } from '$lib/server/engine/coding/session';
-import { openPullRequest } from '$lib/server/engine/coding/pull-request';
+import { openPullRequest, recordPullRequest } from '$lib/server/engine/coding/pull-request';
 import { emitEvent } from '$lib/server/engine/events';
 
 /**
@@ -27,6 +27,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 			title,
 			body: typeof body.body === 'string' ? body.body : undefined
 		});
+		recordPullRequest(session.chatId, pr.url);
 		emitEvent({
 			userId: user.id,
 			chatId: session.chatId,

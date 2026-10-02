@@ -308,7 +308,10 @@ describe('uiDigest', () => {
 		// is what says neither page was cut short. A later file still runs out
 		// of budget and is truncated — that is the design; losing the surfaces
 		// the priority order exists to protect was not.
-		expect(text.match(/class="composer"/g)?.length).toBe(2);
+		expect(text.match(/<Composer\b/g)?.length).toBe(2);
+		// And the composer itself, which both pages now share.
+		expect(text).toContain('/src/lib/components/thread/Composer.svelte');
+		expect(text).toContain('class="composer"');
 	});
 
 	it('puts the two daily-use surfaces first', async () => {
