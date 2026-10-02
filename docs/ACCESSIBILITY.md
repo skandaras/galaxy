@@ -50,6 +50,13 @@ steps `--border` toward `--fg` until it clears 3:1 against `--bg`, and
 — including ones saved before today and any saved later — gets a visible field
 border without anyone configuring it.
 
+That rule is global, so a component's own scoped `border: 1px solid var(--border)`
+on a field outranks it. Twenty-seven rules did exactly that, which put the faint
+outline back on most of Settings, Admin, both composers and the card panel while
+this section said it was fixed. A field that sets its own border names
+`var(--control-border)`, and its own corners `var(--radius)`, or the theme's
+choice never reaches it.
+
 ### Text size
 
 The interface had grown 25 ad-hoc sizes across 390 declarations, the smallest

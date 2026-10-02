@@ -1470,8 +1470,8 @@
 	.new-session select,
 	.new-session input {
 		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 6px;
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
 		color: var(--fg);
 		font-family: inherit;
 		font-size: var(--text-md);
@@ -1879,8 +1879,8 @@
 		flex: 1;
 		box-sizing: border-box;
 		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 8px;
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
 		color: var(--fg);
 		font-family: inherit;
 		font-size: var(--text-lg);

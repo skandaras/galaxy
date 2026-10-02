@@ -461,7 +461,7 @@
 	}
 	.save-as input {
 		background: var(--bg-pane);
-		border: 1px solid var(--border);
+		border: 1px solid var(--control-border);
 		color: var(--fg);
 		font-family: inherit;
 		font-size: var(--text-md);
@@ -527,14 +527,14 @@
 		width: 2.2rem;
 		height: 1.8rem;
 		padding: 0;
-		border: 1px solid var(--border);
+		border: 1px solid var(--control-border);
 		background: none;
 		cursor: pointer;
 	}
 	input:not([type='color']):not([type='checkbox']):not([type='range']),
 	select {
 		background: var(--bg-pane);
-		border: 1px solid var(--border);
+		border: 1px solid var(--control-border);
 		color: var(--fg);
 		font-family: inherit;
 		font-size: var(--text-md);

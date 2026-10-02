@@ -208,8 +208,8 @@
 	}
 	input[type='number'] {
 		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 5px;
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
 		color: var(--fg);
 		font-family: inherit;
 		padding: 0.3rem 0.5rem;

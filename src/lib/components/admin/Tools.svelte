@@ -593,12 +593,12 @@
 	select,
 	textarea {
 		background: var(--bg-pane);
-		border: 1px solid var(--border);
+		border: 1px solid var(--control-border);
 		color: var(--fg);
 		font-family: inherit;
 		font-size: var(--text-md);
 		padding: 0.35rem 0.5rem;
-		border-radius: 4px;
+		border-radius: var(--radius);
 	}
 	label.inline input {
 		width: auto;

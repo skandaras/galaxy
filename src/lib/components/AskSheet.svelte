@@ -351,8 +351,8 @@
 		flex: 1;
 		min-width: 0;
 		background: var(--bg);
-		border: 1px solid var(--border);
-		border-radius: 6px;
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
 		color: var(--fg);
 		font-family: inherit;
 		font-size: var(--text-md);

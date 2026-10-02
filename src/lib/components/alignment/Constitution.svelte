@@ -710,8 +710,8 @@
 		box-sizing: border-box;
 		background: var(--bg);
 		color: var(--fg);
-		border: 1px solid var(--border);
-		border-radius: 5px;
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
 		padding: 0.4rem 0.5rem;
 		font-family: inherit;
 		font-size: var(--text-md);
