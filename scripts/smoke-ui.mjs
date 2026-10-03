@@ -929,6 +929,12 @@ check(
 	await page.goto(`${B}/admin?tab=spend`);
 	await page.locator('.admin .body h1').waitFor();
 	await page.waitForTimeout(500);
+	// Alice is not an admin, so every request this section makes is refused.
+	// Usage rendered the refusal as data and threw, and the boundary replaced
+	// the page; the wait above passed only when it saw the heading before the
+	// 403 came back, which is how this failed one run in three.
+	check('the Spend section survives a refused request', await page.locator('.boundary').count(), 0);
+	check('and keeps its heading', await page.locator('.admin .body h1').count(), 1);
 	const cell = page.locator('td.num').first();
 	if (await cell.count()) {
 		const family = await cell.evaluate((el) => getComputedStyle(el).fontFamily);

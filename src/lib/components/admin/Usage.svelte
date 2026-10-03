@@ -35,10 +35,21 @@
 
 	let days = $state(30);
 	let data = $state<UsageData | null>(null);
+	let problem = $state('');
 
+	// The response used to be taken as data whatever its status, so a refused
+	// request arrived as `{ message }`, the first read of `data.budget` threw,
+	// and the error boundary replaced the whole admin page.
 	$effect(() => {
 		void (async () => {
-			data = await (await fetch(`/api/admin/usage?days=${days}`)).json();
+			const res = await fetch(`/api/admin/usage?days=${days}`).catch(() => null);
+			if (!res?.ok) {
+				data = null;
+				problem = (await res?.json().catch(() => null))?.message ?? 'Could not load usage.';
+				return;
+			}
+			data = await res.json();
+			problem = '';
 		})();
 	});
 
@@ -90,7 +101,9 @@
 		</label>
 	</div>
 
-	{#if data}
+	{#if problem}
+		<p class="notice error" role="alert">{problem}</p>
+	{:else if data}
 		<div class="tiles">
 			{#if data.budget.enabled}
 				<div class="tile" class:alert={data.budget.blocked}>

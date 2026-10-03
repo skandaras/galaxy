@@ -28,7 +28,9 @@
 		retentionFields?: RetentionField[];
 	}
 	let { cards, retentionFields = [] }: Props = $props();
-	const has = (c: Card) => cards.includes(c);
+	/** Set when the settings could not be read; no card is shown while it is. */
+	let loadProblem = $state('');
+	const has = (c: Card) => !loadProblem && cards.includes(c);
 
 	const RETENTION: Record<RetentionField, { label: string; hint: string }> = {
 		eventDays: {
@@ -184,7 +186,16 @@
 	}
 
 	async function load() {
-		const data = await (await fetch('/api/admin/settings')).json();
+		// A refused or failed read used to fill every form with defaults, and a
+		// Save from there would have written those over the real settings. So the
+		// cards stay hidden until there is something real to edit.
+		const res = await fetch('/api/admin/settings').catch(() => null);
+		if (!res?.ok) {
+			loadProblem = (await res?.json().catch(() => null))?.message ?? 'Could not load these settings.';
+			return;
+		}
+		loadProblem = '';
+		const data = await res.json();
 		websearch = { apiKey: '', baseUrl: '', fallbackProvider: 'none', ...data.websearch };
 		hasSearchKey = Boolean(data.websearch?.hasApiKey);
 		compaction = { ...data.compaction };
@@ -204,7 +215,12 @@
 	let pushNotice = $state<string | null>(null);
 
 	async function loadPush() {
-		const data = await (await fetch('/api/admin/push')).json();
+		const res = await fetch('/api/admin/push').catch(() => null);
+		if (!res?.ok) {
+			pushNotice = 'Could not read the push settings. Reload to try again.';
+			return;
+		}
+		const data = await res.json();
 		push = { ...push, ...data, publicKey: data.publicKey ?? '' };
 	}
 
@@ -277,6 +293,7 @@
 </script>
 
 <section>
+	{#if loadProblem}<p class="notice error" role="alert">{loadProblem}</p>{/if}
 	{#if has('websearch')}
 		<article class="card">
 			<h3>Web search</h3>
