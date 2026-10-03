@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
 import {
 	canEdit,
+	canManage,
 	deleteDoc,
 	docPath,
 	getDoc,
@@ -16,14 +17,21 @@ export const GET: RequestHandler = ({ locals, params }) => {
 	// A doc you cannot see is indistinguishable from one that isn't there.
 	const doc = getDoc(params.id, user.id);
 	if (!doc) error(404, 'Document not found');
-	return json({ ...doc, canEdit: canEdit(doc.meta, user.id), path: docPath(doc.meta.id, user.id) });
+	return json({
+		...doc,
+		canEdit: canEdit(doc.meta, user.id),
+		canManage: canManage(doc.meta, user.id),
+		path: docPath(doc.meta.id, user.id)
+	});
 };
 
 export const PUT: RequestHandler = async ({ locals, params, request }) => {
 	const user = requireUser(locals);
 	const existing = getDoc(params.id, user.id);
 	if (!existing) error(404, 'Document not found');
-	// Someone else's shared doc is readable, not writable.
+	// Reached only for a doc this user can see, so a refusal here is someone
+	// else's personal doc, which getDoc would already have hidden. Kept as the
+	// check that says so.
 	if (!canEdit(existing.meta, user.id)) error(403, 'This document belongs to another user');
 
 	const body = await request.json().catch(() => ({}));
@@ -46,9 +54,14 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
 			error(409, 'This document changed somewhere else since you opened it');
 		}
 	}
-	if (body.visibility === 'shared' || body.visibility === 'personal') {
+	// The editor sends visibility with every autosave. Applying it only when it
+	// changes is what lets someone who is not the owner save an edit at all.
+	if (
+		(body.visibility === 'shared' || body.visibility === 'personal') &&
+		body.visibility !== existing.meta.visibility
+	) {
 		if (!setVisibility(params.id, user.id, body.visibility)) {
-			error(403, 'This document belongs to another user');
+			error(403, 'Only the owner can change who sees this document');
 		}
 	}
 	try {

@@ -32,6 +32,34 @@ export function cleanFolder(raw: string): string {
 	return raw.replace(/[\\/]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_FOLDER);
 }
 
+/**
+ * Puts back into Unfiled every doc filed under a label that only reads as it.
+ * Idempotent, and one UPDATE on a small table, so it runs on every boot rather
+ * than carrying a stamp: `folderLabel` stops new ones, and this clears the ones
+ * written before it.
+ */
+export function unfileReservedLabels(): number {
+	const moved = db
+		.update(libraryDocs)
+		.set({ folder: '' })
+		.where(sql`lower(${libraryDocs.folder}) = ${UNFILED.toLowerCase()}`)
+		.run().changes;
+	db.delete(libraryFolders)
+		.where(sql`lower(${libraryFolders.name}) = ${UNFILED.toLowerCase()}`)
+		.run();
+	return moved;
+}
+
+/**
+ * The label a doc is filed under. Unfiled is an empty label, and the shelf and
+ * the index draw it with that name, so an agent asked to file a doc there wrote
+ * `folder: "Unfiled"` and made a second folder of that name beside the real one.
+ */
+export function folderLabel(raw: string): string {
+	const name = cleanFolder(raw);
+	return isReserved(name) ? '' : name;
+}
+
 export type LibraryFolder = typeof libraryFolders.$inferSelect;
 
 export type FolderResult =
@@ -73,12 +101,12 @@ const folderRow = (name: string, userId: string) =>
 		.where(and(eq(libraryFolders.name, name), eq(libraryFolders.ownerId, userId)))
 		.get();
 
-/** Whether this user has anything filed under a label, row or no row. */
+/** Whether this user can write anything filed under a label, row or no row. */
 const folderInUse = (name: string, userId: string) =>
 	!!db
 		.select({ id: libraryDocs.id })
 		.from(libraryDocs)
-		.where(and(eq(libraryDocs.folder, name), ownedBy(userId)))
+		.where(and(eq(libraryDocs.folder, name), writableBy(userId)))
 		.get();
 
 /** Unfiled is the overflow every shelf has and nobody owns, so nobody may name one. */
@@ -109,9 +137,10 @@ export function createFolder(userId: string, rawName: string): FolderResult {
 /**
  * Rename a folder, and the docs filed under it.
  *
- * Only this user's docs move: someone else's shared doc under the same label
- * sits on their shelf too, and renaming your folder is not permission to
- * re-file it.
+ * The docs that move are the ones this user could move one at a time: their
+ * own, and every shared doc. Leaving shared docs behind used to split the
+ * folder in two once anyone could re-file them, which is what sharing means
+ * now. Someone else's personal doc under the same label stays where it is.
  *
  * Deliberately does not touch `updatedAt` on the docs it moves. The shelf and
  * the digest are both ordered by it, and a rename that shoved every doc in a
@@ -126,7 +155,7 @@ export function renameFolder(userId: string, from: string, rawName: string): Fol
 	if (name !== from && listFolders(userId).includes(name)) return { ok: false, reason: 'exists' };
 	db.update(libraryDocs)
 		.set({ folder: name })
-		.where(and(eq(libraryDocs.folder, from), ownedBy(userId)))
+		.where(and(eq(libraryDocs.folder, from), writableBy(userId)))
 		.run();
 	if (row) {
 		db.update(libraryFolders).set({ name }).where(eq(libraryFolders.id, row.id)).run();
@@ -150,7 +179,7 @@ export function deleteFolder(userId: string, name: string): boolean {
 	if (!row && !folderInUse(name, userId)) return false;
 	db.update(libraryDocs)
 		.set({ folder: '' })
-		.where(and(eq(libraryDocs.folder, name), ownedBy(userId)))
+		.where(and(eq(libraryDocs.folder, name), writableBy(userId)))
 		.run();
 	if (row) db.delete(libraryFolders).where(eq(libraryFolders.id, row.id)).run();
 	return true;
@@ -186,8 +215,22 @@ export function visibleTo(userId: string): SQL {
 	)!;
 }
 
-/** True when this user may change or delete the doc — owners and legacy only. */
-export function canEdit(doc: Pick<LibraryDoc, 'ownerId'>, userId: string): boolean {
+/**
+ * True when this user may change a doc's title and body, or re-file it: its
+ * owner, anyone for a legacy doc, and anyone at all for a shared one. Sharing
+ * used to mean read-only to everyone else, which made a shared doc something
+ * only one person could keep up to date.
+ */
+export function canEdit(doc: Pick<LibraryDoc, 'ownerId' | 'visibility'>, userId: string): boolean {
+	return canManage(doc, userId) || doc.visibility === 'shared';
+}
+
+/**
+ * True when this user may delete a doc or change who can see it. Still the
+ * owner alone (and anyone, for a legacy doc): those are the two acts that can
+ * take a doc away from everyone else.
+ */
+export function canManage(doc: Pick<LibraryDoc, 'ownerId'>, userId: string): boolean {
 	return doc.ownerId === null || doc.ownerId === userId;
 }
 
@@ -195,12 +238,25 @@ export function canEdit(doc: Pick<LibraryDoc, 'ownerId'>, userId: string): boole
  * `canEdit` as a predicate, for the writes that act on a set of rows.
  *
  * A folder rename moves documents, so it needs the same answer in SQL that
- * `canEdit` gives one row at a time — including the ownerless rows that
- * predate ownership, which are everyone's to change.
+ * `canEdit` gives one row at a time.
  */
-export function ownedBy(userId: string): SQL {
-	return or(eq(libraryDocs.ownerId, userId), isNull(libraryDocs.ownerId))!;
+export function writableBy(userId: string): SQL {
+	return or(
+		eq(libraryDocs.ownerId, userId),
+		isNull(libraryDocs.ownerId),
+		eq(libraryDocs.visibility, 'shared')
+	)!;
 }
+
+/**
+ * A shared doc may only sit under a shared one. Under a personal parent it
+ * would be in a tree that everyone else sees with its top missing, and a
+ * breadcrumb that stops halfway.
+ */
+const sharedUnderPersonal = (
+	doc: Pick<LibraryDoc, 'visibility'>,
+	parent: Pick<LibraryDoc, 'visibility'>
+) => doc.visibility === 'shared' && parent.visibility !== 'shared';
 
 export function listDocs(userId: string): LibraryDoc[] {
 	return db
@@ -296,7 +352,7 @@ function repointSubtree(id: string, rootId: string, folder: string): void {
 
 export type MoveResult =
 	| { ok: true; doc: LibraryDoc }
-	| { ok: false; reason: 'cycle' | 'depth' | 'no-parent' | 'forbidden' };
+	| { ok: false; reason: 'cycle' | 'depth' | 'no-parent' | 'forbidden' | 'personal-parent' };
 
 /** Where a doc is being filed: inside another doc, or loose in a folder. */
 export type FilingDest = { parentId: string } | { folder: string };
@@ -329,13 +385,14 @@ export function fileDoc(id: string, userId: string, dest: FilingDest): MoveResul
 			.where(and(eq(libraryDocs.id, dest.parentId), visibleTo(userId)))
 			.get();
 		if (!parent) return { ok: false, reason: 'no-parent' };
+		if (sharedUnderPersonal(doc, parent)) return { ok: false, reason: 'personal-parent' };
 		const placed = canPlace(id, dest.parentId);
 		if (!placed.ok) return placed;
 		parentId = dest.parentId;
 		rootId = rootOf(parent);
 		folder = parent.folder;
 	} else {
-		folder = cleanFolder(dest.folder);
+		folder = folderLabel(dest.folder);
 	}
 
 	db.update(libraryDocs)
@@ -438,11 +495,18 @@ export function subtreeCounts(userId: string): Map<string, number> {
  * does and a refusal is a message on a form. A bad parent reaching saveDoc is a
  * caller that built one, and its routes turn this into a 400.
  */
+export const PERSONAL_PARENT_MESSAGE = 'A shared document can only go inside another shared document';
+
 export class LibraryTreeError extends Error {
-	constructor(public reason: 'cycle' | 'depth' | 'no-parent') {
-		super(`Cannot file a document there: ${reason}`);
+	constructor(public reason: 'cycle' | 'depth' | 'no-parent' | 'personal-parent') {
+		super(
+			reason === 'personal-parent'
+				? PERSONAL_PARENT_MESSAGE
+				: `Cannot file a document there: ${reason}`
+		);
 	}
 }
+
 
 export function saveDoc(opts: {
 	id?: string;
@@ -477,6 +541,10 @@ export function saveDoc(opts: {
 		if (!placed.ok) throw new LibraryTreeError(placed.reason);
 	}
 	const parent = parentId ? rowById(parentId) : null;
+	if (parent && parentId !== existing?.parentId) {
+		const visibility = existing?.visibility ?? opts.visibility ?? 'personal';
+		if (sharedUnderPersonal({ visibility }, parent)) throw new LibraryTreeError('personal-parent');
+	}
 	// A root's rootId is its own id, never null — the digest groups on it.
 	const rootId = parent ? rootOf(parent) : id;
 
@@ -489,7 +557,7 @@ export function saveDoc(opts: {
 		? parent.folder
 		: opts.folder === undefined
 			? (existing?.folder ?? '')
-			: cleanFolder(opts.folder);
+			: folderLabel(opts.folder);
 
 	const row: LibraryDoc = {
 		id,
@@ -535,14 +603,14 @@ export function saveDoc(opts: {
 	return row;
 }
 
-/** Change who can see a doc. Only its owner (or a legacy doc) can be changed. */
+/** Change who can see a doc. Only its owner can, or anyone for a legacy doc. */
 export function setVisibility(
 	id: string,
 	userId: string,
 	visibility: 'personal' | 'shared'
 ): LibraryDoc | null {
 	const meta = db.select().from(libraryDocs).where(eq(libraryDocs.id, id)).get();
-	if (!meta || !canEdit(meta, userId)) return null;
+	if (!meta || !canManage(meta, userId)) return null;
 	db.update(libraryDocs)
 		// Claim a legacy doc on first change, so it stops being everyone's.
 		.set({ visibility, ownerId: meta.ownerId ?? userId, updatedAt: new Date() })
@@ -553,8 +621,8 @@ export function setVisibility(
 
 export function deleteDoc(id: string, userId: string): boolean {
 	const meta = db.select().from(libraryDocs).where(eq(libraryDocs.id, id)).get();
-	// Someone else's shared doc is readable, not deletable.
-	if (!meta || !canEdit(meta, userId)) return false;
+	// Someone else's shared doc is theirs to delete, even though anyone may edit it.
+	if (!meta || !canManage(meta, userId)) return false;
 
 	/**
 	 * Children are promoted to the deleted doc's own parent.

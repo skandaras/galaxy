@@ -1,7 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
-import { fileDoc, type FilingDest } from '$lib/server/library';
+import { fileDoc, PERSONAL_PARENT_MESSAGE, type FilingDest } from '$lib/server/library';
 
 /**
  * Re-file a document: under another document, or into a folder.
@@ -25,6 +25,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	if (!result.ok) {
 		if (result.reason === 'forbidden') error(404, 'Document not found');
 		if (result.reason === 'no-parent') error(404, 'No such document to file it under');
+		if (result.reason === 'personal-parent') error(400, PERSONAL_PARENT_MESSAGE);
 		error(400, `Cannot file a document there: ${result.reason}`);
 	}
 	return json(result.doc);

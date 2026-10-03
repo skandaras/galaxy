@@ -4,7 +4,13 @@ import { db, runMigrations } from '$lib/server/db';
 import { libraryDocs } from '$lib/server/db/schema';
 import {
 	canEdit,
+	canManage,
+	createFolder,
 	deleteDoc,
+	fileDoc,
+	listFolders,
+	LibraryTreeError,
+	renameFolder,
 	findDocByTitle,
 	getDoc,
 	libraryDigest,
@@ -170,10 +176,81 @@ describe('writes', () => {
 	});
 });
 
-describe('canEdit', () => {
-	it('is true for the owner and for unowned docs', () => {
-		expect(canEdit({ ownerId: ALICE }, ALICE)).toBe(true);
-		expect(canEdit({ ownerId: null }, BOB)).toBe(true);
-		expect(canEdit({ ownerId: ALICE }, BOB)).toBe(false);
+describe('canEdit and canManage', () => {
+	it('lets anyone edit a shared doc, and only the owner manage it', () => {
+		expect(canEdit({ ownerId: ALICE, visibility: 'personal' }, ALICE)).toBe(true);
+		expect(canEdit({ ownerId: null, visibility: 'personal' }, BOB)).toBe(true);
+		expect(canEdit({ ownerId: ALICE, visibility: 'personal' }, BOB)).toBe(false);
+		expect(canEdit({ ownerId: ALICE, visibility: 'shared' }, BOB)).toBe(true);
+		expect(canManage({ ownerId: ALICE }, BOB)).toBe(false);
+		expect(canManage({ ownerId: null }, BOB)).toBe(true);
+	});
+});
+
+describe('a shared doc, for everyone who is not its owner', () => {
+	it('can be edited, and stays its owner’s', () => {
+		const doc = write(ALICE, 'Plan', 'shared');
+		const edited = saveDoc({ id: doc.id, title: 'Plan', body: 'Bob was here', author: 'user', ownerId: BOB });
+		expect(edited.ownerId).toBe(ALICE);
+		expect(getDoc(doc.id, ALICE)?.body).toBe('Bob was here');
+	});
+
+	it('cannot be deleted or made personal', () => {
+		const doc = write(ALICE, 'Plan', 'shared');
+		expect(deleteDoc(doc.id, BOB)).toBe(false);
+		expect(setVisibility(doc.id, BOB, 'personal')).toBeNull();
+	});
+
+	it('can be moved into a folder, which then shows on every shelf with only that doc in it', () => {
+		const doc = write(ALICE, 'Plan', 'shared');
+		write(BOB, 'Bob notes', 'personal');
+		expect(createFolder(BOB, 'Ideas').ok).toBe(true);
+		fileDoc(listDocs(BOB).find((d) => d.title === 'Bob notes')!.id, BOB, { folder: 'Ideas' });
+		expect(fileDoc(doc.id, BOB, { folder: 'Ideas' }).ok).toBe(true);
+		expect(listFolders(ALICE)).toContain('Ideas');
+		expect(listDocs(ALICE).filter((d) => d.folder === 'Ideas').map((d) => d.title)).toEqual(['Plan']);
+	});
+
+	it('cannot go inside a doc that is not shared, by a move or by a save', () => {
+		const doc = write(ALICE, 'Plan', 'shared');
+		const mine = write(BOB, 'Bob notes', 'personal');
+		expect(fileDoc(doc.id, BOB, { parentId: mine.id })).toEqual({ ok: false, reason: 'personal-parent' });
+		expect(() =>
+			saveDoc({ id: doc.id, title: 'Plan', body: 'x', author: 'user', ownerId: BOB, parentId: mine.id })
+		).toThrow(LibraryTreeError);
+		const theirs = write(ALICE, 'Shared parent', 'shared');
+		expect(fileDoc(doc.id, BOB, { parentId: theirs.id }).ok).toBe(true);
+	});
+
+	it('leaves a personal doc free to go under a shared one', () => {
+		const parent = write(ALICE, 'Shared parent', 'shared');
+		const mine = write(BOB, 'Bob notes', 'personal');
+		expect(fileDoc(mine.id, BOB, { parentId: parent.id }).ok).toBe(true);
+	});
+
+	it('moves with a folder rename, so the folder does not split', () => {
+		const doc = write(ALICE, 'Plan', 'shared');
+		fileDoc(doc.id, BOB, { folder: 'Ideas' });
+		expect(renameFolder(BOB, 'Ideas', 'Thoughts').ok).toBe(true);
+		expect(getDoc(doc.id, ALICE)?.meta.folder).toBe('Thoughts');
+	});
+
+	it('leaves someone else’s personal doc where it is on a rename', () => {
+		const theirs = write(ALICE, 'Alice private', 'personal');
+		fileDoc(theirs.id, ALICE, { folder: 'Ideas' });
+		const shared = write(BOB, 'Bob shared', 'shared');
+		fileDoc(shared.id, BOB, { folder: 'Ideas' });
+		renameFolder(BOB, 'Ideas', 'Thoughts');
+		expect(getDoc(theirs.id, ALICE)?.meta.folder).toBe('Ideas');
+	});
+});
+
+describe('the Unfiled label', () => {
+	it('files a doc loose rather than in a folder of that name', () => {
+		const doc = write(ALICE, 'Loose', 'personal');
+		fileDoc(doc.id, ALICE, { folder: 'unfiled' });
+		expect(getDoc(doc.id, ALICE)?.meta.folder).toBe('');
+		const saved = saveDoc({ title: 'By agent', body: 'x', author: 'agent', ownerId: ALICE, folder: 'Unfiled' });
+		expect(saved.folder).toBe('');
 	});
 });
