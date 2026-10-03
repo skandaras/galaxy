@@ -260,8 +260,8 @@ export const feedItems = sqliteTable(
 - **`NOTIFICATION_KINDS`** gains `'feed-alert'`. SQLite stores that column as
   plain TEXT with no CHECK, so this is a type-level change and needs **no
   migration** — the same note `jobs.status` already carries.
-- **`PROSE_TASKS`** (`engine/voice.ts`) gains `'feed'`. Its output is JSON, but
-  so is `ux-audit`'s, which is already in the set: `HOUSE_VOICE` is diction-only
+- **`PROSE_TASKS`** (`engine/engine.ts`) gains `'feed'`. Its output is JSON, but
+  so is `ux-audit`'s, which is already in the set: the Language voice is diction-only
   by design and never says anything about layout, and the tile summaries are
   read as prose by a person. The reason belongs in that file's exclusion list,
   which is where it keeps its reasoning.
@@ -350,9 +350,9 @@ In order:
 live in `research.ts`, which is 126 KB and pulls in the provider registry, the
 Cortex lattice and the Library. A pure gates module importing that for two
 string functions drags the whole graph into a test that should need nothing.
-`voice.ts` exists for exactly this reason — its header says the engine "should
-not have to pull `seedSkills` and `deleteEmptyChats` into its module graph to
-get a string" — so follow the precedent: move both helpers and their tests into
+`engine/prompts.ts` exists for exactly this reason (its header says the engine
+should not pull `seedSkills` and `deleteEmptyChats` into its module graph to get
+a string), so follow the precedent: move both helpers and their tests into
 `engine/urls.ts`, and re-export them from `research.ts` so no existing import
 changes.
 

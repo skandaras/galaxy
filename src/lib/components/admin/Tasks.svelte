@@ -4,7 +4,7 @@
 	interface Props {
 		/** The tasks this admin section edits; see $lib/admin-sections. */
 		only: readonly string[];
-		/** The explanation of overrides and the house style, once, in General tasks. */
+		/** The explanation of overrides and where style lives, once, in General tasks. */
 		intro?: boolean;
 	}
 	let { only, intro = false }: Props = $props();
@@ -126,11 +126,8 @@
 		then on and nothing will touch it, until you reset it.
 	</p>
 	<p class="preamble">
-		The agents that write prose also carry a shared house style, which is not shown in these boxes
-		and is not editable here — how they sound reaches chat, coding, deep research, the board, the
-		sub-agent and the background reviewers, and how their replies are shaped reaches the ones that
-		answer in prose rather than JSON. Read it, and add your own rules to it, under
-		{ADMIN_PATHS.houseStyle}.
+		These prompts say what each agent does. How the ones that write prose sound is set once, for
+		all of them, under {ADMIN_PATHS.language}, and is added after the prompt on every turn.
 	</p>
 	{/if}
 	{#each configs.filter((c) => only.includes(c.task)) as cfg (cfg.task)}

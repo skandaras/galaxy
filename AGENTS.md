@@ -112,11 +112,12 @@ A leading underscore means deliberately unused, and the linter is configured to 
 ## Writing prose
 
 Comments, commit messages, docs, prompt text and anything a person reads are all held to
-one list, and that list lives in `src/lib/server/engine/voice.ts` as `BANNED_WORDS`,
-`BANNED_FRAMINGS` and `BANNED_NAMING`. Read it before writing prose here. It is one file
-rather than a copy in each place because the rules the coding agent writes to and the
-rules the product speaks in are the same rules, and two copies diverge on the first
-addition.
+one list: the owner's Language text (Admin → Language). If you are the coding agent
+running in this app, it is the `[How to write` block at the end of your system prompt;
+follow that. Otherwise read the shipped version, `DEFAULT_LANGUAGE.voice` in
+`src/lib/server/settings.ts`. It is one list rather than a copy in each place because the
+rules the coding agent writes to and the rules the product speaks in are the same rules,
+and two copies diverge on the first addition.
 
 The short version, so you know what you are looking for:
 
@@ -130,11 +131,12 @@ The short version, so you know what you are looking for:
   its source and carry on.
 - **The em dash**, unless it marks a real aside or a turn in the sentence.
 
-Adding a rule means editing `voice.ts`, not this section. Anything here is a summary of
-what is there.
+Changing a rule means editing the Language text, or `DEFAULT_LANGUAGE` for what ships, not
+this section. Anything here is a summary of what is there.
 
-The one exception is the prompt corpus this file has already been applied to. `voice.ts`,
-`engine/prompts.ts`, the tool descriptions and the injected digests are text a model reads
+The one exception is the prompt corpus this list has already been applied to.
+`DEFAULT_LANGUAGE`, `engine/prompts.ts`, the tool descriptions and the injected digests are
+text a model reads
 and imitates, so a rule broken there is demonstrated rather than stated. Comments and
 markdown are governed going forward, not retro-edited.
 

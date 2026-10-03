@@ -8,13 +8,13 @@
  * engine.ts now resolves `promptOverride ?? DEFAULT_PROMPTS[task]`, so an
  * unedited install tracks this file and an edited one is left alone.
  *
- * Its own module rather than bootstrap.ts, which is the reason voice.ts gives
- * for living apart from it: the engine reads these on every turn and should not
- * pull `seedSkills` and `deleteEmptyChats` into its module graph to get a
- * string. bootstrap.ts imports them from here for seeding.
+ * Its own module rather than bootstrap.ts: the engine reads these on every turn
+ * and should not pull `seedSkills` and `deleteEmptyChats` into its module graph
+ * to get a string. bootstrap.ts imports them from here for seeding.
  *
  * Style is not here. How these agents sound and how their replies are shaped is
- * composed at call time by `houseStyle` — see engine/voice.ts.
+ * the owner's Language text (`languageSettings`), added at call time by
+ * `languageBlock` in engine.ts.
  */
 
 /**

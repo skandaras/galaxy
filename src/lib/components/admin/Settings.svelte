@@ -14,7 +14,7 @@
 		| 'fetch'
 		| 'coding'
 		| 'github'
-		| 'style'
+		| 'language'
 		| 'compaction'
 		| 'ivory'
 		| 'deploy'
@@ -94,7 +94,9 @@
 	let retention = $state({ eventDays: 60, usageDays: 400, uxIdeaDays: 14, cortexChangeDays: 90 });
 	let fetchCfg = $state({ timeoutMs: 15000, maxChars: 20000, maxFetchesPerTurn: 5 });
 	/** `house` is served read-only, for editing against — it is never sent back. */
-	let style = $state({ text: '', house: '', layout: '' });
+	const EMPTY_LANGUAGE = { voice: '', layout: '' };
+	let language = $state({ ...EMPTY_LANGUAGE });
+	let languageDefaults = $state({ ...EMPTY_LANGUAGE });
 	let saved = $state<string | null>(null);
 	let failed = $state<{ key: string; message: string } | null>(null);
 	let deployBusy = $state<string | null>(null);
@@ -207,7 +209,8 @@
 		coding = { ...data.coding };
 		retention = { ...data.retention };
 		fetchCfg = { ...data.fetch };
-		style = { text: '', house: '', layout: '', ...data.style };
+		language = { voice: data.language?.voice ?? '', layout: data.language?.layout ?? '' };
+		languageDefaults = { ...EMPTY_LANGUAGE, ...data.language?.defaults };
 		await loadPush();
 	}
 
@@ -270,7 +273,7 @@
 			| 'coding'
 			| 'retention'
 			| 'fetch'
-			| 'style'
+			| 'language'
 			| 'ivory',
 		value: unknown
 	) {
@@ -500,41 +503,43 @@
 		</article>
 	{/if}
 
-	{#if has('style')}
+	{#if has('language')}
 		<article class="card">
-			<h3>House style</h3>
+			<h3>How agents sound</h3>
 			<label class="full">
-				your additions to how the agents write
-				<textarea
-					rows="4"
-					maxlength="1000"
-					bind:value={style.text}
-					placeholder="e.g. British spelling throughout. Never use the word &quot;utilise&quot;."
-				></textarea>
+				<span class="field-head">
+					rules for every agent that writes prose
+					<span class="count num">{language.voice.length} / 6,000</span>
+				</span>
+				<textarea rows="14" maxlength="6000" bind:value={language.voice}></textarea>
 			</label>
 			<p class="hint">
-				Appended to the built-in house style on every turn of chat, coding, deep research and the
-				board, plus the sub-agent and the background reviewers. Where the two disagree, yours wins.
-				It does not reach the agents whose reply is a fixed shape — chat titles, run summaries, the
-				memory audit or the alignment assessor. Up to 1,000 characters: it rides every prose turn,
-				and past that it is a second system prompt with none of the history a task prompt keeps.
+				Chat, coding, deep research, the sub-agent, the Ivory Tower steps and the background
+				reviewers. Not chat titles, run summaries, the memory audit or the alignment assessor, whose
+				replies have a fixed shape. Leave task prompts to say what an agent does; how it writes
+				belongs here, once.
 			</p>
-			<details>
-				<summary class="hint">Read the built-in house style</summary>
-				<pre class="voice">{style.house}</pre>
-			</details>
-			<details>
-				<summary class="hint">Read the built-in layout rules</summary>
-				<p class="hint">
-					These reach the agents that answer in prose: chat and coding.
-					The ones that answer with JSON get the voice above and none of this.
-				</p>
-				<pre class="voice">{style.layout}</pre>
-			</details>
-			<button class="btn primary" onclick={() => save('style', { text: style.text })}>
-				{saved === 'style' ? 'Saved ✓' : 'Save'}
-			</button>
-			{#if failed?.key === 'style'}<span class="save-error" role="alert">{failed.message}</span>{/if}
+			<h3>How replies are laid out</h3>
+			<label class="full">
+				<span class="field-head">
+					for chat, coding and research reports
+					<span class="count num">{language.layout.length} / 6,000</span>
+				</span>
+				<textarea rows="5" maxlength="6000" bind:value={language.layout}></textarea>
+			</label>
+			<p class="hint">
+				Kept apart from the rules above because the agents that answer with JSON get those and none
+				of this. Clear a box to turn that half off.
+			</p>
+			<div class="row-buttons">
+				<button class="btn primary" onclick={() => save('language', language)}>
+					{saved === 'language' ? 'Saved ✓' : 'Save'}
+				</button>
+				<button class="btn" onclick={() => (language = { ...languageDefaults })}>
+					Reset to the shipped text
+				</button>
+			</div>
+			{#if failed?.key === 'language'}<span class="save-error" role="alert">{failed.message}</span>{/if}
 		</article>
 	{/if}
 
@@ -892,20 +897,14 @@
 		padding: 0.5rem 0.65rem;
 		resize: vertical;
 	}
-	summary {
-		cursor: pointer;
+	.field-head {
+		display: flex;
+		justify-content: space-between;
+		gap: 0.5rem;
 	}
-	.voice {
-		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 6px;
+	.count {
 		color: var(--fg-dim);
-		font-family: inherit;
-		font-size: var(--text-sm);
-		line-height: 1.5;
-		padding: 0.6rem;
-		margin: 0.5rem 0 0.7rem;
-		white-space: pre-wrap;
+		font-size: var(--text-xs);
 	}
 	code {
 		color: var(--accent);

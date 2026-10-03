@@ -973,7 +973,7 @@ check(
 	// The page renders client-side, so read the list only once it is drawn.
 	await admin.locator('.admin-nav .item').first().waitFor();
 	const sections = await admin.locator('.admin-nav .item').allTextContents();
-	check('admin has a section per feature', sections.length, 16);
+	check('admin has a section per feature', sections.length, 17);
 	check('admin lists its sections in three groups', await admin.locator('.admin-nav .group').count(), 3);
 	for (const label of sections) {
 		adminProblems.length = 0;

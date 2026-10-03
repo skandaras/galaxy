@@ -10,6 +10,7 @@ import {
 	migrateChats
 } from '$lib/server/bootstrap';
 import { ensureSkillsRepo } from '$lib/server/skills';
+import { unfileReservedLabels } from '$lib/server/library';
 import { typstAvailable } from '$lib/server/pdf';
 import { closeAbandonedJobs } from '$lib/server/engine/jobs';
 import { startScheduler } from '$lib/server/engine/scheduler';
@@ -19,6 +20,10 @@ import { provisionUser } from '$lib/server/users';
 runMigrations();
 migrateSettings();
 migrateChats();
+{
+	const unfiled = unfileReservedLabels();
+	if (unfiled) console.log(`Moved ${unfiled} library doc(s) out of a folder labelled Unfiled.`);
+}
 // Before the seed, which rewrites `system_prompt` from the override and would
 // otherwise erase the edit this reads. Prompts resolve from DEFAULT_PROMPTS now,
 // so the only thing left to rescue is text somebody wrote themselves.

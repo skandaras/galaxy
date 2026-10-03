@@ -186,9 +186,9 @@ describe('renaming a folder', () => {
 		expect(listFolders(ALICE)).toEqual(['Cooking']);
 	});
 
-	it('leaves another person’s documents where they are', () => {
+	it('takes shared documents with it, and leaves another person’s personal ones', () => {
 		createFolder(ALICE, 'Recipes');
-		const theirs = saveDoc({
+		const shared = saveDoc({
 			title: 'Their bread',
 			body: 'x',
 			author: 'user',
@@ -196,10 +196,19 @@ describe('renaming a folder', () => {
 			visibility: 'shared',
 			folder: 'Recipes'
 		});
+		const personal = saveDoc({
+			title: 'Their secret bread',
+			body: 'x',
+			author: 'user',
+			ownerId: BOB,
+			visibility: 'personal',
+			folder: 'Recipes'
+		});
 		expect(renameFolder(ALICE, 'Recipes', 'Cooking').ok).toBe(true);
-		// Their shared doc is on their shelf too, under the name they filed it
-		// under. Renaming your folder is not permission to re-file it.
-		expect(getDoc(theirs.id, BOB)?.meta.folder).toBe('Recipes');
+		// Anyone may re-file a shared doc, so a rename that left it behind would
+		// split the folder in two. A personal one is not Alice's to move.
+		expect(getDoc(shared.id, BOB)?.meta.folder).toBe('Cooking');
+		expect(getDoc(personal.id, BOB)?.meta.folder).toBe('Recipes');
 	});
 
 	it('refuses someone else’s folder, and a name already taken', () => {

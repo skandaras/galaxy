@@ -77,17 +77,10 @@
 <section>
 	<h3>The groomer</h3>
 	<p class="hint">
-		Two jobs, split by who asked for them. The <strong>scheduled pass adds</strong>: it reads what
-		has been said since last time and suggests concepts worth keeping. A <strong>manual review
-		consolidates</strong>: it reads the whole lattice looking for merges and structural problems,
-		which is the expensive prompt and so only ever runs because someone asked.
-	</p>
-	<p class="hint">
-		Both start with the free half — tidying, plus a check for concepts that connect to nothing,
-		names that look like duplicates, and anything unfiled. Those are graph problems rather than
-		language ones, so they cost no tokens and run whether or not a model is configured. Everything
-		that would change what a query returns is <strong>proposed</strong>, never applied, and waits
-		in the owner's own Cortex tab.
+		The scheduled pass suggests concepts from recent conversations. A manual review reads the whole
+		lattice for merges and structural problems, and is the expensive one. Tidying and the graph
+		checks cost nothing and run without a model; everything else waits in the owner's Cortex tab as
+		a suggestion.
 	</p>
 
 	<div class="grid">
@@ -116,33 +109,14 @@
 		</label>
 	</div>
 	<p class="hint">
-		A review is two passes. The first reads every concept's shape — its name, its areas and what
-		it connects to, never its description — and picks out the ones worth looking at properly;
-		<strong>concepts read closely</strong> is how many it may pick. Only those get their
-		descriptions sent, so the expensive half of a review stops growing with the lattice.
-	</p>
-	<p class="hint">
-		<strong>Max tokens</strong> is a ceiling, not the number each pass asks for — each asks for
-		the size of its own answer, a few thousand at most. This matters because a reasoning model
-		treats the number as permission to think: raising it buys minutes of thinking rather than
-		better suggestions, which is how a six-kilobyte prompt once took longer than five minutes.
-		Lower it to constrain a run; raising it will not make one finish. A pass that comes back
-		empty on the token limit is asked again automatically with more room, when there is time
-		left to ask in.
-	</p>
-	<p class="hint">
-		The time limit covers the whole run rather than one call, so a review's two passes share it —
-		the survey takes what it needs and the close read keeps a floor it can always finish in.
-	</p>
-	<p class="hint">
-		A run started by hand is a single request held open for as long as it takes, so if you raise
-		the time limit past your reverse proxy's own read timeout, raise that too — otherwise the
-		browser gives up while the run carries on.
+		<strong>Concepts read closely</strong> is how many a review sends in full. <strong>Max
+		tokens</strong> is a ceiling: raising it buys a reasoning model thinking time, not better
+		suggestions. The time limit covers the whole run, so raise your reverse proxy's read timeout
+		with it.
 	</p>
 	<p class="hint">
 		Last run {when(lastRun)}{#if groom.enabled && lastRun}, next due {when(due)}{/if}. Needs a model
-		set for the <code>cortex-groom</code> task; without one it still tidies, since that half needs
-		no model at all.
+		for the <code>cortex-groom</code> task; without one it still tidies.
 	</p>
 	<div class="row">
 		<button class="btn primary" onclick={() => save('cortexGroom', groom)}>Save schedule</button>
@@ -167,16 +141,9 @@
 
 	<h3>Learning</h3>
 	<p class="hint">
-		Connections strengthen when a reply <em>uses</em> the concept at the other end, and fade when
-		nothing does. Not when a query merely traverses them: a traversal follows the strongest
-		connections, so rewarding it would teach the lattice to confirm the shape it already has.
-	</p>
-	<p class="hint">
-		The strength somebody set by hand is never overwritten — what moves is a separate learned
-		amount added to it, capped so nothing can strengthen without limit. Fading stops at a floor
-		where a connection no longer reaches the activation threshold: it has stopped crowding
-		results, but it is still on the map and still restorable. Removing one is a suggestion in the
-		owner's Cortex tab, never something this does on its own.
+		Connections strengthen when a reply uses the concept at the other end, and fade when nothing
+		does. A strength set by hand is never overwritten, and nothing is removed except through a
+		suggestion.
 	</p>
 	<div class="grid">
 		<label class="check">
@@ -189,22 +156,17 @@
 	</div>
 	<p class="hint" role="status">
 		{#if cortex.learning}
-			<strong>On.</strong> A faded connection that nothing has traversed in
-			{cortex.staleDays} days is raised as a suggestion to disconnect.
+			<strong>On.</strong> A connection unused for {cortex.staleDays} days is suggested for removal.
 		{:else}
-			<strong>Off.</strong> No strength moves on its own in either direction. Anything already
-			learned is kept and still counts — it is simply frozen where it is.
+			<strong>Off.</strong> Strengths stay where they are.
 		{/if}
 	</p>
 	<p class="hint" role="status">
 		{#if cortex.agentWrites}
-			<strong>Agents can write.</strong> The <code>cortex_write</code> tool is offered on chat and
-			coding turns, so a conversation can add a concept and connect it. It cannot file one under
-			an area, mark it a bridge, merge or delete — those go through the review queue.
+			<strong>Agents can write.</strong> <code>cortex_write</code> is offered on chat and coding
+			turns, to add and connect concepts only.
 		{:else}
-			<strong>Agents cannot write.</strong> <code>cortex_write</code> is withheld from every turn,
-			so nothing reaches the lattice except what you add here or accept from a suggestion. It will
-			still appear in Admin → Tools, which lists what exists rather than what is currently offered.
+			<strong>Agents cannot write.</strong> <code>cortex_write</code> is withheld from every turn.
 		{/if}
 	</p>
 	<div class="row">

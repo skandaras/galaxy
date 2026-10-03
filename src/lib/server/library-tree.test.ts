@@ -14,6 +14,7 @@ import {
 	fileDoc,
 	MAX_DEPTH,
 	saveDoc,
+	setVisibility,
 	subtreeCounts
 } from './library';
 
@@ -226,12 +227,14 @@ describe('reading the tree', () => {
 	});
 
 	it('stops a path at an ancestor the reader cannot see', () => {
+		// A shared doc cannot be filed under a personal one, but a parent can be
+		// made personal afterwards, which is how this shape still arises.
 		const theirs = saveDoc({
 			title: 'Bobs epic',
 			body: 'x',
 			author: 'user',
 			ownerId: BOB,
-			visibility: 'personal'
+			visibility: 'shared'
 		});
 		const shared = saveDoc({
 			title: 'Shared child',
@@ -241,6 +244,7 @@ describe('reading the tree', () => {
 			visibility: 'shared',
 			parentId: theirs.id
 		});
+		setVisibility(theirs.id, BOB, 'personal');
 		// A breadcrumb must not name a title out of somebody else's shelf.
 		expect(docPath(shared.id, ALICE)).toEqual(['Shared child']);
 		expect(docPath(shared.id, BOB)).toEqual(['Bobs epic', 'Shared child']);

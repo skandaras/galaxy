@@ -587,53 +587,91 @@ export interface CompactionSettings {
 
 export const DEFAULT_COMPACTION: CompactionSettings = { ratio: 0.7, keepRecent: 8 };
 
-export interface StyleSettings {
+/**
+ * How the agents write, as one owner-editable text. Admin → Language.
+ *
+ * This used to be three blocks in one system prompt: a built-in house style
+ * from voice.ts, the owner's additions appended after it and told to win, and
+ * whatever the owner had also written into the task prompt. The same rule
+ * turned up two or three times in different words, and an agent reported
+ * weighing the variants against each other instead of following any of them.
+ * One text, pre-filled with what used to be built in, leaves one wording.
+ */
+export interface LanguageSettings {
 	/**
-	 * The owner's own additions to the house style, appended after it on every
-	 * prose turn and told to win where the two disagree.
+	 * Diction, for every task whose output a person reads as prose.
 	 *
-	 * An object around one string rather than a bare string, because the admin
-	 * settings route fills every key by spreading it over a defaults object — a
-	 * scalar would need a special case in `fill()`.
+	 * No layout rules belong here, which is what makes it safe for the tasks
+	 * that answer with a JSON object: a paragraphs-and-bullets instruction would
+	 * fight their reply contract.
 	 */
-	text: string;
+	voice: string;
+	/** Reply shape, for chat and coding turns and the research report. */
+	layout: string;
 }
 
 /**
- * A cap, not a preference, and enforced server-side: the textarea's `maxlength`
- * does not survive a raw PUT.
+ * The shipped text. It names failures rather than listing virtues: "clear,
+ * engaging and professional" is three adjectives a model already believes it
+ * satisfies, while a banned sentence with the reason attached is something it
+ * can check a draft against. The chat prompt's whole voice instruction was once
+ * "be direct, capable and concise", and it caught almost nothing, because none
+ * of what a model does by default is *verbose*.
  *
- * It rides every prose turn, and one research run makes around ten model calls
- * that each carry it. Past roughly a thousand characters it stops being a style
- * note and becomes a second system prompt — one with none of the versioning or
- * history that Admin -> Tasks gives the first.
+ * The layout rules exist because the default output shape is one unbroken
+ * paragraph: markdown renders a single newline as a space, so a model that
+ * separates its points with one newline produces a wall.
  */
-export const STYLE_MAX_CHARS = 1_000;
-
-export const DEFAULT_STYLE: StyleSettings = { text: '' };
+export const DEFAULT_LANGUAGE: LanguageSettings = {
+	voice: [
+		'Cut straight to the answer. Do not affirm the input with "Great question", "I would be happy to ' +
+			'help" or "Let me take a look". Do not restate the question before answering it. No flattery: ' +
+			'"Good catch", "you are absolutely right" and "that is a really interesting point" are noise ' +
+			'when true and a lie the rest of the time. Agreement is shown by acting on what was said.',
+		'Hedge only where the doubt is warranted, and say what the doubt is.',
+		'Do not use the em dash (—). Use a comma, a colon, brackets or a new sentence.',
+		'Prefer the plain word. Avoid "stated plainly", "honest", "honestly", "earn", "earned", ' +
+			'"silently", "silent", "delve", "tapestry", "nuanced", "vibrant", "resonate", "underscore", ' +
+			'"underscored", "robust", "seamless", "embark", "leverage", "utilise", "landscape", "realm", ' +
+			'"navigate the complexities of", "it is worth noting that". These are padding wherever they appear.',
+		'NEVER use these sentence shapes: "It is not X, it is Y"; "Not just X, Y"; ' +
+			'"What sets X apart is"; "At its core, X is"; "Whether you are X or Y"; ' +
+			'"X is not just about Y, it is about Z"; ' +
+			'"Never call a statement honest or say you are being honest; just say the thing"',
+		'Do not stop to name a concept for the reader: "the term was coined to describe", ' +
+			'"it names something we have all felt", "the key word is", "none of this is about". ' +
+			'Let the idea arrive in context, or attribute it to its source and carry on.',
+		'Stop when the answer stops. Do not close by summarising the reply that was just read, do not ' +
+			'offer further help, and do not ask whether they would like you to continue. If there is an ' +
+			'obvious next step, take it or name it in one line.'
+	].join('\n\n'),
+	layout:
+		'Format your replies to be read on a screen, not parsed out of a paragraph. Use short paragraphs of two or three sentences, separated by a blank line. Use a bulleted list whenever you are reporting more than one thing, such as files changed, options considered or problems found: one item per line, never as a run-on sentence. Give each bullet or section a short bold lead-in naming what it is about, so the reply can be skimmed. Use a heading only when the reply has genuinely distinct sections. Never answer with a single long paragraph.'
+};
 
 /**
- * Read through the normaliser, not around it, so the cap holds on the way out as
- * well as in — the same reason the admin route normalises on GET. The PUT is the
- * only writer today, but a value that arrived some other way (an image that
- * capped differently, a hand-edited database) would otherwise be paid for on
- * every prose turn with nothing to stop it.
+ * A cap, enforced server-side because a textarea's `maxlength` does not
+ * survive a raw PUT. Both fields ride every prose turn, and one research run
+ * makes around ten model calls that each carry the voice.
  */
-export function styleSettings(): StyleSettings {
-	return normaliseStyleSettings(getSetting<Record<string, unknown>>('style', {}));
+export const LANGUAGE_MAX_CHARS = 6_000;
+
+/** Read through the normaliser, so the cap holds on the way out as well as in. */
+export function languageSettings(): LanguageSettings {
+	return normaliseLanguageSettings(getSetting<Record<string, unknown>>('language', {}));
 }
 
 /**
- * No `settingsVersion` and no entry in the settings migration, unlike the search
- * and research keys: this is a new key with no prior default, so there is no
- * install to move off one. The omission is deliberate, not outstanding.
- *
- * Returns only `text`, which also stops the read-only `house` field the GET
- * route attaches for the editor from ever being written back.
+ * A field that is not a string takes the shipped text, which is how a fresh
+ * install starts with the list. An empty string is kept: clearing a field is
+ * how an owner turns that half off.
  */
-export function normaliseStyleSettings(raw: Record<string, unknown>): StyleSettings {
-	const text = typeof raw.text === 'string' ? raw.text : DEFAULT_STYLE.text;
-	return { text: text.trim().slice(0, STYLE_MAX_CHARS) };
+export function normaliseLanguageSettings(raw: Record<string, unknown>): LanguageSettings {
+	const field = (key: keyof LanguageSettings) =>
+		(typeof raw[key] === 'string' ? (raw[key] as string) : DEFAULT_LANGUAGE[key])
+			.trim()
+			.slice(0, LANGUAGE_MAX_CHARS);
+	return { voice: field('voice'), layout: field('layout') };
 }
 
 export interface BoardSettings {

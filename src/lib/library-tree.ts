@@ -12,6 +12,7 @@ export interface TreeDoc {
 	title: string;
 	folder: string;
 	parentId: string | null;
+	visibility?: 'personal' | 'shared';
 }
 
 export interface ShelfNode<D extends TreeDoc> {
@@ -155,7 +156,11 @@ const depthOf = <D extends TreeDoc>(docs: D[], doc: D): number => {
  * never being on offer. The drag and the picker share this for that reason:
  * two lists of legal parents would eventually disagree.
  */
-export function nestableUnder<D extends TreeDoc>(docs: D[], currentId: string | null): D[] {
+export function nestableUnder<D extends TreeDoc>(
+	docs: D[],
+	currentId: string | null,
+	visibility = docs.find((d) => d.id === currentId)?.visibility
+): D[] {
 	const barred = new Set<string>(currentId ? [currentId] : []);
 	if (currentId) {
 		// Walk down from the current document, bounded like everything else here.
@@ -168,7 +173,9 @@ export function nestableUnder<D extends TreeDoc>(docs: D[], currentId: string | 
 	return docs
 		.filter((d) => !barred.has(d.id))
 		// A document already at the floor cannot take a child without breaching it.
-		.filter((d) => depthOf(docs, d) < MAX_DEPTH - 1);
+		.filter((d) => depthOf(docs, d) < MAX_DEPTH - 1)
+		// The server refuses a shared doc under a personal one, so it is not offered.
+		.filter((d) => visibility !== 'shared' || d.visibility !== 'personal');
 }
 
 /** A picker value naming a folder; the rest of the string is the folder's name. */
@@ -192,7 +199,8 @@ export interface FilingOption {
 export function filingOptions<D extends TreeDoc>(
 	docs: D[],
 	folders: string[],
-	currentId: string | null
+	currentId: string | null,
+	visibility?: 'personal' | 'shared'
 ): FilingOption[] {
 	const names = [...new Set([...folders, ...docs.map((d) => d.folder)].filter(Boolean))].sort(
 		(a, b) => a.localeCompare(b)
@@ -205,7 +213,7 @@ export function filingOptions<D extends TreeDoc>(
 			value: `${FOLDER_VALUE}${name}`,
 			label: name || UNFILED
 		})),
-		...nestableUnder(docs, currentId)
+		...nestableUnder(docs, currentId, visibility)
 			.sort((a, b) => a.title.localeCompare(b.title))
 			.map((d) => ({
 				kind: 'doc' as const,

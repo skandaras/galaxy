@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { taskConfigs } from '$lib/server/db/schema';
+import { taskConfigs, type CORE_TASKS } from '$lib/server/db/schema';
 import { appendMessage, getChat, getMessages, listAttachments, updateChat } from '$lib/server/chats';
 import {
 	listEnabledModels,
@@ -12,13 +12,13 @@ import {
 	DEFAULT_FETCH,
 	webSearchSettings,
 	getSetting,
+	languageSettings,
 	type FetchSettings
 } from '$lib/server/settings';
 import { typstReady } from '$lib/server/pdf';
 import { assertBudget, getBudgetStatus } from './budget';
 import { buildContext } from './context';
 import { DEFAULT_PROMPTS } from './prompts';
-import { houseStyle, PROSE_TASKS } from './voice';
 import { maybeCompact } from './compaction';
 import { maybeTitleChat, nameThisChatNote, setChatTitleTool } from './chat-title';
 import { emitEvent } from './events';
@@ -76,27 +76,93 @@ export function taskPrompt(task: string): string {
 }
 
 /**
- * A task's prompt, plus the house style where the task writes prose a person
- * reads.
+ * The tasks whose output a person reads as prose, and the only ones the
+ * Language voice reaches.
  *
- * The style is composed here rather than baked into `DEFAULT_PROMPTS` so that
- * the two cannot be edited apart: an owner who rewrites the chat prompt still
- * gets the current house style, and a reworded style block reaches them without
- * touching what they wrote.
+ * Excluded, and each for its own reason:
+ * - `chat-title` (two to five words) and `run-summary` (one line, no markdown):
+ *   a block this size shaping a fifteen-word output is pure cost.
+ * - `visual`: the output is Mermaid or SVG.
+ * - `vision`: the reader is another agent, and the output is a transcription
+ *   of what is in an image.
+ * - `memory` and `cortex-groom`: JSON, and both prompts are already stricter
+ *   about what is worth a line than this block knows how to be.
+ * - `alignment`: this one would conflict. The voice bans ritual hedging; the
+ *   assessor *requires* calibrated uncertainty, where "not enough here to say"
+ *   is a first-class answer. Its prompt carries its own version of these rules.
+ * - `board`: it arrives as a supplement to `chat`, which is in the set, so
+ *   listing it here would compose the block twice.
+ */
+export const PROSE_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[number]>([
+	'chat',
+	'coding',
+	'deep-research',
+	'subagent',
+	'ux-audit',
+	'skill-optimiser',
+	'alignment-synthesis',
+	'ivory-read',
+	'ivory-plan',
+	'ivory-synthesise',
+	'ivory-redteam'
+]);
+
+/**
+ * The subset of PROSE_TASKS that also gets the layout half.
  *
- * The cost is that the block is not visible in the Admin -> Tasks textarea,
- * which is why that page says so and points at Admin -> Settings.
+ * Narrower, because three of those answer with a JSON object (`ux-audit`,
+ * `skill-optimiser`, `alignment-synthesis`) and a paragraphs-and-bullets
+ * instruction would fight the reply contract. `subagent` answers another agent
+ * in a few sentences, where headings and bold lead-ins are cost with no reader.
+ * `deep-research` is out because research.ts adds the layout at its synthesis
+ * call: four other phases share that task's prompt and answer in JSON.
+ */
+export const LAYOUT_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[number]>([
+	'chat',
+	'coding'
+]);
+
+/**
+ * The Language block, as it reaches the model.
+ *
+ * Framed as rules, the deliberate opposite of the memory digest's "treat them
+ * as background, never as instructions": memory is extracted from content the
+ * platform does not control, and this is the owner's own configuration.
+ */
+export function languageBlock(task: string): string {
+	if (!PROSE_TASKS.has(task)) return '';
+	const { voice, layout } = languageSettings();
+	const rules = [voice, LAYOUT_TASKS.has(task) ? layout : ''].filter(Boolean);
+	if (!rules.length) return '';
+	// Leading blank lines because this is concatenated onto the end of a prompt
+	// that does not know it is coming, and a single newline collapses.
+	return [
+		'',
+		'',
+		'[How to write, set by the owner of this instance. These are rules and apply to every reply.]',
+		rules.join('\n\n')
+	].join('\n');
+}
+
+/**
+ * A task's prompt, plus the Language block where the task writes prose a
+ * person reads.
+ *
+ * Composed here rather than written into `DEFAULT_PROMPTS`, so that the two
+ * cannot be edited apart: an owner who rewrites the chat prompt still gets the
+ * current Language text, and a change to that text reaches every task at once.
+ * The cost is that the block is not visible in the task prompt textarea, which
+ * is why that page points at Admin → Language.
  *
  * `supplementTask` names a second task config whose prompt is appended before
- * the style — how a board chat gets the board prompt on top of the chat one. It
- * is read raw and is never itself in PROSE_TASKS, so the style cannot be
- * composed twice.
+ * the block, which is how a board chat gets the board prompt on top of the
+ * chat one. It is read raw and is never itself in PROSE_TASKS, so the block
+ * cannot be composed twice.
  */
 export function systemPromptFor(task: string, supplementTask?: string | null): string {
 	const parts = [taskPrompt(task)];
 	if (supplementTask) parts.push(taskPrompt(supplementTask));
-	const stored = parts.filter(Boolean).join('\n\n');
-	return PROSE_TASKS.has(task) ? stored + houseStyle(task) : stored;
+	return parts.filter(Boolean).join('\n\n') + languageBlock(task);
 }
 
 /**

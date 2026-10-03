@@ -1,5 +1,7 @@
 import { db } from '$lib/server/db';
 import {
+	DEFAULT_LANGUAGE,
+	deleteSetting,
 	getSetting,
 	migrateResearchSettings,
 	migrateWebSearchSettings,
@@ -314,4 +316,26 @@ export function migrateSettings(): void {
 		getSetting<Partial<ResearchSettings> | null>('research', null)
 	);
 	if (research) setSetting('research', research);
+	migrateStyleToLanguage();
+}
+
+/**
+ * The owner's additions to the old built-in house style become the end of the
+ * one Language text, after the list that used to be built in, so nothing they
+ * wrote is lost and the duplicates are theirs to remove in one box.
+ *
+ * Keyed on the old row existing rather than stamped: it deletes that row, so
+ * it can only ever find one once.
+ */
+export function migrateStyleToLanguage(): void {
+	const style = getSetting<{ text?: unknown } | null>('style', null);
+	if (!style) return;
+	if (getSetting<object | null>('language', null) === null) {
+		const own = typeof style.text === 'string' ? style.text.trim() : '';
+		setSetting('language', {
+			...DEFAULT_LANGUAGE,
+			voice: own ? `${DEFAULT_LANGUAGE.voice}\n\n${own}` : DEFAULT_LANGUAGE.voice
+		});
+	}
+	deleteSetting('style');
 }

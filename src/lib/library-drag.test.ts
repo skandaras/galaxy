@@ -63,3 +63,20 @@ describe('dropping a document', () => {
 		expect(dropDestination(docs, 'loose', null)).toBeNull();
 	});
 });
+
+describe('dropping a shared document', () => {
+	const shelf: TreeDoc[] = [
+		{ ...doc('shared', 'Shared plan'), visibility: 'shared' },
+		{ ...doc('mine', 'My notes'), visibility: 'personal' },
+		{ ...doc('ours', 'Our notes'), visibility: 'shared' }
+	];
+
+	it('does not light up a personal document, which the server would refuse', () => {
+		expect(dropDestination(shelf, 'shared', { docId: 'mine' })).toBeNull();
+		expect(dropDestination(shelf, 'shared', { docId: 'ours' })).toEqual({ parentId: 'ours' });
+	});
+
+	it('still lets a personal document go under a shared one', () => {
+		expect(dropDestination(shelf, 'mine', { docId: 'ours' })).toEqual({ parentId: 'ours' });
+	});
+});

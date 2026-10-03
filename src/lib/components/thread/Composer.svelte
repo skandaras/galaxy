@@ -232,6 +232,9 @@
 		   the screen. Two elements both paying env(safe-area-inset-bottom) is a
 		   double gap on a notched phone and a wrong one on every other device. */
 		padding: 0.7rem 1rem 0.9rem;
+		/* Lines the box up with the thread's reading column above it, while the
+		   border still spans the pane. */
+		padding-inline: max(1rem, calc((100% - var(--thread-measure)) / 2));
 	}
 	/* Outlined inwards, and an outline rather than a border, so lighting up
 	   cannot change the composer's size and shove the thread up a line every

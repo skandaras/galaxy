@@ -79,7 +79,7 @@
 	const sections = $derived(buildShelf(docs, folders));
 
 	/** Every place this doc could be filed: a folder, or inside another doc. */
-	const filings = $derived(filingOptions(docs, folders, currentId));
+	const filings = $derived(filingOptions(docs, folders, currentId, visibility));
 	const folderChoices = $derived(filings.filter((o) => o.kind === 'folder'));
 	const docChoices = $derived(filings.filter((o) => o.kind === 'doc'));
 
@@ -110,8 +110,10 @@
 		collapsed = Object.fromEntries(sections.map((s) => [s.key, shut]));
 	}
 
-	/** False for someone else's shared doc: readable, not editable. */
+	/** False only for a doc this person cannot write; a shared doc is anyone's to edit. */
 	let editable = $state(true);
+	/** Sharing and deleting stay with the owner, even on a doc anyone may edit. */
+	let manageable = $state(true);
 	/**
 	 * A document opens as the thing it is rather than as its source. Editing is
 	 * the Edit button, or a double-click in the text.
@@ -332,6 +334,7 @@
 		filing = filingValue({ folder: doc.meta.folder ?? '', parentId: doc.meta.parentId ?? null });
 		parentLabel = (doc.path ?? []).slice(0, -1).pop() ?? '';
 		editable = doc.canEdit !== false;
+		manageable = doc.canManage !== false;
 		body = doc.body;
 		preview = true;
 		listOpen = false;
@@ -366,6 +369,7 @@
 		// New docs start personal; sharing is a deliberate act.
 		visibility = 'personal';
 		editable = true;
+		manageable = true;
 		// The one document that does not open in preview: there is nothing in it
 		// to read, and the first thing anybody does with it is type.
 		preview = false;
@@ -1060,10 +1064,10 @@
 						role="switch"
 						aria-checked={visibility === 'shared'}
 						aria-label="Share this document"
-						disabled={!editable}
-						title={editable
-							? 'Shared docs appear in every user’s library and feed their agents’ context'
-							: 'This document belongs to another user'}
+						disabled={!manageable}
+						title={manageable
+							? 'Shared docs appear in every user’s library, anyone can edit them, and they feed every agent’s context'
+							: 'Only the owner can share or delete this'}
 						onclick={() => {
 							visibility = visibility === 'shared' ? 'personal' : 'shared';
 							touch();
@@ -1088,7 +1092,12 @@
 					>
 				{/if}
 				{#if currentId}
-					<button class="btn danger" disabled={!editable} onclick={remove}>Delete</button>
+					<button
+						class="btn danger"
+						disabled={!manageable}
+						title={manageable ? undefined : 'Only the owner can share or delete this'}
+						onclick={remove}>Delete</button
+					>
 				{/if}
 			</div>
 		</header>

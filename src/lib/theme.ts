@@ -189,7 +189,10 @@ if (DEFAULT_THEME.fontUi !== DEFAULT_UI_FONT || DEFAULT_THEME.fontMono !== DEFAU
  * `.btn.primary` here, so which one wins comes down to stylesheet order.
  */
 const BASE_CONTROLS = [
-	':root{--radius-lg:calc(var(--radius) * 1.6);}',
+	// The reading column Chat and Code share. Replies ran the full width of the
+	// pane, around 150 characters to a line on a desktop, which is a lot of
+	// eye travel for prose. One value so the two pages and the composer agree.
+	':root{--radius-lg:calc(var(--radius) * 1.6);--thread-measure:44rem;}',
 	// min-height is --tap, so a button meets 32px with a mouse and the 44px
 	// docs/ACCESSIBILITY.md commits to under a finger, without each page
 	// remembering to ask for it.

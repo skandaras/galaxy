@@ -38,6 +38,8 @@
 			<Models refreshKey={modelsRefreshKey} />
 		{:else if active === 'Tools'}
 			<Tools />
+		{:else if active === 'Language'}
+			<Settings cards={['language']} />
 		{:else if active === 'General tasks'}
 			<Tasks only={tasks} intro />
 		{:else if active === 'Research'}
@@ -70,7 +72,7 @@
 			<Settings cards={['budget', 'retention']} retentionFields={['usageDays']} />
 			<Usage />
 		{:else if active === 'Conversations'}
-			<Settings cards={['compaction', 'style']} />
+			<Settings cards={['compaction']} />
 		{:else}
 			<Settings cards={['deploy', 'push', 'retention']} retentionFields={['eventDays']} />
 		{/if}
