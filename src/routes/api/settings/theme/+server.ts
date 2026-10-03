@@ -29,18 +29,33 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 	const user = requireUser(locals);
 	const body = await request.json().catch(() => ({}));
 	const theme = normalizeTheme(body.theme);
-	setSetting('theme', theme, user.id);
+	const presets = customPresets(user.id);
 
-	// Optionally save this theme as a named custom preset in the same call.
-	if (typeof body.saveAs === 'string' && body.saveAs.trim()) {
+	// `saveTo` writes back into a theme you already have, `saveAs` makes a new
+	// one, and they are separate so that neither can do the other's job by
+	// accident: saveAs used to overwrite any theme that shared the name, with
+	// nothing said, and would also make a "Galaxy" of yours beside the built-in
+	// Galaxy, leaving two chips with one name.
+	let collection: Record<string, Theme> | null = null;
+	if (typeof body.saveTo === 'string') {
+		if (!(body.saveTo in presets)) error(404, `There is no saved theme called "${body.saveTo}".`);
+		collection = { ...presets, [body.saveTo]: theme };
+	} else if (typeof body.saveAs === 'string' && body.saveAs.trim()) {
 		const name = body.saveAs.trim().slice(0, 40);
-		const presets = customPresets(user.id);
-		if (!(name in presets) && Object.keys(presets).length >= MAX_CUSTOM) {
+		const taken = [...Object.keys(presets), ...Object.keys(PRESETS)];
+		if (taken.some((n) => n.toLowerCase() === name.toLowerCase())) {
+			error(409, `There is already a theme called "${name}".`);
+		}
+		if (Object.keys(presets).length >= MAX_CUSTOM) {
 			error(400, `Too many saved themes (max ${MAX_CUSTOM})`);
 		}
-		presets[name] = theme;
-		setSetting(CUSTOM_KEY, presets, user.id);
+		collection = { ...presets, [name]: theme };
 	}
+
+	// Checked before anything is written, so a refused name leaves the active
+	// theme as it was too.
+	setSetting('theme', theme, user.id);
+	if (collection) setSetting(CUSTOM_KEY, collection, user.id);
 	return json({ theme, custom: customPresets(user.id) });
 };
 

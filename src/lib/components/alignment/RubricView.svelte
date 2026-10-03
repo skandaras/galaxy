@@ -258,13 +258,6 @@
 		color: var(--fg-dim);
 	}
 	.link {
-		background: none;
-		border: none;
-		padding: 0;
-		font: inherit;
 		font-size: var(--text-sm);
-		color: var(--accent);
-		cursor: pointer;
-		text-decoration: underline;
 	}
 </style>

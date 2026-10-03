@@ -210,11 +210,6 @@
 		padding: 0.35rem 0.5rem;
 	}
 	.link {
-		background: none;
-		border: none;
-		color: var(--accent);
-		cursor: pointer;
 		font-size: var(--text-sm);
-		font-family: inherit;
 	}
 </style>

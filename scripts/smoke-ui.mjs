@@ -405,6 +405,54 @@ check(
 	check('the Boards tab does not also render Cortex', /cortex/i.test(boardsPane), false);
 }
 
+// 1c. Theme edits belong to the chip they were made on. Saving used to write
+//     only the active theme, so clicking away and back to the chip brought
+//     back the version from before the save.
+{
+	await page.goto(`${B}/settings`);
+	const pressed = page.locator('.preset[aria-pressed="true"]');
+	await pressed.waitFor();
+	const accent = page.locator('.grid label', { hasText: 'accent' }).locator('.hex');
+	const primary = page.locator('.actions .btn.primary');
+	check('the theme in use is the pressed chip', (await pressed.innerText()).includes('Galaxy'));
+
+	await accent.fill('#ff9900');
+	check('an edit marks the chip', (await pressed.innerText()).includes('edited'));
+	check('a built-in asks for a name', await primary.innerText(), 'Save as new theme…');
+	await primary.click();
+	const name = page.locator('.save-as input');
+	await page.waitForTimeout(100);
+	check('with one offered', await name.inputValue(), 'Galaxy 2');
+	await page.locator('.save-as .btn').click();
+	await page.waitForTimeout(400);
+	check('and the new theme becomes the pressed chip', (await pressed.innerText()).includes('Galaxy 2'));
+
+	await accent.fill('#00ccff');
+	// The button reads "Saved ✓" for a moment after the save above.
+	const saveInto = page.locator('.actions .btn.primary', { hasText: 'Save "Galaxy 2"' });
+	await saveInto.waitFor({ timeout: 4000 }).catch(() => {});
+	check('a saved theme saves into itself', await primary.innerText(), 'Save "Galaxy 2"');
+	await primary.click();
+	await page.waitForTimeout(400);
+	await page.locator('.preset', { hasText: 'Paper' }).click();
+	await page.locator('.preset', { hasText: 'Galaxy 2' }).click();
+	check('coming back to it brings back the saved edit', await accent.inputValue(), '#00ccff');
+
+	await accent.fill('#123456');
+	await page.locator('.preset', { hasText: 'Paper' }).click();
+	const dialog = page.locator('dialog.confirm');
+	await dialog.waitFor();
+	await dialog.getByRole('button', { name: 'Cancel' }).click();
+	check('leaving unsaved edits asks first', await accent.inputValue(), '#123456');
+
+	// Put Galaxy back, so the colour checks further down see the default theme.
+	await page.locator('.preset-row').first().locator('.preset', { hasText: 'Galaxy' }).click();
+	await dialog.getByRole('button', { name: 'Discard changes' }).click();
+	await primary.click();
+	await page.waitForTimeout(400);
+	if (fail.length) await shot('theme-chips');
+}
+
 // 2. Nothing covers the brand. This is the general form of a control escaping
 //    its container onto the sidebar — the shape of every layout bug so far.
 {
@@ -446,7 +494,8 @@ check(
 	await page.keyboard.press('Escape');
 }
 
-// 4. Dragging cards. Press and hold, because that is what the UI asks for.
+// 4. Dragging cards. With a mouse the drag starts on the first movement, so
+//    nothing here waits out the hold a finger needs.
 {
 	await page.goto(`${B}/boards`);
 	const picker = page.locator('header.bar select').first();
@@ -543,7 +592,6 @@ check(
 		}
 		await page.mouse.move(x, y);
 		await page.mouse.down();
-		await page.waitForTimeout(300); // past the hold threshold
 		// Stepped, because one jump can skip every hover calculation.
 		for (let i = 1; i <= 6; i++) {
 			await page.mouse.move(
@@ -734,9 +782,9 @@ check(
 	await shot('library-preview');
 }
 
-// 4f. Dragging a document to re-file it. Press and hold rather than the
-//     browser's own drag, which never fires for a finger — so this is a mouse
-//     standing in for one, at the same timings.
+// 4f. Dragging a document to re-file it. Pointer events rather than the
+//     browser's own drag, which never fires for a finger. A mouse skips the
+//     hold, so this moves straight off the press.
 {
 	const filedIn = async (title) =>
 		(await as(ALICE, '/api/library')).find((d) => d.title === title)?.folder;
@@ -748,9 +796,6 @@ check(
 		const b = await onto.boundingBox();
 		await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
 		await page.mouse.down();
-		// Past the hold, which is what separates a drag from a tap and lets a
-		// scroll get away before the gesture commits.
-		await page.waitForTimeout(320);
 		await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 });
 		await page.waitForTimeout(120);
 		await page.mouse.up();

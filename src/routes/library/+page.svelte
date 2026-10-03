@@ -15,8 +15,8 @@
 		flattenTree,
 		UNFILED
 	} from '$lib/library-tree';
-	import { dropDestination, HOLD_MS, MOVE_TOLERANCE, type DropTarget } from '$lib/library-drag';
-	import { movedBeyond } from '$lib/board-drag';
+	import { dropDestination, HOLD_MS, type DropTarget } from '$lib/library-drag';
+	import { pressOutcome } from '$lib/board-drag';
 	import {
 		AUTOSAVE_IDLE_MS,
 		AUTOSAVE_MAX_MS,
@@ -660,9 +660,9 @@
 		savedSnapshot = JSON.stringify({ ...held, filing });
 	}
 
-	// --- press and hold to re-file a document ---------------------------------
+	// --- drag to re-file a document (press and hold under a finger) ----------
 
-	type Pending = { id: string; x: number; y: number; el: HTMLElement };
+	type Pending = { id: string; title: string; x: number; y: number; el: HTMLElement; pointerType: string };
 	let pending: Pending | null = null;
 	let holdTimer: ReturnType<typeof setTimeout> | undefined;
 	let drag = $state<{
@@ -688,19 +688,26 @@
 		// be dragged around — the list is ranked, not filed.
 		if (e.button !== 0 || query.trim()) return;
 		justDragged = false;
-		pending = { id: doc.id, x: e.clientX, y: e.clientY, el: e.currentTarget as HTMLElement };
-		holdTimer = setTimeout(() => beginDrag(doc.title), HOLD_MS);
+		pending = {
+			id: doc.id,
+			title: doc.title,
+			x: e.clientX,
+			y: e.clientY,
+			el: e.currentTarget as HTMLElement,
+			pointerType: e.pointerType
+		};
+		if (e.pointerType !== 'mouse') holdTimer = setTimeout(beginDrag, HOLD_MS);
 		window.addEventListener('pointermove', onPointerMove, { passive: false });
 		window.addEventListener('pointerup', onPointerUp);
 		window.addEventListener('pointercancel', abandon);
 	}
 
-	function beginDrag(name: string) {
+	function beginDrag() {
 		if (!pending) return;
 		const rect = pending.el.getBoundingClientRect();
 		drag = {
 			id: pending.id,
-			title: name,
+			title: pending.title,
 			at: { x: pending.x, y: pending.y },
 			grab: { x: pending.x - rect.left, y: pending.y - rect.top },
 			width: rect.width,
@@ -711,13 +718,18 @@
 
 	function onPointerMove(e: PointerEvent) {
 		if (!drag) {
-			// Still deciding. Movement before the hold fires means the person is
-			// clicking or scrolling, not dragging.
-			if (pending && movedBeyond(pending, { x: e.clientX, y: e.clientY }, MOVE_TOLERANCE)) {
-				abandon();
-			}
-			return;
+			// Still deciding: a click, a scroll, or (for a mouse) a drag starting.
+			if (!pending) return;
+			const outcome = pressOutcome(pending.pointerType, pending, { x: e.clientX, y: e.clientY });
+			if (outcome === 'abandon') return abandon();
+			if (outcome === 'wait') return;
+			beginDrag();
 		}
+		follow(e);
+	}
+
+	function follow(e: PointerEvent) {
+		if (!drag) return;
 		// Holds the page still under a finger once the drag is real.
 		e.preventDefault();
 		drag = { ...drag, at: { x: e.clientX, y: e.clientY }, target: targetAt(e.clientX, e.clientY) };

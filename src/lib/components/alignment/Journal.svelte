@@ -394,7 +394,8 @@
 		text-align: left;
 		background: none;
 		border: none;
-		padding: 0;
+		padding: 0.25rem 0.4rem;
+		border-radius: var(--radius);
 		font-family: inherit;
 		cursor: pointer;
 		display: flex;

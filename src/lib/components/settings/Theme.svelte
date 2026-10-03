@@ -1,25 +1,104 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { ask } from '$lib/confirm.svelte';
 	import { invalidateAll } from '$app/navigation';
-	import { contrastGrade, contrastRatio, type Theme } from '$lib/theme';
+	import {
+		contrastGrade,
+		contrastRatio,
+		freeName,
+		sameTheme,
+		themeOrigin,
+		type Theme
+	} from '$lib/theme';
 	import { fontStack, optionsFor, type FontRole } from '$lib/fonts';
 	import { probeFonts } from '$lib/font-probe';
 
+	/**
+	 * The chip the draft was opened from. Edits are changes to that chip, and
+	 * Save writes them back into it, so returning to a chip after looking at
+	 * another brings back what was saved there. `current` is the active theme
+	 * when it matches no chip (saved before chips were tracked, imported, or
+	 * its chip deleted), so it always has somewhere to be clicked back to.
+	 */
+	type Base = { kind: 'preset' | 'custom' | 'current'; name: string };
+	const CURRENT: Base = { kind: 'current', name: 'Current' };
+
 	let draft = $state<Theme | null>(null);
+	/** The active theme, as the server last confirmed it. */
+	let active = $state<Theme | null>(null);
+	let base = $state<Base>(CURRENT);
 	let presets = $state<Record<string, Theme>>({});
 	let custom = $state<Record<string, Theme>>({});
 	let saveName = $state('');
+	let nameInput = $state<HTMLInputElement | null>(null);
 	let saved = $state(false);
 	let problem = $state('');
+	let nameProblem = $state('');
 
 	$effect(() => {
 		void (async () => {
 			const data = await (await fetch('/api/settings/theme')).json();
-			draft = data.theme;
 			presets = data.presets;
 			custom = data.custom ?? {};
+			active = data.theme;
+			draft = { ...data.theme };
+			base = locate(data.theme);
 		})();
 	});
+
+	function locate(theme: Theme): Base {
+		return themeOrigin(theme, presets, custom) ?? CURRENT;
+	}
+
+	const baseTheme = $derived(
+		base.kind === 'preset' ? presets[base.name] : base.kind === 'custom' ? custom[base.name] : active
+	);
+	const dirty = $derived(!!draft && !!baseTheme && !sameTheme(draft, baseTheme));
+	const isActive = $derived(!!draft && !!active && sameTheme(draft, active));
+	/** The active theme has no chip of its own, so it gets one. */
+	const showCurrent = $derived(!!active && !themeOrigin(active, presets, custom));
+	const allNames = $derived([...Object.keys(presets), ...Object.keys(custom)]);
+	const isBase = (kind: Base['kind'], name: string) => base.kind === kind && base.name === name;
+
+	const status = $derived.by(() => {
+		if (base.kind === 'preset' && dirty) {
+			return `${base.name} is built in, so changes to it are saved under a new name.`;
+		}
+		const label = base.kind === 'current' ? 'the current theme' : base.name;
+		if (dirty) return `Unsaved changes to ${label}.`;
+		if (base.kind === 'current') return 'This theme has no name. Name it below to keep it as a chip.';
+		return isActive ? `${base.name} is your theme.` : `Previewing ${base.name}.`;
+	});
+
+	/**
+	 * Clicking a chip used to replace the draft without a word, so edits made
+	 * to one theme were gone the moment another was looked at.
+	 */
+	async function pick(next: Base, theme: Theme) {
+		if (isBase(next.kind, next.name) && !dirty) return;
+		if (dirty) {
+			const label = base.kind === 'current' ? 'the current theme' : `"${base.name}"`;
+			if (!(await ask({ title: `Discard your changes to ${label}?`, confirm: 'Discard changes', danger: true }))) {
+				return;
+			}
+		}
+		base = next;
+		draft = { ...theme };
+		problem = '';
+	}
+
+	function revert() {
+		if (baseTheme) draft = { ...baseTheme };
+	}
+
+	/** A built-in cannot take edits, so its Save asks for a name instead. */
+	async function startNaming() {
+		saveName = freeName(base.name, allNames);
+		nameProblem = '';
+		await tick();
+		nameInput?.focus();
+		nameInput?.select();
+	}
 
 	/**
 	 * Live preview: apply the draft to the document as it changes.
@@ -111,27 +190,57 @@
 		{ label: 'roomy', percent: 110 }
 	];
 
-	async function save(saveAs?: string) {
+	async function save(target: { saveTo?: string; saveAs?: string } = {}) {
 		if (!draft) return;
 		const res = await fetch('/api/settings/theme', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ theme: draft, saveAs })
+			body: JSON.stringify({ theme: draft, ...target })
 		}).catch(() => null);
 		// "Saved ✓" used to follow whatever came back, so a refused save looked
 		// kept until the next reload put the old theme back.
 		if (!res?.ok) {
-			problem = 'The theme was not saved. Try again.';
+			const message = (await res?.json().catch(() => null))?.message;
+			if (target.saveAs) nameProblem = message ?? 'The theme was not saved. Try again.';
+			else problem = message ?? 'The theme was not saved. Try again.';
 			return;
 		}
 		const data = await res.json();
 		custom = data.custom ?? custom;
-		if (saveAs) saveName = '';
+		active = data.theme;
+		if (target.saveAs) {
+			base = { kind: 'custom', name: target.saveAs };
+			saveName = '';
+		} else if (base.kind === 'preset' || base.kind === 'current') {
+			// A clean built-in saved as-is is still that built-in.
+			base = locate(data.theme);
+		}
 		problem = '';
+		nameProblem = '';
 		saved = true;
 		setTimeout(() => (saved = false), 1500);
 		await invalidateAll();
 	}
+
+	function saveNew() {
+		if (saveName.trim()) void save({ saveAs: saveName.trim() });
+	}
+
+	function primary() {
+		if (base.kind === 'custom') void save({ saveTo: base.name });
+		else if (base.kind === 'preset' && dirty) void startNaming();
+		else void save();
+	}
+
+	const primaryLabel = $derived(
+		base.kind === 'custom'
+			? `Save "${base.name}"`
+			: base.kind === 'preset'
+				? dirty
+					? 'Save as new theme…'
+					: `Use ${base.name}`
+				: 'Save theme'
+	);
 
 	async function deleteCustom(name: string, ev: Event) {
 		ev.stopPropagation();
@@ -139,11 +248,10 @@
 		const res = await fetch(`/api/settings/theme?name=${encodeURIComponent(name)}`, {
 			method: 'DELETE'
 		});
-		if (res.ok) custom = (await res.json()).custom ?? {};
-	}
-
-	function applyPreset(theme: Theme) {
-		draft = { ...theme };
+		if (!res.ok) return;
+		custom = (await res.json()).custom ?? {};
+		// The draft keeps its values; only the chip it belonged to is gone.
+		if (isBase('custom', name) && draft) base = locate(draft);
 	}
 
 	function exportTheme() {
@@ -205,47 +313,70 @@
 			<h3>Presets</h3>
 			<div class="preset-row">
 				{#each Object.entries(presets) as [name, p] (name)}
+					{@const on = isBase('preset', name)}
 					<button
 						class="preset"
 						style="background:{p.bg};color:{p.accent};border-color:{p.border}"
-						onclick={() => applyPreset(p)}
+						aria-pressed={on}
+						onclick={() => pick({ kind: 'preset', name }, p)}
 					>
-						✦ {name}
+						{on ? '✓' : '✦'} {name}{on && dirty ? ' · edited' : ''}
 					</button>
 				{/each}
 			</div>
 
-			{#if Object.keys(custom).length}
+			{#if Object.keys(custom).length || showCurrent}
 				<h3 class="sub">Your saved themes</h3>
 				<div class="preset-row">
+					{#if showCurrent && active}
+						{@const on = base.kind === 'current'}
+						{@const a = active}
+						<button
+							class="preset"
+							style="background:{a.bg};color:{a.accent};border-color:{a.border}"
+							aria-pressed={on}
+							title="The theme in use, which has no name yet"
+							onclick={() => pick(CURRENT, a)}
+						>
+							{on ? '✓' : '✦'} Current{on && dirty ? ' · edited' : ''}
+						</button>
+					{/if}
 					{#each Object.entries(custom) as [name, p] (name)}
+						{@const on = isBase('custom', name)}
 						<span class="preset-wrap">
 							<button
 								class="preset"
 								style="background:{p.bg};color:{p.accent};border-color:{p.border}"
-								onclick={() => applyPreset(p)}
+								aria-pressed={on}
+								onclick={() => pick({ kind: 'custom', name }, p)}
 							>
-								✦ {name}
+								{on ? '✓' : '✦'} {name}{on && dirty ? ' · edited' : ''}
 							</button>
-							<button class="del" title="Delete" onclick={(e) => deleteCustom(name, e)}>×</button>
+							<button class="del" title="Delete {name}" onclick={(e) => deleteCustom(name, e)}>×</button>
 						</span>
 					{/each}
 				</div>
 			{/if}
 
+			<p class="hint status" aria-live="polite">{status}</p>
+
 			<div class="save-as">
 				<label class="save-as-label">
-					<span class="sr-only">name for this theme</span>
-					<input placeholder="Name this theme…" bind:value={saveName} maxlength="40" />
+					<span class="sr-only">name for a new theme</span>
+					<input
+						placeholder="Name a new theme…"
+						bind:value={saveName}
+						bind:this={nameInput}
+						maxlength="40"
+						oninput={() => (nameProblem = '')}
+						onkeydown={(e) => e.key === 'Enter' && saveNew()}
+					/>
 				</label>
-				<button
-					class="btn"
-					disabled={!saveName.trim()}
-					onclick={() => save(saveName.trim())}
-				>
-					Save as preset
+				<button class="btn" disabled={!saveName.trim()} onclick={saveNew}>
+					Save as new theme
 				</button>
 			</div>
+			{#if nameProblem}<p class="notice error" role="alert">{nameProblem}</p>{/if}
 		</section>
 
 		<section class="card">
@@ -390,7 +521,10 @@
 		</section>
 
 		<div class="actions">
-			<button class="btn primary" onclick={() => save()}>{saved ? 'Saved ✓' : 'Save theme'}</button>
+			<button class="btn primary" disabled={!dirty && isActive} onclick={primary}>
+				{saved ? 'Saved ✓' : primaryLabel}
+			</button>
+			{#if dirty}<button class="btn" onclick={revert}>Revert</button>{/if}
 			<button class="btn" onclick={exportTheme}>Export</button>
 			<label class="btn">
 				Import
@@ -427,6 +561,16 @@
 		font-size: var(--text-md);
 		padding: 0.6rem 1rem;
 		cursor: pointer;
+	}
+	/* Marked with an outline because the chip's own colours come from the theme
+	   it stands for, so a fill or text colour could match it. */
+	.preset[aria-pressed='true'] {
+		outline: 2px solid var(--accent);
+		outline-offset: 3px;
+	}
+	/* Two classes, to outrank the negative margin the card hints below take. */
+	.hint.status {
+		margin: 0.9rem 0 0;
 	}
 	.preset-wrap {
 		position: relative;

@@ -9,12 +9,11 @@ import { nestableUnder, UNFILED, type TreeDoc } from './library-tree';
 /**
  * Press and hold, rather than the browser's own drag, because HTML5 drag
  * events do not fire for a finger and half of this app is used on a phone.
- * Both numbers are the board's, which is where the gesture was already proved
- * under a thumb: long enough that a press is not a tap, loose enough that a
- * scroll is not a drag.
+ * The hold is the board's, which is where the gesture was already proved
+ * under a thumb: long enough that a press is not a tap. A mouse skips it; see
+ * `pressOutcome` in board-drag.ts.
  */
 export const HOLD_MS = 180;
-export const MOVE_TOLERANCE = 8;
 
 /** What the pointer is over: a folder heading, a document row, or neither. */
 export type DropTarget = { folder: string } | { docId: string } | null;
