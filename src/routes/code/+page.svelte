@@ -1643,10 +1643,12 @@
 		color: var(--accent);
 	}
 
+	/* The same reading column as Chat; see the note on .thread there. */
 	.thread {
 		flex: 1;
 		overflow-y: auto;
 		padding: 1.1rem;
+		padding-inline: max(1.1rem, calc((100% - var(--thread-measure)) / 2));
 		display: flex;
 		flex-direction: column;
 		gap: 0.9rem;
@@ -1658,8 +1660,13 @@
 	.empty.center {
 		margin: auto;
 	}
+	/* Held inside the column it sits in. The 50rem cap this had was wider than a
+	   phone, so a long unbroken path in a reply could still push the thread
+	   sideways; Chat breaks it for the same reason. */
 	.msg {
-		max-width: 50rem;
+		max-width: 100%;
+		min-width: 0;
+		overflow-wrap: anywhere;
 		font-size: var(--text-lg);
 		line-height: 1.55;
 	}

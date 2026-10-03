@@ -1738,10 +1738,14 @@
 		margin-left: 0.5rem;
 		cursor: pointer;
 	}
+	/* The padding, not a max-width on each child, makes the column: everything in
+	   the thread lines up in it, and the scrollbar stays at the edge of the pane.
+	   A pane narrower than the column falls back to the plain inset. */
 	.thread {
 		flex: 1;
 		overflow-y: auto;
 		padding: 1.25rem;
+		padding-inline: max(1.25rem, calc((100% - var(--thread-measure)) / 2));
 		display: flex;
 		flex-direction: column;
 		gap: 0.9rem;
@@ -1753,7 +1757,6 @@
 		font-size: var(--text-md);
 	}
 	.msg {
-		max-width: 46rem;
 		font-size: var(--text-lg);
 		line-height: 1.55;
 		position: relative;
