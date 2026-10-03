@@ -831,7 +831,7 @@ const server = createServer(async (req, res) => {
 			const parts = [
 				'Nebulae form from collapsing gas clouds [1]. ',
 				`Evidence check: ${hasEvidence ? 'FACT-42 confirmed' : 'no page evidence'} [2].\n\n`,
-				`RSYS layout=${hasLayout} voice=${system.includes('[House style')}\n\n`,
+				`RSYS layout=${hasLayout} voice=${system.includes('[How to write')}\n\n`,
 				'```mermaid\ngraph TD; Cloud-->Collapse; Collapse-->Nebula;\n```'
 			];
 			for (const p of parts) {
@@ -881,7 +881,7 @@ const server = createServer(async (req, res) => {
 			delta(res, {
 				// ALPHA-MEM / BETA-MEM prove per-user memory isolation: a user's
 				// prompt must contain their own marker and never the other's.
-				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} mem=${system.includes('[Memory')} pref=${system.includes('concise replies')} alpha=${system.includes('ALPHA-MEM')} beta=${system.includes('BETA-MEM')} voice=${system.includes('[House style')}`
+				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} mem=${system.includes('[Memory')} pref=${system.includes('concise replies')} alpha=${system.includes('ALPHA-MEM')} beta=${system.includes('BETA-MEM')} voice=${system.includes('[How to write')}`
 			});
 			delta(res, {}, 'stop');
 			res.write('data: [DONE]\n\n');

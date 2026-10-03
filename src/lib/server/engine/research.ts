@@ -7,6 +7,7 @@ import { reasoningNotes } from '$lib/reasoning-note';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import { isRetryable, type Usage } from '$lib/server/providers/types';
 import {
+	languageSettings,
 	researchSettings,
 	webSearchSettings,
 	researchRoundCeiling,
@@ -20,7 +21,6 @@ import { logUsage } from './usage';
 import { searchDocs } from '$lib/server/library';
 import { activate } from '$lib/server/cortex';
 import { EngineError, getTaskConfig, pickModel, systemPromptFor } from './engine';
-import { OUTPUT_FORMAT } from './voice';
 import { emitEvent } from './events';
 import {
 	completeJob,
@@ -733,12 +733,11 @@ async function runResearch(
 						content: [
 							`RESEARCH-SYNTHESIS: Answer the question using the numbered sources. Cite as [n] inline. If sources conflict or are thin, say so. A source marked SEARCH SNIPPET ONLY was never read: prefer a read source for anything load-bearing, and say plainly when a claim rests only on a snippet. The brief is what earlier rounds established from these same sources — treat it as notes, not as an answer, and verify anything load-bearing against the excerpts. Anything listed as an open gap is unresolved: say so rather than filling it in.`,
 							// The one call in this pipeline that writes prose for a person, and until
-							// now the only formatting guidance it had was the three words "be thorough
-							// but structured". Interpolated from the shared constant rather than
-							// restated, so chat and research cannot drift apart, and placed here
-							// rather than in the task default so it reaches every install without
-							// touching the four phases of this pipeline that answer in JSON.
-							OUTPUT_FORMAT,
+							// it had this the only formatting guidance was the three words "be
+							// thorough but structured". The same layout text chat gets, placed here
+							// rather than in the task prompt because four other phases of this
+							// pipeline share that prompt and answer in JSON.
+							languageSettings().layout,
 							'This answer is longer than a chat reply: lead with the direct answer before the detail, and give genuinely distinct sections a heading.',
 							`Question: ${question}`,
 							background ? `--- FROM THE CONVERSATION ---\n${background}` : '',

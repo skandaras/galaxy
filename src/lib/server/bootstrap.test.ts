@@ -4,9 +4,9 @@ import { db, runMigrations } from '$lib/server/db';
 import { taskConfigs, CORE_TASKS } from '$lib/server/db/schema';
 import { migrateSettings, migrateToPromptOverrides, seedTaskConfigs } from './bootstrap';
 import { DEFAULT_PROMPTS } from './engine/prompts';
-import { OUTPUT_FORMAT } from './engine/voice';
 import { taskPrompt } from './engine/engine';
 import {
+	DEFAULT_LANGUAGE,
 	deleteSetting,
 	getSetting,
 	setSetting,
@@ -73,12 +73,12 @@ describe('resolving a task prompt', () => {
 		expect(prompt('chat')).toContain('fetch_url');
 	});
 
-	it('ships no default with the house style baked in', () => {
+	it('ships no default with the Language text baked in', () => {
 		// The style block is composed at call time by systemPromptFor. A default
 		// that also contained it would hand the model two copies.
 		for (const [task, text] of Object.entries(DEFAULT_PROMPTS)) {
-			expect(text, `${task} embeds the injected style block`).not.toContain('[House style');
-			expect(text, `${task} embeds the layout block`).not.toContain(OUTPUT_FORMAT);
+			expect(text, `${task} embeds the injected style block`).not.toContain('[How to write');
+			expect(text, `${task} embeds the layout block`).not.toContain(DEFAULT_LANGUAGE.layout);
 		}
 	});
 });

@@ -9,8 +9,7 @@
  *
  * The paths are built here because forty-odd messages across the server and
  * the pages spelled "Admin → Settings → GitHub" by hand, and several already
- * pointed at tabs that did not exist ("Admin → Research", "Settings → House
- * style"). A path written from this file cannot name a section that is gone.
+ * pointed at tabs that did not exist ("Admin → Research", "Settings → Memory"). A path written from this file cannot name a section that is gone.
  *
  * No server imports: the admin page reads this as well as the engine.
  */
@@ -29,6 +28,7 @@ export const ADMIN_SECTIONS = [
 	{ label: 'Providers', group: 'Platform', tasks: [] },
 	{ label: 'Models', group: 'Platform', tasks: [] },
 	{ label: 'Tools', group: 'Platform', tasks: [] },
+	{ label: 'Language', group: 'Platform', tasks: [] },
 	{
 		label: 'General tasks',
 		group: 'Platform',
@@ -81,7 +81,7 @@ export const ADMIN_PATHS = {
 	budget: adminPath('Spend', 'Budget cap'),
 	webSearch: adminPath('Research', 'Web search'),
 	deepResearch: adminPath('Research', 'Deep research'),
-	houseStyle: adminPath('Conversations', 'House style'),
+	language: adminPath('Language'),
 	memory: adminPath('Memory and skills'),
 	skills: adminPath('Memory and skills', 'Skills'),
 	usage: adminPath('Spend', 'Usage')

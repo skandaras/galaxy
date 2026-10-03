@@ -270,7 +270,7 @@ check "research cites evidence" "$RSTREAM" 'FACT-42 confirmed'
 # The report a person actually reads. It had no formatting or voice rules at all
 # until this landed — only the three words "be thorough but structured".
 check "the research report gets the layout rules" "$RSTREAM" 'layout=true'
-check "the research report gets the house style" "$RSTREAM" 'voice=true'
+check "the research report gets the Language text" "$RSTREAM" 'voice=true'
 # The loop must actually iterate: consolidate what round one read, then search
 # the gap it named rather than the original breadth again.
 check "research consolidates between rounds" "$RSTREAM" '"name":"consolidating"'
@@ -680,9 +680,9 @@ AJ=$(as alice -X POST $M/api/chats/$AC/messages -d '{"content":"echo-system","we
 ASYS=$(curl -sN --max-time 20 -H 'Remote-User: alice' $M/api/jobs/$AJ/stream | grep -o 'SYSCHECK[^"]*' | head -1)
 check "alice's prompt carries her memory" "$ASYS" 'alpha=true'
 check "alice's prompt excludes bob's memory" "$ASYS" 'beta=false'
-# The house style is composed at call time rather than seeded into the prompt
+# The Language text is composed at call time rather than seeded into the prompt
 # stored in Admin -> Tasks, so nothing in the database proves it arrived.
-check "the prompt carries the house style" "$ASYS" 'voice=true'
+check "the prompt carries the Language text" "$ASYS" 'voice=true'
 
 # Cross-user mutation must 404 exactly like a missing item. Target an item
 # explicitly chosen NOT to be the marker, so this can never invalidate the
