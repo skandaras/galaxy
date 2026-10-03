@@ -13,7 +13,7 @@
 		type BoardView,
 		type Card
 	} from '$lib/board-types';
-	import { dropIndex, isNoOp, movedBeyond, type CardBox } from '$lib/board-drag';
+	import { dropIndex, isNoOp, pressOutcome, type CardBox } from '$lib/board-drag';
 
 	/**
 	 * Which projects are showing. Hiding one only hides its cards from this
@@ -43,10 +43,12 @@
 	/**
 	 * A card in flight.
 	 *
-	 * Press-and-hold rather than the browser's own drag-and-drop: HTML5 DnD
+	 * Pointer events rather than the browser's own drag-and-drop: HTML5 DnD
 	 * starts on the first pixel of movement (so a board is hard to scroll and a
 	 * card hard to click), gives no control over the ghost, and cannot animate
-	 * a rejected drop back to where it came from.
+	 * a rejected drop back to where it came from. A finger presses and holds; a
+	 * mouse drags as soon as it moves, since the hold only ever kept a touch
+	 * scroll from turning into a drag and made a mouse wait for nothing.
 	 */
 	interface DragState {
 		id: string;
@@ -63,12 +65,18 @@
 	}
 
 	const HOLD_MS = 180;
-	const MOVE_TOLERANCE = 8;
 
 	let drag = $state<DragState | null>(null);
 	/** Press that has not yet become a drag: still a click until the hold fires. */
-	let pending: { card: Card; laneId: string; index: number; x: number; y: number; el: HTMLElement } | null =
-		null;
+	let pending: {
+		card: Card;
+		laneId: string;
+		index: number;
+		x: number;
+		y: number;
+		el: HTMLElement;
+		pointerType: string;
+	} | null = null;
 	let holdTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Set when a gesture became a drag, so the click that follows is ignored. */
 	let justDragged = false;
@@ -259,7 +267,7 @@
 		await goto(`/chat?chat=${chatId}`);
 	}
 
-	// --- press and hold to drag a card ---------------------------------------
+	// --- drag a card (press and hold under a finger) -------------------------
 
 	function onCardPointerDown(e: PointerEvent, card: Card, laneId: string, index: number) {
 		// The selects inside a card are controls in their own right, and a
@@ -268,8 +276,16 @@
 		// Cleared here rather than in openCard: a drag that ends over another lane
 		// produces no click at all, and the flag would swallow the next one.
 		justDragged = false;
-		pending = { card, laneId, index, x: e.clientX, y: e.clientY, el: e.currentTarget as HTMLElement };
-		holdTimer = setTimeout(beginDrag, HOLD_MS);
+		pending = {
+			card,
+			laneId,
+			index,
+			x: e.clientX,
+			y: e.clientY,
+			el: e.currentTarget as HTMLElement,
+			pointerType: e.pointerType
+		};
+		if (e.pointerType !== 'mouse') holdTimer = setTimeout(beginDrag, HOLD_MS);
 		window.addEventListener('pointermove', onPointerMove, { passive: false });
 		window.addEventListener('pointerup', onPointerUp);
 		window.addEventListener('pointercancel', abandon);
@@ -294,11 +310,18 @@
 
 	function onPointerMove(e: PointerEvent) {
 		if (!drag) {
-			// Still deciding. Movement before the hold fires means the person is
-			// clicking or scrolling, not dragging.
-			if (pending && movedBeyond(pending, { x: e.clientX, y: e.clientY }, MOVE_TOLERANCE)) abandon();
-			return;
+			// Still deciding: a click, a scroll, or (for a mouse) a drag starting.
+			if (!pending) return;
+			const outcome = pressOutcome(pending.pointerType, pending, { x: e.clientX, y: e.clientY });
+			if (outcome === 'abandon') return abandon();
+			if (outcome === 'wait') return;
+			beginDrag();
 		}
+		follow(e);
+	}
+
+	function follow(e: PointerEvent) {
+		if (!drag) return;
 		// Holds the page still under a finger once the drag is real.
 		e.preventDefault();
 		drag.at = { x: e.clientX, y: e.clientY };
@@ -762,8 +785,8 @@
 		padding: 0.45rem 0.5rem;
 		margin-bottom: 0.45rem;
 	}
-	/* Press and hold, so a press that is going to become a drag should not also
-	   start a text selection. */
+	/* A press that is going to become a drag should not also start a text
+	   selection. */
 	.board-card {
 		user-select: none;
 		-webkit-user-select: none;
@@ -840,14 +863,7 @@
 		color: var(--fg-dim);
 	}
 	.filters .link {
-		background: none;
-		border: none;
-		padding: 0;
-		font: inherit;
 		font-size: var(--text-sm);
-		color: var(--accent);
-		cursor: pointer;
-		text-decoration: underline;
 	}
 	.filter-label {
 		font-size: var(--text-xs);

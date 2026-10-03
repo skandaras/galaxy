@@ -469,7 +469,8 @@
 		color: var(--fg);
 		font-family: inherit;
 		font-size: var(--text-md);
-		padding: 0;
+		padding: 0.15rem 0.35rem;
+		border-radius: var(--radius);
 		cursor: pointer;
 		text-align: left;
 	}

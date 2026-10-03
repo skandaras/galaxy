@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dropIndex, isNoOp, movedBeyond, type CardBox } from './board-drag';
+import { dropIndex, isNoOp, movedBeyond, pressOutcome, type CardBox } from './board-drag';
 
 /** Three 40px cards stacked from y=0, midpoints at 20, 60 and 100. */
 const LANE: CardBox[] = [
@@ -60,5 +60,19 @@ describe('movedBeyond', () => {
 	it('catches a scroll or a drag starting in either axis', () => {
 		expect(movedBeyond({ x: 100, y: 100 }, { x: 100, y: 130 }, 8)).toBe(true);
 		expect(movedBeyond({ x: 100, y: 100 }, { x: 60, y: 100 }, 8)).toBe(true);
+	});
+});
+
+describe('pressOutcome', () => {
+	const at = { x: 100, y: 100 };
+
+	it('starts a mouse drag on the first real movement, with no hold', () => {
+		expect(pressOutcome('mouse', at, { x: 106, y: 100 })).toBe('drag');
+		expect(pressOutcome('mouse', at, { x: 102, y: 101 })).toBe('wait');
+	});
+
+	it('treats a finger moving before the hold as a scroll', () => {
+		expect(pressOutcome('touch', at, { x: 100, y: 130 })).toBe('abandon');
+		expect(pressOutcome('pen', at, { x: 106, y: 100 })).toBe('wait');
 	});
 });

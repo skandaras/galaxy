@@ -1443,7 +1443,8 @@
 		color: var(--accent);
 		text-align: left;
 		cursor: pointer;
-		padding: 0;
+		padding: 0.15rem 0.35rem;
+		border-radius: var(--radius);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;

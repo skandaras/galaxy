@@ -227,13 +227,7 @@
 		margin: 0.5rem 0 0;
 	}
 	.link {
-		background: none;
-		border: none;
-		color: var(--accent);
-		cursor: pointer;
 		font-size: var(--text-sm);
-		font-family: inherit;
-		padding: 0;
 	}
 	table {
 		width: 100%;

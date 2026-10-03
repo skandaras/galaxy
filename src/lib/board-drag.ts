@@ -40,7 +40,7 @@ export function isNoOp(
 
 /**
  * Has the pointer moved far enough to mean "drag" rather than "click"?
- * Used to abandon the press-and-hold when a touch turns into a scroll.
+ * Ends the hold when a touch turns into a scroll, and starts a mouse drag.
  */
 export function movedBeyond(
 	from: { x: number; y: number },
@@ -48,4 +48,26 @@ export function movedBeyond(
 	tolerance: number
 ): boolean {
 	return Math.abs(to.x - from.x) > tolerance || Math.abs(to.y - from.y) > tolerance;
+}
+
+/** How far a finger may wander during the hold before it counts as a scroll. */
+export const MOVE_TOLERANCE = 8;
+/** How far a mouse must move with the button down before it counts as a drag. */
+export const DRAG_START = 4;
+
+/**
+ * What a press that has not yet become a drag should do as the pointer moves.
+ *
+ * A mouse starts dragging as soon as it moves: it cannot scroll the page by
+ * dragging, so there is nothing to tell apart and the hold was only a wait.
+ * Touch and pen keep the hold, and moving before it fires is a scroll.
+ * Staying within the threshold either way leaves it a click.
+ */
+export function pressOutcome(
+	pointerType: string,
+	from: { x: number; y: number },
+	to: { x: number; y: number }
+): 'drag' | 'abandon' | 'wait' {
+	if (pointerType === 'mouse') return movedBeyond(from, to, DRAG_START) ? 'drag' : 'wait';
+	return movedBeyond(from, to, MOVE_TOLERANCE) ? 'abandon' : 'wait';
 }

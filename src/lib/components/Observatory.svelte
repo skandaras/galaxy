@@ -95,7 +95,10 @@
 		letter-spacing: 0.25em;
 		text-transform: uppercase;
 		cursor: pointer;
-		padding: 0.2rem 0;
+		/* The whole row glows on hover, so the dot and the caret need room inside
+		   it; the list below takes the same inset to stay lined up under them. */
+		padding: 0.35rem 0.5rem;
+		border-radius: var(--radius);
 	}
 	.pulse {
 		width: 6px;
@@ -135,7 +138,7 @@
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
-		padding: 0.18rem 0;
+		padding: 0.18rem 0.5rem;
 		color: var(--fg-dim);
 	}
 	.dot {
@@ -172,5 +175,6 @@
 		text-decoration: none;
 		font-size: var(--text-xs);
 		margin-top: 0.35rem;
+		padding: 0 0.5rem;
 	}
 </style>

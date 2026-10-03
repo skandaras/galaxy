@@ -207,6 +207,12 @@ const BASE_CONTROLS = [
 	'.hint{font-size:var(--text-sm);color:var(--fg-dim);line-height:1.5;}',
 	'.notice{font-size:var(--text-base);color:var(--accent);}',
 	'.notice.error{color:var(--danger);}',
+	// A button that reads as a link. Eight components each declared their own,
+	// most at padding 0, which put the hover glow and the focus ring flush on the
+	// letters. `.inline` is for one inside a sentence: the negative margin keeps
+	// the words around it where they were while the glow still gets room.
+	'.link{padding:.2rem .45rem;background:none;border:none;border-radius:var(--radius);font:inherit;color:var(--accent);text-decoration:underline;cursor:pointer;}',
+	'.link.inline{padding:0 .2rem;margin:0 -.2rem;}',
 	'.badge{display:inline-block;font-size:var(--text-xs);border:1px solid var(--accent);color:var(--accent);border-radius:3px;padding:0 .25rem;text-transform:uppercase;}',
 	'.tabs{display:flex;flex-wrap:wrap;gap:.3rem;border-bottom:1px solid var(--border);margin-bottom:1rem;}',
 	'.tabs button{background:none;border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--fg-dim);font-family:inherit;font-size:var(--text-md);padding:.5rem .8rem;cursor:pointer;}',
@@ -414,6 +420,52 @@ export function normalizeTheme(raw: unknown): Theme {
 		if (!accepted.has(key)) (out as Record<string, unknown>)[key] = out[from];
 	}
 	return out;
+}
+
+/** Same appearance, field by field. Hex case is not a difference anyone can see. */
+export function sameTheme(a: unknown, b: unknown): boolean {
+	const x = normalizeTheme(a);
+	const y = normalizeTheme(b);
+	return (Object.keys(DEFAULT_THEME) as (keyof Theme)[]).every((key) => {
+		const u = x[key];
+		const v = y[key];
+		return typeof u === 'string' && typeof v === 'string' ? u.toLowerCase() === v.toLowerCase() : u === v;
+	});
+}
+
+export type ThemeOrigin = { kind: 'preset' | 'custom'; name: string };
+
+/**
+ * Which chip in the editor the active theme is.
+ *
+ * Worked out from the values rather than stored beside them. The editor used
+ * to keep no record of where a theme came from, so saving edits wrote the
+ * active theme and left the chip it was opened from as it was: clicking that
+ * chip again brought back the version from before the save, and the theme
+ * actually in use had no chip at all. Matching by value needs no migration for
+ * themes saved before, and cannot fall out of step with what is stored.
+ *
+ * Your own themes are checked first, so a copy of a built-in you have named
+ * is the one shown as selected. Null means no chip matches: a theme saved
+ * before this, an import, or a saved theme that was then deleted.
+ */
+export function themeOrigin(
+	active: Theme,
+	presets: Record<string, Theme>,
+	custom: Record<string, Theme>
+): ThemeOrigin | null {
+	for (const [name, t] of Object.entries(custom)) if (sameTheme(active, t)) return { kind: 'custom', name };
+	for (const [name, t] of Object.entries(presets)) if (sameTheme(active, t)) return { kind: 'preset', name };
+	return null;
+}
+
+/** The first of "Galaxy 2", "Galaxy 3"… not already taken, ignoring case. */
+export function freeName(base: string, taken: string[]): string {
+	const used = new Set(taken.map((n) => n.toLowerCase()));
+	for (let i = 2; ; i++) {
+		const name = `${base.slice(0, 36)} ${i}`;
+		if (!used.has(name.toLowerCase())) return name;
+	}
 }
 
 /** Parse `#rgb` / `#rrggbb` to 0-255 channels. Null for anything else. */

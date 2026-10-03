@@ -5,9 +5,12 @@ import {
 	contrastGrade,
 	contrastRatio,
 	controlBorder,
+	freeName,
 	isLight,
 	normalizeTheme,
-	themeCss
+	sameTheme,
+	themeCss,
+	themeOrigin
 } from './theme';
 import { GALAXY_FONT_STACK } from './fonts';
 
@@ -463,5 +466,40 @@ describe('shipped palettes', () => {
 			const ratio = contrastRatio(preset.bg, preset.accent);
 			expect(ratio, `${name} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
 		}
+	});
+});
+
+describe('themeOrigin', () => {
+	const dusk = { ...PRESETS.Galaxy, accent: '#ff9900' };
+
+	it('finds the chip the active theme came from', () => {
+		expect(themeOrigin(PRESETS.Paper, PRESETS, {})).toEqual({ kind: 'preset', name: 'Paper' });
+		expect(themeOrigin(dusk, PRESETS, { Dusk: dusk })).toEqual({ kind: 'custom', name: 'Dusk' });
+	});
+
+	it('prefers your own copy of a built-in', () => {
+		expect(themeOrigin(PRESETS.Void, PRESETS, { Mine: { ...PRESETS.Void } })).toEqual({
+			kind: 'custom',
+			name: 'Mine'
+		});
+	});
+
+	it('answers null when no chip matches, so the editor can offer the current theme on its own', () => {
+		expect(themeOrigin(dusk, PRESETS, {})).toBeNull();
+	});
+
+	it('ignores hex case and fields a stored theme predates', () => {
+		expect(sameTheme({ ...dusk, accent: '#FF9900' }, dusk)).toBe(true);
+		// An old save without `label` gets it derived from fgDim, as the preset has.
+		const { label: _label, ...older } = PRESETS.Nebula;
+		expect(sameTheme(older, PRESETS.Nebula)).toBe(true);
+		expect(sameTheme({ ...dusk, galaxyBg: !dusk.galaxyBg }, dusk)).toBe(false);
+	});
+});
+
+describe('freeName', () => {
+	it('numbers past the names already taken, ignoring case', () => {
+		expect(freeName('Galaxy', ['Galaxy'])).toBe('Galaxy 2');
+		expect(freeName('Galaxy', ['galaxy 2', 'Galaxy 3'])).toBe('Galaxy 4');
 	});
 });

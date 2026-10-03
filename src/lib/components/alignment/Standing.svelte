@@ -74,9 +74,9 @@
 		<h3>Nothing here yet</h3>
 		<p class="hint">
 			Alignment works in two halves. Write down what you actually hold in
-			<button class="link" onclick={() => onGoTo('Constitution')}>Constitution</button> — a few
+			<button class="link inline" onclick={() => onGoTo('Constitution')}>Constitution</button> — a few
 			values, a principle or two, and at least one way you know you go wrong. Then write a
-			reflection in <button class="link" onclick={() => onGoTo('Journal')}>Journal</button> and
+			reflection in <button class="link inline" onclick={() => onGoTo('Journal')}>Journal</button> and
 			press Assess when you want it read back against them.
 		</p>
 		<p class="hint">
@@ -367,15 +367,6 @@
 		font-size: var(--text-md);
 		line-height: 1.6;
 		margin-bottom: 0.7rem;
-	}
-	.link {
-		background: none;
-		border: none;
-		padding: 0;
-		font: inherit;
-		color: var(--accent);
-		cursor: pointer;
-		text-decoration: underline;
 	}
 	.empty h3 {
 		margin-bottom: 0.8rem;

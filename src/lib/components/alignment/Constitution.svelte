@@ -899,16 +899,6 @@
 	.btn {
 		white-space: nowrap;
 	}
-	.link {
-		background: none;
-		border: none;
-		padding: 0;
-		font: inherit;
-		font-size: var(--text-base);
-		color: var(--accent);
-		cursor: pointer;
-		text-decoration: underline;
-	}
 	@media (max-width: 720px) {
 		.sliders,
 		.compare-cols {

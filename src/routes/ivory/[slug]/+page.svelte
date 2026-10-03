@@ -526,13 +526,8 @@
 		resize: vertical;
 	}
 	.link {
-		background: none;
-		border: none;
 		color: var(--fg-dim);
-		font-family: inherit;
 		font-size: var(--text-sm);
-		text-decoration: underline;
-		cursor: pointer;
 		min-height: 2rem;
 	}
 	.plan-actions {
