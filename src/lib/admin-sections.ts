@@ -14,6 +14,8 @@
  * No server imports: the admin page reads this as well as the engine.
  */
 
+import { cortexEnabled } from '$lib/features';
+
 export type AdminGroup = 'Platform' | 'Features' | 'Operations';
 
 export interface AdminSection {
@@ -21,6 +23,11 @@ export interface AdminSection {
 	group: AdminGroup;
 	/** The core tasks whose prompt and models are edited in this section. */
 	tasks: readonly string[];
+	/**
+	 * For a feature that is switched off: the section keeps its tasks (so each
+	 * core task still has exactly one home) and is simply not offered.
+	 */
+	available?: () => boolean;
 }
 
 export const ADMIN_SECTIONS = [
@@ -38,7 +45,7 @@ export const ADMIN_SECTIONS = [
 	{ label: 'Coding', group: 'Features', tasks: ['coding', 'subagent'] },
 	{ label: 'Memory and skills', group: 'Features', tasks: ['memory', 'skill-optimiser'] },
 	{ label: 'Boards', group: 'Features', tasks: ['board'] },
-	{ label: 'Cortex', group: 'Features', tasks: ['cortex-groom'] },
+	{ label: 'Cortex', group: 'Features', tasks: ['cortex-groom'], available: cortexEnabled },
 	{
 		label: 'Ivory Tower',
 		group: 'Features',
@@ -56,6 +63,16 @@ export type AdminSectionLabel = (typeof ADMIN_SECTIONS)[number]['label'];
 export const ADMIN_SECTION_LABELS: readonly AdminSectionLabel[] = ADMIN_SECTIONS.map(
 	(s) => s.label
 );
+
+/** The sections Admin offers, which leaves out any whose feature is off. */
+export function availableSections(): (typeof ADMIN_SECTIONS)[number][] {
+	return ADMIN_SECTIONS.filter((s) => ('available' in s ? s.available() : true));
+}
+
+/** Their labels, for reading the section out of the URL. */
+export function availableSectionLabels(): AdminSectionLabel[] {
+	return availableSections().map((s) => s.label);
+}
 
 /** "Admin → Coding → GitHub", for a message that sends someone there. */
 export function adminPath(section: AdminSectionLabel, card?: string): string {

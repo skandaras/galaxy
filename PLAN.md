@@ -141,7 +141,10 @@ Internet ─► Proxy ──┤
 - ~~**SearXNG self-hosted search** as default provider~~ — **shipped**: runs in compose on an internal network, with primary/fallback providers and an admin "Test search" probe.
 - **Local model endpoints** (Ollama / llama.cpp) via the OpenAI-compatible adapter.
 - **Embeddings + RAG** over Library and past chats (semantic search) once FTS5 stops being enough.
-- **Cortex — the knowledge lattice** (`docs/CORTEX.md`): concepts as nodes, weighted
+- **Cortex — the knowledge lattice** (`docs/CORTEX.md`). *Built, then switched off and
+  kept* (`cortexEnabled()` in `src/lib/features.ts`): a conventional knowledge graph or
+  taxonomy is planned in its place, and is where facts about a person's world will go.
+  As built: concepts as nodes, weighted
   associations as edges, retrieval by traversal rather than lookup — the relational layer
   memory, the Library and Boards each lack. Owner-scoped like every other store that
   reaches an agent's context, seeded from FTS5 rather than a maintained keyword map, two

@@ -49,6 +49,7 @@ import {
 	type SearchResult
 } from './tools/web-search';
 import { ADMIN_PATHS } from '$lib/admin-sections';
+import { cortexEnabled } from '$lib/features';
 
 export interface Evidence {
 	n: number;
@@ -290,7 +291,9 @@ async function runResearch(
 		event('research.local', 'ok', 0, { lines: local.split('\n').length });
 		pushChunk(job, {
 			type: 'notice',
-			text: 'Your library and knowledge lattice have something on this — aiming the opening search with it.'
+			text: cortexEnabled()
+				? 'Your library and knowledge lattice have something on this — aiming the opening search with it.'
+				: 'Your library has something on this — aiming the opening search with it.'
 		});
 	}
 	const plan = await planQueries(
@@ -3231,6 +3234,7 @@ function defaultLocalDocs(query: string, userId: string, limit: number) {
 }
 
 function defaultLocalConcepts(query: string, userId: string, limit: number) {
+	if (!cortexEnabled()) return [];
 	return activate({ userId, query, limit })
 		.nodes.slice(0, limit)
 		.map((a) => ({ name: a.node.name, description: a.node.description }));

@@ -1,6 +1,13 @@
 # Cortex — the knowledge lattice
 
-> Status: **Phases 1 through 4 shipped, and P3.5 with them.** Store, FTS
+> Status: **switched off and kept.** `cortexEnabled()` in `src/lib/features.ts`
+> returns false, so no agent sees the lattice, nothing about it changes, and its
+> page, API and settings are not offered. The code, tables and data are intact
+> and the tests still run against them. A conventional knowledge graph or
+> taxonomy is planned in its place; this document describes the lattice as it
+> was built.
+>
+> Before that: **Phases 1 through 4 shipped, and P3.5 with them.** Store, FTS
 > seeding, spreading activation, two agent tools, the retrieval eval, a human
 > write path, the grooming agent and its review queue, the file round trip,
 > Hebbian learning, and the 3D map at `/cortex`. Agent writes ship **on** — see

@@ -53,6 +53,14 @@ import {
 	tidy
 } from './cortex-groom';
 
+/**
+ * Cortex ships switched off ($lib/features). This file is about what the lattice
+ * does when it runs, so it runs with the switch on, except where a case turns it
+ * off to assert what off means.
+ */
+const features = vi.hoisted(() => ({ cortexOn: true }));
+vi.mock('$lib/features', () => ({ cortexEnabled: () => features.cortexOn }));
+
 const ANA = 'user-ana';
 const BEN = 'user-ben';
 
@@ -782,6 +790,23 @@ describe('retention', () => {
 			.run();
 		expect(prune(Date.now(), true).cortexChanges).toBeGreaterThan(0);
 		expect(listChanges(ANA)).toHaveLength(0);
+	});
+
+	it('keeps every change while Cortex is switched off', async () => {
+		const { prune } = await import('./scheduler');
+		const node = saveNode({ name: 'Rock pools', ownerId: ANA });
+		db.update(cortexNodes).set({ name: ' Rock  pools ' }).where(eq(cortexNodes.id, node.id)).run();
+		tidy(ANA, 'run-kept');
+		db.update(cortexChangeLog)
+			.set({ createdAt: new Date(Date.now() - 200 * 86_400_000) })
+			.run();
+		features.cortexOn = false;
+		try {
+			expect(prune(Date.now(), true).cortexChanges).toBe(0);
+			expect(listChanges(ANA).length).toBeGreaterThan(0);
+		} finally {
+			features.cortexOn = true;
+		}
 	});
 });
 

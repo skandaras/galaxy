@@ -25,9 +25,8 @@ const EXPECTED = [
 	'library_tree',
 	'library_read',
 	'library_write',
-	// cortex
-	'cortex_query',
-	'cortex_write',
+	// cortex_query and cortex_write are absent while Cortex is switched off
+	// ($lib/features), which is what this list asserts.
 	// attachments
 	'list_attachments',
 	'read_attachment',

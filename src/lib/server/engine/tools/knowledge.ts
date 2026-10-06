@@ -15,6 +15,7 @@ import {
 import { UNFILED } from '$lib/library-tree';
 import { toolResultMaxChars } from '../limits';
 import { cortexDigest } from '$lib/server/cortex';
+import { cortexEnabled } from '$lib/features';
 import { memoryDigest } from '../memory';
 import { boardsDigest } from './boards';
 
@@ -38,7 +39,7 @@ export function bootstrapContext(userId: string): string {
 		// more of the same — another record of things that already happened — and
 		// an agent that takes it for an archive never thinks to consult it before
 		// answering. The map comes first, then the log.
-		cortexDigest(userId),
+		cortexEnabled() ? cortexDigest(userId) : '',
 		// Only this user's memories — never another user's observations.
 		memoryDigest(userId)
 	].join('\n');
