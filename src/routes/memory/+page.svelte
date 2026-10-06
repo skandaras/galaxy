@@ -1,12 +1,31 @@
 <script lang="ts">
 	import { ask } from '$lib/confirm.svelte';
+
+	type Kind = 'preference' | 'pattern';
 	interface MemoryItem {
 		id: string;
 		kind: string;
+		title: string;
 		content: string;
-		source: string | null;
 		status: 'active' | 'archived';
 		createdAt: number;
+	}
+	interface Proposal {
+		id: string;
+		action: 'add' | 'update' | 'retire';
+		itemId: string | null;
+		kind: Kind | null;
+		title: string;
+		content: string;
+		why: string;
+	}
+	interface Rebuild {
+		running: boolean;
+		done: number;
+		total: number;
+		proposals: number;
+		failed: number;
+		stopped?: string;
 	}
 	interface Candidate {
 		id: string;
@@ -14,46 +33,65 @@
 		description: string;
 		status: 'pending' | 'approved' | 'rejected';
 	}
-
-	interface Merge {
-		kind: string;
+	/** A row being reworded, whether a held memory or a proposal about to be approved. */
+	interface Draft {
+		id: string;
+		title: string;
 		content: string;
-		replaces: string[];
-	}
-	interface Proposal {
-		merged: Merge[];
-		drop: string[];
-		before: number;
-		after: number;
+		kind: Kind;
 	}
 
 	let items = $state<MemoryItem[]>([]);
+	let proposals = $state<Proposal[]>([]);
 	let myCandidates = $state<Candidate[]>([]);
 	let enabled = $state(true);
 	let scheduleEnabled = $state(true);
 	let intervalHours = $state(12);
 	let lastRun = $state(0);
 	let nextDue = $state(0);
-	let digestMaxItems = $state(20);
-	let busy = $state(false);
-	let consolidating = $state(false);
-	let proposal = $state<Proposal | null>(null);
-	let notice = $state<string | null>(null);
+	let cap = $state(50);
+	let rebuild = $state<Rebuild | null>(null);
+	let busy = $state<'run' | 'consolidate' | 'rebuild' | null>(null);
+	let draft = $state<Draft | null>(null);
+	let notice = $state<{ text: string; error?: boolean } | null>(null);
+	let loadFailed = $state(false);
 
 	async function load() {
-		const data = await (await fetch('/api/memory')).json();
+		const res = await fetch('/api/memory').catch(() => null);
+		if (!res?.ok) {
+			loadFailed = true;
+			return;
+		}
+		loadFailed = false;
+		const data = await res.json();
 		items = data.items;
+		proposals = data.proposals ?? [];
 		myCandidates = data.myCandidates ?? [];
 		enabled = data.enabled;
 		scheduleEnabled = data.scheduleEnabled;
 		intervalHours = data.intervalHours;
 		lastRun = data.lastRun;
 		nextDue = data.nextDue;
-		digestMaxItems = data.digestMaxItems ?? digestMaxItems;
+		cap = data.cap ?? cap;
+		rebuild = data.rebuild ?? null;
 	}
 	$effect(() => {
 		void load();
 	});
+	// While a rebuild reads history in the background, follow it here: the
+	// queue fills as each window is read.
+	$effect(() => {
+		if (!rebuild?.running) return;
+		const timer = setInterval(() => void load(), 3000);
+		return () => clearInterval(timer);
+	});
+
+	/** Read the server's reason for a refusal, so the notice says what it said. */
+	async function reason(res: Response | null, fallback: string): Promise<string> {
+		if (!res) return fallback;
+		const body = await res.json().catch(() => null);
+		return body?.message ?? fallback;
+	}
 
 	async function toggleEnabled() {
 		const next = !enabled;
@@ -61,19 +99,105 @@
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ enabled: next })
-		});
-		if (res.ok) enabled = next;
+		}).catch(() => null);
+		if (res?.ok) enabled = next;
+		else notice = { text: 'Could not change that setting.', error: true };
 	}
 
 	async function runNow() {
-		busy = true;
+		busy = 'run';
 		notice = null;
-		const result = await (await fetch('/api/memory/run', { method: 'POST' })).json();
-		busy = false;
-		const kept = result.memories ?? 0;
+		const res = await fetch('/api/memory/run', { method: 'POST' }).catch(() => null);
+		busy = null;
+		if (!res?.ok) {
+			notice = { text: await reason(res, 'The review did not run.'), error: true };
+			return;
+		}
+		const result = await res.json();
+		const n = result.proposals ?? 0;
 		notice = result.ran
-			? `Kept ${kept} new ${kept === 1 ? 'memory' : 'memories'}${result.displaced ? `, making room by dropping ${result.displaced}` : ''}${result.candidates ? `, and proposed ${result.candidates} skill candidate(s)` : ''}`
-			: `Nothing to do: ${result.reason}`;
+			? {
+					text: `${n ? `${n} ${n === 1 ? 'proposal' : 'proposals'} waiting for you below` : 'Nothing worth proposing'}${result.candidates ? `, and ${result.candidates} skill ${result.candidates === 1 ? 'candidate' : 'candidates'}` : ''}.`
+				}
+			: { text: `Nothing to do: ${result.reason}` };
+		await load();
+	}
+
+	async function consolidate() {
+		busy = 'consolidate';
+		notice = null;
+		const res = await fetch('/api/memory/consolidate', { method: 'POST' }).catch(() => null);
+		busy = null;
+		if (!res?.ok) {
+			notice = { text: await reason(res, 'Consolidation did not run.'), error: true };
+			return;
+		}
+		const result = await res.json();
+		notice = !result.ran
+			? { text: `Nothing to do: ${result.reason}` }
+			: result.proposals
+				? { text: `${result.proposals} changes proposed below. Nothing changes until you approve them.` }
+				: { text: 'Nothing worth merging: the list is already tight.' };
+		await load();
+	}
+
+	async function startRebuild() {
+		if (
+			!(await ask({
+				title: 'Wipe and rebuild your memory?',
+				body:
+					'Every memory you hold, everything waiting for you, and your "Long term user memory" document are deleted now. ' +
+					'Then your whole history is read again, and what it suggests waits here for you to approve.',
+				confirm: 'Wipe and rebuild',
+				danger: true
+			}))
+		)
+			return;
+		busy = 'rebuild';
+		notice = null;
+		const res = await fetch('/api/memory/rebuild', { method: 'POST' }).catch(() => null);
+		busy = null;
+		if (!res?.ok) {
+			notice = { text: await reason(res, 'The rebuild did not start.'), error: true };
+			return;
+		}
+		await load();
+	}
+
+	async function decide(p: Proposal, approve: boolean) {
+		const edited = draft?.id === p.id ? draft : null;
+		const res = await fetch(`/api/memory/proposals/${p.id}`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(
+				edited
+					? { approve, title: edited.title, content: edited.content, kind: edited.kind }
+					: { approve }
+			)
+		}).catch(() => null);
+		if (!res?.ok) {
+			notice = { text: await reason(res, 'Could not record that decision.'), error: true };
+			await load();
+			return;
+		}
+		if (edited) draft = null;
+		notice = null;
+		await load();
+	}
+
+	async function saveItem(item: MemoryItem) {
+		if (!draft || draft.id !== item.id) return;
+		const res = await fetch(`/api/memory/items/${item.id}`, {
+			method: 'PUT',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ title: draft.title, content: draft.content, kind: draft.kind })
+		}).catch(() => null);
+		if (!res?.ok) {
+			notice = { text: await reason(res, 'Could not save that memory.'), error: true };
+			return;
+		}
+		draft = null;
+		notice = { text: 'Saved.' };
 		await load();
 	}
 
@@ -82,105 +206,96 @@
 			method === 'DELETE' &&
 			!(await ask({
 				title: 'Delete this memory?',
-				body: 'Archive keeps it out of your agents\' context without losing it.',
+				body: "Archive keeps it out of your agents' context without losing it.",
 				confirm: 'Delete memory',
 				danger: true
 			}))
 		)
 			return;
 		const res = await fetch(`/api/memory/items/${item.id}`, { method }).catch(() => null);
-		if (!res?.ok) notice = method === 'DELETE' ? 'Could not delete that memory.' : 'Could not archive that memory.';
+		if (!res?.ok) {
+			notice = {
+				text: method === 'DELETE' ? 'Could not delete that memory.' : 'Could not archive that memory.',
+				error: true
+			};
+		}
 		await load();
 	}
 
-	async function consolidate() {
-		consolidating = true;
-		notice = null;
-		proposal = null;
-		const result = await (await fetch('/api/memory/consolidate', { method: 'POST' })).json();
-		consolidating = false;
-		if (!result.ran) {
-			notice = `Nothing to do: ${result.reason}`;
-			return;
-		}
-		const p: Proposal = result.proposal;
-		if (!p.merged.length && !p.drop.length) {
-			notice = 'Reviewed — nothing worth merging, the list is already tight.';
-			return;
-		}
-		proposal = p;
-	}
+	const edit = (row: { id: string; title: string; content: string; kind: string | null }) =>
+		(draft = {
+			id: row.id,
+			title: row.title,
+			content: row.content,
+			kind: row.kind === 'pattern' ? 'pattern' : 'preference'
+		});
 
-	async function applyProposal() {
-		if (!proposal) return;
-		const { merged, drop } = proposal;
-		proposal = null;
-		const res = await (
-			await fetch('/api/memory/consolidate', {
-				method: 'PUT',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ merged, drop })
-			})
-		).json();
-		notice = `Consolidated: ${res.removed} memories became ${res.merged}.`;
-		await load();
-	}
-
-	/** Look up the text of an original by id, for the preview. */
-	const textOf = (id: string) => items.find((i) => i.id === id)?.content ?? '(removed)';
-
+	/** An untitled memory is named by the start of what it says, as agents see it. */
+	const titleOf = (m: { title: string; content: string }) => {
+		if (m.title.trim()) return m.title;
+		const words = m.content.trim().split(/\s+/);
+		return words.slice(0, 8).join(' ') + (words.length > 8 ? '…' : '');
+	};
+	const heldItem = (id: string | null) => items.find((i) => i.id === id);
 	const when = (ts: number) => (ts ? new Date(ts).toLocaleString() : 'never');
 	const active = $derived(items.filter((i) => i.status === 'active'));
 	const archived = $derived(items.filter((i) => i.status === 'archived'));
-
-	/**
-	 * What the memory actually costs per message, and how much of the ceiling is
-	 * spoken for. `truncated` is normally zero now that the stored set is held at
-	 * the same number that reaches a prompt — it survives for the one case where
-	 * it is not, which is a list still being cut down by hand from before the
-	 * cap existed.
-	 */
-	const footprint = $derived.by(() => {
-		const inContext = active.slice(0, digestMaxItems);
-		const chars = inContext.reduce((n, i) => n + i.content.length + i.kind.length + 5, 0);
-		return { count: inContext.length, chars, truncated: active.length - inContext.length };
-	});
+	/** What the titles cost per message: the bodies stay out until an agent asks. */
+	const footprint = $derived(
+		active.slice(0, cap).reduce((n, i) => n + titleOf(i).length + 3, 0)
+	);
+	const ACTION_LABEL: Record<Proposal['action'], string> = {
+		add: 'New',
+		update: 'Change',
+		retire: 'Retire'
+	};
 </script>
 
-<!-- A page of its own, in the rail's Knowledge group beside Library and
-     Cortex. As a Settings tab it sat between Theme and Notifications, away from
-     the other places that feed what the agents know. -->
+<!-- A page of its own, in the rail's Knowledge group beside the Library. As a
+     Settings tab it sat between Theme and Notifications, away from the other
+     places that feed what the agents know. -->
 <div class="memory-page">
 <h1>Memory</h1>
 <section class="memory-section">
-	{#if notice}<p class="notice">{notice}</p>{/if}
+	{#if loadFailed}<p class="notice error" role="alert">Your memory did not load.</p>{/if}
+	{#if notice}
+		<p class="notice" class:error={notice.error} role={notice.error ? 'alert' : 'status'}>
+			{notice.text}
+		</p>
+	{/if}
 
 	<article class="card">
 		<h3>Your memory</h3>
 		<p class="hint">
-			Every {intervalHours}h the memory agent reviews <em>your</em> recent chats and coding
-			sessions for the few things that will still be true, and still be worth knowing, in six
-			months — how you work, what you have decided, what you are constrained by. Not what you
-			happened to ask about, which is a record of a conversation rather than a fact about you.
-			Those notes are added to your agents' context so they remember how you like to work. They
-			are private to you — nobody else, including admins, can read them. Hidden chats are never
-			looked at.
+			Every {intervalHours}h the memory agent reads <em>your</em> recent chats and coding sessions
+			for how you like to work: standing preferences and patterns that will still be true in six
+			months. Not what you asked about, and not facts about your world. It only proposes: nothing
+			reaches your agents until you approve it below. Your agents see each memory's title and read
+			the rest only when it bears on what you asked. Private to you; hidden chats are never read.
 		</p>
 		<div class="row">
 			<label class="chk">
 				<input type="checkbox" checked={enabled} onchange={toggleEnabled} />
-				keep building my memory
+				keep proposing memories
 			</label>
-			<button class="btn" disabled={busy} onclick={runNow}>
-				{busy ? 'Reviewing…' : 'Run now'}
+			<button class="btn" disabled={busy !== null || rebuild?.running} onclick={runNow}>
+				{busy === 'run' ? 'Reviewing…' : 'Run now'}
 			</button>
 			<button
 				class="btn"
-				disabled={consolidating}
-				title="Look for memories that say the same thing and propose a shorter list. Shows you the changes before anything happens."
+				disabled={busy !== null || rebuild?.running}
+				title="Look for memories that say the same thing and propose a shorter list."
 				onclick={consolidate}
 			>
-				{consolidating ? 'Consolidating…' : 'Consolidate'}
+				{busy === 'consolidate' ? 'Consolidating…' : 'Consolidate'}
+			</button>
+			<button
+				class="btn danger"
+				disabled={busy !== null || rebuild?.running}
+				title="Delete everything held and waiting, then read your whole history again."
+				onclick={startRebuild}
+			>
+				{busy === 'rebuild' ? 'Starting…' : 'Wipe and rebuild'}
 			</button>
 			<span class="meta">
 				last run {when(lastRun)}
@@ -190,84 +305,116 @@
 				{#if !scheduleEnabled} · automatic runs are off platform-wide{/if}
 			</span>
 		</div>
+		{#if rebuild?.running}
+			<p class="notice" role="status">
+				Reading your history: {rebuild.done} of {rebuild.total}
+				{rebuild.total === 1 ? 'batch' : 'batches'} of conversations, {rebuild.proposals} proposed so
+				far.
+			</p>
+		{:else if rebuild && (rebuild.stopped || rebuild.failed)}
+			<p class="notice error" role="alert">
+				The last rebuild {rebuild.stopped ? `stopped early: ${rebuild.stopped}` : 'finished'}{rebuild.failed
+					? `, and ${rebuild.failed} of its ${rebuild.total} batches could not be read`
+					: ''}.
+			</p>
+		{/if}
 	</article>
 
-	{#if proposal}
-		<article class="card proposal">
-			<h3>Proposed consolidation — {proposal.before} → {proposal.after}</h3>
-			<p class="hint">
-				Nothing has changed yet. Each line below would replace the ones under it; anything not
-				listed is kept as it is. Lines marked for removal are either duplicates or notes of what
-				you once asked about rather than facts about you — the sort of thing the audit used to
-				record and no longer does.
-			</p>
-			{#each proposal.merged as m (m.content)}
-				<div class="merge">
-					<div class="merge-new"><span class="kind">{m.kind}</span> {m.content}</div>
-					{#each m.replaces as id (id)}
-						<div class="merge-old">{textOf(id)}</div>
-					{/each}
+	<article class="card" class:waiting={proposals.length > 0}>
+		<h3>Waiting for you {proposals.length ? `(${proposals.length})` : ''}</h3>
+		{#each proposals as p (p.id)}
+			{@const old = heldItem(p.itemId)}
+			<div class="proposal">
+				<div class="proposal-head">
+					<span class="badge">{ACTION_LABEL[p.action]}</span>
+					{#if p.why}<span class="hint why">{p.why}</span>{/if}
 				</div>
-			{/each}
-			{#each proposal.drop as id (id)}
-				<div class="merge">
-					<div class="merge-old drop">{textOf(id)} <span class="tag">not worth keeping — removed</span></div>
+				{#if draft?.id === p.id}
+					{@render editor()}
+				{:else if p.action === 'retire'}
+					<div class="line"><strong>{p.title}</strong> <span class="body">{p.content}</span></div>
+				{:else}
+					<div class="line">
+						{#if p.kind}<span class="kind">{p.kind}</span>{/if}
+						<strong>{p.title}</strong>
+						<span class="body">{p.content}</span>
+					</div>
+					{#if p.action === 'update' && old}
+						<div class="line was">
+							was: <strong>{titleOf(old)}</strong> <span class="body">{old.content}</span>
+						</div>
+					{/if}
+				{/if}
+				<div class="row actions">
+					<button class="btn primary" onclick={() => decide(p, true)}>
+						{p.action === 'retire' ? 'Retire it' : 'Approve'}
+					</button>
+					{#if p.action !== 'retire' && draft?.id !== p.id}
+						<button class="btn" onclick={() => edit(p)}>Edit</button>
+					{/if}
+					{#if draft?.id === p.id}
+						<button class="btn" onclick={() => (draft = null)}>Cancel edit</button>
+					{/if}
+					<button class="btn" onclick={() => decide(p, false)}>
+						{p.action === 'retire' ? 'Keep it' : 'Reject'}
+					</button>
 				</div>
-			{/each}
-			<div class="row proposal-actions">
-				<button class="btn primary" onclick={applyProposal}>Apply</button>
-				<button class="btn" onclick={() => (proposal = null)}>Discard</button>
 			</div>
-		</article>
-	{/if}
+		{:else}
+			<p class="hint">
+				Nothing waiting. Proposals appear here after a review finds something; a rejection is
+				remembered, so the same thing is not proposed again.
+			</p>
+		{/each}
+	</article>
 
 	<article class="card">
-		<h3>What it remembers {active.length ? `(${active.length})` : ''}</h3>
+		<h3>What it remembers ({active.length} of {cap})</h3>
 		{#if active.length}
 			<p class="hint footprint">
-				Holding {footprint.count} of {digestMaxItems}, about {footprint.chars.toLocaleString()} characters
-				added to every chat and coding turn.{#if footprint.truncated}
-					{footprint.truncated} more are stored but never sent, and nothing new can be recorded
-					until you are back under {digestMaxItems}.{/if}
+				About {footprint.toLocaleString()} characters of titles added to every chat and coding turn.
 			</p>
 		{/if}
 		<p class="hint">
-			This list has a ceiling, and every line is paid for on every turn. Once it is full, a new
-			memory can only take the place of one already here, and has to be worth more than the one
-			it displaces — what it pushes out is either filed in your “Long term user memory”
-			document, where agents can go and look for it, or dropped.
-		</p>
-		<p class="hint">
-			<strong>Archive</strong> is how you say "not that" — it leaves the observation out of every
-			agent's context and tells the next audit not to record it again. <strong>Delete</strong>
-			erases it outright; since the activity it came from is still there, a later audit can
-			record the same thing afresh. <strong>Consolidate</strong> above merges memories that say
-			the same thing, which buys back room without waiting for an audit to do it.
+			<strong>Archive</strong> is how you say "not that": it leaves the memory out of every agent's
+			context and tells the next review not to propose it again. <strong>Delete</strong> erases it
+			outright, so a later review could propose the same thing afresh.
 		</p>
 		<table>
 			<tbody>
 				{#each active as item (item.id)}
 					<tr>
 						<td class="kind">{item.kind}</td>
-						<td>{item.content}</td>
+						<td>
+							{#if draft?.id === item.id}
+								{@render editor()}
+							{:else}
+								<strong>{titleOf(item)}</strong>
+								<div class="body">{item.content}</div>
+							{/if}
+						</td>
 						<td class="actions">
-							<button
-								class="btn"
-								title="Drops it from every agent's context and stops it being recorded again."
-								onclick={() => act(item, 'PATCH')}>Archive</button
-							>
-							<button
-								class="btn danger"
-								title="Erases it. The next audit could record the same thing again — archive instead if you never want it back."
-								onclick={() => act(item, 'DELETE')}>Delete</button
-							>
+							{#if draft?.id === item.id}
+								<button class="btn primary" onclick={() => saveItem(item)}>Save</button>
+								<button class="btn" onclick={() => (draft = null)}>Cancel</button>
+							{:else}
+								<button class="btn" onclick={() => edit(item)}>Edit</button>
+								<button
+									class="btn"
+									title="Drops it from every agent's context and stops it being proposed again."
+									onclick={() => act(item, 'PATCH')}>Archive</button
+								>
+								<button
+									class="btn danger"
+									title="Erases it. A later review could propose the same thing again; archive instead if you never want it back."
+									onclick={() => act(item, 'DELETE')}>Delete</button
+								>
+							{/if}
 						</td>
 					</tr>
 				{:else}
 					<tr>
-						<td class="hint">
-							Nothing yet — memories appear after an audit finds something worth keeping.
-						</td>
+						<td class="hint">Nothing yet. Memories appear here once you approve them.</td>
 					</tr>
 				{/each}
 			</tbody>
@@ -276,19 +423,18 @@
 		{#if archived.length}
 			<details>
 				<summary
-					>{archived.length} archived — kept out of context, and the audit is told not to record
-					them again</summary
+					>{archived.length} archived: kept out of context, and never proposed again</summary
 				>
 				<table>
 					<tbody>
 						{#each archived as item (item.id)}
 							<tr class="archived">
 								<td class="kind">{item.kind}</td>
-								<td>{item.content}</td>
+								<td><strong>{titleOf(item)}</strong> <span class="body">{item.content}</span></td>
 								<td class="actions">
 									<button
 										class="btn danger"
-										title="Erases it. The next audit could record the same thing again — archiving is what makes that stick."
+										title="Erases it. A later review could propose the same thing again; archiving is what makes that stick."
 										onclick={() => act(item, 'DELETE')}>Delete</button
 									>
 								</td>
@@ -319,6 +465,28 @@
 </section>
 </div>
 
+{#snippet editor()}
+	{#if draft}
+		<div class="editor">
+			<label>
+				<span class="hint">Title, which is what your agents see</span>
+				<input type="text" maxlength="80" bind:value={draft.title} />
+			</label>
+			<label>
+				<span class="hint">The whole of it</span>
+				<textarea rows="3" maxlength="1000" bind:value={draft.content}></textarea>
+			</label>
+			<label class="kind-pick">
+				<span class="hint">Kind</span>
+				<select bind:value={draft.kind}>
+					<option value="preference">preference</option>
+					<option value="pattern">pattern</option>
+				</select>
+			</label>
+		</div>
+	{/if}
+{/snippet}
+
 <style>
 	.memory-page {
 		flex: 1;
@@ -342,6 +510,9 @@
 	}
 	.card {
 		margin-bottom: 0.9rem;
+	}
+	.card.waiting {
+		border-color: var(--accent);
 	}
 	h3 {
 		margin: 0 0 0.6rem;
@@ -374,37 +545,56 @@
 		margin-bottom: 0.5rem;
 	}
 	.proposal {
-		border-color: var(--accent);
-	}
-	.merge {
 		border-top: 1px solid var(--border);
-		padding: 0.45rem 0;
+		padding: 0.6rem 0;
 		font-size: var(--text-base);
 	}
-	.merge-new {
-		color: var(--fg);
+	.proposal-head {
+		display: flex;
+		align-items: baseline;
+		gap: 0.6rem;
+		margin-bottom: 0.3rem;
 	}
-	/* Dimmed and struck through: these are what the line above stands in for,
-	   shown so the merge can be judged rather than taken on trust. */
-	.merge-old {
+	.why {
+		margin: 0;
+	}
+	.line {
+		margin: 0.15rem 0;
+	}
+	.body {
 		color: var(--fg-dim);
+	}
+	/* What an update replaces, shown so the change can be judged rather than
+	   taken on trust. */
+	.was {
 		font-size: var(--text-sm);
+		color: var(--fg-dim);
 		text-decoration: line-through;
-		margin: 0.2rem 0 0 1rem;
 	}
-	.merge-old.drop {
-		margin-left: 0;
-		text-decoration: none;
+	.actions {
+		margin-top: 0.4rem;
 	}
-	.tag {
-		color: var(--danger);
-		font-size: var(--text-xs);
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		text-decoration: none;
+	.editor {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+		margin: 0.3rem 0;
 	}
-	.proposal-actions {
-		margin-top: 0.7rem;
+	.editor label {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+	}
+	.editor .hint {
+		margin: 0;
+	}
+	.editor input,
+	.editor textarea {
+		width: 100%;
+		box-sizing: border-box;
+	}
+	.kind-pick {
+		max-width: 12rem;
 	}
 	table {
 		width: 100%;
@@ -416,6 +606,11 @@
 		border-bottom: 1px solid var(--border);
 		vertical-align: top;
 	}
+	td.actions {
+		white-space: nowrap;
+		text-align: right;
+		margin: 0;
+	}
 	tr.archived td {
 		opacity: 0.5;
 	}
@@ -424,10 +619,6 @@
 		font-size: var(--text-xs);
 		text-transform: uppercase;
 		white-space: nowrap;
-	}
-	.actions {
-		white-space: nowrap;
-		text-align: right;
 	}
 	details summary {
 		font-size: var(--text-base);

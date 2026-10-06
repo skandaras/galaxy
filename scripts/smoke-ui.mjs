@@ -1073,6 +1073,45 @@ check(
 	if (fail.length) await shot('research-searches');
 }
 
+// N2. Memory waits for its owner. The audit only proposes, so the page is where
+//     anything becomes a memory at all: approving, rewording and the rebuild
+//     all have to work from the page, not just from the API.
+{
+	problems = [];
+	const ran = await as(ALICE, '/api/memory/run', { method: 'POST' });
+	check('a memory review proposes something', ran.proposals > 0);
+	await page.goto(`${B}/memory`);
+	const waiting = page.locator('.memory-page .card', { hasText: 'Waiting for you' });
+	const proposal = waiting.locator('.proposal', { hasText: 'Concise replies' });
+	await proposal.waitFor();
+	check('nothing is held before it is approved', await page.locator('.memory-page table td', { hasText: 'Concise replies' }).count(), 0);
+	await proposal.getByRole('button', { name: 'Approve' }).click();
+	const held = page.locator('.memory-page table tr', { hasText: 'Concise replies' });
+	await held.waitFor();
+	check('approving puts it in the list', await held.count(), 1);
+	check('and takes it out of the queue', await waiting.locator('.proposal', { hasText: 'Concise replies' }).count(), 0);
+
+	await held.getByRole('button', { name: 'Edit' }).click();
+	// The title is an input's value now, not text, so find the row by its editor.
+	const editing = page.locator('.memory-page table tr:has(input[type="text"])');
+	await editing.locator('input[type="text"]').fill('Short answers');
+	await editing.getByRole('button', { name: 'Save' }).click();
+	await page.locator('.memory-page table tr', { hasText: 'Short answers' }).waitFor();
+	check('a held memory can be retitled', await page.locator('.memory-page table tr', { hasText: 'Short answers' }).count(), 1);
+
+	await page.getByRole('button', { name: 'Wipe and rebuild' }).click();
+	const dialog = page.locator('dialog.confirm');
+	await dialog.waitFor();
+	await dialog.getByRole('button', { name: 'Wipe and rebuild' }).click();
+	// The mock answers at once, so the rebuild is over in moments; what it
+	// proposed is back in the queue and nothing is held.
+	await waiting.locator('.proposal', { hasText: 'Concise replies' }).waitFor({ timeout: 20_000 });
+	check('a rebuild empties the list', await page.locator('.memory-page table tr', { hasText: 'Short answers' }).count(), 0);
+	check('and refills the queue', await waiting.locator('.proposal').count() > 0);
+	check('the memory page renders quietly throughout', problems, []);
+	if (fail.length) await shot('memory');
+}
+
 // N+1. "+ New chat" must not create anything until a message is sent.
 {
 	problems = [];

@@ -16,7 +16,7 @@ import { UNFILED } from '$lib/library-tree';
 import { toolResultMaxChars } from '../limits';
 import { cortexDigest } from '$lib/server/cortex';
 import { cortexEnabled } from '$lib/features';
-import { memoryDigest } from '../memory';
+import { memoryDigest, memoryTitle, readMemory } from '../memory';
 import { boardsDigest } from './boards';
 
 /**
@@ -46,7 +46,7 @@ export function bootstrapContext(userId: string): string {
 }
 
 /**
- * Tools shared by every agent: skills + Library access.
+ * Tools shared by every agent: skills, memory and the Library.
  *
  * `userId` scopes every Library call to what that person may see. It is not
  * optional — the Library is the one store whose contents reach a *different*
@@ -71,6 +71,27 @@ export function knowledgeTools(userId: string): LoopTool[] {
 				const skill = getSkill(String(a.name ?? ''));
 				if (!skill || !skill.meta.enabled) throw new Error(`No such skill: ${a.name}`);
 				return skill.body;
+			}
+		},
+		{
+			parallelSafe: true,
+			def: {
+				name: 'memory_read',
+				description:
+					"Read one of this person's memories in full, by the title the Memory index shows. " +
+					'Only when it bears on the reply: most turns need none of them.',
+				parameters: {
+					type: 'object',
+					properties: { title: { type: 'string' } },
+					required: ['title']
+				}
+			},
+			describe: (a) => String(a.title ?? ''),
+			execute: async (a) => {
+				// Scoped to this person: readMemory only ever reads their own rows.
+				const found = readMemory(userId, String(a.title ?? ''));
+				if (!found.length) throw new Error(`No memory titled "${a.title}"`);
+				return found.map((m) => `${memoryTitle(m)} (${m.kind})\n${m.content}`).join('\n\n');
 			}
 		},
 		{

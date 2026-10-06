@@ -212,14 +212,16 @@ async function scriptedReply(userText, maxTokens = 0) {
 				: userText.includes('beta-topic')
 					? 'BETA-MEM'
 					: null;
-			// `add` rather than `memories`: the audit keeps a fixed working set now,
-			// and past the cap an entry has to name the memory it displaces. These
-			// go into a fresh instance with slots to spare, so none of them do.
+			// Proposals with titles, since only a title reaches a prompt. The marker
+			// sits in the title for that reason. The fact is there to be dropped:
+			// a memory is a preference or a pattern.
 			content = JSON.stringify({
 				add: [
-					...(marker ? [{ kind: 'fact', content: `Observed marker ${marker}` }] : []),
-					{ kind: 'preference', content: 'User prefers concise replies' },
-					{ kind: 'fact', content: 'Prod restarts via systemctl restart galaxy' }
+					...(marker
+						? [{ kind: 'pattern', title: `Marker ${marker}`, content: `Observed marker ${marker}` }]
+						: []),
+					{ kind: 'preference', title: 'Concise replies', content: 'User prefers concise replies' },
+					{ kind: 'fact', title: 'Restarts', content: 'Prod restarts via systemctl restart galaxy' }
 				],
 				skill_candidates: [
 					{

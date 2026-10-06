@@ -21,6 +21,7 @@ import {
 const EXPECTED = [
 	// knowledge
 	'skill_load',
+	'memory_read',
 	'library_search',
 	'library_tree',
 	'library_read',

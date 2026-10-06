@@ -569,7 +569,7 @@ describe('what the harvest actually reads', () => {
 			.values({
 				id: `mem-${content.slice(0, 8)}`,
 				userId: ANA,
-				kind: 'fact',
+				kind: 'pattern',
 				content,
 				status: 'active',
 				createdAt: new Date()

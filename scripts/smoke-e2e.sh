@@ -582,6 +582,11 @@ check "rather than deleting them" "$(api $B/api/library/$KID)" 'Smoke Child'
 api -X POST $B/api/skills -d '{"name":"smoke-skill","description":"smoke","body":"body"}' > /dev/null
 MEM=$(api -X POST $B/api/memory/run)
 check "memory run" "$MEM" '"ran":true'
+# The audit proposes; nothing is held until the person approves it.
+check "the audit proposes rather than writes" "$MEM" '"proposals":1'
+MEMVIEW=$(api $B/api/memory)
+check "so nothing is held yet" "$MEMVIEW" '"items":[]'
+check "and a fact is never proposed" "$(echo "$MEMVIEW" | grep -c systemctl)" "0"
 
 # ---------------------------------------------------------------------------
 # UX audit → backlog. The interesting parts are that the agent is handed live
@@ -659,8 +664,29 @@ for pair in "alice alpha-topic" "bob beta-topic"; do
   as "$1" -X POST $M/api/memory/run > /dev/null
 done
 
+# Nothing an audit proposes reaches a prompt before its owner approves it.
+AC0=$(as alice -X POST $M/api/chats -d '{}' | jqn .id)
+AJ0=$(as alice -X POST $M/api/chats/$AC0/messages -d '{"content":"echo-system","webSearch":false}' | jqn .jobId)
+ASYS0=$(curl -sN --max-time 20 -H 'Remote-User: alice' $M/api/jobs/$AJ0/stream | grep -o 'SYSCHECK[^"]*' | head -1)
+check "a proposal is not in the prompt before it is approved" "$ASYS0" 'alpha=false'
+
+# Someone else's proposal is not found, exactly like a missing one.
+ALICE_PROPOSAL=$(as alice $M/api/memory | node -pe 'JSON.parse(require("fs").readFileSync(0)).proposals[0].id')
+check "bob cannot approve alice's proposal" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' -H 'content-type: application/json' \
+     -d '{"approve":true}' $M/api/memory/proposals/$ALICE_PROPOSAL)" "404"
+
+approve_all() { # approve_all <user>
+  for id in $(as "$1" $M/api/memory | node -pe 'JSON.parse(require("fs").readFileSync(0)).proposals.map((p) => p.id).join(" ")'); do
+    as "$1" -X POST $M/api/memory/proposals/$id -d '{"approve":true}' > /dev/null
+  done
+}
+approve_all alice
+approve_all bob
+
 ALICE_MEM=$(as alice $M/api/memory)
 BOB_MEM=$(as bob $M/api/memory)
+check "approving puts it in the set" "$ALICE_MEM" '"title":"Marker ALPHA-MEM"'
 check "alice has her own memory" "$ALICE_MEM" 'ALPHA-MEM'
 check "alice cannot see bob's memory" "$(echo "$ALICE_MEM" | grep -c BETA-MEM)" "0"
 check "bob has his own memory" "$BOB_MEM" 'BETA-MEM'

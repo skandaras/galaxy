@@ -302,6 +302,13 @@
       "when": 1790968093895,
       "tag": "0042_flowery_lyja",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1791323668264,
+      "tag": "0043_lyrical_namorita",
+      "breakpoints": true
     }
   ]
 }
