@@ -1,0 +1,4 @@
+{
+	"pre_commit": [{ "run": "npm run lint", "timeoutSeconds": 300 }],
+	"pre_push": [{ "run": "npm run lint && npm run check && npm test", "timeoutSeconds": 900 }]
+}

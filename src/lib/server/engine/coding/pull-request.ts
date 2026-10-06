@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { codeSessions } from '$lib/server/db/schema';
 import { getExecutor } from './executor';
+import { runRepoHooks, type HookRun } from './hooks';
 import { gitAuthArgs, githubToken, scrubSecrets } from './workspace';
 import { ADMIN_PATHS } from '$lib/admin-sections';
 
@@ -28,6 +29,8 @@ export interface PullRequestResult {
 	number: number;
 	/** True when the PR was already open and this call only found it. */
 	existing: boolean;
+	/** The pre-push checks this call ran, for the caller's event. */
+	hooks: HookRun[];
 }
 
 /** `owner/repo` for a github.com remote, or null for anywhere else. */
@@ -73,6 +76,10 @@ export async function openPullRequest(
 	// Push first, always: GitHub refuses a pull request from a branch it has
 	// never seen, and "commit, push, open" is three chances to forget the middle
 	// one. Pushing an already-pushed branch is a no-op.
+	//
+	// Gated here rather than in the tool, because the session header's button
+	// reaches this too, and a push from a button is still a push.
+	const hooks = await runRepoHooks('pre_push', target);
 	const push = await getExecutor().exec(
 		`git ${gitAuthArgs(target.repoUrl)} push -u origin HEAD`,
 		{ cwdRel: target.workspaceRel, timeoutMs: 120_000 }
@@ -90,7 +97,7 @@ export async function openPullRequest(
 	});
 	if (res.ok) {
 		const pr = await res.json();
-		return { url: pr.html_url, number: pr.number, existing: false };
+		return { url: pr.html_url, number: pr.number, existing: false, hooks };
 	}
 
 	// 422 is what GitHub says both for "there is already one open for this
@@ -106,7 +113,7 @@ export async function openPullRequest(
 		);
 		const rows = found.ok ? await found.json() : [];
 		if (Array.isArray(rows) && rows.length) {
-			return { url: rows[0].html_url, number: rows[0].number, existing: true };
+			return { url: rows[0].html_url, number: rows[0].number, existing: true, hooks };
 		}
 	}
 	throw new Error(`GitHub refused the pull request (${res.status}): ${(await res.text()).slice(0, 300)}`);

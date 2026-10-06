@@ -623,7 +623,8 @@ function buildCodingSystemPrompt(base: string, session: CodeSession): string {
 					// out of steps holding uncommitted edits, and answering with a
 					// description of an edit instead of making it.
 					`Never end a turn with uncommitted changes. If you are running short, commit what you have before you stop.`,
-					`Never describe an action you have not taken: if you say you are going to edit a file, call the tool in the same turn.`
+					`Never describe an action you have not taken: if you say you are going to edit a file, call the tool in the same turn.`,
+					`Committing and pushing run the repository's own checks. A refusal carries their output: fix what it reports and try again, rather than working around the check.`
 				].join(' ');
 	return [
 		base,

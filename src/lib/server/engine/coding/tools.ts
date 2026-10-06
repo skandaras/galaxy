@@ -3,6 +3,7 @@ import { dirname, join, relative } from 'node:path';
 import type { LoopTool } from '../loop';
 import { toolResultMaxChars } from '../limits';
 import { getExecutor } from './executor';
+import { HookFailure, runRepoHooks, type HookStage } from './hooks';
 import { openPullRequest, recordPullRequest } from './pull-request';
 import { setPlan, type PlanItem } from './state';
 import { gitAuthArgs, safeJoin, scrubSecrets, shellQuote, workspaceAbs } from './workspace';
@@ -129,6 +130,27 @@ function summarisePlan(items: PlanItem[]): string {
 	]
 		.filter(Boolean)
 		.join(', ') || 'empty';
+}
+
+/**
+ * Run the repository's hooks for a stage and put the runs on the tool's event,
+ * whether they passed or refused. A refusal rethrows, which is what hands the
+ * failing output to the model.
+ */
+async function gated(
+	stage: HookStage,
+	ctx: CodingToolContext,
+	report: ((meta: Record<string, unknown>) => void) | undefined,
+	action: () => Promise<string>
+): Promise<string> {
+	try {
+		const runs = await runRepoHooks(stage, ctx);
+		if (runs.length) report?.({ hooks: runs });
+	} catch (err) {
+		if (err instanceof HookFailure) report?.({ hooks: err.runs });
+		throw err;
+	}
+	return action();
 }
 
 /** One replacement against an in-memory string, so a failure writes nothing. */
@@ -398,7 +420,9 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 		{
 			def: {
 				name: 'git_commit',
-				description: 'Stage all changes and commit with the given message.',
+				description:
+					"Stage all changes and commit with the given message. Runs the repository's " +
+					'pre-commit checks first; if one fails the commit is refused and its output returned.',
 				parameters: {
 					type: 'object',
 					properties: { message: { type: 'string' } },
@@ -406,14 +430,15 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 				}
 			},
 			describe: (a) => String(a.message ?? '').slice(0, 80),
-			execute: async (a) => {
-				const res = await getExecutor().exec(
-					`git add -A && git commit -m ${shellQuote(String(a.message))}`,
-					{ cwdRel: ctx.workspaceRel, timeoutMs: 30_000 }
-				);
-				if (res.code !== 0) throw new Error(scrubSecrets(res.stderr || res.stdout));
-				return scrubSecrets(res.stdout);
-			}
+			execute: (a, report) =>
+				gated('pre_commit', ctx, report, async () => {
+					const res = await getExecutor().exec(
+						`git add -A && git commit -m ${shellQuote(String(a.message))}`,
+						{ cwdRel: ctx.workspaceRel, timeoutMs: 30_000 }
+					);
+					if (res.code !== 0) throw new Error(scrubSecrets(res.stderr || res.stdout));
+					return scrubSecrets(res.stdout);
+				})
 		},
 		...(ctx.chatId
 			? [
@@ -474,11 +499,18 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 				}
 			},
 			describe: (a) => String(a.title ?? '').slice(0, 80),
-			execute: async (a) => {
-				const pr = await openPullRequest(ctx, {
-					title: String(a.title ?? ''),
-					body: a.body === undefined ? undefined : String(a.body)
-				});
+			execute: async (a, report) => {
+				let pr;
+				try {
+					pr = await openPullRequest(ctx, {
+						title: String(a.title ?? ''),
+						body: a.body === undefined ? undefined : String(a.body)
+					});
+				} catch (err) {
+					if (err instanceof HookFailure) report?.({ hooks: err.runs });
+					throw err;
+				}
+				if (pr.hooks.length) report?.({ hooks: pr.hooks });
 				if (ctx.chatId) recordPullRequest(ctx.chatId, pr.url);
 				return pr.existing
 					? `This branch already had an open pull request: ${pr.url}`
@@ -488,20 +520,23 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 		{
 			def: {
 				name: 'git_push',
-				description: "Push the session's work branch to the remote.",
+				description:
+					"Push the session's work branch to the remote. Runs the repository's pre-push " +
+					'checks first; if one fails the push is refused and its output returned.',
 				parameters: { type: 'object', properties: {} }
 			},
-			execute: async () => {
-				const res = await getExecutor().exec(
-					`git ${gitAuthArgs(ctx.repoUrl)} push -u origin HEAD`,
-					{
-						cwdRel: ctx.workspaceRel,
-						timeoutMs: 120_000
-					}
-				);
-				if (res.code !== 0) throw new Error(scrubSecrets(res.stderr || res.stdout));
-				return scrubSecrets(res.stdout + res.stderr) || 'Pushed';
-			}
+			execute: (_a, report) =>
+				gated('pre_push', ctx, report, async () => {
+					const res = await getExecutor().exec(
+						`git ${gitAuthArgs(ctx.repoUrl)} push -u origin HEAD`,
+						{
+							cwdRel: ctx.workspaceRel,
+							timeoutMs: 120_000
+						}
+					);
+					if (res.code !== 0) throw new Error(scrubSecrets(res.stderr || res.stdout));
+					return scrubSecrets(res.stdout + res.stderr) || 'Pushed';
+				})
 		}
 	];
 	return [...readOnly, ...writeTools];

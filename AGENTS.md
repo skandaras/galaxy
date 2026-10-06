@@ -15,6 +15,11 @@ npm run lint && npm run check && npm test
 
 All three, every time. `npm run build` too if you touched anything the build resolves.
 
+A coding session in this app cannot skip them: `.galaxy/hooks.json` declares lint before a
+commit and all three before a push, and `git_commit`, `git_push` and `open_pull_request`
+refuse until they pass. The file is read from the base branch, so changing the gate takes a
+merged change.
+
 The **promotion gate** — what decides whether an image reaches prod — is
 `bash scripts/smoke-e2e.sh` and `npm run test:ui`. Run both if you touched the agent loop,
 SSE, the API surface, or anything a page renders. They start a real server against a mock
