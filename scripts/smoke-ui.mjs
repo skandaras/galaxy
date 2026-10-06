@@ -1099,6 +1099,12 @@ check(
 	await page.locator('.memory-page table tr', { hasText: 'Short answers' }).waitFor();
 	check('a held memory can be retitled', await page.locator('.memory-page table tr', { hasText: 'Short answers' }).count(), 1);
 
+	// The same review proposed a skill, which its owner can approve from here.
+	const cand = page.locator('.memory-page .skills .cand', { hasText: 'release-checklist' });
+	await cand.getByRole('button', { name: 'Approve skill' }).click();
+	await cand.locator('.cand-status.approved').waitFor();
+	check('a proposed skill can be approved by its owner', await cand.locator('.cand-status').textContent(), 'approved');
+
 	await page.getByRole('button', { name: 'Wipe and rebuild' }).click();
 	const dialog = page.locator('dialog.confirm');
 	await dialog.waitFor();

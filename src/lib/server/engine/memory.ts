@@ -12,7 +12,7 @@ import {
 	skillCandidates,
 	users
 } from '$lib/server/db/schema';
-import { listSkills, saveSkill } from '$lib/server/skills';
+import { listSkills, normalizeTasks, saveSkill } from '$lib/server/skills';
 import { DEFAULT_MEMORY, getSetting, setSetting, type MemorySettings } from '$lib/server/settings';
 import { deleteDoc, findDocByTitle } from '$lib/server/library';
 import { getBudgetStatus } from './budget';
@@ -413,9 +413,30 @@ export function wipeMemory(userId: string): { items: number; proposals: number }
 	return { items, proposals };
 }
 
-/** Approving writes the real (agent-authored) skill; both paths close the candidate. */
-export function decideCandidate(id: string, approve: boolean): SkillCandidate | null {
-	const cand = db.select().from(skillCandidates).where(eq(skillCandidates.id, id)).get();
+/**
+ * Approving writes the real (agent-authored) skill; both paths close the
+ * candidate.
+ *
+ * An admin may decide any candidate. With `by`, only the person whose activity
+ * proposed it may, and anyone else's is "not found". A new skill belongs to
+ * that person, because it was learnt from their conversations; an admin shares
+ * it from Admin. A candidate that rewrites an existing skill leaves its owner
+ * alone.
+ */
+export function decideCandidate(
+	id: string,
+	approve: boolean,
+	by?: { userId: string }
+): SkillCandidate | null {
+	const cand = db
+		.select()
+		.from(skillCandidates)
+		.where(
+			by
+				? and(eq(skillCandidates.id, id), eq(skillCandidates.userId, by.userId))
+				: eq(skillCandidates.id, id)
+		)
+		.get();
 	if (!cand || cand.status !== 'pending') return null;
 	if (approve) {
 		saveSkill({
@@ -423,8 +444,10 @@ export function decideCandidate(id: string, approve: boolean): SkillCandidate | 
 			category: cand.category,
 			description: cand.description,
 			triggers: cand.triggers,
+			tasks: cand.tasks,
 			author: 'agent',
-			body: cand.body
+			body: cand.body,
+			ownerId: cand.userId
 		});
 	}
 	db.update(skillCandidates)
@@ -737,7 +760,7 @@ async function audit(
 			? `You may propose up to ${free} new ${free === 1 ? 'memory' : 'memories'}.`
 			: 'There is no room for anything new. You may still propose updating or retiring a memory already held.',
 		`At most ${MAX_PROPOSALS_PER_RUN} proposals in all.`,
-		'Reply with ONLY a JSON object: {"add":[{"kind":"preference|pattern","title":"…","content":"…","why":"…"}],"update":[{"item":3,"kind":"preference|pattern","title":"…","content":"…","why":"…"}],"retire":[{"item":7,"why":"…"}],"skill_candidates":[{"name":"kebab-case","category":"…","description":"…","triggers":"a, b","body":"markdown instructions","rationale":"why this is worth a skill"}]}',
+		'Reply with ONLY a JSON object: {"add":[{"kind":"preference|pattern","title":"…","content":"…","why":"…"}],"update":[{"item":3,"kind":"preference|pattern","title":"…","content":"…","why":"…"}],"retire":[{"item":7,"why":"…"}],"skill_candidates":[{"name":"kebab-case","category":"…","description":"…","triggers":"a, b","tasks":"chat, coding, or empty for all","body":"markdown instructions","rationale":"why this is worth a skill"}]}',
 		'"title" is what an agent sees until it reads the memory: a few words naming what it is about. "content" says the whole of it. "item" is a bracketed number from the list below. "update" is for a memory the activity shows to be out of date or better said another way; "retire" for one that has stopped being true. "why" is one sentence the person reads before deciding.',
 		'Do not repeat anything held or waiting. Do not propose skills that already exist.',
 		`Held (${held.length}):\n${numbered || '(none)'}`,
@@ -871,6 +894,7 @@ async function audit(
 				category: String(c.category ?? 'general'),
 				description: String(c.description ?? ''),
 				triggers: String(c.triggers ?? ''),
+				tasks: normalizeTasks(c.tasks),
 				body: String(c.body ?? ''),
 				rationale: String(c.rationale ?? ''),
 				status: 'pending',
@@ -1330,7 +1354,9 @@ export async function runSkillOptimiser(
 		return { ran: false, reason };
 	};
 
-	const enabled = listSkills().filter((s) => s.enabled);
+	// Shared skills only. A personal one was learnt from one person's
+	// conversations, and this pass runs platform-wide on an admin's behalf.
+	const enabled = listSkills().filter((s) => s.enabled && s.ownerId === null);
 	if (!enabled.length) return skip('no skills to optimise');
 	if (getBudgetStatus().blocked) return skip('budget cap reached');
 	const cfg = getTaskConfig('skill-optimiser');

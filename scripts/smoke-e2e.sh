@@ -684,6 +684,16 @@ approve_all() { # approve_all <user>
 approve_all alice
 approve_all bob
 
+# A skill proposed from one person's activity is theirs to decide, and theirs
+# once approved. The mock's audit proposes alpha-mem-checklist from alice's activity.
+ALICE_CAND=$(as alice $M/api/memory | node -pe 'JSON.parse(require("fs").readFileSync(0)).myCandidates.find((c) => c.status === "pending").id')
+check "bob cannot decide alice's skill candidate" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' -H 'content-type: application/json' \
+     -d '{"approve":true}' $M/api/skills/candidates/$ALICE_CAND)" "404"
+check "alice approves her own" "$(as alice -X POST $M/api/skills/candidates/$ALICE_CAND -d '{"approve":true}')" '"status":"approved"'
+check "and it is hers" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: alice' $M/api/skills/alpha-mem-checklist)" "200"
+check "and not bob's" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/skills/alpha-mem-checklist)" "404"
+
 ALICE_MEM=$(as alice $M/api/memory)
 BOB_MEM=$(as bob $M/api/memory)
 check "approving puts it in the set" "$ALICE_MEM" '"title":"Marker ALPHA-MEM"'

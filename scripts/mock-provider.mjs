@@ -225,7 +225,9 @@ async function scriptedReply(userText, maxTokens = 0) {
 				],
 				skill_candidates: [
 					{
-						name: 'release-checklist',
+						// Named per marker: the multi-user smoke shares a data dir with the
+						// first instance, and a name already proposed is never proposed again.
+						name: marker ? `${marker.toLowerCase()}-checklist` : 'release-checklist',
 						category: 'ops',
 						description: 'Steps to follow when releasing',
 						triggers: 'release, deploy',

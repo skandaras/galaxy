@@ -31,6 +31,9 @@
 		id: string;
 		name: string;
 		description: string;
+		rationale: string;
+		tasks: string;
+		body: string;
 		status: 'pending' | 'approved' | 'rejected';
 	}
 	/** A row being reworded, whether a held memory or a proposal about to be approved. */
@@ -219,6 +222,20 @@
 				error: true
 			};
 		}
+		await load();
+	}
+
+	async function decideSkill(c: Candidate, approve: boolean) {
+		const res = await fetch(`/api/skills/candidates/${c.id}`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ approve })
+		}).catch(() => null);
+		if (!res?.ok) {
+			notice = { text: await reason(res, 'Could not record that decision.'), error: true };
+			return;
+		}
+		notice = { text: approve ? `${c.name} is now one of your skills.` : `${c.name} rejected.` };
 		await load();
 	}
 
@@ -447,17 +464,31 @@
 	</article>
 
 	{#if myCandidates.length}
-		<article class="card">
-			<h3>Skills your activity proposed</h3>
+		<article class="card skills">
+			<h3>Skills proposed from your work</h3>
 			<p class="hint">
-				Skills are shared platform-wide, so an admin approves these before they become active.
-				Shown here so you can see what was suggested from your work.
+				A skill is written instructions for a procedure, which your agents load when it applies.
+				Approve one and it is yours: your agents use it and nobody else's do, unless an admin
+				shares it. A rejection is remembered, so the same skill is not proposed again.
 			</p>
 			{#each myCandidates as c (c.id)}
 				<div class="cand">
-					<span class="cand-name">{c.name}</span>
-					<span class="cand-desc">{c.description}</span>
-					<span class="cand-status {c.status}">{c.status}</span>
+					<div class="cand-head">
+						<span class="cand-name">{c.name}</span>
+						<span class="cand-desc">{c.description}</span>
+						<span class="cand-status {c.status}">{c.status}</span>
+					</div>
+					{#if c.status === 'pending'}
+						{#if c.rationale}<p class="hint why">{c.rationale}</p>{/if}
+						<details>
+							<summary>The instructions{c.tasks ? ` (for ${c.tasks})` : ''}</summary>
+							<pre class="skill-body">{c.body}</pre>
+						</details>
+						<div class="row actions">
+							<button class="btn primary" onclick={() => decideSkill(c, true)}>Approve skill</button>
+							<button class="btn" onclick={() => decideSkill(c, false)}>Reject</button>
+						</div>
+					{/if}
 				</div>
 			{/each}
 		</article>
@@ -627,12 +658,21 @@
 		margin-top: 0.6rem;
 	}
 	.cand {
+		padding: 0.45rem 0;
+		border-top: 1px solid var(--border);
+		font-size: var(--text-base);
+	}
+	.cand-head {
 		display: flex;
 		align-items: baseline;
 		gap: 0.6rem;
-		padding: 0.35rem 0;
-		border-top: 1px solid var(--border);
-		font-size: var(--text-base);
+	}
+	.skill-body {
+		white-space: pre-wrap;
+		font-family: var(--font-mono);
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
+		margin: 0.4rem 0 0;
 	}
 	.cand-name {
 		color: var(--fg);

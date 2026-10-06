@@ -33,6 +33,9 @@ export const GET: RequestHandler = ({ locals }) => {
 				id: c.id,
 				name: c.name,
 				description: c.description,
+				rationale: c.rationale,
+				tasks: c.tasks,
+				body: c.body,
 				status: c.status,
 				createdAt: c.createdAt
 			}))

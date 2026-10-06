@@ -1,8 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { db, runMigrations } from '$lib/server/db';
-import { memoryItems, memoryProposals, skillCandidates } from '$lib/server/db/schema';
+import { memoryItems, memoryProposals, skillCandidates, skills } from '$lib/server/db/schema';
 import { DEFAULT_MEMORY, setSetting } from '$lib/server/settings';
+import { getSkill } from '$lib/server/skills';
 import {
 	MemoryDecisionError,
 	archiveMemoryItem,
@@ -28,6 +29,7 @@ beforeEach(() => {
 	db.delete(memoryItems).run();
 	db.delete(memoryProposals).run();
 	db.delete(skillCandidates).run();
+	db.delete(skills).run();
 	setSetting('memory', { ...DEFAULT_MEMORY, maxItems: 3 });
 });
 
@@ -121,6 +123,18 @@ describe('a decided skill candidate', () => {
 		const id = propose('tidy-inbox');
 		expect(decideCandidate(id, false)).not.toBeNull();
 		expect(decideCandidate(id, true)).toBeNull();
+	});
+
+	it('may be decided by the person it was learnt from, and by nobody else', () => {
+		const id = propose('tidy-inbox');
+		expect(decideCandidate(id, true, { userId: BOB })).toBeNull();
+		expect(decideCandidate(id, true, { userId: ALICE })?.status).toBe('approved');
+	});
+
+	it('becomes a skill of that person, not of everyone', () => {
+		decideCandidate(propose('tidy-inbox'), true);
+		expect(getSkill('tidy-inbox', ALICE)).not.toBeNull();
+		expect(getSkill('tidy-inbox', BOB)).toBeNull();
 	});
 });
 

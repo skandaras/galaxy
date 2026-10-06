@@ -468,6 +468,18 @@ export const skills = sqliteTable('skills', {
 	version: integer('version').notNull().default(1),
 	author: text('author', { enum: ['user', 'agent'] }).notNull().default('user'),
 	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+	/**
+	 * Whose skill this is. Null is shared with everyone, which is every skill
+	 * written before skills had owners and every one an admin writes or shares.
+	 * A skill approved from one person's activity is theirs, because it was
+	 * learnt from their conversations.
+	 */
+	ownerId: text('owner_id'),
+	/**
+	 * The tasks whose skill index lists it, comma-separated; empty is every
+	 * task. A coding agent has no use for the Figma skill's line in its prompt.
+	 */
+	tasks: text('tasks').notNull().default(''),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 	updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
 });
@@ -543,6 +555,8 @@ export const skillCandidates = sqliteTable('skill_candidates', {
 	triggers: text('triggers').notNull().default(''),
 	body: text('body').notNull().default(''),
 	rationale: text('rationale').notNull().default(''),
+	/** As on `skills`: the tasks it is for, comma-separated, empty for all. */
+	tasks: text('tasks').notNull().default(''),
 	status: text('status', { enum: ['pending', 'approved', 'rejected'] })
 		.notNull()
 		.default('pending'),

@@ -63,6 +63,7 @@ import {
 	createWorkspace,
 	destroyWorkspace,
 	repoInstructions,
+	repoSkillIndex,
 	scrubSecrets,
 	shellQuote
 } from './workspace';
@@ -303,7 +304,7 @@ export function startCodingTurn(opts: {
 					userId: opts.userId,
 					chatId: chat.id
 				}),
-				...knowledgeTools(opts.userId),
+				...knowledgeTools(opts.userId, { repo: session.workspaceRel, hidden: chat.hidden }),
 				...attachmentTools(chat.id),
 				// Reading a linked spec, an upstream README or an API doc is safe in
 				// plan mode as well as implement — it changes nothing in the repo.
@@ -634,7 +635,7 @@ function buildCodingSystemPrompt(base: string, session: CodeSession): string {
 		'',
 		`Repository: ${session.repoName} (branch ${session.workBranch}, based on ${session.baseBranch}).`,
 		modeNote,
-		bootstrapContext(session.userId),
-		repoInstructions(session.workspaceRel)
+		bootstrapContext(session.userId, 'coding'),
+		repoInstructions(session.workspaceRel) + repoSkillIndex(session.workspaceRel)
 	].join('\n');
 }

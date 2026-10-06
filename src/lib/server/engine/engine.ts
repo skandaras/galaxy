@@ -280,7 +280,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 
 	const searchCfg = webSearchSettings();
 	const tools: LoopTool[] = [
-		...knowledgeTools(opts.userId),
+		...knowledgeTools(opts.userId, { hidden: chat.hidden }),
 		...attachmentTools(chat.id),
 		// Deliberately not behind the web-search toggle. That toggle governs
 		// *looking things up*; this is for reading an address the user has already
@@ -329,7 +329,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		tools.push(webSearchTool(searchCfg));
 	}
 	const fullSystemPrompt =
-		systemPrompt + bootstrapContext(opts.userId) + (needsName ? nameThisChatNote() : '');
+		systemPrompt + bootstrapContext(opts.userId, 'chat') + (needsName ? nameThisChatNote() : '');
 	// Read before the turn starts, so it describes the *previous* attempt and
 	// stays fixed for the whole of this one. Carried as a tail note rather than
 	// in the system message: it changes every turn, and in front of the prompt

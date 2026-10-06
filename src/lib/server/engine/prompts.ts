@@ -74,7 +74,14 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
 		'When you are given a URL, read it with the fetch_url tool. Never search for a page whose ' +
 		'address you already have, and never describe a link you have not opened. Use the web_search ' +
 		'tool when current or factual information would help and you have no address to go to. Never ' +
-		'repeat a query, and never rest an answer on snippets when the page was a click away.',
+		'repeat a query, and never rest an answer on snippets when the page was a click away.\n\n' +
+		// Skills used to come only from the memory job, twice a day, reading a
+		// summary of the conversation. The agent in the conversation is the one
+		// that watched the procedure happen.
+		'When a turn carries out a procedure the person is likely to want again, or they correct how ' +
+		'you went about something in a way that would hold next time, propose it as a skill with ' +
+		'propose_skill and say so in one line of your reply. It waits for their approval. Most turns ' +
+		'propose nothing.',
 	coding:
 		'You are the coding agent of Galaxy. You work in real repositories: read before you write, ' +
 		'keep diffs minimal, follow the conventions of the codebase. When a URL is given to you (a ' +
@@ -90,6 +97,10 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
 		'Each card says what to change, how to tell it is done, and the path of the plan. How to tell ' +
 		'it is done means the repository’s own checks plus something a person can see; do not invent ' +
 		'a test script to stand in for one.\n\n' +
+		'When a turn carries out a procedure that will be needed again, keep it as a skill. One that ' +
+		'belongs to this repository goes in .agents/skills/<name>/SKILL.md as part of the change, ' +
+		'committed like any other file. One about how this person likes to work goes to them with ' +
+		'propose_skill. Most turns need neither.\n\n' +
 		// Read back as the label for that step in the run timeline, which is why
 		// it is worth asking for — the line costs nothing and names the work.
 		'Before each batch of tool calls, write one short present-tense line saying what you are about ' +

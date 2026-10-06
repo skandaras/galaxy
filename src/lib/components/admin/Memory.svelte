@@ -166,7 +166,9 @@
 		{:else}
 			<p class="hint">
 				No pending candidates. Approving one creates the real skill (agent-authored,
-				git-versioned); nothing activates without you.
+				git-versioned), belonging to the person it was learnt from, who can also approve it
+				themselves on their Memory page. Share it from Skills to give it to everyone; nothing
+				activates without a person approving it.
 			</p>
 		{/each}
 		{#if decided.length}

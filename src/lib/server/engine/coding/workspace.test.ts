@@ -6,6 +6,8 @@ import {
 	authenticatedUrl,
 	gitAuthArgs,
 	repoInstructions,
+	repoSkillIndex,
+	repoSkills,
 	safeJoin,
 	scrubSecrets,
 	shellQuote
@@ -127,5 +129,33 @@ describe('repoInstructions', () => {
 		const out = repoInstructions(INSTR);
 		expect(out).toContain('…(truncated)');
 		expect(out.length).toBeLessThan(9_000);
+	});
+});
+
+describe('repoSkills', () => {
+	const RS = 'workspaces/test-repo-skills';
+	const put = (path: string, body: string) => {
+		mkdirSync(join(dataDir, RS, path, '..'), { recursive: true });
+		writeFileSync(join(dataDir, RS, path), body);
+	};
+
+	beforeAll(() => {
+		rmSync(join(dataDir, RS), { recursive: true, force: true });
+		put('.agents/skills/release/SKILL.md', '---\nname: release\ndescription: How releases go\n---\nsteps');
+		put('.claude/skills/release/SKILL.md', '---\nname: release\ndescription: the other copy\n---\nx');
+		put('.claude/skills/review/SKILL.md', '---\ndescription: Reviewing a PR\n---\nsteps');
+		put('.agents/skills/no-skill-file/README.md', 'not a skill');
+	});
+
+	it('reads both directories, the first copy of a name winning', () => {
+		expect(repoSkills(RS)).toEqual([
+			{ name: 'release', description: 'How releases go', dirRel: '.agents/skills/release' },
+			{ name: 'review', description: 'Reviewing a PR', dirRel: '.claude/skills/review' }
+		]);
+	});
+
+	it('indexes them for the prompt, and says nothing for a repository with none', () => {
+		expect(repoSkillIndex(RS)).toContain('  - release: How releases go');
+		expect(repoSkillIndex(WS)).toBe('');
 	});
 });

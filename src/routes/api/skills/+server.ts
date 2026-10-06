@@ -4,9 +4,13 @@ import { requireAdmin, requireUser } from '$lib/server/api';
 import { listSkills, saveSkill, SKILL_TEMPLATE } from '$lib/server/skills';
 import { emitEvent } from '$lib/server/engine/events';
 
+// An admin manages every skill; anyone else sees their own and shared ones.
 export const GET: RequestHandler = ({ locals }) => {
-	requireUser(locals);
-	return json({ skills: listSkills(), template: SKILL_TEMPLATE });
+	const user = requireUser(locals);
+	return json({
+		skills: listSkills(user.isAdmin ? undefined : user.id),
+		template: SKILL_TEMPLATE
+	});
 };
 
 export const POST: RequestHandler = async ({ locals, request }) => {
@@ -19,6 +23,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			category: String(body.category ?? 'general'),
 			description: String(body.description ?? ''),
 			triggers: String(body.triggers ?? ''),
+			tasks: String(body.tasks ?? ''),
 			author: 'user',
 			body: String(body.body ?? ''),
 			enabled: body.enabled !== false

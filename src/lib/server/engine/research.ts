@@ -134,7 +134,7 @@ export function startResearchTurn(opts: {
 		// Same bootstrap the chat loop gets: memory, the skills index, the
 		// library and boards. Research had none of it, so it could not know
 		// something the user had already told the platform.
-		systemPromptFor('deep-research') + bootstrapContext(opts.userId),
+		systemPromptFor('deep-research') + bootstrapContext(opts.userId, 'deep-research'),
 		searchCfg,
 		persist,
 		opts.effort ?? 'balanced',

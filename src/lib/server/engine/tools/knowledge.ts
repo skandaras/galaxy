@@ -1,5 +1,18 @@
 import type { LoopTool } from '../loop';
-import { getSkill, skillIndexText } from '$lib/server/skills';
+import { randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
+import { db } from '$lib/server/db';
+import { skillCandidates, skills } from '$lib/server/db/schema';
+import {
+	getSkill,
+	normalizeSkillName,
+	normalizeTasks,
+	readSkillFile,
+	skillDir,
+	skillFiles,
+	skillIndexText
+} from '$lib/server/skills';
+import { repoSkills, safeJoin } from '../coding/workspace';
 import {
 	docPath,
 	findDocByTitle,
@@ -24,11 +37,13 @@ import { boardsDigest } from './boards';
  * what skills and Library knowledge exist. Bodies load on demand through the
  * knowledge tools (progressive disclosure — the index stays cheap).
  */
-export function bootstrapContext(userId: string): string {
+export function bootstrapContext(userId: string, task?: string): string {
 	return [
 		'',
 		'[Available skills: load the full instructions with skill_load when one applies]',
-		skillIndexText(),
+		// Only this person's skills and shared ones, and only those meant for
+		// this task: a coding prompt has no use for the Figma skill's line.
+		skillIndexText(userId, task),
 		'',
 		'[Library index: a line per folder, naming what sits at the top of it and nothing nested inside that. These are the docs you can see: your own plus anything shared. A "(N beneath)" is a whole subtree collapsed to one number: open it with library_tree. This is a catalogue, not their contents: search inside them with library_search, read one with library_read, save durable knowledge with library_write, filed inside an existing document wherever it belongs under one, which costs this block nothing]',
 		libraryDigest(userId),
@@ -53,13 +68,47 @@ export function bootstrapContext(userId: string): string {
  * user's prompt, so an unscoped read here leaks one person's notes into
  * another's context.
  */
-export function knowledgeTools(userId: string): LoopTool[] {
-	return [
+export function knowledgeTools(
+	userId: string,
+	opts: {
+		/**
+		 * A coding session's workspace, whose own skills (`.agents/skills`,
+		 * `.claude/skills`) load ahead of stored ones of the same name: the
+		 * repository knows its own procedures better than a copy elsewhere.
+		 */
+		repo?: string;
+		/**
+		 * A hidden chat is never written to the database, so it is offered no
+		 * way to propose a skill: the proposal would be a record of it.
+		 */
+		hidden?: boolean;
+	} = {}
+): LoopTool[] {
+	/** The folder and body of a skill this person may load, repository first. */
+	const resolveSkill = (name: string): { dir: string; body: string } | null => {
+		if (opts.repo) {
+			const found = repoSkills(opts.repo).find((s) => s.name === name);
+			if (found) {
+				const dir = safeJoin(opts.repo, found.dirRel);
+				const raw = readSkillFile(dir, 'SKILL.md', toolResultMaxChars());
+				return { dir, body: raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '') };
+			}
+		}
+		const stored = getSkill(name, userId);
+		if (!stored || !stored.meta.enabled) return null;
+		return { dir: skillDir(stored.meta), body: stored.body };
+	};
+	// One proposal a turn: a second in the same turn is a list, not a noticed pattern.
+	let proposed = false;
+
+	const tools: LoopTool[] = [
 		{
 			parallelSafe: true,
 			def: {
 				name: 'skill_load',
-				description: 'Load the full instructions of a skill from the skill index.',
+				description:
+					'Load the full instructions of a skill from the skill index. Lists any files the ' +
+					'skill carries beside its instructions; read one with skill_read when you need it.',
 				parameters: {
 					type: 'object',
 					properties: { name: { type: 'string' } },
@@ -68,9 +117,105 @@ export function knowledgeTools(userId: string): LoopTool[] {
 			},
 			describe: (a) => String(a.name ?? ''),
 			execute: async (a) => {
-				const skill = getSkill(String(a.name ?? ''));
-				if (!skill || !skill.meta.enabled) throw new Error(`No such skill: ${a.name}`);
-				return skill.body;
+				const skill = resolveSkill(String(a.name ?? ''));
+				if (!skill) throw new Error(`No such skill: ${a.name}`);
+				const files = skillFiles(skill.dir);
+				return files.length
+					? `${skill.body}\n\n[Files in this skill, for skill_read: ${files.join(', ')}]`
+					: skill.body;
+			}
+		},
+		{
+			parallelSafe: true,
+			def: {
+				name: 'skill_read',
+				description:
+					'Read one file a skill carries beside its instructions: a reference, a template, a ' +
+					'script. skill_load lists them.',
+				parameters: {
+					type: 'object',
+					properties: {
+						name: { type: 'string', description: 'The skill' },
+						path: { type: 'string', description: 'The file, as skill_load listed it' }
+					},
+					required: ['name', 'path']
+				}
+			},
+			describe: (a) => `${a.name ?? ''}/${a.path ?? ''}`,
+			execute: async (a) => {
+				const skill = resolveSkill(String(a.name ?? ''));
+				if (!skill) throw new Error(`No such skill: ${a.name}`);
+				return readSkillFile(skill.dir, String(a.path ?? ''), toolResultMaxChars());
+			}
+		},
+		{
+			def: {
+				name: 'propose_skill',
+				description:
+					'Propose a skill: written instructions for a procedure, which agents load when it ' +
+					'applies. Use it when this turn carried out a procedure the person is likely to want ' +
+					'again, or they corrected how you went about something in a way that would hold next ' +
+					'time. Not for a one-off answer. It goes to the person for approval and does nothing ' +
+					'until they approve it. At most one a turn.',
+				parameters: {
+					type: 'object',
+					properties: {
+						name: { type: 'string', description: 'kebab-case' },
+						description: {
+							type: 'string',
+							description: 'One line saying when an agent should use it'
+						},
+						body: {
+							type: 'string',
+							description: 'The instructions, in markdown: when to use it, then the steps'
+						},
+						rationale: {
+							type: 'string',
+							description: 'What in this conversation shows it will be needed again'
+						},
+						category: { type: 'string' },
+						triggers: { type: 'string', description: 'Comma-separated keywords' },
+						tasks: {
+							type: 'string',
+							description: 'The agents it is for (chat, coding); empty for all'
+						}
+					},
+					required: ['name', 'description', 'body', 'rationale']
+				}
+			},
+			describe: (a) => String(a.name ?? ''),
+			execute: async (a) => {
+				if (proposed) throw new Error('One skill proposal a turn. Mention any other in your reply.');
+				const name = normalizeSkillName(String(a.name ?? ''));
+				const body = String(a.body ?? '').trim();
+				if (!name || !body) throw new Error('name and body are required');
+				// Every name ever proposed, whatever became of it: a rejection is a
+				// decision, and the memory job reads the same table for the same reason.
+				const taken =
+					db.select({ id: skills.id }).from(skills).where(eq(skills.name, name)).get() ??
+					db
+						.select({ id: skillCandidates.id })
+						.from(skillCandidates)
+						.where(eq(skillCandidates.name, name))
+						.get();
+				if (taken) throw new Error(`A skill called ${name} already exists or was already proposed`);
+				db.insert(skillCandidates)
+					.values({
+						id: randomUUID(),
+						userId,
+						name,
+						category: normalizeSkillName(String(a.category ?? '')) || 'general',
+						description: String(a.description ?? '').trim().slice(0, 300),
+						triggers: String(a.triggers ?? '').trim().slice(0, 300),
+						tasks: normalizeTasks(a.tasks),
+						body: body.slice(0, 20_000),
+						rationale: String(a.rationale ?? '').trim().slice(0, 1000),
+						status: 'pending',
+						createdAt: new Date()
+					})
+					.run();
+				proposed = true;
+				return `Proposed ${name}. It waits for the person's approval on their Memory page; say so in your reply.`;
 			}
 		},
 		{
@@ -250,4 +395,5 @@ export function knowledgeTools(userId: string): LoopTool[] {
 			}
 		}
 	];
+	return opts.hidden ? tools.filter((t) => t.def.name !== 'propose_skill') : tools;
 }
