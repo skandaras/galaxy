@@ -19,6 +19,7 @@ import {
 } from '$lib/server/settings';
 import { decayReinforcement, refreshLayout } from '$lib/server/cortex';
 import { groomSettings, groomStatus, runCortexGroom } from './cortex-groom';
+import { cortexEnabled } from '$lib/features';
 import { getSynthesisStatus, runAlignmentSynthesis } from './alignment';
 import { emitEvent } from './events';
 import { getMemoryStatus, runMemory, runSkillOptimiser } from './memory';
@@ -70,10 +71,13 @@ export async function tick(): Promise<void> {
 	if (sweeping) return;
 	sweeping = true;
 	try {
-		sweepCortexLayout();
-		sweepCortexLearning();
+		// All three Cortex sweeps sit behind its switch: while it is off nothing
+		// about the lattice may change, so it is still there as it was.
+		const cortex = cortexEnabled();
+		if (cortex) sweepCortexLayout();
+		if (cortex) sweepCortexLearning();
 		await sweepMemory();
-		await sweepCortexGroom();
+		if (cortex) await sweepCortexGroom();
 		await sweepAlignmentSynthesis();
 		await sweepUxAudit();
 		await sweepSkillOptimiser();
@@ -349,8 +353,10 @@ export function prune(
 	// check the groomer's work and to undo it, and both of those happen within
 	// days. A `before` snapshot is a whole node, so this is the fastest-growing
 	// thing Cortex owns and the one place it needs a ceiling.
+	//
+	// Kept whole while Cortex is switched off, with the rest of its data.
 	let prunedCortex = 0;
-	if (cfg.cortexChangeDays > 0) {
+	if (cortexEnabled() && cfg.cortexChangeDays > 0) {
 		prunedCortex = db
 			.delete(cortexChangeLog)
 			.where(lt(cortexChangeLog.createdAt, new Date(now - cfg.cortexChangeDays * 86_400_000)))

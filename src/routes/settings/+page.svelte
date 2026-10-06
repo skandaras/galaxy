@@ -7,8 +7,11 @@
 	import { page } from '$app/state';
 	import { tabFromUrl } from '$lib/url-tab';
 	import Tabs from '$lib/components/Tabs.svelte';
+	import { cortexEnabled } from '$lib/features';
 
-	const tabs = ['Theme', 'Boards', 'Cortex', 'Notifications', 'Alignment'] as const;
+	const all = ['Theme', 'Boards', 'Cortex', 'Notifications', 'Alignment'] as const;
+	// The Cortex tab only while the lattice is switched on ($lib/features).
+	const tabs = all.filter((t) => t !== 'Cortex' || cortexEnabled());
 	// In the URL rather than in $state, so Back steps through tabs, a tab can
 	// be linked to, and the phone's More sheet can point at one.
 	const active = $derived(tabFromUrl(page.url.searchParams, tabs));

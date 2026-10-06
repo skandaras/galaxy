@@ -31,6 +31,7 @@ import { attachmentTools } from './tools/attachments';
 import { boardTools } from './tools/boards';
 import { cortexTools } from './tools/cortex';
 import { forgetActivation, learnFromReply } from './cortex-learn';
+import { cortexEnabled } from '$lib/features';
 import { documentTools } from './tools/documents';
 import { fetchUrlTool } from './tools/fetch-url';
 import { imageTools } from './tools/images';
@@ -279,7 +280,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 
 	const searchCfg = webSearchSettings();
 	const tools: LoopTool[] = [
-		...knowledgeTools(opts.userId),
+		...knowledgeTools(opts.userId, { hidden: chat.hidden }),
 		...attachmentTools(chat.id),
 		// Deliberately not behind the web-search toggle. That toggle governs
 		// *looking things up*; this is for reading an address the user has already
@@ -292,7 +293,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		// Likewise scoped: their own concepts plus anything shared. Activation
 		// never crosses into a lattice they cannot see. The chat id is what lets
 		// a query be judged against the reply it fed — see cortex-learn.
-		...cortexTools(opts.userId, undefined, chat.id),
+		...(cortexEnabled() ? cortexTools(opts.userId, undefined, chat.id) : []),
 		// Drawing and typesetting. Scoped to this chat: what they make is saved
 		// as an attachment on it, which is how the result reaches the thread.
 		...imageTools(chat.id, opts.userId),
@@ -328,7 +329,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		tools.push(webSearchTool(searchCfg));
 	}
 	const fullSystemPrompt =
-		systemPrompt + bootstrapContext(opts.userId) + (needsName ? nameThisChatNote() : '');
+		systemPrompt + bootstrapContext(opts.userId, 'chat') + (needsName ? nameThisChatNote() : '');
 	// Read before the turn starts, so it describes the *previous* attempt and
 	// stays fixed for the whole of this one. Carried as a tail note rather than
 	// in the system message: it changes every turn, and in front of the prompt
@@ -383,7 +384,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 			// rest quietly do not. After the reply for the same reason compaction
 			// is, and never on a hidden chat: those are deliberately never written
 			// down, and baking one into edge weights is writing it down.
-			if (persist) {
+			if (persist && cortexEnabled()) {
 				try {
 					learnFromReply(chat.id, content);
 				} catch {

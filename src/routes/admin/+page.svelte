@@ -14,10 +14,12 @@
 	import AdminNav from '$lib/components/admin/AdminNav.svelte';
 	import { page } from '$app/state';
 	import { tabFromUrl } from '$lib/url-tab';
-	import { ADMIN_SECTIONS, ADMIN_SECTION_LABELS } from '$lib/admin-sections';
+	import { ADMIN_SECTIONS, availableSectionLabels } from '$lib/admin-sections';
 
 	// An unknown section, including the old tab names, lands on the first.
-	const active = $derived(tabFromUrl(page.url.searchParams, ADMIN_SECTION_LABELS));
+	// A section whose feature is switched off is unknown here too.
+	const sectionLabels = availableSectionLabels();
+	const active = $derived(tabFromUrl(page.url.searchParams, sectionLabels));
 	const tasks = $derived(ADMIN_SECTIONS.find((s) => s.label === active)?.tasks ?? []);
 	let modelsRefreshKey = $state(0);
 </script>

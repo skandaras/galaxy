@@ -11,7 +11,7 @@ import {
 } from '$lib/server/settings';
 import { taskConfigs, CORE_TASKS, skills } from '$lib/server/db/schema';
 import { WRITE_SOURCE_NOTE_SKILL } from '$lib/server/ivory/notes';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { saveSkill } from '$lib/server/skills';
 import { deleteEmptyChats } from '$lib/server/chats';
 import { DEFAULT_PROMPTS } from '$lib/server/engine/prompts';
@@ -201,6 +201,7 @@ export function seedSkills(): void {
 		description:
 			'Read Figma files: pull a frame/node tree and image renditions via the figma-developer-mcp tools (chat-only).',
 		triggers: 'figma, design file, figma link, figma url',
+		tasks: 'chat',
 		body: FIGMA_SKILL_BODY
 	});
 	seedSkill('typst', {
@@ -208,6 +209,8 @@ export function seedSkills(): void {
 		description:
 			'Typst markup for the create_pdf tool: document structure, tables, maths, and what this instance cannot do.',
 		triggers: 'pdf, create_pdf, typst, document, report, letter, typeset',
+		// create_pdf is a chat tool, so no other agent can use these.
+		tasks: 'chat',
 		body: TYPST_SKILL_BODY
 	});
 	seedSkill(WRITE_SOURCE_NOTE_SKILL, {
@@ -215,8 +218,36 @@ export function seedSkills(): void {
 		description:
 			'The note format for Ivory Tower source notes: frontmatter, claims with verbatim quotes and locations, and what access means.',
 		triggers: 'ivory tower, source note, reading notes, shelf, ivory-read',
+		// The reader is handed this body directly; no other agent writes notes.
+		tasks: 'ivory-read',
 		body: WRITE_SOURCE_NOTE_BODY
 	});
+	scopeSeededSkills();
+}
+
+const SEEDED_SKILL_TASKS: Record<string, string> = {
+	'figma-reading': 'chat',
+	typst: 'chat',
+	[WRITE_SOURCE_NOTE_SKILL]: 'ivory-read'
+};
+const SKILL_SCOPE_KEY = 'skills.seedScopeVersion';
+
+/**
+ * Give the bundled skills their task scope on installs seeded before skills
+ * had one. Once, and only where the scope is still empty: a scope somebody
+ * set in Admin since is theirs. The index row is the source of truth, so the
+ * file's frontmatter catches up on the next save rather than being rewritten
+ * (and versioned) here.
+ */
+function scopeSeededSkills(): void {
+	if (getSetting<number>(SKILL_SCOPE_KEY, 0) >= 1) return;
+	for (const [name, tasks] of Object.entries(SEEDED_SKILL_TASKS)) {
+		db.update(skills)
+			.set({ tasks })
+			.where(and(eq(skills.name, name), eq(skills.tasks, '')))
+			.run();
+	}
+	setSetting(SKILL_SCOPE_KEY, 1);
 }
 
 /**
@@ -275,7 +306,7 @@ export function migrateToPromptOverrides(): void {
 /** Write a skill unless one of that name is already there — never overwrite. */
 function seedSkill(
 	name: string,
-	spec: { category: string; description: string; triggers: string; body: string }
+	spec: { category: string; description: string; triggers: string; tasks: string; body: string }
 ): void {
 	if (db.select({ name: skills.name }).from(skills).where(eq(skills.name, name)).get()) return;
 	saveSkill({ name, author: 'user', enabled: true, ...spec });

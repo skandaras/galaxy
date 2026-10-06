@@ -16,6 +16,7 @@ import { closeAbandonedJobs } from '$lib/server/engine/jobs';
 import { startScheduler } from '$lib/server/engine/scheduler';
 import { isTrustedProxy, parseAuthHeaders, isAdminFromGroups } from '$lib/server/auth';
 import { provisionUser } from '$lib/server/users';
+import { cortexEnabled } from '$lib/features';
 
 runMigrations();
 migrateSettings();
@@ -49,6 +50,13 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	if (PUBLIC_PATHS.has(event.url.pathname)) {
 		return resolve(event);
+	}
+
+	// Cortex is switched off ($lib/features): its page and every endpoint under
+	// /api/cortex answer as if they did not exist, one check rather than one per
+	// route.
+	if (!cortexEnabled() && /^\/(api\/)?cortex(\/|$)/.test(event.url.pathname)) {
+		error(404, 'Not found');
 	}
 
 	const authMode = env.AUTH_MODE || 'authelia';

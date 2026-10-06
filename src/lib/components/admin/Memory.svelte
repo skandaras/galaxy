@@ -19,7 +19,7 @@
 		proposedBy: string;
 	}
 
-	let settings = $state({ enabled: true, intervalHours: 12, maxItems: 20, timeoutSeconds: 180 });
+	let settings = $state({ enabled: true, intervalHours: 12, maxItems: 50, timeoutSeconds: 180 });
 	let userStatus = $state<UserStatus[]>([]);
 	let candidates = $state<Candidate[]>([]);
 	let expandedCand = $state<string | null>(null);
@@ -109,9 +109,10 @@
 			the Memory page; an audit only reads that user's own activity, and never hidden chats.
 		</p>
 		<p class="hint">
-			The number kept is a hard ceiling, not a target: past it a new memory has to displace one
-			and say why it is worth more, and what it pushes out is either filed in that person's
-			“Long term user memory” document or dropped. The time limit is the whole of one model
+			An audit only proposes: each person approves, edits or rejects what it finds on their
+			Memory page, and nothing reaches their agents before that. The number kept is a hard
+			ceiling, and an approval past it is refused, so it also bounds the review queue. Only
+			titles reach a prompt, so a memory costs a few words a turn. The time limit is the whole of one model
 			call — a background call is not streamed, so unlike a chat turn it gets no allowance for
 			going quiet. Raise it if audits time out against a slow provider.
 		</p>
@@ -165,7 +166,9 @@
 		{:else}
 			<p class="hint">
 				No pending candidates. Approving one creates the real skill (agent-authored,
-				git-versioned); nothing activates without you.
+				git-versioned), belonging to the person it was learnt from, who can also approve it
+				themselves on their Memory page. Share it from Skills to give it to everyone; nothing
+				activates without a person approving it.
 			</p>
 		{/each}
 		{#if decided.length}

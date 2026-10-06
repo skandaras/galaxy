@@ -1144,7 +1144,9 @@ async function executeToolCall(
 				name: call.name,
 				status: 'error',
 				durationMs: Date.now() - started,
-				detail: { summary, error: String(err) }
+				// What the tool reported before it threw: a refused push carries the
+				// hook runs that refused it, and they were dropped here.
+				detail: { summary, ...meta, error: String(err) }
 			},
 			{ persist }
 		);

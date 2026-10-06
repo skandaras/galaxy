@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { dirname, join, normalize, resolve, sep } from 'node:path';
 import { dataDir } from '$lib/server/db';
 import { decryptSecret } from '$lib/server/crypto';
@@ -109,6 +109,74 @@ export function repoInstructions(workspaceRel: string): string {
 		);
 	}
 	return blocks.length ? `\n\n${blocks.join('\n\n')}` : '';
+}
+
+/**
+ * Where a repository keeps skills of its own. `.agents` first for the same
+ * reason AGENTS.md is read first; `.claude/skills` because that is where a
+ * repository set up for Claude Code already has them, in the same SKILL.md
+ * format.
+ */
+export const REPO_SKILL_DIRS = ['.agents/skills', '.claude/skills'] as const;
+
+export interface RepoSkill {
+	name: string;
+	description: string;
+	/** The skill's folder, relative to the workspace. */
+	dirRel: string;
+}
+
+/** Skills a repository indexes. Past this it is a library, not an index. */
+const MAX_REPO_SKILLS = 40;
+
+/**
+ * The skills a repository carries, from `<dir>/<name>/SKILL.md`.
+ *
+ * Read from the work tree, as AGENTS.md is: they are the repository's own
+ * instructions and have the same standing. The first directory to name a
+ * skill wins, so a repository carrying both copies is not indexed twice.
+ */
+export function repoSkills(workspaceRel: string): RepoSkill[] {
+	const out: RepoSkill[] = [];
+	const seen = new Set<string>();
+	for (const dir of REPO_SKILL_DIRS) {
+		let entries: string[];
+		try {
+			entries = readdirSync(safeJoin(workspaceRel, dir)).sort();
+		} catch {
+			continue;
+		}
+		for (const entry of entries) {
+			if (out.length >= MAX_REPO_SKILLS) return out;
+			const dirRel = `${dir}/${entry}`;
+			let raw: string;
+			try {
+				raw = readFileSync(safeJoin(workspaceRel, `${dirRel}/SKILL.md`), 'utf8');
+			} catch {
+				continue;
+			}
+			const meta = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? '';
+			const field = (key: string) =>
+				meta.match(new RegExp(`^${key}:\\s*(.*)$`, 'm'))?.[1].trim() ?? '';
+			const name = field('name') || entry;
+			if (seen.has(name)) continue;
+			seen.add(name);
+			out.push({ name, description: field('description'), dirRel });
+		}
+	}
+	return out;
+}
+
+/** The repository's skills as an index for the coding prompt, or nothing. */
+export function repoSkillIndex(workspaceRel: string): string {
+	const found = repoSkills(workspaceRel);
+	if (!found.length) return '';
+	return [
+		'',
+		'',
+		"[This repository's own skills: procedures it keeps beside its code, with the same standing as its AGENTS.md. Load one with skill_load when it applies.]",
+		...found.map((s) => `  - ${s.name}: ${s.description}`)
+	].join('\n');
 }
 
 export interface CreatedWorkspace {

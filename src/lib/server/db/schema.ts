@@ -468,12 +468,24 @@ export const skills = sqliteTable('skills', {
 	version: integer('version').notNull().default(1),
 	author: text('author', { enum: ['user', 'agent'] }).notNull().default('user'),
 	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+	/**
+	 * Whose skill this is. Null is shared with everyone, which is every skill
+	 * written before skills had owners and every one an admin writes or shares.
+	 * A skill approved from one person's activity is theirs, because it was
+	 * learnt from their conversations.
+	 */
+	ownerId: text('owner_id'),
+	/**
+	 * The tasks whose skill index lists it, comma-separated; empty is every
+	 * task. A coding agent has no use for the Figma skill's line in its prompt.
+	 */
+	tasks: text('tasks').notNull().default(''),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 	updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
 });
 
-// Durable observations the memory agent extracts from activity. Injected
-// into the context bootstrap while active.
+// A person's preferences and patterns, each one signed off by them. Only the
+// titles of active items reach a prompt; an agent reads a body on demand.
 export const memoryItems = sqliteTable(
 	'memory_items',
 	{
@@ -482,7 +494,16 @@ export const memoryItems = sqliteTable(
 		// an image that inserts without it (expand-migrate-contract); every read
 		// filters by owner, so a null row is simply invisible.
 		userId: text('user_id'),
-		kind: text('kind', { enum: ['preference', 'pattern', 'fact'] }).notNull(),
+		// Facts about a person's world are not memories: they belong in the
+		// knowledge graph planned in Cortex's place. Rows written as 'fact' before
+		// that may still be stored, and read back as the string they hold.
+		kind: text('kind', { enum: ['preference', 'pattern'] }).notNull(),
+		/**
+		 * What an agent sees in its prompt, a few words long. Empty on rows
+		 * written before titles existed, which show the start of their content
+		 * instead; the default is what lets the previous image keep inserting.
+		 */
+		title: text('title').notNull().default(''),
 		content: text('content').notNull(),
 		source: text('source'),
 		status: text('status', { enum: ['active', 'archived'] }).notNull().default('active'),
@@ -490,6 +511,36 @@ export const memoryItems = sqliteTable(
 	},
 	// Reads are always "this user's items, usually the active ones".
 	(t) => [index('memory_items_user_status_idx').on(t.userId, t.status)]
+);
+
+/**
+ * A change to someone's memory that waits for them to sign it off.
+ *
+ * The audit, consolidation and the rebuild only ever write here. Nothing
+ * reaches `memory_items` until its owner approves the proposal, and a rejected
+ * one stays as the record that tells later audits not to propose it again.
+ */
+export const memoryProposals = sqliteTable(
+	'memory_proposals',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id').notNull(),
+		action: text('action', { enum: ['add', 'update', 'retire'] }).notNull(),
+		/** The memory an update or retirement is about; null for an addition. */
+		itemId: text('item_id'),
+		kind: text('kind', { enum: ['preference', 'pattern'] }),
+		title: text('title').notNull().default(''),
+		content: text('content').notNull().default(''),
+		/** The agent's reason, shown beside the proposal. */
+		why: text('why').notNull().default(''),
+		status: text('status', { enum: ['pending', 'approved', 'rejected'] })
+			.notNull()
+			.default('pending'),
+		source: text('source'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		decidedAt: integer('decided_at', { mode: 'timestamp_ms' })
+	},
+	(t) => [index('memory_proposals_user_status_idx').on(t.userId, t.status)]
 );
 
 // Skills proposed by the memory/optimiser agents. Never auto-activated:
@@ -504,6 +555,8 @@ export const skillCandidates = sqliteTable('skill_candidates', {
 	triggers: text('triggers').notNull().default(''),
 	body: text('body').notNull().default(''),
 	rationale: text('rationale').notNull().default(''),
+	/** As on `skills`: the tasks it is for, comma-separated, empty for all. */
+	tasks: text('tasks').notNull().default(''),
 	status: text('status', { enum: ['pending', 'approved', 'rejected'] })
 		.notNull()
 		.default('pending'),

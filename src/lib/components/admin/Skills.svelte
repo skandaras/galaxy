@@ -9,12 +9,22 @@
 		version: number;
 		author: 'user' | 'agent';
 		enabled: boolean;
+		/** Null is shared with everyone; otherwise the person it was learnt from. */
+		ownerId: string | null;
+		tasks: string;
 	}
 
 	let skills = $state<Skill[]>([]);
 	let template = $state('');
 	let editing = $state<string | null>(null); // skill name, or '' for new
-	let form = $state({ name: '', category: 'general', description: '', triggers: '', body: '' });
+	let form = $state({
+		name: '',
+		category: 'general',
+		description: '',
+		triggers: '',
+		tasks: '',
+		body: ''
+	});
 	let saved = $state(false);
 	let errorMsg = $state<string | null>(null);
 	/**
@@ -64,6 +74,7 @@
 			category: 'general',
 			description: '',
 			triggers: '',
+			tasks: '',
 			body: parsed?.[1]?.trimStart() ?? ''
 		};
 		errorMsg = null;
@@ -77,6 +88,7 @@
 			category: s.category,
 			description: s.description,
 			triggers: s.triggers,
+			tasks: s.tasks,
 			body: data.body
 		};
 		errorMsg = null;
@@ -105,6 +117,24 @@
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ enabled: !s.enabled })
 		});
+		await load();
+	}
+
+	async function share(s: Skill) {
+		if (
+			!(await ask({
+				title: `Share "${s.name}" with everyone?`,
+				body: 'It was learnt from one person\'s conversations. Shared, every agent on this instance can load it, and it cannot be made personal again.',
+				confirm: 'Share skill'
+			}))
+		)
+			return;
+		const res = await fetch(`/api/skills/${s.name}`, {
+			method: 'PUT',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ shared: true })
+		}).catch(() => null);
+		if (!res?.ok) errorMsg = 'Could not share that skill';
 		await load();
 	}
 
@@ -153,12 +183,17 @@
 									{s.name}
 									<span class="v">v{s.version}</span>
 									{#if s.author === 'agent'}<span class="agent-badge">agent</span>{/if}
+									{#if s.ownerId}<span class="agent-badge">personal</span>{/if}
 								</div>
 								<div class="desc">{s.description}</div>
 								{#if s.triggers}<div class="trig">triggers: {s.triggers}</div>{/if}
+								{#if s.tasks}<div class="trig">for: {s.tasks}</div>{/if}
 							</td>
 							<td class="actions">
 								<button class="btn" onclick={() => edit(s)}>Edit</button>
+								{#if s.ownerId}
+									<button class="btn" onclick={() => share(s)}>Share</button>
+								{/if}
 								<button class="btn danger" onclick={() => remove(s)}>Delete</button>
 							</td>
 						</tr>
@@ -187,6 +222,10 @@
 				<label class="wide">
 					triggers (comma-separated keywords)
 					<input bind:value={form.triggers} />
+				</label>
+				<label class="wide">
+					for (comma-separated tasks such as chat, coding; empty for every agent)
+					<input bind:value={form.tasks} placeholder="every agent" />
 				</label>
 			</div>
 			<textarea rows="14" bind:value={form.body} placeholder="Skill instructions (markdown)"></textarea>

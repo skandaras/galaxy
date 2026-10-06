@@ -22,6 +22,7 @@ import { setSetting } from '$lib/server/settings';
  */
 
 let failMemory = false;
+let cortexOn = true;
 
 const ran = {
 	layout: 0,
@@ -32,6 +33,10 @@ const ran = {
 	uxAudit: 0,
 	skills: 0
 };
+
+// Cortex ships switched off. These cases are about whether tick reaches a sweep,
+// so they switch it on; the last case asserts what off means.
+vi.mock('$lib/features', () => ({ cortexEnabled: () => cortexOn }));
 
 vi.mock('$lib/server/cortex', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('$lib/server/cortex')>();
@@ -108,6 +113,7 @@ beforeAll(() => {
 beforeEach(() => {
 	for (const key of Object.keys(ran) as (keyof typeof ran)[]) ran[key] = 0;
 	failMemory = false;
+	cortexOn = true;
 	db.delete(users).run();
 	db.insert(users)
 		.values({
@@ -191,5 +197,14 @@ describe('one tick', () => {
 		// jobs to be skipped for the rest of the day.
 		expect(ran.groom).toBeGreaterThan(0);
 		expect(ran.uxAudit).toBeGreaterThan(0);
+	});
+
+	it('leaves the lattice exactly as it is while Cortex is switched off', async () => {
+		cortexOn = false;
+		await tick();
+		expect(ran.layout).toBe(0);
+		expect(ran.decay).toBe(0);
+		expect(ran.groom).toBe(0);
+		expect(ran.memory).toBeGreaterThan(0);
 	});
 });

@@ -1,8 +1,17 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	statSync,
+	writeFileSync
+} from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
-import { asc, eq } from 'drizzle-orm';
+import { join, relative, resolve, sep } from 'node:path';
+import { and, asc, eq, isNull, or, type SQL } from 'drizzle-orm';
 import { db, dataDir } from '$lib/server/db';
 import { skills } from '$lib/server/db/schema';
 
@@ -15,6 +24,8 @@ export interface SkillMeta {
 	triggers: string;
 	version: number;
 	author: 'user' | 'agent';
+	/** Comma-separated tasks whose index lists it; empty for every task. */
+	tasks: string;
 }
 
 const skillsDir = () => join(dataDir, 'skills');
@@ -26,6 +37,7 @@ category: general
 version: 1
 author: user
 triggers: keyword-one, keyword-two
+tasks:
 ---
 
 ## When to use
@@ -35,7 +47,12 @@ Describe the situations this skill applies to.
 ## Instructions
 
 Step-by-step guidance the agent should follow. Keep it focused: one skill,
-one capability. Link Library docs by title where helpful.
+one capability. Link Library docs by title where helpful. Longer reference
+material can sit beside this file in the skill's folder, where an agent reads
+it with skill_read only when it needs it.
+
+\`tasks\` limits which agents list this skill (chat, coding, deep-research…);
+leave it empty for all of them.
 `;
 
 /** Ensure the skills directory exists and is a git repo (versioning every edit). */
@@ -83,7 +100,8 @@ export function parseFrontmatter(raw: string): { meta: Partial<SkillMeta>; body:
 			description: meta.description,
 			triggers: meta.triggers,
 			version: meta.version ? Number(meta.version) : undefined,
-			author: meta.author === 'agent' ? 'agent' : meta.author === 'user' ? 'user' : undefined
+			author: meta.author === 'agent' ? 'agent' : meta.author === 'user' ? 'user' : undefined,
+			tasks: meta.tasks
 		},
 		body: m[2].replace(/^\r?\n/, '')
 	};
@@ -98,6 +116,7 @@ export function serializeSkill(meta: SkillMeta, body: string): string {
 		`version: ${meta.version}`,
 		`author: ${meta.author}`,
 		`triggers: ${meta.triggers}`,
+		`tasks: ${meta.tasks}`,
 		'---',
 		'',
 		body.trimStart()
@@ -116,12 +135,48 @@ function skillPath(category: string, name: string): string {
 	return join(skillsDir(), normalizeSkillName(category) || 'general', name, 'SKILL.md');
 }
 
-export function listSkills(): Skill[] {
-	return db.select().from(skills).orderBy(asc(skills.category), asc(skills.name)).all();
+/** A person's own skills and every shared one. */
+export function skillVisibleTo(userId: string): SQL {
+	return or(isNull(skills.ownerId), eq(skills.ownerId, userId))!;
 }
 
-export function getSkill(name: string): { meta: Skill; body: string } | null {
-	const meta = db.select().from(skills).where(eq(skills.name, name)).get();
+/**
+ * Skills in category order. With a user, only those that person may see; with
+ * none, every skill, which is for Admin and the platform's own lookups.
+ */
+export function listSkills(userId?: string): Skill[] {
+	return db
+		.select()
+		.from(skills)
+		.where(userId ? skillVisibleTo(userId) : undefined)
+		.orderBy(asc(skills.category), asc(skills.name))
+		.all();
+}
+
+/** Normalise a comma-separated task list. */
+export function normalizeTasks(raw: unknown): string {
+	return [
+		...new Set(
+			String(raw ?? '')
+				.split(',')
+				.map((t) => t.trim().toLowerCase())
+				.filter(Boolean)
+		)
+	].join(', ');
+}
+
+/** Whether a skill belongs in a task's index. Empty means every task. */
+export function skillAppliesTo(skill: Pick<Skill, 'tasks'>, task: string | undefined): boolean {
+	if (!task || !skill.tasks.trim()) return true;
+	return normalizeTasks(skill.tasks).split(', ').includes(task);
+}
+
+export function getSkill(name: string, userId?: string): { meta: Skill; body: string } | null {
+	const meta = db
+		.select()
+		.from(skills)
+		.where(userId ? and(eq(skills.name, name), skillVisibleTo(userId)) : eq(skills.name, name))
+		.get();
 	if (!meta) return null;
 	const path = skillPath(meta.category, meta.name);
 	const raw = existsSync(path) ? readFileSync(path, 'utf8') : '';
@@ -136,6 +191,9 @@ export function saveSkill(opts: {
 	author: 'user' | 'agent';
 	body: string;
 	enabled?: boolean;
+	tasks?: string;
+	/** Only for a new skill; an existing one keeps its owner. See setSkillOwner. */
+	ownerId?: string | null;
 }): Skill {
 	ensureSkillsRepo();
 	const name = normalizeSkillName(opts.name);
@@ -144,6 +202,7 @@ export function saveSkill(opts: {
 	const existing = db.select().from(skills).where(eq(skills.name, name)).get();
 	const version = (existing?.version ?? 0) + 1;
 	const category = normalizeSkillName(opts.category) || 'general';
+	const tasks = opts.tasks === undefined ? (existing?.tasks ?? '') : normalizeTasks(opts.tasks);
 
 	// Category may change — remove the old file location first.
 	if (existing && existing.category !== category) {
@@ -160,7 +219,8 @@ export function saveSkill(opts: {
 				description: opts.description,
 				triggers: opts.triggers,
 				version,
-				author: existing?.author ?? opts.author
+				author: existing?.author ?? opts.author,
+				tasks
 			},
 			opts.body
 		)
@@ -175,6 +235,8 @@ export function saveSkill(opts: {
 		version,
 		author: existing?.author ?? opts.author,
 		enabled: opts.enabled ?? existing?.enabled ?? true,
+		ownerId: existing ? existing.ownerId : (opts.ownerId ?? null),
+		tasks,
 		createdAt: existing?.createdAt ?? now,
 		updatedAt: now
 	};
@@ -190,6 +252,11 @@ export function saveSkill(opts: {
 	return row;
 }
 
+/** Share a skill with everyone (null), or hand it to one person. */
+export function setSkillOwner(name: string, ownerId: string | null): void {
+	db.update(skills).set({ ownerId, updatedAt: new Date() }).where(eq(skills.name, name)).run();
+}
+
 export function setSkillEnabled(name: string, enabled: boolean): void {
 	db.update(skills).set({ enabled, updatedAt: new Date() }).where(eq(skills.name, name)).run();
 }
@@ -203,9 +270,12 @@ export function deleteSkill(name: string): boolean {
 	return true;
 }
 
-/** Categorised one-liner index injected into agent context at session start. */
-export function skillIndexText(maxSkills = 60): string {
-	const enabled = listSkills().filter((s) => s.enabled);
+/**
+ * Categorised one-liner index injected into agent context at session start:
+ * the skills this person may see, and only those meant for this task.
+ */
+export function skillIndexText(userId?: string, task?: string, maxSkills = 60): string {
+	const enabled = listSkills(userId).filter((s) => s.enabled && skillAppliesTo(s, task));
 	if (!enabled.length) return '(no skills defined yet)';
 	const lines: string[] = [];
 	let currentCategory = '';
@@ -220,4 +290,57 @@ export function skillIndexText(maxSkills = 60): string {
 	}
 	if (enabled.length > maxSkills) lines.push(`…and ${enabled.length - maxSkills} more.`);
 	return lines.join('\n');
+}
+
+/** Files a skill may carry beside SKILL.md, listed for the agent. */
+const MAX_SKILL_FILES = 50;
+
+/**
+ * The files in a skill's folder other than SKILL.md: reference material,
+ * templates, scripts. Listed by `skill_load` and read one at a time with
+ * `skill_read`, so a long reference costs nothing until it is needed.
+ */
+export function skillFiles(dir: string): string[] {
+	const out: string[] = [];
+	const walk = (at: string) => {
+		let entries;
+		try {
+			entries = readdirSync(at, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const e of entries) {
+			if (out.length >= MAX_SKILL_FILES) return;
+			if (e.name.startsWith('.')) continue;
+			const abs = join(at, e.name);
+			if (e.isDirectory()) walk(abs);
+			else if (e.isFile() && !(at === dir && e.name === 'SKILL.md')) out.push(relative(dir, abs));
+		}
+	};
+	walk(dir);
+	return out.sort();
+}
+
+/**
+ * Read one file from a skill's folder, refusing anything that resolves outside
+ * it, through `..` or through a link planted inside it.
+ */
+export function readSkillFile(dir: string, path: string, maxChars: number): string {
+	const base = realpathSync(resolve(dir));
+	const target = resolve(base, path);
+	if (target === base || !target.startsWith(base + sep)) {
+		throw new Error(`Not a file in this skill: ${path}`);
+	}
+	if (!existsSync(target) || !statSync(target).isFile()) throw new Error(`No such file: ${path}`);
+	const real = realpathSync(target);
+	if (!real.startsWith(base + sep)) throw new Error(`Not a file in this skill: ${path}`);
+	const text = readFileSync(real, 'utf8');
+	return text.length > maxChars
+		? `${text.slice(0, maxChars)}\n\n[truncated at ${maxChars} characters]`
+		: text;
+}
+
+/** The folder a stored skill's SKILL.md lives in. */
+export function skillDir(meta: Pick<Skill, 'category' | 'name'>): string {
+	return join(skillPath(meta.category, meta.name), '..');
 }

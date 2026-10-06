@@ -430,11 +430,14 @@ export interface MemorySettings {
 	/**
 	 * How many memories a person keeps at once.
 	 *
-	 * This is the whole design, not a tuning knob: only this many ever reached a
-	 * system prompt, but the audit used to add without ever removing, so the
-	 * stored list grew forever — and the audit's own prompt carried every line
-	 * of it, which is how a job that had always worked started timing out. Past
-	 * the cap a new memory has to displace one, judged against it.
+	 * The audit used to add without ever removing, so the stored list grew
+	 * forever, and its own prompt carried every line of it, which is how a job
+	 * that had always worked started timing out. Every change now needs the
+	 * person's approval and an approval past the ceiling is refused, so this is
+	 * what keeps both the prompt and the review queue bounded.
+	 *
+	 * Fifty rather than twenty since only titles reach a prompt: a memory costs a
+	 * few words per turn rather than a sentence or two.
 	 */
 	maxItems: number;
 	/**
@@ -451,7 +454,7 @@ export interface MemorySettings {
 export const DEFAULT_MEMORY: MemorySettings = {
 	enabled: true,
 	intervalHours: 12,
-	maxItems: 20,
+	maxItems: 50,
 	timeoutSeconds: 180
 };
 

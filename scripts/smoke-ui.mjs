@@ -280,7 +280,7 @@ const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
 
 // 1. Every page renders, and renders quietly. A page that throws during
 //    hydration still answers 200, so the bash smoke calls it healthy.
-for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/memory', '/ivory', '/ivory/new', '/settings', '/observatory', '/alignment']) {
+for (const path of ['/chat', '/code', '/boards', '/library', '/memory', '/ivory', '/ivory/new', '/settings', '/observatory', '/alignment']) {
 	problems = [];
 	// Not networkidle: the app holds SSE streams open (notifications, the
 	// Observatory feed), so the network is never idle and every goto would sit
@@ -291,6 +291,16 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/memory
 	check(`${path} renders without errors`, problems, []);
 	const body = await page.locator('body').boundingBox();
 	check(`${path} draws something`, (body?.height ?? 0) > 100);
+}
+
+// 1-. Cortex is switched off ($lib/features): no rail entry, and its page and
+//     API answer 404 rather than rendering an empty lattice.
+{
+	await page.goto(`${B}/chat`);
+	await page.locator('aside.pane').waitFor();
+	check('the rail has no Cortex entry', await page.locator('.nav a[href="/cortex"]').count(), 0);
+	check('/cortex answers 404', (await page.request.get(`${B}/cortex`)).status(), 404);
+	check('/api/cortex/map answers 404', (await page.request.get(`${B}/api/cortex/map`)).status(), 404);
 }
 
 // 1a. The Shelf with no GitHub token says so, instead of hanging on "Reading".
@@ -327,13 +337,8 @@ check(
 	await page.goto(`${B}/settings`);
 	await page.locator('.tabs button').first().waitFor();
 	const tabs = await page.locator('.tabs button').allTextContents();
-	check('settings offers every pane a tab', tabs, [
-		'Theme',
-		'Boards',
-		'Cortex',
-		'Notifications',
-		'Alignment'
-	]);
+	// No Cortex tab while it is switched off.
+	check('settings offers every pane a tab', tabs, ['Theme', 'Boards', 'Notifications', 'Alignment']);
 
 	for (const tab of tabs) {
 		problems = [];
@@ -353,7 +358,7 @@ check(
 		await page.locator('.tabs button[aria-selected="true"]').innerText(),
 		'Notifications'
 	);
-	await page.locator('.tabs button', { hasText: 'Cortex' }).click();
+	await page.locator('.tabs button', { hasText: 'Boards' }).click();
 	await page.waitForTimeout(200);
 	await page.goBack();
 	await page.waitForTimeout(200);
@@ -973,7 +978,10 @@ check(
 	// The page renders client-side, so read the list only once it is drawn.
 	await admin.locator('.admin-nav .item').first().waitFor();
 	const sections = await admin.locator('.admin-nav .item').allTextContents();
-	check('admin has a section per feature', sections.length, 17);
+	// Seventeen sections, one of them Cortex's, which is not offered while it is
+	// switched off.
+	check('admin has a section per feature', sections.length, 16);
+	check('admin offers no Cortex section', sections.includes('Cortex'), false);
 	check('admin lists its sections in three groups', await admin.locator('.admin-nav .group').count(), 3);
 	for (const label of sections) {
 		adminProblems.length = 0;
@@ -986,11 +994,10 @@ check(
 	}
 	await admin.goto(`${B}/admin?tab=cortex`);
 	await admin.locator('.admin .body h1').waitFor();
-	await admin.waitForTimeout(400);
 	check(
-		'Cortex holds its own task prompt',
-		await admin.locator('.admin .body h3', { hasText: 'cortex-groom' }).count(),
-		1
+		'a link to the Cortex section lands on the first section',
+		await admin.locator('.admin .body h1').innerText(),
+		'Users'
 	);
 	await admin.goto(`${B}/admin?tab=settings`);
 	check(
@@ -1064,6 +1071,51 @@ check(
 	check('the searches survive the run that made them', (await page.locator('.results li').count()) > 0);
 	check('the chat page stayed quiet during a research run', problems, []);
 	if (fail.length) await shot('research-searches');
+}
+
+// N2. Memory waits for its owner. The audit only proposes, so the page is where
+//     anything becomes a memory at all: approving, rewording and the rebuild
+//     all have to work from the page, not just from the API.
+{
+	problems = [];
+	const ran = await as(ALICE, '/api/memory/run', { method: 'POST' });
+	check('a memory review proposes something', ran.proposals > 0);
+	await page.goto(`${B}/memory`);
+	const waiting = page.locator('.memory-page .card', { hasText: 'Waiting for you' });
+	const proposal = waiting.locator('.proposal', { hasText: 'Concise replies' });
+	await proposal.waitFor();
+	check('nothing is held before it is approved', await page.locator('.memory-page table td', { hasText: 'Concise replies' }).count(), 0);
+	await proposal.getByRole('button', { name: 'Approve' }).click();
+	const held = page.locator('.memory-page table tr', { hasText: 'Concise replies' });
+	await held.waitFor();
+	check('approving puts it in the list', await held.count(), 1);
+	check('and takes it out of the queue', await waiting.locator('.proposal', { hasText: 'Concise replies' }).count(), 0);
+
+	await held.getByRole('button', { name: 'Edit' }).click();
+	// The title is an input's value now, not text, so find the row by its editor.
+	const editing = page.locator('.memory-page table tr:has(input[type="text"])');
+	await editing.locator('input[type="text"]').fill('Short answers');
+	await editing.getByRole('button', { name: 'Save' }).click();
+	await page.locator('.memory-page table tr', { hasText: 'Short answers' }).waitFor();
+	check('a held memory can be retitled', await page.locator('.memory-page table tr', { hasText: 'Short answers' }).count(), 1);
+
+	// The same review proposed a skill, which its owner can approve from here.
+	const cand = page.locator('.memory-page .skills .cand', { hasText: 'release-checklist' });
+	await cand.getByRole('button', { name: 'Approve skill' }).click();
+	await cand.locator('.cand-status.approved').waitFor();
+	check('a proposed skill can be approved by its owner', await cand.locator('.cand-status').textContent(), 'approved');
+
+	await page.getByRole('button', { name: 'Wipe and rebuild' }).click();
+	const dialog = page.locator('dialog.confirm');
+	await dialog.waitFor();
+	await dialog.getByRole('button', { name: 'Wipe and rebuild' }).click();
+	// The mock answers at once, so the rebuild is over in moments; what it
+	// proposed is back in the queue and nothing is held.
+	await waiting.locator('.proposal', { hasText: 'Concise replies' }).waitFor({ timeout: 20_000 });
+	check('a rebuild empties the list', await page.locator('.memory-page table tr', { hasText: 'Short answers' }).count(), 0);
+	check('and refills the queue', await waiting.locator('.proposal').count() > 0);
+	check('the memory page renders quietly throughout', problems, []);
+	if (fail.length) await shot('memory');
 }
 
 // N+1. "+ New chat" must not create anything until a message is sent.
@@ -1242,7 +1294,9 @@ check(
 //    completely silent — nothing throws, nothing is missing from the DOM, it
 //    just draws nothing. So this seeds a small lattice, checks the chart put
 //    pixels on the canvas, and checks that rotating it changes them.
-{
+// Kept for when Cortex is switched back on; while it is off its API answers 404
+// and there is no map to draw.
+if ((await page.request.get(`${B}/api/cortex/map`)).status() !== 404) {
 	const areas = {};
 	for (const name of ['Coastal fieldwork', 'Letterpress']) {
 		areas[name] = (
@@ -1535,7 +1589,7 @@ check(
 	// the abort as a console error, which looks exactly like a broken page.
 	await phone.waitForTimeout(500);
 
-	for (const path of ['/chat', '/code', '/boards', '/library', '/cortex', '/ivory', '/settings']) {
+	for (const path of ['/chat', '/code', '/boards', '/library', '/ivory', '/settings']) {
 		phoneProblems = [];
 		await phone.goto(B + path);
 		// The same wait as the desktop loop, which is the whole payoff of leaving
@@ -1946,8 +2000,8 @@ check(
 		);
 		// Activity is the Observatory's page, under the name people read. The
 		// docked feed is display:none at this width, so this is the way there.
+		// No Cortex while it is switched off.
 		check('More holds everything the bar could not', items, [
-			'✧ Cortex',
 			'◇ Memory',
 			'▲ Ivory Tower',
 			'◉ Alignment',
@@ -1976,7 +2030,8 @@ check(
 		check('closing behind itself', await phone.locator('.more-sheet').count(), 0);
 	}
 
-	{
+	// The map on a phone, kept for when Cortex is switched back on.
+	if ((await phone.request.get(`${B}/api/cortex/map`)).status() !== 404) {
 		await phone.goto(`${B}/cortex`);
 		await phone.locator('.map canvas').waitFor();
 		await phone.waitForTimeout(900);
