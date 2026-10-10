@@ -9,8 +9,6 @@ import {
 	DEFAULT_COMPACTION,
 	DEFAULT_FETCH,
 	DEFAULT_IVORY,
-	DEFAULT_CORTEX,
-	DEFAULT_CORTEX_GROOM,
 	DEFAULT_MEMORY,
 	DEFAULT_RESEARCH,
 	DEFAULT_RETENTION,
@@ -40,8 +38,6 @@ const KNOWN_KEYS = [
 	'retention',
 	'fetch',
 	'boards',
-	'cortex',
-	'cortexGroom',
 	'language',
 	'ivory'
 ] as const;
@@ -58,8 +54,6 @@ const DEFAULTS: Record<string, unknown> = {
 	retention: DEFAULT_RETENTION,
 	fetch: DEFAULT_FETCH,
 	boards: DEFAULT_BOARDS,
-	cortex: DEFAULT_CORTEX,
-	cortexGroom: DEFAULT_CORTEX_GROOM,
 	language: DEFAULT_LANGUAGE,
 	ivory: DEFAULT_IVORY
 };

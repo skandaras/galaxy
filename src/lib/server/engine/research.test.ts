@@ -2554,35 +2554,29 @@ describe('questionUrls', () => {
 
 describe('localContext', () => {
 	const deps = {
-		docs: () => [{ title: 'Nebula notes', match: 'the «helium» fraction I measured' }],
-		concepts: () => [{ name: 'Amateur spectroscopy', description: 'their telescope work' }]
+		docs: () => [{ title: 'Nebula notes', match: 'the «helium» fraction I measured' }]
 	};
 
-	it('offers the library and the lattice for aiming the opening query', () => {
+	it('offers the library for aiming the opening query', () => {
 		const out = localContext('u1', 'how do nebulae form?', deps);
 		expect(out).toContain('Nebula notes');
 		expect(out).toContain('helium');
-		expect(out).toContain('Amateur spectroscopy');
 	});
 
 	it('is empty when the person has nothing on the subject', () => {
-		expect(localContext('u1', 'q', { docs: () => [], concepts: () => [] })).toBe('');
+		expect(localContext('u1', 'q', { docs: () => [] })).toBe('');
 	});
 
-	it('plans without them rather than failing the run when a store cannot be read', () => {
+	it('plans without it rather than failing the run when the library cannot be read', () => {
 		const boom = () => {
 			throw new Error('index locked');
 		};
-		expect(localContext('u1', 'q', { docs: boom, concepts: deps.concepts })).toContain(
-			'Amateur spectroscopy'
-		);
-		expect(localContext('u1', 'q', { docs: boom, concepts: boom })).toBe('');
+		expect(localContext('u1', 'q', { docs: boom })).toBe('');
 	});
 
 	it('stays small enough to be a hint rather than an input', () => {
 		const out = localContext('u1', 'q', {
-			docs: () => Array.from({ length: 4 }, () => ({ title: 'T', match: 'x'.repeat(2_000) })),
-			concepts: () => []
+			docs: () => Array.from({ length: 4 }, () => ({ title: 'T', match: 'x'.repeat(2_000) }))
 		});
 		expect(out.length).toBeLessThan(1_400);
 	});

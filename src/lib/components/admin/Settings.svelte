@@ -21,7 +21,7 @@
 		| 'budget'
 		| 'retention'
 		| 'push';
-	type RetentionField = 'eventDays' | 'usageDays' | 'uxIdeaDays' | 'cortexChangeDays';
+	type RetentionField = 'eventDays' | 'usageDays' | 'uxIdeaDays';
 	interface Props {
 		cards: Card[];
 		/** Which history windows the retention card shows, for this section. */
@@ -44,10 +44,6 @@
 		uxIdeaDays: {
 			label: 'keep UX ideas on dev (days)',
 			hint: 'Non-production instances only. On prod the backlog is kept, because it is what stops the audit proposing again what you dismissed.'
-		},
-		cortexChangeDays: {
-			label: 'keep Cortex change history (days)',
-			hint: 'Each change keeps a snapshot of what it replaced so it can be undone.'
 		}
 	};
 	let websearch = $state({
@@ -91,7 +87,7 @@
 		extraLanguages: ''
 	});
 	let coding = $state({ autoCheckpoint: true, autoContinue: true, maxLegs: 3 });
-	let retention = $state({ eventDays: 60, usageDays: 400, uxIdeaDays: 14, cortexChangeDays: 90 });
+	let retention = $state({ eventDays: 60, usageDays: 400, uxIdeaDays: 14 });
 	let fetchCfg = $state({ timeoutMs: 15000, maxChars: 20000, maxFetchesPerTurn: 5 });
 	/** `house` is served read-only, for editing against — it is never sent back. */
 	const EMPTY_LANGUAGE = { voice: '', layout: '' };

@@ -74,8 +74,7 @@
 	 *
 	 * Worth a tile of its own because reasoning tokens are output tokens — they
 	 * are charged as output, generated at output speed, and `max_tokens` does not
-	 * bound them. They are the wall clock, and until this row existed the only
-	 * screen that said so was the Cortex page, about its own job.
+	 * bound them. They are the wall clock.
 	 */
 	const thinkingShare = (reasoning: number, completion: number) =>
 		completion > 0 ? `${Math.round((reasoning / completion) * 100)}%` : '—';
@@ -155,11 +154,9 @@
 			</tbody>
 		</table>
 		{#if heavy.length}
-			<!-- The same warning the Cortex page has carried for its own job since
-			     9d7c83d, which is where this wording comes from. It belongs here
-			     too: that page can only ever say it about cortex-groom, and the
-			     task most worth hearing it about is whichever one a person is
-			     sitting and waiting on. -->
+			<!-- Here rather than on a feature's own page, because the task most
+			     worth hearing it about is whichever one a person is sitting and
+			     waiting on. -->
 			<p class="hint">
 				Most of what {heavy.length === 1
 					? `${heavy[0].task} wrote on ${heavy[0].modelKey}`

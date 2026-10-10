@@ -563,22 +563,12 @@ export interface RetentionSettings {
 	 * nobody ever actually read. 0 disables pruning there too.
 	 */
 	uxIdeaDays: number;
-	/**
-	 * Days of Cortex change history to keep.
-	 *
-	 * The log exists so automatic changes can be checked and undone, and both of
-	 * those are things you do soon after they happen. A `before` snapshot is a
-	 * whole node, so at a thousand concepts and a weekly groomer this is the
-	 * fastest-growing thing Cortex owns. 0 disables pruning.
-	 */
-	cortexChangeDays: number;
 }
 
 export const DEFAULT_RETENTION: RetentionSettings = {
 	eventDays: 60,
 	usageDays: 400,
-	uxIdeaDays: 14,
-	cortexChangeDays: 90
+	uxIdeaDays: 14
 };
 
 export interface CompactionSettings {
@@ -767,126 +757,3 @@ export function normaliseIvorySettings(raw: Record<string, unknown>): IvorySetti
 export function ivorySettings(): IvorySettings {
 	return normaliseIvorySettings(getSetting<Record<string, unknown>>('ivory', {}));
 }
-
-export interface CortexSettings {
-	/**
-	 * Whether agents may write to the lattice, or only read it.
-	 *
-	 * On, now that the thing it was waiting for exists. It shipped off because an
-	 * agent free to mint concepts produces near-duplicates — "music discovery",
-	 * "discovering music", "music curation" — faster than anyone merges them,
-	 * and there was no groomer. There is now: duplicate detection is
-	 * deterministic and runs every pass, merges are proposals a person accepts,
-	 * and since areas became reviewed-only an agent cannot file a concept at all.
-	 *
-	 * So the most an unreviewed write can do is add an unfiled concept with
-	 * connections, which is the conservative end of this design rather than a
-	 * hole in it.
-	 */
-	agentWrites: boolean;
-	/**
-	 * Whether this instance may look for the same concept in two people's
-	 * lattices and offer to note the overlap.
-	 *
-	 * Off by default and opted into per user, because even the *proposal*
-	 * discloses to one person that another holds a node by a similar name. See
-	 * docs/CORTEX.md — kinship is a note, never an edge, and activation never
-	 * traverses it.
-	 */
-	kinship: boolean;
-	/**
-	 * Nodes one person may own. Not a scaling limit — SQLite is nowhere near
-	 * troubled at this size — but a lattice past a few thousand concepts has
-	 * stopped being a memory and started being a landfill, and the cap is where
-	 * that conversation happens.
-	 */
-	maxNodesPerUser: number;
-	/**
-	 * Whether connections strengthen when a reply actually uses them, and erode
-	 * when nothing does.
-	 *
-	 * On. The alternative is a lattice whose weights are whatever somebody
-	 * guessed on the day the concept was written, which never gets better and
-	 * never gets worse — and the whole bet of a weighted mesh is that use is a
-	 * better judge of a connection than a first estimate was.
-	 *
-	 * Off, `effectiveWeight` still adds a stored delta (so nothing already
-	 * learned is thrown away), but nothing new moves and nothing decays.
-	 */
-	learning: boolean;
-	/**
-	 * Days a connection may sit at the erosion floor, untouched by any
-	 * traversal, before the groomer suggests removing it.
-	 *
-	 * Long by design. This is the one place learning is allowed to propose
-	 * destroying something, and a connection nobody has needed for two months is
-	 * a much safer thing to raise than one nobody needed for a fortnight.
-	 */
-	staleDays: number;
-}
-
-export interface CortexGroomSettings {
-	enabled: boolean;
-	intervalHours: number;
-	/** Proposals one run may raise, so a first pass cannot bury the review list. */
-	maxProposalsPerRun: number;
-	/**
-	 * A **ceiling** on what one groom call may write, not the number it asks for.
-	 *
-	 * The difference matters more than it looks. `max_tokens` reaches the
-	 * provider untouched, and on a reasoning model it is *permission to think* —
-	 * hand one a large number and it will spend a large fraction of it before
-	 * writing a word, which is wall-clock time whatever the prompt says.
-	 *
-	 * This was 16,384 and each pass asked for all of it, so a six-kilobyte prompt
-	 * could take longer than five minutes. Each pass now asks for the size of its
-	 * own answer — see `SURVEY_TOKENS` and `PROPOSAL_TOKENS` in cortex-groom.ts,
-	 * which carry the comparison against every other job in this codebase — and
-	 * this number caps them. Lowering it still bites; raising it no longer makes
-	 * a run slower.
-	 */
-	maxTokens: number;
-	/**
-	 * How long one groom **run** may take, across every call it makes.
-	 *
-	 * A ceiling on the run rather than on a call, because a review is two passes
-	 * now — a wide survey of the lattice's shape, then a close read of what that
-	 * turned up. Given to each call separately it would silently mean twice this
-	 * number, and a manual run is one synchronous request: raising it past a
-	 * reverse proxy's own read timeout needs the proxy raised too, so the setting
-	 * has to mean what a person configuring the proxy thinks it means. See
-	 * docs/INSTALL.md.
-	 */
-	timeoutSeconds: number;
-	/**
-	 * How many concepts a review takes forward for a close read.
-	 *
-	 * The width of the deep pass, and the whole point is that it does not grow
-	 * with the lattice. The survey reads every concept's shape and picks this
-	 * many worth looking at properly; only those get their descriptions sent.
-	 * Raising it buys a broader second pass at a linear cost in that pass alone.
-	 */
-	shortlistSize: number;
-}
-
-export const DEFAULT_CORTEX_GROOM: CortexGroomSettings = {
-	enabled: false,
-	// Daily rather than weekly. The scheduled pass only reads what is new, and
-	// skips the model entirely when nothing is, so a quiet day costs nothing —
-	// which is what makes a short cadence affordable at all.
-	intervalHours: 24,
-	maxProposalsPerRun: 10,
-	// A ceiling, and double what the largest pass asks for. It is not the number
-	// sent: see the field's own note, and the budgets in cortex-groom.ts.
-	maxTokens: 8_192,
-	timeoutSeconds: 300,
-	shortlistSize: 20
-};
-
-export const DEFAULT_CORTEX: CortexSettings = {
-	agentWrites: true,
-	kinship: false,
-	maxNodesPerUser: 2000,
-	learning: true,
-	staleDays: 60
-};

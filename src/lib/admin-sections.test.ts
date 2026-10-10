@@ -26,7 +26,7 @@ describe('admin sections', () => {
 	it('writes paths the way the rest of the app reads them', () => {
 		expect(adminPath('Coding', 'GitHub')).toBe('Admin → Coding → GitHub');
 		expect(adminPath('Spend')).toBe('Admin → Spend');
-		expect(sectionOfTask('cortex-groom')).toBe('Cortex');
+		expect(sectionOfTask('ux-audit')).toBe('UX audit');
 		expect(taskPath('vision')).toBe('Admin → General tasks → vision');
 	});
 });

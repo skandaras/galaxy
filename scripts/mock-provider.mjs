@@ -681,6 +681,45 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
+		// Noting something about the person. NOTE-THIS <words> quotes those words,
+		// which are the person's own; NOTE-FAKE quotes words they never wrote, the
+		// way an instruction planted in a fetched page would. The second pass
+		// echoes the tool's answer, so the smoke sees a note go in and one refused.
+		const noteAnswer = parsed.messages.find(
+			(m) =>
+				m.role === 'tool' &&
+				parsed.messages.some(
+					(a) =>
+						Array.isArray(a.tool_calls) &&
+						a.tool_calls.some((tc) => tc.id === m.tool_call_id && tc.function?.name === 'profile_note')
+				)
+		);
+		if (noteAnswer) {
+			delta(res, { content: `NOTE-RESULT ${String(noteAnswer.content)}` });
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+		const said = String(last?.content ?? '');
+		if (said.startsWith('NOTE-THIS ') || said === 'NOTE-FAKE') {
+			const note = {
+				path: 'life/logistics',
+				kind: 'fact',
+				claim: 'Gets around by e-bike, PROFILE-NOTED.',
+				quote: said === 'NOTE-FAKE' ? 'nothing like this was ever written' : said.slice('NOTE-THIS '.length)
+			};
+			delta(res, {
+				tool_calls: [
+					{ index: 0, id: 'call_note', function: { name: 'profile_note', arguments: JSON.stringify(note) } }
+				]
+			});
+			delta(res, {}, 'tool_calls');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
 		// Reading a link the user supplied, rather than searching for it. The
 		// second pass echoes what came back, so the smoke can prove the page text
 		// actually reached the model.
@@ -885,7 +924,7 @@ const server = createServer(async (req, res) => {
 			delta(res, {
 				// ALPHA-MEM / BETA-MEM prove per-user memory isolation: a user's
 				// prompt must contain their own marker and never the other's.
-				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} mem=${system.includes('[Memory')} pref=${system.includes('concise replies')} alpha=${system.includes('ALPHA-MEM')} beta=${system.includes('BETA-MEM')} voice=${system.includes('[How to write')}`
+				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} mem=${system.includes('[Memory')} pref=${system.includes('concise replies')} alpha=${system.includes('ALPHA-MEM')} beta=${system.includes('BETA-MEM')} voice=${system.includes('[How to write')} profile=${system.includes('[Profile:')} pmark=${system.includes('PROFILE-ALPHA')}`
 			});
 			delta(res, {}, 'stop');
 			res.write('data: [DONE]\n\n');

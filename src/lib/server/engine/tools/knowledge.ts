@@ -27,10 +27,10 @@ import {
 } from '$lib/server/library';
 import { UNFILED } from '$lib/library-tree';
 import { toolResultMaxChars } from '../limits';
-import { cortexDigest } from '$lib/server/cortex';
-import { cortexEnabled } from '$lib/features';
 import { memoryDigest, memoryTitle, readMemory } from '../memory';
+import { profileBlock } from '$lib/server/profile';
 import { boardsDigest } from './boards';
+import { profileTools } from './profile';
 
 /**
  * The context bootstrap: appended to every agent's system prompt so it knows
@@ -38,7 +38,12 @@ import { boardsDigest } from './boards';
  * knowledge tools (progressive disclosure — the index stays cheap).
  */
 export function bootstrapContext(userId: string, task?: string): string {
+	const profile = task ? profileBlock(userId, task) : '';
 	return [
+		// First, because it changes least. A write to the Library or a board
+		// rewrites everything after it in the prompt, and a provider caches only
+		// the prefix up to the first change.
+		...(profile ? ['', profile] : []),
 		'',
 		'[Available skills: load the full instructions with skill_load when one applies]',
 		// Only this person's skills and shared ones, and only those meant for
@@ -50,11 +55,6 @@ export function bootstrapContext(userId: string, task?: string): string {
 		'',
 		'[Task boards: yours plus any shared with you. Read them with board_read, one card in full with card_read]',
 		boardsDigest(userId),
-		// Ahead of the memory digest on purpose. Placed after it, Cortex read as
-		// more of the same — another record of things that already happened — and
-		// an agent that takes it for an archive never thinks to consult it before
-		// answering. The map comes first, then the log.
-		cortexEnabled() ? cortexDigest(userId) : '',
 		// Only this user's memories — never another user's observations.
 		memoryDigest(userId)
 	].join('\n');
@@ -82,6 +82,10 @@ export function knowledgeTools(
 		 * way to propose a skill: the proposal would be a record of it.
 		 */
 		hidden?: boolean;
+		/** Which agent this is, which decides what of the profile it can reach. */
+		task?: string;
+		/** The chat a profile note's quote is checked against. */
+		chatId?: string;
 	} = {}
 ): LoopTool[] {
 	/** The folder and body of a skill this person may load, repository first. */
@@ -395,5 +399,8 @@ export function knowledgeTools(
 			}
 		}
 	];
+	if (opts.task) {
+		tools.push(...profileTools(userId, { task: opts.task, chatId: opts.chatId, hidden: opts.hidden }));
+	}
 	return opts.hidden ? tools.filter((t) => t.def.name !== 'propose_skill') : tools;
 }

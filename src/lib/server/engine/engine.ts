@@ -29,9 +29,6 @@ import { previousRunNote, runHistoryTool } from './run-history';
 import { askUserTool } from './ask-user';
 import { attachmentTools } from './tools/attachments';
 import { boardTools } from './tools/boards';
-import { cortexTools } from './tools/cortex';
-import { forgetActivation, learnFromReply } from './cortex-learn';
-import { cortexEnabled } from '$lib/features';
 import { documentTools } from './tools/documents';
 import { fetchUrlTool } from './tools/fetch-url';
 import { imageTools } from './tools/images';
@@ -86,8 +83,8 @@ export function taskPrompt(task: string): string {
  * - `visual`: the output is Mermaid or SVG.
  * - `vision`: the reader is another agent, and the output is a transcription
  *   of what is in an image.
- * - `memory` and `cortex-groom`: JSON, and both prompts are already stricter
- *   about what is worth a line than this block knows how to be.
+ * - `memory`: JSON, and its prompt is already stricter about what is worth a
+ *   line than this block knows how to be.
  * - `alignment`: this one would conflict. The voice bans ritual hedging; the
  *   assessor *requires* calibrated uncertainty, where "not enough here to say"
  *   is a first-class answer. Its prompt carries its own version of these rules.
@@ -175,8 +172,7 @@ export function systemPromptFor(task: string, supplementTask?: string | null): s
  * "something" is whatever SQLite happened to return first. Disable the model
  * the memory job was pointed at and it carries on against an arbitrary
  * substitute: no capability check, no event, and output that quietly gets worse
- * for a reason nothing records. cortex-groom.ts already names this in a comment
- * about why it prints the model it used.
+ * for a reason nothing records.
  *
  * So a substitution now says so. `task` is only a label for that event; passing
  * nothing still works and still reports. A task with no stored preference at
@@ -280,7 +276,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 
 	const searchCfg = webSearchSettings();
 	const tools: LoopTool[] = [
-		...knowledgeTools(opts.userId, { hidden: chat.hidden }),
+		...knowledgeTools(opts.userId, { hidden: chat.hidden, task: 'chat', chatId: chat.id }),
 		...attachmentTools(chat.id),
 		// Deliberately not behind the web-search toggle. That toggle governs
 		// *looking things up*; this is for reading an address the user has already
@@ -290,10 +286,6 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		runHistoryTool(chat.id),
 		// Scoped to this user's boards and anything shared with them.
 		...boardTools(opts.userId),
-		// Likewise scoped: their own concepts plus anything shared. Activation
-		// never crosses into a lattice they cannot see. The chat id is what lets
-		// a query be judged against the reply it fed — see cortex-learn.
-		...(cortexEnabled() ? cortexTools(opts.userId, undefined, chat.id) : []),
 		// Drawing and typesetting. Scoped to this chat: what they make is saved
 		// as an attachment on it, which is how the result reaches the thread.
 		...imageTools(chat.id, opts.userId),
@@ -379,20 +371,6 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 				// still says so when it is scrolled back to.
 				trace: summary.trace.length ? { steps: summary.trace } : null
 			});
-			// Which of the concepts the lattice offered this turn the reply went on
-			// to use, so the connections that delivered them strengthen and the
-			// rest quietly do not. After the reply for the same reason compaction
-			// is, and never on a hidden chat: those are deliberately never written
-			// down, and baking one into edge weights is writing it down.
-			if (persist && cortexEnabled()) {
-				try {
-					learnFromReply(chat.id, content);
-				} catch {
-					// Learning is a nicety. A turn must never fail because of it.
-				}
-			} else {
-				forgetActivation(chat.id);
-			}
 			// Compaction and titling both run after the reply so neither delays
 			// streaming, and neither can fail the turn.
 			void (async () => {

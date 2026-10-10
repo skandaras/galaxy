@@ -689,30 +689,33 @@ const FTS_STOPWORDS = new Set([
 /**
  * Quote terms so user input can't break FTS5 query syntax.
  *
- * Exported because Cortex seeds its traversals from an FTS table too, and this
- * hazard is worth solving once rather than in every module that opens one.
- *
- * `match` decides what a multi-word query means, and the two callers genuinely
- * want different things. Library search is given deliberate keywords, so *all*
- * — FTS5's implicit AND — is right: asking for two words and being shown
+ * `match` decides what a multi-word query means, and the two callers want
+ * different things. Library search is given deliberate keywords, so *all*
+ * (FTS5's implicit AND) is right: asking for two words and being shown
  * documents containing one of them is not a search.
  *
- * Cortex is given a sentence someone said. A natural-language query is almost
- * never a term-for-term subset of the text it should match — "cliff edge
- * retreating" against a node that says "retreats" already fails — so AND finds
- * nothing at all, silently, which is the same failure the keyword map it
- * replaced would have had. *any* matches on whatever overlaps and lets bm25
- * rank by how much did.
+ * A profile lookup is written by an agent mid-reply, as a phrase about the
+ * person ("diet restrictions food"), and a one-line claim rarely holds every
+ * word of it. AND would find nothing, so *any* matches on whatever overlaps and
+ * lets bm25 rank by how much did. Two letters is enough to keep: "GP" and "NZ"
+ * are the whole of some claims.
  */
 export function ftsQuery(q: string, match: 'all' | 'any' = 'all'): string {
 	const terms = q.split(/\s+/).filter(Boolean);
 	const kept =
 		match === 'any'
-			? terms.filter((t) => t.length >= 3 && !FTS_STOPWORDS.has(t.toLowerCase()))
+			? terms
+					.map((t) => t.replace(/[^\p{L}\p{N}'-]/gu, ''))
+					.filter((t) => t.length >= 2 && !FTS_STOPWORDS.has(t.toLowerCase()))
 			: terms;
 	return kept
 		.slice(0, 8)
-		.map((t) => `"${t.replace(/"/g, '')}"`)
+		.map((t) => {
+			const quoted = `"${t.replace(/"/g, '')}"`;
+			// A prefix, so "Postgres" finds "PostgreSQL". Not below four letters,
+			// where a prefix matches half the table.
+			return match === 'any' && t.length >= 4 ? `${quoted}*` : quoted;
+		})
 		.join(match === 'any' ? ' OR ' : ' ');
 }
 

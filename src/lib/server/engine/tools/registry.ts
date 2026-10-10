@@ -7,8 +7,6 @@ import { exploreToolDef } from '../coding/explore';
 import { askUserToolDef } from '../ask-user';
 import { attachmentTools } from './attachments';
 import { boardTools } from './boards';
-import { cortexTools } from './cortex';
-import { cortexEnabled } from '$lib/features';
 import { createPdfToolDef } from './documents';
 import { fetchUrlToolDef } from './fetch-url';
 import {
@@ -94,21 +92,9 @@ export function builtinDescriptors(): ToolDescriptor[] {
 
 	// The user id only scopes execution, never the declaration — same placeholder
 	// convention as attachmentTools('*') below.
-	add(knowledgeTools('*'), 'knowledge', ['chat', 'coding']);
-	// Both are listed whatever the agentWrites setting says, for the same reason
-	// the board write tools are: a control that disappears when the setting flips
-	// is worse than one that is simply off.
-	//
-	// Absent altogether while Cortex is switched off: no turn is offered them,
-	// so a row in Admin to switch them off would be a control for nothing.
-	if (cortexEnabled()) {
-		add(
-			cortexTools('*', true),
-			'knowledge',
-			['chat', 'coding'],
-			'cortex_write is also gated on the cortex agentWrites setting: this list shows what exists, not what a turn is currently offered'
-		);
-	}
+	// Built as chat sees them, so both profile tools are declared: the coding
+	// agent gets the same two, held to its narrower scope when they run.
+	add(knowledgeTools('*', { task: 'chat', chatId: '*' }), 'knowledge', ['chat', 'coding']);
 	// The chat id only affects execution, never the declaration.
 	add(attachmentTools('*'), 'attachments', ['chat', 'coding']);
 	add([{ def: webSearchToolDef, execute: async () => '' }], 'web', ['chat', 'coding']);

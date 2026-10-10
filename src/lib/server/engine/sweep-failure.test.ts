@@ -45,7 +45,7 @@ describe('runSweep', () => {
 		// The loop calling this runs users sequentially and must keep going, which
 		// only holds while this resolves rather than rejects.
 		await expect(
-			runSweep('cortex-groom', 'u1', async () => {
+			runSweep('alignment-synthesis', 'u1', async () => {
 				throw new Error('boom');
 			})
 		).resolves.toBeUndefined();

@@ -589,6 +589,44 @@ check "so nothing is held yet" "$MEMVIEW" '"items":[]'
 check "and a fact is never proposed" "$(echo "$MEMVIEW" | grep -c systemctl)" "0"
 
 # ---------------------------------------------------------------------------
+# Profile: what a person has told Galaxy about themselves, reaching their
+# agents' prompts, and what an agent may note there. After the memory run, so
+# the chats here are not in what the audit above read.
+# ---------------------------------------------------------------------------
+PENT=$(api -X POST $B/api/profile/entries -d '{"path":"life/constraints","kind":"constraint","claim":"Vegetarian, PROFILE-ALPHA.","pinned":true}')
+check "an entry can be added from the page" "$PENT" '"source":"stated"'
+check "and the profile holds it" "$(api $B/api/profile)" 'PROFILE-ALPHA'
+check "a claim outside its bounds is refused with the reason" \
+  "$(curl -s -X POST -H 'content-type: application/json' -d '{"path":"life/constraints","kind":"fact","claim":"short"}' $B/api/profile/entries)" 'A claim is 8 to 160'
+check "a place in the profile that does not exist is refused" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+     -d '{"path":"hobbies/knitting","kind":"fact","claim":"Knits jumpers in winter."}' $B/api/profile/entries)" "400"
+PC=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+PJ=$(api -X POST $B/api/chats/$PC/messages -d '{"content":"echo-system","webSearch":false}' | jqn .jobId)
+PSYS=$(curl -sN --max-time 20 $B/api/jobs/$PJ/stream | grep -o 'SYSCHECK[^"]*' | head -1)
+check "the chat prompt carries the profile" "$PSYS" 'profile=true'
+check "with what the person pinned" "$PSYS" 'pmark=true'
+
+NC=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+NJ=$(api -X POST $B/api/chats/$NC/messages -d '{"content":"NOTE-THIS I ride an e-bike everywhere","webSearch":false}' | jqn .jobId)
+NSTREAM=$(curl -sN --max-time 20 $B/api/jobs/$NJ/stream)
+check "an agent notes what the person said" "$NSTREAM" 'NOTE-RESULT Noted ['
+check "and the reply offers it back for an undo" "$NSTREAM" '"noted":{"id":"'
+check "which the stored reply keeps" "$(api $B/api/chats/$NC)" '"noted":{"id":"'
+NOTED_ID=$(api $B/api/profile | node -pe '
+  const d = JSON.parse(require("fs").readFileSync(0));
+  d.domains.flatMap((x) => x.subdomains.flatMap((s) => s.entries)).find((e) => e.claim.includes("PROFILE-NOTED")).id')
+check "Undo takes the note back" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/profile/entries/$NOTED_ID/undo)" "200"
+check "and it is gone" "$(api $B/api/profile | grep -c PROFILE-NOTED)" "0"
+FC=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+FJ=$(api -X POST $B/api/chats/$FC/messages -d '{"content":"NOTE-FAKE","webSearch":false}' | jqn .jobId)
+check "a note quoting words the person never wrote is refused" \
+  "$(curl -sN --max-time 20 $B/api/jobs/$FJ/stream)" 'NOTE-RESULT Not noted'
+check "and writes nothing" "$(api $B/api/profile | grep -c PROFILE-NOTED)" "0"
+check "the export is the person's profile as markdown" "$(curl -s $B/api/profile/export)" '- Vegetarian, PROFILE-ALPHA. (pinned)'
+
+# ---------------------------------------------------------------------------
 # UX audit → backlog. The interesting parts are that the agent is handed live
 # telemetry and the real interface source (which is NOT on disk in the built
 # image — it is inlined at build time), and that an idea already decided is
@@ -708,6 +746,21 @@ check "admin sees per-user status" "$ADMIN_VIEW" '"username":"alice"'
 check "admin cannot read alice's memory" "$(echo "$ADMIN_VIEW" | grep -c ALPHA-MEM)" "0"
 check "admin cannot read bob's memory" "$(echo "$ADMIN_VIEW" | grep -c BETA-MEM)" "0"
 
+# A profile is one person's. Someone else's entry answers exactly like a
+# missing one, whatever is asked of it.
+AP=$(as alice -X POST $M/api/profile/entries -d '{"path":"work/tools","kind":"fact","claim":"Uses PROFILE-ALPHA tooling daily.","pinned":true}' | jqn .entry.id)
+check "bob cannot correct alice's entry" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H 'Remote-User: bob' -H 'content-type: application/json' -d '{"claim":"Uses something else daily."}' $M/api/profile/entries/$AP)" "404"
+check "bob cannot delete it" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Remote-User: bob' $M/api/profile/entries/$AP)" "404"
+check "bob cannot read its history" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/profile/entries/$AP/history)" "404"
+check "bob's profile holds nothing of alice's" "$(as bob $M/api/profile | grep -c PROFILE-ALPHA)" "0"
+BC=$(as bob -X POST $M/api/chats -d '{}' | jqn .id)
+BJ=$(as bob -X POST $M/api/chats/$BC/messages -d '{"content":"echo-system","webSearch":false}' | jqn .jobId)
+BSYS=$(curl -sN --max-time 20 -H 'Remote-User: bob' $M/api/jobs/$BJ/stream | grep -o 'SYSCHECK[^"]*' | head -1)
+check "bob's prompt carries none of alice's profile" "$BSYS" 'pmark=false'
+
 # The bootstrap the model actually receives must be isolated too. This runs
 # BEFORE the delete checks below: deleting a memory changes what the prompt
 # contains, so the two must not overlap.
@@ -716,6 +769,7 @@ AJ=$(as alice -X POST $M/api/chats/$AC/messages -d '{"content":"echo-system","we
 ASYS=$(curl -sN --max-time 20 -H 'Remote-User: alice' $M/api/jobs/$AJ/stream | grep -o 'SYSCHECK[^"]*' | head -1)
 check "alice's prompt carries her memory" "$ASYS" 'alpha=true'
 check "alice's prompt excludes bob's memory" "$ASYS" 'beta=false'
+check "alice's prompt carries her profile" "$ASYS" 'pmark=true'
 # The Language text is composed at call time rather than seeded into the prompt
 # stored in Admin -> Tasks, so nothing in the database proves it arrived.
 check "the prompt carries the Language text" "$ASYS" 'voice=true'

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import type { SearchResultRow } from '$lib/run-timeline';
+import type { NotedEntry, SearchResultRow } from '$lib/run-timeline';
 import { db } from '$lib/server/db';
 import { jobs } from '$lib/server/db/schema';
 import { notify } from '$lib/server/notifications';
@@ -72,6 +72,8 @@ export type JobChunk =
 			 * note in executeToolCall — so anything new goes on the end.
 			 */
 			results?: SearchResultRow[];
+			/** A profile entry the call wrote. After `results` for the same reason. */
+			noted?: NotedEntry;
 	  }
 	| { type: 'stage'; name: string; detail?: string }
 	| { type: 'notice'; text: string }

@@ -11,8 +11,8 @@
 	import { page } from '$app/state';
 	import { tabUrl } from '$lib/url-tab';
 	import {
-		availableSectionLabels,
-		availableSections,
+		ADMIN_SECTION_LABELS,
+		ADMIN_SECTIONS,
 		type AdminGroup,
 		type AdminSectionLabel
 	} from '$lib/admin-sections';
@@ -23,12 +23,10 @@
 	let { active }: Props = $props();
 
 	const GROUPS: AdminGroup[] = ['Platform', 'Features', 'Operations'];
-	const sections = availableSections();
-	const labels = availableSectionLabels();
-	const inGroup = (g: AdminGroup) => sections.filter((s) => s.group === g);
+	const inGroup = (g: AdminGroup) => ADMIN_SECTIONS.filter((s) => s.group === g);
 
 	const show = (label: AdminSectionLabel) =>
-		void goto(tabUrl(page.url.pathname, label, labels), {
+		void goto(tabUrl(page.url.pathname, label, ADMIN_SECTION_LABELS), {
 			keepFocus: true,
 			noScroll: true
 		});

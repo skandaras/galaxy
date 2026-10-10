@@ -41,10 +41,8 @@ export const GET: RequestHandler = ({ locals, url }) => {
 	// column has been written since 9d7c83d, with a schema comment saying why —
 	// "wrote a lot" and "deliberated a lot" are different problems with the same
 	// completion total, and only the second is usually a fault — and then no
-	// aggregate ever selected it. The one screen that reads it is the Cortex
-	// page, for its own job alone, which is how a chat model spending four
-	// fifths of every reply thinking stayed invisible here while being perfectly
-	// visible there.
+	// aggregate ever selected it, which is how a chat model spending four fifths
+	// of every reply thinking stayed invisible.
 	const byModel = db.all(sql`
 		SELECT model_key AS modelKey, task,
 		       SUM(prompt_tokens) AS prompt, SUM(completion_tokens) AS completion,

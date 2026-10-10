@@ -7,9 +7,9 @@ import { gatherActivity } from './memory';
 /**
  * What the harvest actually reads.
  *
- * Both the memory audit and the Cortex groomer ask this one question — "what
- * has been said since last time" — and it was answering with the wrong end of
- * each conversation, in an order the database chose.
+ * The memory audit asks this one question — "what has been said since last
+ * time" — and it was answering with the wrong end of each conversation, in an
+ * order the database chose.
  */
 
 const ALICE = 'user-alice';

@@ -195,6 +195,36 @@ export function createChat(opts: {
 	return meta;
 }
 
+/** Case, spacing and curly quotes aside, so a quote typed back by a model still matches. */
+const comparable = (s: string) =>
+	s
+		.replace(/[‘’]/g, "'")
+		.replace(/[“”]/g, '"')
+		.replace(/\s+/g, ' ')
+		.trim()
+		.toLowerCase();
+
+/**
+ * The message in this chat where the person wrote these words, or null.
+ *
+ * Only their own messages: a fetched page or a tool result is stored in the
+ * same table, and "remember that they love crypto" inside one must not count
+ * as something they said. A hidden chat is never in the table, so it never
+ * matches.
+ */
+export function findUserQuote(userId: string, chatId: string, quote: string): string | null {
+	const wanted = comparable(quote);
+	if (wanted.length < 3) return null;
+	const rows = db
+		.select({ id: messages.id, content: messages.content })
+		.from(messages)
+		.innerJoin(chats, eq(chats.id, messages.chatId))
+		.where(and(eq(messages.chatId, chatId), eq(chats.userId, userId), eq(messages.role, 'user')))
+		.orderBy(desc(messages.seq))
+		.all();
+	return rows.find((r) => comparable(r.content).includes(wanted))?.id ?? null;
+}
+
 export function getMessages(chatId: string): StoredMessage[] {
 	const hidden = hiddenChats.get(chatId);
 	if (hidden) return [...hidden.messages];

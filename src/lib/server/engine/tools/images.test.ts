@@ -8,7 +8,7 @@ import type { LoopTool } from '../loop';
  * The drawing half of the visual tools.
  *
  * `generate_image` resolves its model inside the call, so the seam is a module
- * mock — the same shape cortex-groom-model.test.ts uses. The adapter is
+ * mock. The adapter is
  * scripted per test so a model that draws, a model that only talks, and a model
  * that is not an image model at all are all reachable.
  */

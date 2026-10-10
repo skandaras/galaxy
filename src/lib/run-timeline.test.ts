@@ -5,6 +5,7 @@ import {
 	emptyStreamText,
 	itemsFromTrace,
 	liveActivity,
+	notedIn,
 	type TimelineChunk,
 	type TimelineItem,
 	type TimelineSearch,
@@ -198,6 +199,44 @@ describe('search results in the timeline', () => {
 		expect(steps(items)[0].tools[0].results).toEqual(ROWS);
 		// A call that never had results still has none, rather than an empty box.
 		expect(steps(items)[0].tools[1].results).toBeUndefined();
+	});
+});
+
+describe('a profile note on a call', () => {
+	const noted = { id: 'abcd2345', claim: 'Vegetarian.' };
+
+	it('survives the terminal chunk, which is the one that carries it', () => {
+		let items: TimelineItem[] = [];
+		items = applyChunk(items, { type: 'step', id: 's1', label: 'Noting that', status: 'running' });
+		items = applyChunk(items, { type: 'tool', name: 'profile_note', status: 'running', detail: 'life/constraints', callId: 'c1', stepId: 's1' });
+		items = applyChunk(items, { type: 'tool', name: 'profile_note', status: 'ok', detail: 'life/constraints', callId: 'c1', stepId: 's1', noted });
+		expect((items[0] as TimelineStep).tools[0].noted).toEqual(noted);
+	});
+
+	it('is found in a stored trace, which is what opens the reply’s run', () => {
+		expect(notedIn(null)).toEqual([]);
+		expect(
+			notedIn({
+				steps: [
+					{ id: 's1', label: 'Searching', status: 'ok', toolCalls: [{ name: 'web_search', status: 'ok' }] },
+					{ id: 's2', label: 'Noting', status: 'ok', toolCalls: [{ name: 'profile_note', status: 'ok', noted }] }
+				]
+			})
+		).toEqual([noted]);
+	});
+
+	it('comes back from a stored trace, so Undo is still there after a reload', () => {
+		const [step] = itemsFromTrace({
+			steps: [
+				{
+					id: 's1',
+					label: 'Noting that',
+					status: 'ok',
+					toolCalls: [{ name: 'profile_note', summary: 'life/constraints', status: 'ok', noted }]
+				}
+			]
+		}) as TimelineStep[];
+		expect(step.tools[0].noted).toEqual(noted);
 	});
 });
 

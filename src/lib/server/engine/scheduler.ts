@@ -1,7 +1,7 @@
 import { lt } from 'drizzle-orm';
 import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db';
-import { cortexChangeLog, events, jobs, usageLog, users, uxIdeas } from '$lib/server/db/schema';
+import { events, jobs, usageLog, users, uxIdeas } from '$lib/server/db/schema';
 import {
 	ALIGNMENT_ENABLED_KEY,
 	DEFAULT_ALIGNMENT,
@@ -17,9 +17,6 @@ import {
 	type SkillOptimiserSettings,
 	type UxAuditSettings
 } from '$lib/server/settings';
-import { decayReinforcement, refreshLayout } from '$lib/server/cortex';
-import { groomSettings, groomStatus, runCortexGroom } from './cortex-groom';
-import { cortexEnabled } from '$lib/features';
 import { getSynthesisStatus, runAlignmentSynthesis } from './alignment';
 import { emitEvent } from './events';
 import { getMemoryStatus, runMemory, runSkillOptimiser } from './memory';
@@ -55,29 +52,21 @@ export function startScheduler(): void {
 /**
  * One pass over every scheduled job.
  *
- * **Every sweep defined in this file belongs in this list.** Three of them were
- * not: the layout refresh, the Cortex groomer and the alignment letter were each
- * written, tested on their own and never called from here, so on every install
- * ever run they were dead code that looked shipped. Nothing caught it —
- * `noUnusedLocals` is off, so a sweep nobody calls type-checks perfectly — which
- * is why `scheduler.test.ts` now asserts this function reaches each one.
+ * **Every sweep defined in this file belongs in this list.** Some were not:
+ * the alignment letter among them was written, tested on its own and never
+ * called from here, so on every install ever run it was dead code that looked
+ * shipped. Nothing caught it — `noUnusedLocals` is off, so a sweep nobody calls
+ * type-checks perfectly — which is why `scheduler.test.ts` now asserts this
+ * function reaches each one.
  *
- * Ordered cheapest first: the two synchronous Cortex sweeps answer "has anything
- * changed" without doing any work on most ticks, and the per-user model jobs run
- * sequentially after them so they cannot race the budget cap.
+ * The per-user model jobs run sequentially so they cannot race the budget cap.
  */
 export async function tick(): Promise<void> {
 	// A slow sweep must not overlap the next tick.
 	if (sweeping) return;
 	sweeping = true;
 	try {
-		// All three Cortex sweeps sit behind its switch: while it is off nothing
-		// about the lattice may change, so it is still there as it was.
-		const cortex = cortexEnabled();
-		if (cortex) sweepCortexLayout();
-		if (cortex) sweepCortexLearning();
 		await sweepMemory();
-		if (cortex) await sweepCortexGroom();
 		await sweepAlignmentSynthesis();
 		await sweepUxAudit();
 		await sweepSkillOptimiser();
@@ -95,8 +84,8 @@ export async function tick(): Promise<void> {
  * happens inside the agent's own try block — every one of them catches, emits
  * and returns rather than rethrowing, so nothing reaching here has been
  * reported. It is not true of the work before it: `gatherActivity()`, a
- * settings read, the working/dismissed queries in memory.ts, `tidy()` and
- * `detect()` in cortex-groom.ts all run outside that block.
+ * settings read and the working/dismissed queries in memory.ts all run outside
+ * that block.
  *
  * A throw there reached neither the Observatory nor stdout — `tick`'s own
  * console.error never saw it either, because the empty catch had already eaten
@@ -137,88 +126,6 @@ async function sweepMemory(): Promise<void> {
 		// Sequential on purpose: parallel audits would race the budget cap
 		// and hammer the provider. One user's failure must not stop the rest.
 		await runSweep('memory', user.id, () => runMemory('schedule', user.id));
-	}
-}
-
-/**
- * The lattice's gardener, per user and only for those who turned it on.
- *
- * Off by default: it files suggestions about the shape of somebody's own
- * concepts, which is not a thing to start doing unasked.
- */
-async function sweepCortexGroom(): Promise<void> {
-	const cfg = groomSettings();
-	if (!cfg.enabled) return;
-	const now = Date.now();
-	for (const user of db.select().from(users).all()) {
-		const status = groomStatus(user.id);
-		if (!status.enabled) continue;
-		if (now < status.lastRun + cfg.intervalHours * 3_600_000) continue;
-		// Sequential, like the memory sweep: parallel runs would race the budget
-		// cap, and one person's failure must not stop the rest.
-		await runSweep('cortex-groom', user.id, () => runCortexGroom('schedule', user.id));
-	}
-}
-
-/**
- * Keep the lattice map's coordinates current.
- *
- * Cheap on almost every tick: the signature check answers "has the graph
- * changed" without laying anything out, and usually it has not. Doing this here
- * rather than per request is what keeps the map free to open — force layout is
- * the expensive part of any graph view, and on demand it would be paid by
- * whoever opened the page.
- */
-function sweepCortexLayout(): void {
-	try {
-		const res = refreshLayout();
-		if (!res.recomputed) return;
-		emitEvent({
-			type: 'job',
-			name: 'cortex.layout',
-			status: 'ok',
-			// Counts only. Node names never reach an event detail.
-			detail: { nodes: res.nodes, edges: res.edges }
-		});
-	} catch (err) {
-		// A layout that throws must not take the rest of the sweep with it.
-		emitEvent({
-			type: 'job',
-			name: 'cortex.layout',
-			status: 'error',
-			detail: { error: err instanceof Error ? err.message : String(err) }
-		});
-	}
-}
-
-/**
- * Let unused connections erode.
- *
- * Global rather than per user: it is one arithmetic pass over the whole edge
- * table, and it decays by elapsed time rather than by tick, so running it on
- * every five-minute tick and running it once a day come to the same answer. That
- * is what makes it safe to sit here beside the layout check — a server that was
- * off for a week decays once by a week rather than catching up in a burst.
- */
-function sweepCortexLearning(): void {
-	try {
-		const res = decayReinforcement();
-		if (!res.edges) return;
-		emitEvent({
-			type: 'job',
-			name: 'cortex.decay',
-			status: 'ok',
-			// Counts only, like every other Cortex event.
-			detail: { edges: res.edges, days: Math.round(res.days * 100) / 100 }
-		});
-	} catch (err) {
-		// Decay failing must not take the rest of the sweep with it.
-		emitEvent({
-			type: 'job',
-			name: 'cortex.decay',
-			status: 'error',
-			detail: { error: err instanceof Error ? err.message : String(err) }
-		});
 	}
 }
 
@@ -303,8 +210,8 @@ export function isProd(): boolean {
 export function prune(
 	now = Date.now(),
 	force = false
-): { events: number; jobs: number; usage: number; uxIdeas: number; cortexChanges: number } {
-	const nothing = { events: 0, jobs: 0, usage: 0, uxIdeas: 0, cortexChanges: 0 };
+): { events: number; jobs: number; usage: number; uxIdeas: number } {
+	const nothing = { events: 0, jobs: 0, usage: 0, uxIdeas: 0 };
 	if (!force && now < lastPrune + PRUNE_INTERVAL_MS) return nothing;
 	lastPrune = now;
 	const cfg = getSetting<RetentionSettings>('retention', DEFAULT_RETENTION);
@@ -348,21 +255,6 @@ export function prune(
 			.run().changes;
 	}
 
-	// Unlike the UX backlog, this prunes on prod too. Nothing here suppresses a
-	// future suggestion — the change log is a record of what was done, read to
-	// check the groomer's work and to undo it, and both of those happen within
-	// days. A `before` snapshot is a whole node, so this is the fastest-growing
-	// thing Cortex owns and the one place it needs a ceiling.
-	//
-	// Kept whole while Cortex is switched off, with the rest of its data.
-	let prunedCortex = 0;
-	if (cortexEnabled() && cfg.cortexChangeDays > 0) {
-		prunedCortex = db
-			.delete(cortexChangeLog)
-			.where(lt(cortexChangeLog.createdAt, new Date(now - cfg.cortexChangeDays * 86_400_000)))
-			.run().changes;
-	}
-
 	// No VACUUM: the file does not shrink, but SQLite reuses the freed pages for
 	// subsequent inserts, so the database plateaus instead of growing forever —
 	// and a full VACUUM takes an exclusive lock this process cannot afford.
@@ -370,7 +262,6 @@ export function prune(
 		events: prunedEvents,
 		jobs: prunedJobs,
 		usage: prunedUsage,
-		uxIdeas: prunedIdeas,
-		cortexChanges: prunedCortex
+		uxIdeas: prunedIdeas
 	};
 }

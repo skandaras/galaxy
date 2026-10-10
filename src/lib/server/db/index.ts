@@ -52,11 +52,10 @@ export function runMigrations() {
 	sqlite.exec(
 		`CREATE VIRTUAL TABLE IF NOT EXISTS library_fts USING fts5(id UNINDEXED, title, body)`
 	);
-	// Cortex seeds its traversals from here rather than from a hand-maintained
-	// keyword map: a map has to be written by someone, and when its coverage
-	// falls behind the lattice the failure is silent — queries stop reaching the
-	// right region and nothing says so.
+	// Porter stemming here and not in the Library's: an agent looking something
+	// up about a person writes "runs" when the claim says "running", where a
+	// Library search is given the exact words someone remembers.
 	sqlite.exec(
-		`CREATE VIRTUAL TABLE IF NOT EXISTS cortex_fts USING fts5(id UNINDEXED, name, description)`
+		`CREATE VIRTUAL TABLE IF NOT EXISTS profile_fts USING fts5(id UNINDEXED, claim, names, path, tokenize='porter unicode61')`
 	);
 }

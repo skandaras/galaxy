@@ -42,11 +42,10 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	if (typeof body.hidden === 'boolean' && body.hidden !== chat.hidden) {
 		// Refused mid-run, because `persist` is captured once when the run starts
 		// (engine.ts) and never re-read. A run that began visible therefore carries
-		// on writing events, job rows and a usage chat id after the flip, and bakes
-		// the conversation into cortex edge weights on the way out — the one thing
-		// hiding is supposed to prevent. Making `persist` live would mean threading
-		// it through every closure in the loop; refusing is honest and costs the
-		// user one click.
+		// on writing events, job rows and a usage chat id after the flip, which is
+		// what hiding is supposed to prevent. Making `persist` live would mean
+		// threading it through every closure in the loop; refusing costs the user
+		// one click.
 		const running = findRunningJobForChat(chat.id);
 		if (running) {
 			const mins = jobAgeMinutes(running);

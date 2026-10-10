@@ -54,8 +54,8 @@ describe('logUsage', () => {
 
 	it('prices a background agent’s call, so the spend cap can see it', () => {
 		// The regression this exists for: usage.ts hardcoded `costUsd: null`,
-		// so every background agent — memory, ux-audit, alignment, cortex-groom,
-		// sub-agents — spent real money that summed to $0 against the cap.
+		// so every background agent — memory, ux-audit, alignment, sub-agents —
+		// spent real money that summed to $0 against the cap.
 		logUsage({
 			task: 'memory',
 			choice: choiceAt(3, 15),
@@ -72,7 +72,7 @@ describe('logUsage', () => {
 	it('blocks once a background agent has spent past the cap', () => {
 		for (let i = 0; i < 4; i++) {
 			logUsage({
-				task: 'cortex-groom',
+				task: 'ux-audit',
 				choice: choiceAt(3, 15),
 				usage: { promptTokens: 1_000_000, completionTokens: 0 },
 				status: 'ok',
