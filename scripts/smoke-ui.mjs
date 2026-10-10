@@ -1046,6 +1046,38 @@ check(
 	if (fail.length) await shot('research-searches');
 }
 
+// N1c. The over-personalisation check, run from its Admin card on the
+//      admin's own profile. The mock answers plainly, so nothing should intrude.
+{
+	const adminContext = await browser.newContext({
+		viewport: { width: 1400, height: 900 },
+		extraHTTPHeaders: { 'Remote-User': 'root', 'Remote-Groups': 'galaxy-admins' }
+	});
+	const admin = await adminContext.newPage();
+	const adminProblems = [];
+	admin.on('pageerror', (e) => adminProblems.push(`uncaught: ${e.message}`));
+	admin.on('console', (m) => {
+		if (m.type() === 'error') adminProblems.push(`console: ${m.text()}`);
+	});
+	await asAdmin('/api/profile/entries', {
+		method: 'POST',
+		body: JSON.stringify({ path: 'life/constraints', kind: 'constraint', claim: 'Vegetarian, PROBE-PIN.', pinned: true })
+	});
+	await admin.goto(`${B}/admin?tab=${encodeURIComponent('Profile and skills')}`);
+	const probeCard = admin.locator('.card.probe');
+	await probeCard.getByRole('button', { name: 'Run the check' }).click();
+	await probeCard.locator('tbody tr').nth(11).waitFor({ timeout: 30_000 });
+	check('the over-personalisation check asks every question', await probeCard.locator('tbody tr').count(), 12);
+	check(
+		'and says how many replies intruded',
+		(await probeCard.locator('.notice').innerText()).startsWith('0 of 12 replies intruded'),
+		true
+	);
+	check('and runs quietly', adminProblems, []);
+	if (fail.length) await admin.screenshot({ path: join(SHOTS, 'probe.png') });
+	await adminContext.close();
+}
+
 // N2. Learning waits for its owner. It only proposes, so the Profile page is
 //     where anything learnt becomes part of a profile at all: approving,
 //     rewording, turning down and reading the past all have to work from the

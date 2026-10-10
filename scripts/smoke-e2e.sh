@@ -661,6 +661,9 @@ check "with how to reply set apart" "$SUR" '"notCarried":["Prefers replies as bu
 check "saving the survey" "$(api -X POST $B/api/profile/confirm -d "$(draft_body "$SUR" survey)")" '"ok":true'
 check "puts it in the profile" "$(api $B/api/profile)" 'Sails a dinghy called PARSE-ALPHA.'
 check_absent "and not how to reply" "$(api $B/api/profile)" 'bullet points'
+PROBE=$(api -X POST $B/api/admin/profile/probe)
+check "the over-personalisation check asks every question" "$PROBE" '"asked":12'
+check "and the mock's plain answers intrude on none" "$PROBE" '"flagged":0'
 
 # ---------------------------------------------------------------------------
 # UX audit → backlog. The interesting parts are that the agent is handed live
@@ -777,6 +780,8 @@ ADMIN_VIEW=$(asadmin $M/api/admin/memory)
 check "admin sees per-user status" "$ADMIN_VIEW" '"username":"alice"'
 check_absent "admin cannot read alice's profile" "$ADMIN_VIEW" 'ALPHA-LEARN'
 check_absent "admin cannot read bob's" "$ADMIN_VIEW" 'BETA-LEARN'
+check "only an admin may run the over-personalisation check" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' $M/api/admin/profile/probe)" "403"
 
 # A profile is one person's. Someone else's entry answers exactly like a
 # missing one, whatever is asked of it.

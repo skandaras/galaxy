@@ -82,6 +82,27 @@
 		await load();
 	}
 
+	interface Probe {
+		ran: boolean;
+		reason?: string;
+		results?: { question: string; flagged: string[]; excerpt: string }[];
+		flagged?: number;
+		asked?: number;
+		stopped?: string;
+		blockChars?: number;
+		tokens?: { prompt: number; completion: number } | null;
+	}
+	let probe = $state<Probe | null>(null);
+	let probing = $state(false);
+
+	async function runProbe() {
+		probing = true;
+		probe = null;
+		const res = await fetch('/api/admin/profile/probe', { method: 'POST' }).catch(() => null);
+		probing = false;
+		probe = res?.ok ? await res.json() : { ran: false, reason: 'The check did not run. Try again.' };
+	}
+
 	const when = (ts: number) => (ts ? new Date(ts).toLocaleString() : 'never');
 	const pending = $derived(candidates.filter((c) => c.status === 'pending'));
 	const decided = $derived(candidates.filter((c) => c.status !== 'pending'));
@@ -159,6 +180,43 @@
 				{/each}
 			</tbody>
 		</table>
+	</article>
+
+	<article class="card probe">
+		<h3>Does the profile intrude?</h3>
+		<p class="hint">
+			Asks the chat model twelve everyday questions a profile has no bearing on, with your own profile
+			in the prompt, and counts the replies that name one of your people or reach for a word from
+			your pinned brief. A word match is crude, so each flag shows what matched. Twelve chat calls,
+			one at a time, counted against the budget like any other.
+		</p>
+		<button class="btn" disabled={probing} onclick={runProbe}>
+			{probing ? 'Asking…' : 'Run the check'}
+		</button>
+		{#if probe && !probe.ran}
+			<p class="notice error" role="alert">{probe.reason}</p>
+		{:else if probe?.results}
+			<p class="notice" role="status">
+				{probe.flagged} of {probe.asked} replies intruded{probe.stopped ? `; it stopped early: ${probe.stopped}` : ''}.
+				Your block is {probe.blockChars?.toLocaleString('en-NZ')} characters{probe.tokens
+					? `; ${probe.tokens.prompt.toLocaleString('en-NZ')} prompt and ${probe.tokens.completion.toLocaleString('en-NZ')} completion tokens in all`
+					: ''}.
+			</p>
+			<table>
+				<thead><tr><th>Question</th><th>What intruded</th></tr></thead>
+				<tbody>
+					{#each probe.results as r (r.question)}
+						<tr class:intruded={r.flagged.length > 0}>
+							<td>
+								{r.question}
+								{#if r.flagged.length}<div class="excerpt">{r.excerpt}</div>{/if}
+							</td>
+							<td>{r.flagged.join(', ') || 'nothing'}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		{/if}
 	</article>
 
 	<article class="card">
@@ -313,6 +371,17 @@
 		font-size: var(--text-base);
 		color: var(--fg-dim);
 		padding: 0.15rem 0;
+	}
+	.probe table {
+		margin-top: 0.6rem;
+	}
+	tr.intruded td {
+		color: var(--danger);
+	}
+	.excerpt {
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
+		margin-top: 0.2rem;
 	}
 	details summary {
 		font-size: var(--text-base);

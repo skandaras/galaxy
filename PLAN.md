@@ -150,7 +150,9 @@ Internet ─► Proxy ──┤
   nothing about how agents should reply: that is platform configuration. An onboarding
   survey, a Profile export or another assistant's memory seeds it, each as a draft the
   person reads line by line before any of it is saved; lines about how to reply are set
-  apart rather than filed.
+  apart rather than filed. Admin → Profile and skills has a check that asks the chat model
+  twelve everyday questions with the admin's own profile in the prompt, and counts the
+  replies that name their people or reach for a word from their pinned brief.
 - **GitHub App + PR watching** — review agent, CI auto-fix via webhooks, replacing the PAT. Opening the pull request itself is shipped (`open_pull_request`, and a button on the session header).
 - **Artifacts pane** — sandboxed iframe rendering of interactive HTML/SVG the agents produce.
 - **Image generation providers** + a gallery surface in the Library; deep image analysis (OCR, structured extraction).
