@@ -17,7 +17,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	if (!result) error(404, 'Candidate not found or already decided');
 	emitEvent({
 		userId: user.id,
-		task: 'memory',
+		task: 'profile-learn',
 		type: 'job',
 		name: `skill-candidate.${body.approve ? 'approve' : 'reject'} ${result.name}`,
 		status: 'ok'

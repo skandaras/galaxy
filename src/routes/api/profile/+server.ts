@@ -1,11 +1,11 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
-import { LIMITS, profileView, wipeProfile } from '$lib/server/profile';
+import { briefBudget, LIMITS, profileView, wipeProfile } from '$lib/server/profile';
 
 export const GET: RequestHandler = ({ locals }) => {
 	const user = requireUser(locals);
-	return json({ ...profileView(user.id), limits: LIMITS });
+	return json({ ...profileView(user.id), limits: { ...LIMITS, briefChars: briefBudget() } });
 };
 
 /** Everything, for this person only. The page asks first, through ask(). */

@@ -161,8 +161,8 @@ Migrations run automatically on boot. Visit the **dev** subdomain first:
 4. **Admin → Research** for the web search provider, **Admin → Spend** for
    the budget cap, **Admin → Coding** for the GitHub PAT (fine-grained;
    Contents read/write on the repos you'll code in, plus workflow scope if you
-   want the Promote button), and **Admin → Memory and skills** for the memory
-   schedule.
+   want the Promote button), and **Admin → Profile and skills** for how often
+   Galaxy learns from conversations.
 
 ## 5. Coding runners (sandbox)
 
@@ -515,7 +515,7 @@ npm test && npm run build && bash scripts/smoke-e2e.sh
 | Installed Android app shows a browser address bar | Digital Asset Links did not verify. `curl` `/.well-known/assetlinks.json` signed out from outside — a login page means the proxy bypass above is missing; JSON means the fingerprint does not match the installed APK. See [MOBILE.md](./MOBILE.md) |
 | Attachment upload fails / 403 on form posts | `ORIGIN` not set to this instance's public URL (SvelteKit CSRF check) |
 | Small attachments upload but larger ones fail with `413` / `exceeds the server's request limit` | `BODY_SIZE_LIMIT` too low (or missing, so adapter-node's 512K default applies). Set it to `32M`. A reverse proxy can impose its own cap too — nginx's `client_max_body_size` defaults to 1 MB |
-| Memory never runs | Admin → Memory and skills: enabled? interval? It also skips when there's no new activity |
+| Nothing is ever proposed for a profile | Admin → Profile and skills: is learning on, and how often? It also skips when there's no new activity, when the person turned it off, or when 30 things are already waiting for them |
 | Deep research returns nothing, or always searches "1 queries" | A reasoning model spending its whole token budget thinking. Both the planner and the synthesis now retry with more room automatically; if it persists, raise Max tokens in Admin → Research or pick a non-reasoning model |
 | Deep research reports "no sources could be retrieved" | Search returned nothing — check the provider in Admin → Research with the Test button. The answer that follows is general knowledge, not research |
 | Deep research says "Consolidation returned no usable JSON" | The model could not produce the between-rounds brief in the shape asked for. The run falls back to searching the gaps it already had and only stops after two failures in a row, so the answer still lands — but a model that cannot follow a JSON contract will research shallowly. Pick a different one for the deep-research task |

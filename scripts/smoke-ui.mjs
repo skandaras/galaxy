@@ -1046,49 +1046,75 @@ check(
 	if (fail.length) await shot('research-searches');
 }
 
-// N2. Memory waits for its owner. The audit only proposes, so the page is where
-//     anything becomes a memory at all: approving, rewording and the rebuild
-//     all have to work from the page, not just from the API.
+// N2. Learning waits for its owner. It only proposes, so the Profile page is
+//     where anything learnt becomes part of a profile at all: approving,
+//     rewording, turning down and reading the past all have to work from the
+//     page, not just from the API. The mock proposes from "alpha-topic".
 {
 	problems = [];
-	const ran = await as(ALICE, '/api/memory/run', { method: 'POST' });
-	check('a memory review proposes something', ran.proposals > 0);
-	await page.goto(`${B}/memory`);
-	const waiting = page.locator('.memory-page .card', { hasText: 'Waiting for you' });
-	const proposal = waiting.locator('.proposal', { hasText: 'Concise replies' });
+	const learning = () => as(ALICE, '/api/profile/learning');
+	const said = await as(ALICE, '/api/chats', { method: 'POST', body: '{}' });
+	await as(ALICE, `/api/chats/${said.id}/messages`, {
+		method: 'POST',
+		body: JSON.stringify({ content: 'These days I sail most weekends, alpha-topic.', webSearch: false })
+	});
+	const ran = await as(ALICE, '/api/profile/learning/run', { method: 'POST' });
+	check('learning proposes what the person said', ran.proposals, 1);
+	await page.goto(`${B}/profile`);
+	const waiting = page.locator('.profile-page .card', { hasText: 'Waiting for you' });
+	// Found by its quote, which stays on screen while the claim is being edited.
+	const proposal = waiting.locator('.proposal', { has: page.locator('.quote', { hasText: 'alpha-topic' }) });
 	await proposal.waitFor();
-	check('nothing is held before it is approved', await page.locator('.memory-page table td', { hasText: 'Concise replies' }).count(), 0);
+	check('it shows the words it rests on', await proposal.locator('.quote').innerText(), 'You said: “alpha-topic”');
+	const learnt = page.locator('.profile-page ul.entries > li', { hasText: 'ALPHA-LEARN' });
+	check('nothing is in the profile before it is approved', await learnt.count(), 0);
+	await proposal.getByRole('button', { name: 'Edit' }).click();
+	await proposal.getByLabel('What is true').fill('Follows ALPHA-LEARN sailing closely.');
 	await proposal.getByRole('button', { name: 'Approve' }).click();
-	const held = page.locator('.memory-page table tr', { hasText: 'Concise replies' });
-	await held.waitFor();
-	check('approving puts it in the list', await held.count(), 1);
-	check('and takes it out of the queue', await waiting.locator('.proposal', { hasText: 'Concise replies' }).count(), 0);
+	await learnt.waitFor();
+	check('approving, reworded, puts it in the profile', await learnt.locator('.claim').innerText(), 'Follows ALPHA-LEARN sailing closely.');
+	check('marked as inferred', await learnt.locator('.badge', { hasText: 'inferred' }).count(), 1);
+	check('and takes it out of the queue', await proposal.count(), 0);
 
-	await held.getByRole('button', { name: 'Edit' }).click();
-	// The title is an input's value now, not text, so find the row by its editor.
-	const editing = page.locator('.memory-page table tr:has(input[type="text"])');
-	await editing.locator('input[type="text"]').fill('Short answers');
-	await editing.getByRole('button', { name: 'Save' }).click();
-	await page.locator('.memory-page table tr', { hasText: 'Short answers' }).waitFor();
-	check('a held memory can be retitled', await page.locator('.memory-page table tr', { hasText: 'Short answers' }).count(), 1);
+	const skill = waiting.locator('.proposal', { hasText: 'alpha-learn-checklist' });
+	await skill.getByRole('button', { name: 'Approve skill' }).click();
+	await skill.waitFor({ state: 'detached' });
+	check(
+		'a proposed skill can be approved by its owner',
+		(await learning()).candidates.find((c) => c.name === 'alpha-learn-checklist')?.status,
+		'approved'
+	);
 
-	// The same review proposed a skill, which its owner can approve from here.
-	const cand = page.locator('.memory-page .skills .cand', { hasText: 'release-checklist' });
-	await cand.getByRole('button', { name: 'Approve skill' }).click();
-	await cand.locator('.cand-status.approved').waitFor();
-	check('a proposed skill can be approved by its owner', await cand.locator('.cand-status').textContent(), 'approved');
+	// Something to turn down: the mock proposes from "beta-topic" as well.
+	const again = await as(ALICE, '/api/chats', { method: 'POST', body: '{}' });
+	await as(ALICE, `/api/chats/${again.id}/messages`, {
+		method: 'POST',
+		body: JSON.stringify({ content: 'And a little beta-topic on the side.', webSearch: false })
+	});
+	await waiting.getByRole('button', { name: 'Look now' }).click();
+	const beta = waiting.locator('.proposal', { has: page.locator('.quote', { hasText: 'beta-topic' }) });
+	await beta.waitFor();
+	await beta.getByRole('button', { name: 'Reject' }).click();
+	await beta.waitFor({ state: 'detached' });
+	check('turning one down keeps it out of the profile', await page.locator('.profile-page ul.entries > li', { hasText: 'BETA-LEARN' }).count(), 0);
 
-	await page.getByRole('button', { name: 'Wipe and rebuild' }).click();
-	const dialog = page.locator('dialog.confirm');
-	await dialog.waitFor();
-	await dialog.getByRole('button', { name: 'Wipe and rebuild' }).click();
-	// The mock answers at once, so the rebuild is over in moments; what it
-	// proposed is back in the queue and nothing is held.
-	await waiting.locator('.proposal', { hasText: 'Concise replies' }).waitFor({ timeout: 20_000 });
-	check('a rebuild empties the list', await page.locator('.memory-page table tr', { hasText: 'Short answers' }).count(), 0);
-	check('and refills the queue', await waiting.locator('.proposal').count() > 0);
-	check('the memory page renders quietly throughout', problems, []);
-	if (fail.length) await shot('memory');
+	// Reading the whole past again proposes nothing approved or turned down.
+	await waiting.getByRole('button', { name: 'Read my past conversations' }).click();
+	for (let i = 0; i < 40 && (await learning()).reading?.running !== false; i++) await page.waitForTimeout(250);
+	const after = await learning();
+	check('reading the past finishes', after.reading?.running, false);
+	check(
+		'and offers nothing already decided again',
+		after.proposals.filter((p) => /ALPHA-LEARN|BETA-LEARN/.test(p.claim ?? '')).length,
+		0
+	);
+
+	await page.goto(`${B}/memory`);
+	const note = page.locator('.memory-page .card', { hasText: 'Memory no longer learns' });
+	await note.waitFor();
+	check('the Memory page says it no longer learns', await note.count(), 1);
+	check('learning renders quietly throughout', problems, []);
+	if (fail.length) await shot('learning');
 }
 
 // N+0b. The Profile page. Adding, pinning and forgetting happen here, and the

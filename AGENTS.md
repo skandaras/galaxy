@@ -68,7 +68,7 @@ commit the generated SQL.
 the call can be priced — `getBudgetStatus()` sums `cost_usd`, and a call that reaches a
 provider without reaching `logUsage` is spend the cap cannot see.
 
-**Hidden chats.** A hidden chat is never written to the DB, never reaches the memory job, and
+**Hidden chats.** A hidden chat is never written to the DB, never reaches the learning job, and
 its id must not survive in `usage_log` or in stored `events`. The spend still counts; the
 identifier does not. Alignment and the Profile have their own boundaries, asserted in
 `alignment-privacy.test.ts` and `profile-privacy.test.ts` — read those before touching

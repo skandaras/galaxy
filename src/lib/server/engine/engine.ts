@@ -83,8 +83,8 @@ export function taskPrompt(task: string): string {
  * - `visual`: the output is Mermaid or SVG.
  * - `vision`: the reader is another agent, and the output is a transcription
  *   of what is in an image.
- * - `memory`: JSON, and its prompt is already stricter about what is worth a
- *   line than this block knows how to be.
+ * - `profile-learn` and `profile-parse`: JSON, and the learning prompt is
+ *   already stricter about what is worth a line than this block knows how to be.
  * - `alignment`: this one would conflict. The voice bans ritual hedging; the
  *   assessor *requires* calibrated uncertainty, where "not enough here to say"
  *   is a first-class answer. Its prompt carries its own version of these rules.

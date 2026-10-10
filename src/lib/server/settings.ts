@@ -425,8 +425,6 @@ export interface BudgetSettings {
 export const DEFAULT_BUDGET: BudgetSettings = { enabled: false, limitUsd: 25, period: 'month' };
 
 export interface MemorySettings {
-	enabled: boolean;
-	intervalHours: number;
 	/**
 	 * How many memories a person keeps at once.
 	 *
@@ -440,8 +438,16 @@ export interface MemorySettings {
 	 * few words per turn rather than a sentence or two.
 	 */
 	maxItems: number;
+}
+
+export const DEFAULT_MEMORY: MemorySettings = { maxItems: 50 };
+
+export interface ProfileSettings {
+	/** Learning from conversations, platform-wide. Each person can also turn it off for themselves. */
+	enabled: boolean;
+	intervalHours: number;
 	/**
-	 * Wall-clock ceiling on each of the memory job's model calls.
+	 * Wall-clock ceiling on each of the learning job's model calls.
 	 *
 	 * A background call is a plain non-streaming request, so this is the whole
 	 * of it — no idle allowance, unlike a streamed turn, which tolerates 180s of
@@ -449,14 +455,38 @@ export interface MemorySettings {
 	 * which is less than a streaming call is allowed to spend saying nothing.
 	 */
 	timeoutSeconds: number;
+	/**
+	 * The pinned brief every agent is given, in characters. A pin past it is
+	 * refused, so this is the owner's trade between what every turn carries and
+	 * what each one costs.
+	 */
+	briefChars: number;
 }
 
-export const DEFAULT_MEMORY: MemorySettings = {
+export const DEFAULT_PROFILE: ProfileSettings = {
 	enabled: true,
 	intervalHours: 12,
-	maxItems: 50,
-	timeoutSeconds: 180
+	timeoutSeconds: 180,
+	briefChars: 2_400
 };
+
+const clamp = (v: unknown, min: number, max: number, fallback: number) =>
+	typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : fallback;
+
+/** The stored row made whole and held to the bounds the Admin form shows. */
+export function normaliseProfileSettings(raw: Record<string, unknown>): ProfileSettings {
+	const d = DEFAULT_PROFILE;
+	return {
+		enabled: typeof raw.enabled === 'boolean' ? raw.enabled : d.enabled,
+		intervalHours: clamp(raw.intervalHours, 1, 168, d.intervalHours),
+		timeoutSeconds: clamp(raw.timeoutSeconds, 30, 900, d.timeoutSeconds),
+		briefChars: clamp(raw.briefChars, 800, 4_000, d.briefChars)
+	};
+}
+
+export function profileSettings(): ProfileSettings {
+	return normaliseProfileSettings(getSetting<Record<string, unknown>>('profile', {}));
+}
 
 export interface AlignmentSettings {
 	/**

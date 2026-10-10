@@ -276,9 +276,6 @@ const SHIPPED_BEFORE_OVERRIDES: Record<string, string[]> = {
 	],
 	'deep-research': [
 		'You are the research agent of Galaxy. Plan searches, gather sources, verify claims across them, and synthesise findings with citations.'
-	],
-	memory: [
-		'You are the memory agent of Galaxy. Audit recent activity for durable patterns, preferences and candidate skills. Extract only what is clearly supported.'
 	]
 };
 

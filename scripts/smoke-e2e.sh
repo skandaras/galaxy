@@ -580,18 +580,28 @@ check "deleting a folder drops its documents into Unfiled" "$(api $B/api/library
 check "rather than deleting them" "$(api $B/api/library/$KID)" 'Smoke Child'
 
 api -X POST $B/api/skills -d '{"name":"smoke-skill","description":"smoke","body":"body"}' > /dev/null
-MEM=$(api -X POST $B/api/memory/run)
-check "memory run" "$MEM" '"ran":true'
-# The audit proposes; nothing is held until the person approves it.
-check "the audit proposes rather than writes" "$MEM" '"proposals":1'
-MEMVIEW=$(api $B/api/memory)
-check "so nothing is held yet" "$MEMVIEW" '"items":[]'
-check "and a fact is never proposed" "$(echo "$MEMVIEW" | grep -c systemctl)" "0"
+# Learning: what the person says reaches their Profile only through a proposal
+# they approve, quoting them. Its own topic: the two-person instance below
+# shares this data directory, and a skill name once proposed is never
+# proposed again.
+LC=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+LJ=$(api -X POST $B/api/chats/$LC/messages -d '{"content":"These days I sail most weekends, gamma-topic.","webSearch":false}' | jqn .jobId)
+curl -sN --max-time 20 $B/api/jobs/$LJ/stream > /dev/null
+LEARN=$(api -X POST $B/api/profile/learning/run)
+check "learning runs" "$LEARN" '"ran":true'
+check "and proposes rather than writes" "$LEARN" '"proposals":1'
+LWAIT=$(api $B/api/profile/learning)
+check "what it proposes quotes the person" "$LWAIT" '"quote":"gamma-topic"'
+check_absent "and is never a line they did not say" "$LWAIT" 'LEARN-INVENTED'
+check_absent "or anything private" "$LWAIT" 'LEARN-PRIVATE'
+check_absent "so the profile holds none of it yet" "$(api $B/api/profile)" 'GAMMA-LEARN'
+check "memory no longer learns" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/memory/run)" "404"
 
 # ---------------------------------------------------------------------------
 # Profile: what a person has told Galaxy about themselves, reaching their
-# agents' prompts, and what an agent may note there. After the memory run, so
-# the chats here are not in what the audit above read.
+# agents' prompts, and what an agent may note there. After the learning run, so
+# the chats here are not in what it read.
 # ---------------------------------------------------------------------------
 PENT=$(api -X POST $B/api/profile/entries -d '{"path":"life/constraints","kind":"constraint","claim":"Vegetarian, PROFILE-ALPHA.","pinned":true}')
 check "an entry can be added from the page" "$PENT" '"source":"stated"'
@@ -719,58 +729,54 @@ as() { # as <user> <curl args...>
 }
 asadmin() { curl -sf -H 'Remote-User: root' -H 'Remote-Groups: galaxy-admins' -H 'content-type: application/json' "$@"; }
 
-# Each user talks about their own distinct topic, then audits their own activity.
+# Each user talks about their own distinct topic, then learning reads it.
 for pair in "alice alpha-topic" "bob beta-topic"; do
   set -- $pair
   C=$(as "$1" -X POST $M/api/chats -d '{}' | jqn .id)
   J=$(as "$1" -X POST $M/api/chats/$C/messages -d "{\"content\":\"let's discuss $2\",\"webSearch\":false}" | jqn .jobId)
   curl -sN --max-time 20 -H "Remote-User: $1" $M/api/jobs/$J/stream > /dev/null
-  as "$1" -X POST $M/api/memory/run > /dev/null
+  as "$1" -X POST $M/api/profile/learning/run > /dev/null
 done
 
-# Nothing an audit proposes reaches a prompt before its owner approves it.
-AC0=$(as alice -X POST $M/api/chats -d '{}' | jqn .id)
-AJ0=$(as alice -X POST $M/api/chats/$AC0/messages -d '{"content":"echo-system","webSearch":false}' | jqn .jobId)
-ASYS0=$(curl -sN --max-time 20 -H 'Remote-User: alice' $M/api/jobs/$AJ0/stream | grep -o 'SYSCHECK[^"]*' | head -1)
-check "a proposal is not in the prompt before it is approved" "$ASYS0" 'alpha=false'
+ALICE_WAIT=$(as alice $M/api/profile/learning)
+BOB_WAIT=$(as bob $M/api/profile/learning)
+check "alice's proposals come from her own words" "$ALICE_WAIT" 'ALPHA-LEARN'
+check_absent "and none from bob's" "$ALICE_WAIT" 'BETA-LEARN'
+check "bob's come from his" "$BOB_WAIT" 'BETA-LEARN'
+check_absent "and none from alice's" "$BOB_WAIT" 'ALPHA-LEARN'
 
 # Someone else's proposal is not found, exactly like a missing one.
-ALICE_PROPOSAL=$(as alice $M/api/memory | node -pe 'JSON.parse(require("fs").readFileSync(0)).proposals[0].id')
+ALICE_PROPOSAL=$(echo "$ALICE_WAIT" | node -pe 'JSON.parse(require("fs").readFileSync(0)).proposals[0].id')
 check "bob cannot approve alice's proposal" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' -H 'content-type: application/json' \
-     -d '{"approve":true}' $M/api/memory/proposals/$ALICE_PROPOSAL)" "404"
-
-approve_all() { # approve_all <user>
-  for id in $(as "$1" $M/api/memory | node -pe 'JSON.parse(require("fs").readFileSync(0)).proposals.map((p) => p.id).join(" ")'); do
-    as "$1" -X POST $M/api/memory/proposals/$id -d '{"approve":true}' > /dev/null
-  done
-}
-approve_all alice
-approve_all bob
+     -d '{"approve":true}' $M/api/profile/proposals/$ALICE_PROPOSAL)" "404"
+check "alice approves her own" \
+  "$(as alice -X POST $M/api/profile/proposals/$ALICE_PROPOSAL -d '{"approve":true}')" '"status":"approved"'
+ALICE_PROFILE=$(as alice $M/api/profile)
+check "it is in her profile, marked as inferred" "$ALICE_PROFILE" '"source":"inferred"'
+check "with the words it came from" "$ALICE_PROFILE" '"quote":"alpha-topic"'
+check_absent "and not in bob's" "$(as bob $M/api/profile)" 'ALPHA-LEARN'
+# Pinned, so the brief every agent gets carries it.
+LEARNT=$(echo "$ALICE_PROFILE" | node -pe '
+  const d = JSON.parse(require("fs").readFileSync(0));
+  d.domains.flatMap((x) => x.subdomains.flatMap((s) => s.entries)).find((e) => e.claim.includes("ALPHA-LEARN")).id')
+as alice -X PATCH $M/api/profile/entries/$LEARNT -d '{"pinned":true}' > /dev/null
 
 # A skill proposed from one person's activity is theirs to decide, and theirs
-# once approved. The mock's audit proposes alpha-mem-checklist from alice's activity.
-ALICE_CAND=$(as alice $M/api/memory | node -pe 'JSON.parse(require("fs").readFileSync(0)).myCandidates.find((c) => c.status === "pending").id')
+# once approved. The mock proposes alpha-learn-checklist from alice's activity.
+ALICE_CAND=$(echo "$ALICE_WAIT" | node -pe 'JSON.parse(require("fs").readFileSync(0)).candidates.find((c) => c.status === "pending").id')
 check "bob cannot decide alice's skill candidate" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' -H 'content-type: application/json' \
      -d '{"approve":true}' $M/api/skills/candidates/$ALICE_CAND)" "404"
-check "alice approves her own" "$(as alice -X POST $M/api/skills/candidates/$ALICE_CAND -d '{"approve":true}')" '"status":"approved"'
-check "and it is hers" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: alice' $M/api/skills/alpha-mem-checklist)" "200"
-check "and not bob's" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/skills/alpha-mem-checklist)" "404"
+check "alice approves her skill" "$(as alice -X POST $M/api/skills/candidates/$ALICE_CAND -d '{"approve":true}')" '"status":"approved"'
+check "and it is hers" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: alice' $M/api/skills/alpha-learn-checklist)" "200"
+check "and not bob's" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/skills/alpha-learn-checklist)" "404"
 
-ALICE_MEM=$(as alice $M/api/memory)
-BOB_MEM=$(as bob $M/api/memory)
-check "approving puts it in the set" "$ALICE_MEM" '"title":"Marker ALPHA-MEM"'
-check "alice has her own memory" "$ALICE_MEM" 'ALPHA-MEM'
-check "alice cannot see bob's memory" "$(echo "$ALICE_MEM" | grep -c BETA-MEM)" "0"
-check "bob has his own memory" "$BOB_MEM" 'BETA-MEM'
-check "bob cannot see alice's memory" "$(echo "$BOB_MEM" | grep -c ALPHA-MEM)" "0"
-
-# The admin view must carry status only — no memory text at all.
+# The admin view carries counts and times, never a line of anyone's profile.
 ADMIN_VIEW=$(asadmin $M/api/admin/memory)
 check "admin sees per-user status" "$ADMIN_VIEW" '"username":"alice"'
-check "admin cannot read alice's memory" "$(echo "$ADMIN_VIEW" | grep -c ALPHA-MEM)" "0"
-check "admin cannot read bob's memory" "$(echo "$ADMIN_VIEW" | grep -c BETA-MEM)" "0"
+check_absent "admin cannot read alice's profile" "$ADMIN_VIEW" 'ALPHA-LEARN'
+check_absent "admin cannot read bob's" "$ADMIN_VIEW" 'BETA-LEARN'
 
 # A profile is one person's. Someone else's entry answers exactly like a
 # missing one, whatever is asked of it.
@@ -787,36 +793,20 @@ BJ=$(as bob -X POST $M/api/chats/$BC/messages -d '{"content":"echo-system","webS
 BSYS=$(curl -sN --max-time 20 -H 'Remote-User: bob' $M/api/jobs/$BJ/stream | grep -o 'SYSCHECK[^"]*' | head -1)
 check "bob's prompt carries none of alice's profile" "$BSYS" 'pmark=false'
 
-# The bootstrap the model actually receives must be isolated too. This runs
-# BEFORE the delete checks below: deleting a memory changes what the prompt
-# contains, so the two must not overlap.
+# The bootstrap the model actually receives must be isolated too.
 AC=$(as alice -X POST $M/api/chats -d '{}' | jqn .id)
 AJ=$(as alice -X POST $M/api/chats/$AC/messages -d '{"content":"echo-system","webSearch":false}' | jqn .jobId)
 ASYS=$(curl -sN --max-time 20 -H 'Remote-User: alice' $M/api/jobs/$AJ/stream | grep -o 'SYSCHECK[^"]*' | head -1)
-check "alice's prompt carries her memory" "$ASYS" 'alpha=true'
-check "alice's prompt excludes bob's memory" "$ASYS" 'beta=false'
+check "alice's prompt carries what she approved and pinned" "$ASYS" 'alpha=true'
+check "and nothing learnt from bob" "$ASYS" 'beta=false'
 check "alice's prompt carries her profile" "$ASYS" 'pmark=true'
 # The Language text is composed at call time rather than seeded into the prompt
 # stored in Admin -> Tasks, so nothing in the database proves it arrived.
 check "the prompt carries the Language text" "$ASYS" 'voice=true'
 
-# Cross-user mutation must 404 exactly like a missing item. Target an item
-# explicitly chosen NOT to be the marker, so this can never invalidate the
-# prompt checks above regardless of row ordering.
-ALICE_ITEM=$(echo "$ALICE_MEM" | node -pe '
-  const d = JSON.parse(require("fs").readFileSync(0));
-  const victim = d.items.find((i) => !i.content.includes("ALPHA-MEM"));
-  if (!victim) throw new Error("expected a non-marker memory item to delete");
-  victim.id')
-BOB_DEL=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Remote-User: bob' $M/api/memory/items/$ALICE_ITEM)
-check "bob cannot delete alice's item" "$BOB_DEL" "404"
-ALICE_DEL=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Remote-User: alice' $M/api/memory/items/$ALICE_ITEM)
-check "alice can delete her own item" "$ALICE_DEL" "200"
-check "alice's marker survived the delete" "$(as alice $M/api/memory)" 'ALPHA-MEM'
-
-# Opting out must stop the scheduler touching that user.
-as alice -X PUT $M/api/memory/settings -d '{"enabled":false}' > /dev/null
-check "opt-out persists" "$(as alice $M/api/memory)" '"enabled":false'
+# Turning learning off is the person's own switch, and it sticks.
+as alice -X PUT $M/api/profile/learning -d '{"enabled":false}' > /dev/null
+check "turning learning off persists" "$(as alice $M/api/profile/learning)" '"enabled":false'
 
 # ---------------------------------------------------------------------------
 # Library visibility. The library had no owner column at all before this, so

@@ -337,6 +337,20 @@
       "when": 1791613537434,
       "tag": "0047_profile",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1791667074306,
+      "tag": "0048_profile_proposals",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1791667082323,
+      "tag": "0049_profile_learn",
+      "breakpoints": true
     }
   ]
 }

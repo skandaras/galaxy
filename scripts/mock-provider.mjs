@@ -204,24 +204,23 @@ async function scriptedReply(userText, maxTokens = 0) {
 				highlights: ['steadier on honesty', 'presence still slipping'],
 				neglected: neglected.slice(0, 1)
 			});
-		} else if (userText.includes('MEMORY-AUDIT')) {
-			// Echo a marker drawn from the audited activity so a test can prove
-			// each user's memory came from their own chats and nobody else's.
-			const marker = userText.includes('alpha-topic')
-				? 'ALPHA-MEM'
-				: userText.includes('beta-topic')
-					? 'BETA-MEM'
-					: null;
-			// Proposals with titles, since only a title reaches a prompt. The marker
-			// sits in the title for that reason. The fact is there to be dropped:
-			// a memory is a preference or a pattern.
+		} else if (userText.includes('PROFILE-LEARN')) {
+			// Learning about the person. One proposal quoting a marker they wrote,
+			// so a test can prove each profile learns only from its owner's chats;
+			// one quoting words nobody wrote and one for a private place, both of
+			// which code must drop; and a skill candidate.
+			const activity = userText.slice(userText.indexOf('--- BEGIN ACTIVITY ---'));
+			const topic = ['alpha-topic', 'beta-topic', 'gamma-topic'].find((t) => activity.includes(t)) ?? null;
+			const marker = topic ? `${topic.split('-')[0].toUpperCase()}-LEARN` : null;
 			content = JSON.stringify({
 				add: [
-					...(marker
-						? [{ kind: 'pattern', title: `Marker ${marker}`, content: `Observed marker ${marker}` }]
+					...(topic
+						? [
+								{ path: 'interests/pursuits', kind: 'fact', claim: `Follows ${marker} closely.`, quote: topic, why: `They brought up ${topic}.` },
+								{ path: 'life/health', kind: 'constraint', claim: 'Allergic to LEARN-PRIVATE.', quote: topic }
+							]
 						: []),
-					{ kind: 'preference', title: 'Concise replies', content: 'User prefers concise replies' },
-					{ kind: 'fact', title: 'Restarts', content: 'Prod restarts via systemctl restart galaxy' }
+					{ path: 'work/role', kind: 'fact', claim: 'Flew to the moon, LEARN-INVENTED.', quote: 'flew to the moon last year' }
 				],
 				skill_candidates: [
 					{
@@ -940,7 +939,7 @@ const server = createServer(async (req, res) => {
 			delta(res, {
 				// ALPHA-MEM / BETA-MEM prove per-user memory isolation: a user's
 				// prompt must contain their own marker and never the other's.
-				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} mem=${system.includes('[Memory')} pref=${system.includes('concise replies')} alpha=${system.includes('ALPHA-MEM')} beta=${system.includes('BETA-MEM')} voice=${system.includes('[How to write')} profile=${system.includes('[Profile:')} pmark=${system.includes('PROFILE-ALPHA')}`
+				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} mem=${system.includes('[Memory')} alpha=${system.includes('ALPHA-LEARN')} beta=${system.includes('BETA-LEARN')} voice=${system.includes('[How to write')} profile=${system.includes('[Profile:')} pmark=${system.includes('PROFILE-ALPHA')}`
 			});
 			delta(res, {}, 'stop');
 			res.write('data: [DONE]\n\n');

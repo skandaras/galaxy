@@ -34,8 +34,8 @@ const stored = (task: string) =>
 const override = (task: string) =>
 	db.select().from(taskConfigs).where(eq(taskConfigs.task, task)).get()?.promptOverride ?? null;
 
-const OLD_MEMORY =
-	'You are the memory agent of Galaxy. Audit recent activity for durable patterns, preferences and candidate skills. Extract only what is clearly supported.';
+const OLD_RESEARCH =
+	'You are the research agent of Galaxy. Plan searches, gather sources, verify claims across them, and synthesise findings with citations.';
 
 const OVERRIDE_KEY = 'tasks.promptOverrideVersion';
 
@@ -51,17 +51,17 @@ beforeEach(() => {
 
 describe('resolving a task prompt', () => {
 	it('uses the shipped default when nobody has overridden it', () => {
-		expect(override('memory')).toBeNull();
-		expect(prompt('memory')).toBe(DEFAULT_PROMPTS.memory);
+		expect(override('deep-research')).toBeNull();
+		expect(prompt('deep-research')).toBe(DEFAULT_PROMPTS['deep-research']);
 	});
 
 	it('uses the override when there is one', () => {
-		const mine = 'You are the memory agent. Only ever record things about cheese.';
+		const mine = 'You are the research agent. Only ever research cheese.';
 		db.update(taskConfigs)
 			.set({ promptOverride: mine })
-			.where(eq(taskConfigs.task, 'memory'))
+			.where(eq(taskConfigs.task, 'deep-research'))
 			.run();
-		expect(prompt('memory')).toBe(mine);
+		expect(prompt('deep-research')).toBe(mine);
 	});
 
 	it('tracks a reworded default without any migration at all', () => {
@@ -85,21 +85,21 @@ describe('resolving a task prompt', () => {
 
 describe('moving an install onto overrides', () => {
 	it('keeps a prompt somebody edited', () => {
-		const mine = 'You are the memory agent. Only ever record things about cheese.';
+		const mine = 'You are the research agent. Only ever research cheese.';
 		db.update(taskConfigs)
 			.set({ systemPrompt: mine, promptOverride: null })
-			.where(eq(taskConfigs.task, 'memory'))
+			.where(eq(taskConfigs.task, 'deep-research'))
 			.run();
 
 		migrateToPromptOverrides();
-		expect(override('memory')).toBe(mine);
-		expect(prompt('memory')).toBe(mine);
+		expect(override('deep-research')).toBe(mine);
+		expect(prompt('deep-research')).toBe(mine);
 	});
 
 	it('claims nothing for a row still holding the current default', () => {
 		migrateToPromptOverrides();
-		expect(override('memory')).toBeNull();
-		expect(prompt('memory')).toBe(DEFAULT_PROMPTS.memory);
+		expect(override('deep-research')).toBeNull();
+		expect(prompt('deep-research')).toBe(DEFAULT_PROMPTS['deep-research']);
 	});
 
 	it('claims nothing for a row holding a default an older release shipped', () => {
@@ -108,14 +108,14 @@ describe('moving an install onto overrides', () => {
 		// would pin every long-running install to a prompt from two rewrites ago,
 		// looking exactly like an owner's edit.
 		db.update(taskConfigs)
-			.set({ systemPrompt: OLD_MEMORY, promptOverride: null })
-			.where(eq(taskConfigs.task, 'memory'))
+			.set({ systemPrompt: OLD_RESEARCH, promptOverride: null })
+			.where(eq(taskConfigs.task, 'deep-research'))
 			.run();
 
 		migrateToPromptOverrides();
-		expect(override('memory')).toBeNull();
-		expect(prompt('memory')).toBe(DEFAULT_PROMPTS.memory);
-		expect(prompt('memory')).toContain('six months');
+		expect(override('deep-research')).toBeNull();
+		expect(prompt('deep-research')).toBe(DEFAULT_PROMPTS['deep-research']);
+		expect(prompt('deep-research')).toContain('You work in rounds');
 	});
 
 	it('runs on one boot and never again', () => {
@@ -123,11 +123,11 @@ describe('moving an install onto overrides', () => {
 		const mine = 'Written after the migration had already run.';
 		db.update(taskConfigs)
 			.set({ systemPrompt: mine, promptOverride: null })
-			.where(eq(taskConfigs.task, 'memory'))
+			.where(eq(taskConfigs.task, 'deep-research'))
 			.run();
 
 		migrateToPromptOverrides();
-		expect(override('memory')).toBeNull();
+		expect(override('deep-research')).toBeNull();
 	});
 
 	it('survives a table with nothing in it', () => {
@@ -154,34 +154,34 @@ describe('the rollback copy', () => {
 		// release stopped shipping is an agent running on a prompt nobody chose.
 		db.update(taskConfigs)
 			.set({ systemPrompt: 'stale' })
-			.where(eq(taskConfigs.task, 'memory'))
+			.where(eq(taskConfigs.task, 'deep-research'))
 			.run();
 
 		seedTaskConfigs();
-		expect(stored('memory')).toBe(DEFAULT_PROMPTS.memory);
+		expect(stored('deep-research')).toBe(DEFAULT_PROMPTS['deep-research']);
 	});
 
 	it('follows the override rather than the default', () => {
-		const mine = 'Only ever record things about cheese.';
+		const mine = 'Only ever research cheese.';
 		db.update(taskConfigs)
 			.set({ promptOverride: mine })
-			.where(eq(taskConfigs.task, 'memory'))
+			.where(eq(taskConfigs.task, 'deep-research'))
 			.run();
 
 		seedTaskConfigs();
-		expect(stored('memory')).toBe(mine);
+		expect(stored('deep-research')).toBe(mine);
 	});
 
 	it('never clears an override', () => {
-		const mine = 'Only ever record things about cheese.';
+		const mine = 'Only ever research cheese.';
 		db.update(taskConfigs)
 			.set({ promptOverride: mine })
-			.where(eq(taskConfigs.task, 'memory'))
+			.where(eq(taskConfigs.task, 'deep-research'))
 			.run();
 
 		seedTaskConfigs();
 		seedTaskConfigs();
-		expect(override('memory')).toBe(mine);
+		expect(override('deep-research')).toBe(mine);
 	});
 });
 

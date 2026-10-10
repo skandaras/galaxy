@@ -194,7 +194,7 @@ export function knowledgeTools(
 				const body = String(a.body ?? '').trim();
 				if (!name || !body) throw new Error('name and body are required');
 				// Every name ever proposed, whatever became of it: a rejection is a
-				// decision, and the memory job reads the same table for the same reason.
+				// decision, and the learning job reads the same table for the same reason.
 				const taken =
 					db.select({ id: skills.id }).from(skills).where(eq(skills.name, name)).get() ??
 					db
@@ -219,7 +219,7 @@ export function knowledgeTools(
 					})
 					.run();
 				proposed = true;
-				return `Proposed ${name}. It waits for the person's approval on their Memory page; say so in your reply.`;
+				return `Proposed ${name}. It waits for the person's approval on their Profile page; say so in your reply.`;
 			}
 		},
 		{

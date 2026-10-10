@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { briefUsage, entryMarks, pathOptions } from './profile-view';
+import {
+	briefUsage,
+	entryMarks,
+	pathOptions,
+	placeLabel,
+	proposalWords,
+	readingText
+} from './profile-view';
 
 describe('pathOptions', () => {
 	it('offers every subdomain, and a person’s card by their name', () => {
@@ -28,5 +35,38 @@ describe('entryMarks', () => {
 		expect(
 			entryMarks({ pinned: true, sensitivity: 'private', source: 'inferred', expiresAt: '2026-11-01T00:00:00.000Z' })
 		).toEqual(['pinned', 'private', 'inferred', 'until 2026-11-01']);
+	});
+});
+
+describe('proposalWords', () => {
+	it('says what each kind of proposal asks, and only lets the wording of a line be edited', () => {
+		expect(proposalWords('add')).toMatchObject({ badge: 'New', editable: true });
+		expect(proposalWords('update')).toMatchObject({ badge: 'Change', editable: true });
+		expect(proposalWords('retire')).toEqual({ badge: 'Retire', yes: 'Retire it', no: 'Keep it', editable: false });
+		expect(proposalWords('confirm')).toEqual({
+			badge: 'Still true?',
+			yes: 'Still true',
+			no: 'Not any more',
+			editable: false
+		});
+		expect(placeLabel('people/Nikau')).toBe('people / Nikau');
+	});
+});
+
+describe('readingText', () => {
+	const r = { running: true, done: 2, total: 5, proposals: 3, failed: 0 };
+	it('follows a reading, and says nothing once one ends well', () => {
+		expect(readingText(r)).toEqual({
+			text: 'Reading your past conversations: 2 of 5 batches, 3 proposed so far.',
+			error: false
+		});
+		expect(readingText({ ...r, running: false, done: 5 })).toBeNull();
+		expect(readingText(null)).toBeNull();
+	});
+
+	it('says why one stopped, and how much of it could not be read', () => {
+		expect(readingText({ ...r, running: false, stopped: 'the spending cap was reached', failed: 1 })?.text).toBe(
+			'The last reading stopped early: the spending cap was reached, and 1 of its 5 batches could not be read.'
+		);
 	});
 });

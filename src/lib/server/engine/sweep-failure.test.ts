@@ -24,19 +24,19 @@ const filed = () => db.select().from(events).where(eq(events.type, 'job')).all()
 
 describe('runSweep', () => {
 	it('says nothing when the agent finishes', async () => {
-		await runSweep('memory', 'u1', async () => ({ ran: true }));
+		await runSweep('profile-learn', 'u1', async () => ({ ran: true }));
 		expect(filed()).toHaveLength(0);
 	});
 
 	it('files a failure the agent never got far enough to report', async () => {
-		await runSweep('memory', 'u1', async () => {
+		await runSweep('profile-learn', 'u1', async () => {
 			throw new Error('settings row is malformed');
 		});
 
 		const [event] = filed();
 		expect(event).toBeTruthy();
 		expect(event.status).toBe('error');
-		expect(event.task).toBe('memory');
+		expect(event.task).toBe('profile-learn');
 		expect(event.userId).toBe('u1');
 		expect(JSON.stringify(event.detail)).toContain('settings row is malformed');
 	});

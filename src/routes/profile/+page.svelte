@@ -1,7 +1,16 @@
 <script lang="ts">
 	import { ask } from '$lib/confirm.svelte';
 	import { ENTITY_KINDS, KINDS } from '$lib/profile-taxonomy';
-	import { briefUsage, entryMarks, pathOptions } from '$lib/profile-view';
+	import {
+		briefUsage,
+		entryMarks,
+		pathOptions,
+		placeLabel,
+		proposalWords,
+		readingText,
+		type ProposalAction,
+		type ReadingView
+	} from '$lib/profile-view';
 	import { stepFor } from '$lib/survey';
 
 	interface Entry {
@@ -33,6 +42,36 @@
 		limits: { briefChars: number; claimMax: number };
 	}
 
+	interface Proposal {
+		id: string;
+		action: ProposalAction;
+		path: string | null;
+		kind: string | null;
+		claim: string | null;
+		person: { kind: string; relation: string } | null;
+		quote: string | null;
+		why: string;
+		entry: { id: string; claim: string; place: string } | null;
+	}
+	interface Candidate {
+		id: string;
+		name: string;
+		description: string;
+		rationale: string;
+		tasks: string;
+		body: string;
+		status: 'pending' | 'approved' | 'rejected';
+	}
+	interface Learning {
+		proposals: Proposal[];
+		candidates: Candidate[];
+		enabled: boolean;
+		scheduleEnabled: boolean;
+		lastRun: number;
+		nextDue: number;
+		reading: ReadingView | null;
+	}
+
 	const TASK_LABEL: Record<string, string> = {
 		chat: 'Chat',
 		coding: 'Coding',
@@ -46,6 +85,9 @@
 	let notice = $state<{ at: string; text: string; error?: boolean } | null>(null);
 	let editing = $state<{ id: string; claim: string } | null>(null);
 	let versions = $state<{ id: string; list: { claim: string; status: string }[] } | null>(null);
+	let learning = $state<Learning | null>(null);
+	let deciding = $state<{ id: string; claim: string; path: string; kind: string } | null>(null);
+	let busy = $state<'look' | 'read' | null>(null);
 
 	let draft = $state({ path: '', kind: 'fact', claim: '', pinned: false, until: '' });
 	let person = $state({ name: '', kind: 'person', relation: '' });
@@ -54,11 +96,16 @@
 	const usage = $derived(view ? briefUsage(view.briefUsed, view.limits.briefChars) : null);
 	const blank = $derived(!!view && view.count === 0 && view.entities.length === 0);
 	const paths = $derived(view ? pathOptions(view.domains) : []);
+	const skillsWaiting = $derived(learning?.candidates.filter((c) => c.status === 'pending') ?? []);
+	const waiting = $derived((learning?.proposals.length ?? 0) + skillsWaiting.length);
+	const reading = $derived(readingText(learning?.reading ?? null));
+	const known = (path: string | null) => paths.some((p) => p.value.toLowerCase() === (path ?? '').toLowerCase());
 
 	async function load() {
-		const [res, agents] = await Promise.all([
+		const [res, agents, learnt] = await Promise.all([
 			fetch('/api/profile').catch(() => null),
-			fetch('/api/profile/agents').catch(() => null)
+			fetch('/api/profile/agents').catch(() => null),
+			fetch('/api/profile/learning').catch(() => null)
 		]);
 		if (!res?.ok) {
 			loadFailed = true;
@@ -67,10 +114,18 @@
 		loadFailed = false;
 		view = await res.json();
 		blocks = agents?.ok ? (await agents.json()).blocks : [];
+		learning = learnt?.ok ? await learnt.json() : null;
 		if (!draft.path && paths.length) draft.path = paths[0].value;
 	}
 	$effect(() => {
 		void load();
+	});
+	// While past conversations are read in the background, follow along: the
+	// queue fills as each batch is read.
+	$effect(() => {
+		if (!learning?.reading?.running) return;
+		const timer = setInterval(() => void load(), 3000);
+		return () => clearInterval(timer);
 	});
 
 	/** Send a change and say what the server said about it, beside `at`. */
@@ -89,6 +144,63 @@
 		await load();
 		return true;
 	}
+
+	async function decideProposal(p: Proposal, approve: boolean) {
+		const edits = deciding?.id === p.id ? deciding : null;
+		const body = edits ? { approve, claim: edits.claim, path: edits.path, kind: edits.kind } : { approve };
+		const words = proposalWords(p.action);
+		if (await send(p.id, `/api/profile/proposals/${p.id}`, 'POST', body, approve ? `${words.yes}: done.` : `${words.no}: done.`)) {
+			if (edits) deciding = null;
+		} else {
+			// Gone or refused, the list may have moved under it.
+			await load();
+		}
+	}
+
+	async function decideSkill(c: Candidate, approve: boolean) {
+		await send(
+			c.id,
+			`/api/skills/candidates/${c.id}`,
+			'POST',
+			{ approve },
+			approve ? `${c.name} is now one of your skills.` : `${c.name} turned down.`
+		);
+	}
+
+	async function toggleLearning() {
+		if (!learning) return;
+		await send('learning', '/api/profile/learning', 'PUT', { enabled: !learning.enabled });
+	}
+
+	async function lookNow() {
+		busy = 'look';
+		notice = null;
+		const res = await fetch('/api/profile/learning/run', { method: 'POST' }).catch(() => null);
+		busy = null;
+		const result = res?.ok ? await res.json() : null;
+		if (!result) {
+			notice = { at: 'learning', text: 'That did not run. Try again.', error: true };
+			return;
+		}
+		const n = result.proposals ?? 0;
+		notice = {
+			at: 'learning',
+			text: result.ran
+				? n
+					? `${n} waiting for you above.`
+					: 'Nothing new worth adding.'
+				: `Nothing to do: ${result.reason}.`
+		};
+		await load();
+	}
+
+	async function readPast() {
+		busy = 'read';
+		await send('learning', '/api/profile/learning/read', 'POST', undefined, 'Reading your past conversations.');
+		busy = null;
+	}
+
+	const when = (ts: number) => (ts ? new Date(ts).toLocaleString() : 'never');
 
 	async function add() {
 		const ok = await send('add', '/api/profile/entries', 'POST', draft, 'Added.');
@@ -222,6 +334,118 @@
 				</div>
 				{@render said('top')}
 			</article>
+
+			{#if learning}
+				<article class="card" class:waiting={waiting > 0}>
+					<h3>Waiting for you{waiting ? ` (${waiting})` : ''}</h3>
+					{#each learning.proposals as p (p.id)}
+						{@const words = proposalWords(p.action)}
+						<div class="proposal">
+							<div class="row">
+								<span class="badge">{words.badge}</span>
+								<span class="meta">
+									{p.action === 'add' ? placeLabel(p.path) : p.entry?.place ? placeLabel(p.entry.place) : ''}
+									{#if p.action === 'add' && p.kind} · {p.kind}{/if}
+								</span>
+								{#if p.person}<span class="badge">someone new</span>
+								{:else if p.action === 'add' && !known(p.path)}<span class="badge">new place</span>{/if}
+							</div>
+							{#if deciding?.id === p.id}
+								<input class="claim-edit" aria-label="What is true" bind:value={deciding.claim} maxlength={view.limits.claimMax} />
+								{#if p.action === 'add'}
+									<div class="form">
+										<label>
+											Where
+											<select bind:value={deciding.path}>
+												{#if !known(deciding.path)}<option value={deciding.path}>{placeLabel(deciding.path)}</option>{/if}
+												{#each paths as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
+											</select>
+										</label>
+										<label>
+											Kind
+											<select bind:value={deciding.kind}>
+												{#each KINDS as k (k)}<option value={k}>{k}</option>{/each}
+											</select>
+										</label>
+									</div>
+								{/if}
+							{:else if p.action === 'add' || p.action === 'update'}
+								<div class="claim">{p.claim}</div>
+								{#if p.action === 'update' && p.entry}<div class="was">was: {p.entry.claim}</div>{/if}
+							{:else}
+								<div class="claim">{p.entry?.claim}</div>
+							{/if}
+							{#if p.quote}<p class="quote">You said: “{p.quote}”</p>{/if}
+							{#if p.why}<p class="hint why">{p.why}</p>{/if}
+							<div class="row actions">
+								<button class="btn primary" onclick={() => decideProposal(p, true)}>{words.yes}</button>
+								{#if words.editable && deciding?.id !== p.id}
+									<button
+										class="btn"
+										onclick={() =>
+											(deciding = { id: p.id, claim: p.claim ?? '', path: p.path ?? '', kind: p.kind ?? 'fact' })}
+										>Edit</button
+									>
+								{/if}
+								{#if deciding?.id === p.id}
+									<button class="btn" onclick={() => (deciding = null)}>Cancel edit</button>
+								{/if}
+								<button class="btn" onclick={() => decideProposal(p, false)}>{words.no}</button>
+							</div>
+							{@render said(p.id)}
+						</div>
+					{/each}
+					{#each skillsWaiting as c (c.id)}
+						<div class="proposal">
+							<div class="row">
+								<span class="badge">Skill</span>
+								<strong>{c.name}</strong>
+								<span class="meta">{c.description}</span>
+							</div>
+							{#if c.rationale}<p class="hint why">{c.rationale}</p>{/if}
+							<details>
+								<summary>The instructions{c.tasks ? ` (for ${c.tasks})` : ''}</summary>
+								<pre class="block">{c.body}</pre>
+							</details>
+							<div class="row actions">
+								<button class="btn primary" onclick={() => decideSkill(c, true)}>Approve skill</button>
+								<button class="btn" onclick={() => decideSkill(c, false)}>Reject</button>
+							</div>
+							{@render said(c.id)}
+						</div>
+					{/each}
+					{#if !waiting}
+						<p class="hint">
+							Nothing waiting. Galaxy reads your new conversations for things about you and your
+							world, and anything it finds waits here: nothing reaches your agents until you approve
+							it, and what you turn down is not proposed again.
+						</p>
+					{/if}
+					<div class="row learn">
+						<label class="chk">
+							<input type="checkbox" checked={learning.enabled} onchange={toggleLearning} />
+							learn from my conversations
+						</label>
+						<button class="btn" disabled={busy !== null || learning.reading?.running} onclick={lookNow}>
+							{busy === 'look' ? 'Looking…' : 'Look now'}
+						</button>
+						<button class="btn" disabled={busy !== null || learning.reading?.running} onclick={readPast}>
+							{busy === 'read' ? 'Starting…' : 'Read my past conversations'}
+						</button>
+						<span class="meta">
+							last looked {when(learning.lastRun)}
+							{#if learning.enabled && learning.scheduleEnabled && learning.lastRun} · next {when(learning.nextDue)}{/if}
+							{#if !learning.scheduleEnabled} · automatic learning is off for everyone{/if}
+						</span>
+					</div>
+					{#if reading}
+						<p class="notice" class:error={reading.error} role={reading.error ? 'alert' : 'status'}>
+							{reading.text}
+						</p>
+					{/if}
+					{@render said('learning')}
+				</article>
+			{/if}
 
 			<article class="card">
 				<h3>Add something</h3>
@@ -506,6 +730,43 @@
 	}
 	meter {
 		width: 8rem;
+	}
+	.card.waiting {
+		border-color: var(--accent);
+	}
+	.proposal {
+		border-top: 1px solid var(--border);
+		padding: 0.55rem 0;
+	}
+	.proposal .claim {
+		display: block;
+		margin: 0.3rem 0 0;
+	}
+	.was {
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
+		text-decoration: line-through;
+	}
+	.quote {
+		margin: 0.3rem 0 0;
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
+		font-style: italic;
+	}
+	.why {
+		margin: 0.2rem 0 0;
+	}
+	.chk {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-size: var(--text-base);
+		color: var(--fg-dim);
+	}
+	.learn {
+		border-top: 1px solid var(--border);
+		padding-top: 0.6rem;
+		margin-top: 0.4rem;
 	}
 	.ask-link {
 		display: inline-block;

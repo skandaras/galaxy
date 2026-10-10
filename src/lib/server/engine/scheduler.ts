@@ -5,21 +5,22 @@ import { events, jobs, usageLog, users, uxIdeas } from '$lib/server/db/schema';
 import {
 	ALIGNMENT_ENABLED_KEY,
 	DEFAULT_ALIGNMENT,
-	DEFAULT_MEMORY,
 	DEFAULT_RETENTION,
 	DEFAULT_SKILL_OPTIMISER,
 	DEFAULT_UX_AUDIT,
 	getSetting,
+	profileSettings,
 	setSetting,
 	type AlignmentSettings,
-	type MemorySettings,
 	type RetentionSettings,
 	type SkillOptimiserSettings,
 	type UxAuditSettings
 } from '$lib/server/settings';
 import { getSynthesisStatus, runAlignmentSynthesis } from './alignment';
 import { emitEvent } from './events';
-import { getMemoryStatus, runMemory, runSkillOptimiser } from './memory';
+import { expireDue, raiseStillTrue } from '$lib/server/profile';
+import { runSkillOptimiser } from './memory';
+import { learningStatus, runLearning } from './profile-learn';
 import { runUxAudit } from './ux-audit';
 
 const TICK_MS = 5 * 60 * 1000;
@@ -66,7 +67,8 @@ export async function tick(): Promise<void> {
 	if (sweeping) return;
 	sweeping = true;
 	try {
-		await sweepMemory();
+		await sweepLearning();
+		await sweepProfile();
 		await sweepAlignmentSynthesis();
 		await sweepUxAudit();
 		await sweepSkillOptimiser();
@@ -84,7 +86,7 @@ export async function tick(): Promise<void> {
  * happens inside the agent's own try block — every one of them catches, emits
  * and returns rather than rethrowing, so nothing reaching here has been
  * reported. It is not true of the work before it: `gatherActivity()`, a
- * settings read and the working/dismissed queries in memory.ts all run outside
+ * settings read and the profile queries in profile-learn.ts all run outside
  * that block.
  *
  * A throw there reached neither the Observatory nor stdout — `tick`'s own
@@ -114,19 +116,32 @@ export async function runSweep(
 	}
 }
 
-/** Each user has their own last-run and can opt out individually. */
-async function sweepMemory(): Promise<void> {
-	const cfg = getSetting<MemorySettings>('memory', DEFAULT_MEMORY);
+/** Each user has their own last run and can opt out individually. */
+async function sweepLearning(): Promise<void> {
+	const cfg = profileSettings();
 	if (!cfg.enabled) return;
 	const now = Date.now();
 	for (const user of db.select().from(users).all()) {
-		const status = getMemoryStatus(user.id);
+		const status = learningStatus(user.id);
 		if (!status.enabled) continue;
 		if (now < status.lastRun + cfg.intervalHours * 3_600_000) continue;
-		// Sequential on purpose: parallel audits would race the budget cap
-		// and hammer the provider. One user's failure must not stop the rest.
-		await runSweep('memory', user.id, () => runMemory('schedule', user.id));
+		// Sequential on purpose: parallel runs would race the budget cap and
+		// hammer the provider. One user's failure must not stop the rest.
+		await runSweep('profile-learn', user.id, () => runLearning('schedule', user.id));
 	}
+}
+
+/**
+ * Entries past their date, and the yearly "still true?". No model call, so it
+ * runs every tick: an expired line stays out of every prompt by its date
+ * either way, and this only makes its status and the person's queue say so.
+ */
+async function sweepProfile(): Promise<void> {
+	await runSweep('profile', undefined, async () => {
+		const now = new Date();
+		expireDue(now);
+		for (const user of db.select({ id: users.id }).from(users).all()) raiseStillTrue(user.id, now);
+	});
 }
 
 /**
