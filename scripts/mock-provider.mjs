@@ -236,6 +236,22 @@ async function scriptedReply(userText, maxTokens = 0) {
 					}
 				]
 			});
+		} else if (userText.includes('PROFILE-PARSE')) {
+			// Sorting a survey's free answers or a pasted memory. One entry drawn
+			// from a marker in the text, so a smoke can see it came from what was
+			// written; one that quotes words nobody wrote, which code must drop; and
+			// a line about replying, which must come back as not carried over.
+			const text = userText.slice(userText.indexOf('--- BEGIN TEXT ---'));
+			content = JSON.stringify({
+				entries: [
+					...(text.includes('PARSE-ALPHA')
+						? [{ path: 'interests/pursuits', kind: 'fact', claim: 'Sails a dinghy called PARSE-ALPHA.', quote: 'PARSE-ALPHA' }]
+						: []),
+					{ path: 'work/role', kind: 'fact', claim: 'Flew to the moon, PARSE-INVENTED.', quote: 'flew to the moon last year' }
+				],
+				people: [],
+				not_carried: text.includes('bullet') ? ['Prefers replies as bullet points.'] : []
+			});
 		} else if (userText.includes('CHAT-TITLE')) {
 			// Titling happens after the reply, so a real (remote) model takes a
 			// beat. Simulated here, because an instant local answer hides whether

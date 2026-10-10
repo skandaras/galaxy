@@ -5,11 +5,9 @@ import {
 	correctEntry,
 	deleteEntry,
 	setPinned,
-	setSensitivity,
-	type Sensitivity
+	isSensitivity,
+	setSensitivity
 } from '$lib/server/profile';
-
-const SENSITIVITIES: Sensitivity[] = ['normal', 'personal', 'private'];
 
 /**
  * One change at a time: a reworded claim is a correction, so the old wording
@@ -27,7 +25,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	if (typeof body.pinned === 'boolean') {
 		return json({ entry: profileWrite(() => setPinned(user.id, params.id, body.pinned)) });
 	}
-	if (SENSITIVITIES.includes(body.sensitivity)) {
+	if (isSensitivity(body.sensitivity)) {
 		return json({ entry: profileWrite(() => setSensitivity(user.id, params.id, body.sensitivity)) });
 	}
 	error(400, 'Send a claim, pinned or a sensitivity');

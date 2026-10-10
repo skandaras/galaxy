@@ -37,7 +37,11 @@ export const ADMIN_SECTIONS = [
 	},
 	{ label: 'Research', group: 'Features', tasks: ['deep-research'] },
 	{ label: 'Coding', group: 'Features', tasks: ['coding', 'subagent'] },
-	{ label: 'Memory and skills', group: 'Features', tasks: ['memory', 'skill-optimiser'] },
+	{
+		label: 'Memory and skills',
+		group: 'Features',
+		tasks: ['memory', 'profile-parse', 'skill-optimiser']
+	},
 	{ label: 'Boards', group: 'Features', tasks: ['board'] },
 	{
 		label: 'Ivory Tower',

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { ask } from '$lib/confirm.svelte';
+	import { ENTITY_KINDS, KINDS } from '$lib/profile-taxonomy';
 	import { briefUsage, entryMarks, pathOptions } from '$lib/profile-view';
+	import { stepFor } from '$lib/survey';
 
 	interface Entry {
 		id: string;
@@ -31,8 +33,6 @@
 		limits: { briefChars: number; claimMax: number };
 	}
 
-	const KINDS = ['fact', 'preference', 'constraint', 'goal'];
-	const ENTITY_KINDS = ['person', 'pet', 'organisation', 'project', 'place'];
 	const TASK_LABEL: Record<string, string> = {
 		chat: 'Chat',
 		coding: 'Coding',
@@ -52,6 +52,7 @@
 	let newSub = $state({ domain: 'interests', name: '' });
 
 	const usage = $derived(view ? briefUsage(view.briefUsed, view.limits.briefChars) : null);
+	const blank = $derived(!!view && view.count === 0 && view.entities.length === 0);
 	const paths = $derived(view ? pathOptions(view.domains) : []);
 
 	async function load() {
@@ -165,6 +166,11 @@
 	}
 </script>
 
+{#snippet askAbout(domain: string)}
+	{@const step = stepFor(domain)}
+	{#if step}<a class="ask-link" href="/profile/survey?step={step}">Answer the questions about this</a>{/if}
+{/snippet}
+
 {#snippet said(at: string)}
 	{#if notice?.at === at}
 		<p class="notice" class:error={notice.error} role={notice.error ? 'alert' : 'status'}>
@@ -179,6 +185,19 @@
 		{#if loadFailed}<p class="notice error" role="alert">Your profile did not load.</p>{/if}
 
 		{#if view}
+			{#if blank}
+				<article class="card">
+					<h3>Start your profile</h3>
+					<p class="hint">
+						A few questions about you, your work, the people in your life and what is on your plate,
+						in about eight minutes. Skip anything. Nothing is saved until you have read it through.
+					</p>
+					<div class="row">
+						<a class="btn primary" href="/profile/survey">Answer a few questions</a>
+						<a class="btn" href="/profile/import">Import what you have</a>
+					</div>
+				</article>
+			{/if}
 			<article class="card">
 				<h3>Your profile</h3>
 				<p class="hint">
@@ -193,6 +212,10 @@
 					{#if usage}
 						<span class="meta">{usage.text}</span>
 						<meter min="0" max="1" value={usage.full} aria-label="How full the brief is"></meter>
+					{/if}
+					{#if !blank}
+						<a class="btn" href="/profile/survey">Questions</a>
+						<a class="btn" href="/profile/import">Import</a>
 					{/if}
 					<a class="btn" href="/api/profile/export" download>Export</a>
 					<button class="btn danger" onclick={wipe}>Wipe</button>
@@ -238,6 +261,7 @@
 				{#if d.domain === 'people'}
 					<article class="card">
 						<h3>People and things</h3>
+						{@render askAbout('people')}
 						<ul class="entities">
 							{#each view.entities as p (p.id)}
 								<li>
@@ -266,6 +290,7 @@
 				{#if filled.length}
 					<article class="card">
 						<h3>{d.domain}</h3>
+						{@render askAbout(d.domain)}
 						{#each filled as s (s.name)}
 							<h4>{s.label}</h4>
 							<ul class="entries">
@@ -481,5 +506,20 @@
 	}
 	meter {
 		width: 8rem;
+	}
+	.ask-link {
+		display: inline-block;
+		margin-bottom: 0.4rem;
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
+	}
+	input:not([type='checkbox']):not([type='file']),
+	select {
+		background: var(--bg-pane);
+		border: 1px solid var(--control-border);
+		color: var(--fg);
+		font-family: inherit;
+		padding: 0.3rem 0.45rem;
+		box-sizing: border-box;
 	}
 </style>

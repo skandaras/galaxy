@@ -10,6 +10,7 @@ import { runAgentLoop } from '$lib/server/engine/loop';
 import { bootstrapContext, knowledgeTools } from '$lib/server/engine/tools/knowledge';
 import {
 	addEntry,
+	confirmDraft,
 	createEntity,
 	listEntries,
 	lookup,
@@ -221,6 +222,31 @@ describe('the Observatory', () => {
 		expect(toolEvents).toHaveLength(calls.length);
 		const stored = JSON.stringify(rows);
 		for (const marker of [CLAIM, QUOTE, PARTNER, HEALTH]) expect(stored).not.toContain(marker);
+	});
+});
+
+describe('a draft', () => {
+	it('names people only from the profile of the person saving it', () => {
+		// A draft carries names, not ids. Resolved against anyone's profile but
+		// the saver's, it would file a line on someone else's card.
+		const line = { kind: 'fact' as const, pinned: false, until: null, sensitivity: null };
+		const result = confirmDraft(
+			BOB,
+			{
+				people: [],
+				entries: [
+					{ ...line, path: `people/${PARTNER}`, claim: 'Was told about by Bob.', about: null },
+					{ ...line, path: 'life/routines', claim: 'Swims with them on Fridays.', about: PARTNER }
+				],
+				notCarried: [],
+				leftOut: []
+			},
+			'imported',
+			NOW
+		);
+		expect(result.ok).toBe(false);
+		expect(!result.ok && result.refusals).toHaveLength(2);
+		expect(everything(ALICE, 'chat')).not.toContain('Bob');
 	});
 });
 
