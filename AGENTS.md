@@ -2,7 +2,7 @@
 
 Galaxy is a self-hosted, model-agnostic AI workspace: SvelteKit 2 + Svelte 5 on Node 22,
 Drizzle + better-sqlite3, deployed as one Docker image. `PLAN.md` holds the architecture and
-the feature map; `docs/` holds install, accessibility, MCP and Cortex.
+the feature map; `docs/` holds install, accessibility, MCP, mobile and Feed.
 
 It maintains itself. The coding agent running in this app is what edits this repository, so
 these are the conventions it is expected to already know.
@@ -38,7 +38,7 @@ because some functions have one.
 ## Structure
 
 - `src/lib/server/engine/` — the agent loop (`loop.ts`), the task entry points (`engine.ts` chat, `coding/session.ts`, `research.ts`), background agents, and `tools/`.
-- `src/lib/server/` — domain modules: `chats`, `boards`, `library`, `cortex`, `alignment`, `skills`, `settings`, `auth`, `api`.
+- `src/lib/server/` — domain modules: `chats`, `boards`, `library`, `alignment`, `skills`, `settings`, `auth`, `api`.
 - `src/routes/api/**/+server.ts` — 106 endpoints, thin. Logic belongs in the domain module.
 - `src/lib/components/`, `src/routes/**/+page.svelte` — the UI.
 
@@ -70,8 +70,8 @@ provider without reaching `logUsage` is spend the cap cannot see.
 
 **Hidden chats.** A hidden chat is never written to the DB, never reaches the memory job, and
 its id must not survive in `usage_log` or in stored `events`. The spend still counts; the
-identifier does not. Alignment and Cortex have their own boundaries, asserted in
-`*-privacy.test.ts` — read those before touching either.
+identifier does not. Alignment has its own boundary, asserted in
+`alignment-privacy.test.ts` — read it before touching Alignment.
 
 **Untrusted input.** Web pages, repo contents, uploads and memory items are attacker-controlled.
 They are fenced and labelled as data, never as instructions, wherever they enter a prompt.

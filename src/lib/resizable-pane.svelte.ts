@@ -30,16 +30,6 @@ export interface ResizablePaneOptions {
 	max: number;
 	initial: number;
 	/**
-	 * Which side of the handle the pane is on. 'left' is the original and the
-	 * default — a list with the divider to its right, so dragging right widens
-	 * it. A pane anchored 'right' sits after its handle, and the same drag has
-	 * to mean the opposite thing.
-	 *
-	 * Cortex's panel is on the right and got this wrong: it widened when you
-	 * dragged toward it, which is backwards from every other handle in the app.
-	 */
-	anchor?: 'left' | 'right';
-	/**
 	 * Injected in tests. Defaults to localStorage when there is one — every page
 	 * using this is client-rendered, so at runtime there always is.
 	 */
@@ -52,9 +42,6 @@ function defaultStorage(): PaneStorage | null {
 
 export function createResizablePane(opts: ResizablePaneOptions): ResizablePane {
 	const { key, min, max } = opts;
-	// +1 when the pane is left of the handle, -1 when it is right of it. Applied
-	// to the drag delta and to the arrow keys alike, so both follow the pointer.
-	const direction = opts.anchor === 'right' ? -1 : 1;
 	const store = opts.storage === undefined ? defaultStorage() : opts.storage;
 
 	const clamp = (px: number) => Math.min(max, Math.max(min, Math.round(px)));
@@ -95,7 +82,7 @@ export function createResizablePane(opts: ResizablePaneOptions): ResizablePane {
 		const startWidth = width;
 
 		const move = (ev: PointerEvent) =>
-			(width = clamp(startWidth + (ev.clientX - startX) * direction));
+			(width = clamp(startWidth + ev.clientX - startX));
 		const up = () => {
 			dragging = false;
 			handle.releasePointerCapture(e.pointerId);
@@ -109,8 +96,8 @@ export function createResizablePane(opts: ResizablePaneOptions): ResizablePane {
 
 	function nudge(e: KeyboardEvent) {
 		const step = e.shiftKey ? 40 : 10;
-		if (e.key === 'ArrowLeft') width = clamp(width - step * direction);
-		else if (e.key === 'ArrowRight') width = clamp(width + step * direction);
+		if (e.key === 'ArrowLeft') width = clamp(width - step);
+		else if (e.key === 'ArrowRight') width = clamp(width + step);
 		else return;
 		e.preventDefault();
 		remember();

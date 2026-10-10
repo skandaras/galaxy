@@ -55,7 +55,7 @@ export interface UsageEntry {
  *
  * Every model call in the platform goes through here — the agent loop, deep
  * research, and the background agents (memory, skill optimiser, ux-audit,
- * alignment, run-summary, chat-title, cortex-groom, sub-agents) alike. They all
+ * alignment, run-summary, chat-title, sub-agents) alike. They all
  * spend money, and `getBudgetStatus` sums `cost_usd`, so anything that reaches
  * a provider without reaching this function is spend the cap cannot see.
  */

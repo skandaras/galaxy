@@ -19,7 +19,6 @@ import { withDocumentText } from './context';
 import { bootstrapContext } from './tools/knowledge';
 import { logUsage } from './usage';
 import { searchDocs } from '$lib/server/library';
-import { activate } from '$lib/server/cortex';
 import { EngineError, getTaskConfig, pickModel, systemPromptFor } from './engine';
 import { emitEvent } from './events';
 import {
@@ -49,7 +48,6 @@ import {
 	type SearchResult
 } from './tools/web-search';
 import { ADMIN_PATHS } from '$lib/admin-sections';
-import { cortexEnabled } from '$lib/features';
 
 export interface Evidence {
 	n: number;
@@ -286,14 +284,11 @@ async function runResearch(
 	const local = localContext(opts.userId, question);
 	if (local) {
 		// Counts only. The Observatory is not the place for the contents of
-		// someone's library or lattice — the same rule cortex_query holds itself
-		// to, for the same reason.
+		// someone's library.
 		event('research.local', 'ok', 0, { lines: local.split('\n').length });
 		pushChunk(job, {
 			type: 'notice',
-			text: cortexEnabled()
-				? 'Your library and knowledge lattice have something on this — aiming the opening search with it.'
-				: 'Your library has something on this — aiming the opening search with it.'
+			text: 'Your library has something on this — aiming the opening search with it.'
 		});
 	}
 	const plan = await planQueries(
@@ -304,7 +299,7 @@ async function runResearch(
 			...(background ? [`Already established, do not re-research: ${background}`] : []),
 			...(local
 				? [
-						`This person's own notes and concepts on the subject, which are context for aiming the search and NOT sources — they cannot be cited and the research still has to establish everything from the open web:\n${local}`
+						`This person's own notes on the subject, which are context for aiming the search and NOT sources — they cannot be cited and the research still has to establish everything from the open web:\n${local}`
 					]
 				: [])
 		].join('\n\n'),
@@ -3182,11 +3177,9 @@ export function htmlToReadableText(html: string): string {
 /** How much of the person's own material the opening plan is shown. */
 const LOCAL_CONTEXT_CHARS = 1_200;
 const LOCAL_DOCS = 4;
-const LOCAL_CONCEPTS = 5;
 
 export interface LocalContextDeps {
 	docs?: (query: string, userId: string, limit: number) => { title: string; match: string }[];
-	concepts?: (query: string, userId: string, limit: number) => { name: string; description: string }[];
 }
 
 /**
@@ -3198,13 +3191,13 @@ export interface LocalContextDeps {
  * own vocabulary for it. A query written without that searches for the subject
  * in the abstract rather than the subject as they talk about it.
  *
- * Aiming only. These are notes and concepts, not sources: they carry no `[n]`,
+ * Aiming only. These are notes, not sources: they carry no `[n]`,
  * they are never merged into the evidence, and the prompt says so, because a
  * claim cited to somebody's own notes is exactly the sort of thing this
  * pipeline spends a lot of effort making impossible.
  *
- * Never throws. A lattice or library that cannot be read is a reason to plan
- * without them, not a reason to fail a research run.
+ * Never throws. A library that cannot be read is a reason to plan without it,
+ * not a reason to fail a research run.
  */
 export function localContext(userId: string, question: string, deps: LocalContextDeps = {}): string {
 	const parts: string[] = [];
@@ -3217,27 +3210,12 @@ export function localContext(userId: string, question: string, deps: LocalContex
 	} catch {
 		// A failed index read is not worth a word to the reader.
 	}
-	try {
-		const concepts = (deps.concepts ?? defaultLocalConcepts)(question, userId, LOCAL_CONCEPTS);
-		for (const c of concepts) {
-			parts.push(`- Concept, ${c.name}${c.description ? `: ${c.description}` : ''}`);
-		}
-	} catch {
-		/* as above */
-	}
 	if (!parts.length) return '';
 	return clipExcerpt(parts.join('\n'), LOCAL_CONTEXT_CHARS);
 }
 
 function defaultLocalDocs(query: string, userId: string, limit: number) {
 	return searchDocs(query, userId, limit).map((d) => ({ title: d.title, match: d.match }));
-}
-
-function defaultLocalConcepts(query: string, userId: string, limit: number) {
-	if (!cortexEnabled()) return [];
-	return activate({ userId, query, limit })
-		.nodes.slice(0, limit)
-		.map((a) => ({ name: a.node.name, description: a.node.description }));
 }
 
 /**

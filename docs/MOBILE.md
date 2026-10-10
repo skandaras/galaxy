@@ -116,9 +116,6 @@ installed app and the browser.
   perfect and answers nothing, which is what it used to do: an uncaught error
   inside a Svelte flush abandons every update queued behind it, and an installed
   app has no console to notice that in.
-- **Cortex** takes touch gestures: pinch to zoom, twist to turn, double-tap to
-  zoom in, plus explicit − and + buttons. Its on-screen hint names the gestures
-  the device you are holding actually has.
 - Admin tables scroll horizontally inside their panel instead of stretching the
   page, and multi-column forms collapse to one column.
 - The docked Activity feed is hidden below 720px; it needs vertical room the

@@ -1,17 +1,13 @@
 <script lang="ts">
 	import Theme from '$lib/components/settings/Theme.svelte';
 	import Boards from '$lib/components/settings/Boards.svelte';
-	import Cortex from '$lib/components/settings/Cortex.svelte';
 	import Notifications from '$lib/components/settings/Notifications.svelte';
 	import Alignment from '$lib/components/settings/Alignment.svelte';
 	import { page } from '$app/state';
 	import { tabFromUrl } from '$lib/url-tab';
 	import Tabs from '$lib/components/Tabs.svelte';
-	import { cortexEnabled } from '$lib/features';
 
-	const all = ['Theme', 'Boards', 'Cortex', 'Notifications', 'Alignment'] as const;
-	// The Cortex tab only while the lattice is switched on ($lib/features).
-	const tabs = all.filter((t) => t !== 'Cortex' || cortexEnabled());
+	const tabs = ['Theme', 'Boards', 'Notifications', 'Alignment'] as const;
 	// In the URL rather than in $state, so Back steps through tabs, a tab can
 	// be linked to, and the phone's More sheet can point at one.
 	const active = $derived(tabFromUrl(page.url.searchParams, tabs));
@@ -25,8 +21,6 @@
 			<Theme />
 		{:else if active === 'Boards'}
 			<Boards />
-		{:else if active === 'Cortex'}
-			<Cortex />
 		{:else if active === 'Notifications'}
 			<Notifications />
 		{:else}

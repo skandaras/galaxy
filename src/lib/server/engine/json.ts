@@ -9,9 +9,9 @@
  * its first `{` to its last `}` — which is the elements without their brackets,
  * so it either fails to parse or, with a single element, quietly returns that
  * one item as though it were the whole answer. Every prompt in this codebase
- * therefore asks for an object with the array inside it. The Cortex groomer
- * asked for a bare array for two phases and silently discarded every suggestion
- * a model made; nothing noticed, because nothing tested the model path.
+ * therefore asks for an object with the array inside it. One agent asked for a
+ * bare array and discarded every suggestion a model made; nothing noticed,
+ * because nothing tested the model path.
  */
 export function extractJson(text: string): Record<string, unknown> | null {
 	const start = text.indexOf('{');

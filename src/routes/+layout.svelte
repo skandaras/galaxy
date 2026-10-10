@@ -10,7 +10,6 @@
 	import { reportClientError } from '$lib/client-report';
 	import { attachViewport } from '$lib/viewport.svelte';
 	import { groupNav, type NavLink } from '$lib/mobile-nav';
-	import { cortexEnabled } from '$lib/features';
 
 	let { data, children } = $props();
 
@@ -21,7 +20,6 @@
 		...(data.user?.canCode ? [{ href: '/code', label: 'Code', group: 'work' as const }] : []),
 		{ href: '/boards', label: 'Boards', group: 'work' },
 		{ href: '/library', label: 'Library', group: 'knowledge' },
-		...(cortexEnabled() ? [{ href: '/cortex', label: 'Cortex', group: 'knowledge' as const }] : []),
 		{ href: '/memory', label: 'Memory', group: 'knowledge' },
 		// Behind the coding grant for the same reason as Code: the Shelf is read
 		// and written with the shared GitHub token.

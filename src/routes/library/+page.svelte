@@ -1299,9 +1299,9 @@
 		align-items: center;
 		gap: 0.2rem;
 		/* The shelf is the thing being scrolled, so the heading of whatever you
-		   are inside should still be readable while you scroll it — as the
-		   cortex panel's group headings already are. It is also the drop target
-		   for the folder, which is a second reason for it to stay on screen. */
+		   are inside should still be readable while you scroll it. It is also the
+		   drop target for the folder, which is a second reason for it to stay on
+		   screen. */
 		position: sticky;
 		top: 0;
 		z-index: var(--z-base);

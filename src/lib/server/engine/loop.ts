@@ -152,7 +152,7 @@ export interface LoopOptions {
 	 *
 	 * The job that reads material and emits JSON or a short label has asked for
 	 * `'low'` since `reasoningFor` existed — chat-title, memory, compaction,
-	 * run-summary, ux-audit, alignment, vision and cortex-groom all do. This loop
+	 * run-summary, ux-audit, alignment and vision all do. This loop
 	 * asked for nothing, and it is the path a person sits and waits on.
 	 *
 	 * What that cost: a chat turn on a reasoning model spent 1,672 of its 2,087

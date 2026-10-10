@@ -40,9 +40,6 @@ import { webSearchConfigured, webSearchTool } from '../tools/web-search';
 import { askUserTool } from '../ask-user';
 import { attachmentTools } from '../tools/attachments';
 import { boardTools } from '../tools/boards';
-import { cortexTools } from '../tools/cortex';
-import { learnFromReply } from '../cortex-learn';
-import { cortexEnabled } from '$lib/features';
 import { fetchUrlTool } from '../tools/fetch-url';
 import { bootstrapContext, knowledgeTools } from '../tools/knowledge';
 import { mcpLoopTools } from '../tools/mcp';
@@ -313,10 +310,6 @@ export function startCodingTurn(opts: {
 				// A coding task often is a card; reading the board is how the agent
 				// finds out what it was actually asked for.
 				...boardTools(opts.userId, undefined, { repoUrl: session.repoUrl }),
-				// Why a thing is built the way it is outlives any one session, and
-				// that is the sort of thing the lattice holds. The chat id is what
-				// lets a query be judged against the reply it fed — see cortex-learn.
-				...(cortexEnabled() ? cortexTools(opts.userId, undefined, chat.id) : []),
 				askUserTool(job),
 				...(opts.webSearch && webSearchConfigured(searchCfg)
 					? [webSearchTool(searchCfg, { scope: 'leg' })]
@@ -382,17 +375,6 @@ export function startCodingTurn(opts: {
 				});
 				messageId = saved.id;
 				updateChat(chat.id, {});
-				// Which concepts the lattice offered this leg the reply went on to
-				// use. A coding session is several legs, and each is judged on its
-				// own: a query answered in leg one and leaned on in leg one is what
-				// earns the strengthening.
-				if (cortexEnabled()) {
-					try {
-						learnFromReply(chat.id, text);
-					} catch {
-						// Learning is a nicety. A leg must never fail because of it.
-					}
-				}
 				// Same deal as chat: compact after the reply so it never delays
 				// streaming, and so the next leg starts from a bounded transcript.
 				void (async () => {

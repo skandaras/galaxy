@@ -554,9 +554,7 @@ interface ActivityDigest {
 /**
  * Chats, messages and coding sessions since a watermark.
  *
- * Exported because the Cortex groomer needs the same window and the same
- * shape — a second implementation would drift, and this one already handles
- * the truncation and ordering that make the digest affordable.
+ * Exported for its tests.
  */
 export function gatherActivity(userId: string, sinceMs: number): ActivityDigest {
 	const since = new Date(sinceMs);

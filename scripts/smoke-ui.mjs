@@ -293,16 +293,6 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/memory', '/ivory'
 	check(`${path} draws something`, (body?.height ?? 0) > 100);
 }
 
-// 1-. Cortex is switched off ($lib/features): no rail entry, and its page and
-//     API answer 404 rather than rendering an empty lattice.
-{
-	await page.goto(`${B}/chat`);
-	await page.locator('aside.pane').waitFor();
-	check('the rail has no Cortex entry', await page.locator('.nav a[href="/cortex"]').count(), 0);
-	check('/cortex answers 404', (await page.request.get(`${B}/cortex`)).status(), 404);
-	check('/api/cortex/map answers 404', (await page.request.get(`${B}/api/cortex/map`)).status(), 404);
-}
-
 // 1a. The Shelf with no GitHub token says so, instead of hanging on "Reading".
 //     This instance has no token, which is the state a fresh install is in.
 await page.goto(`${B}/ivory`);
@@ -327,17 +317,16 @@ check(
 
 // 1b. Every settings tab has a pane, and shows only its own.
 //
-//     The Cortex pane shipped with no tab at all: it was written one level of
-//     indentation shallow, which put it inside the Boards branch, and 'Cortex'
+//     A pane once shipped with no tab at all: it was written one level of
+//     indentation shallow, which put it inside the Boards branch, and its name
 //     was never added to the tabs list. Valid Svelte, so svelte-check passed and
-//     the render check above passed — nobody could reach the groomer controls
-//     except by clicking Boards. Loading the page was never going to catch that;
+//     the render check above passed — nobody could reach its controls except
+//     by clicking Boards. Loading the page was never going to catch that;
 //     clicking through it is.
 {
 	await page.goto(`${B}/settings`);
 	await page.locator('.tabs button').first().waitFor();
 	const tabs = await page.locator('.tabs button').allTextContents();
-	// No Cortex tab while it is switched off.
 	check('settings offers every pane a tab', tabs, ['Theme', 'Boards', 'Notifications', 'Alignment']);
 
 	for (const tab of tabs) {
@@ -401,13 +390,6 @@ check(
 		await page.locator('.nav a[aria-current="page"]').innerText(),
 		'Memory'
 	);
-	await page.goto(`${B}/settings`);
-
-	// The specific regression: Boards must not be carrying the Cortex pane.
-	await page.locator('.tabs button', { hasText: 'Boards' }).click();
-	await page.waitForTimeout(200);
-	const boardsPane = await page.locator('.body').innerText();
-	check('the Boards tab does not also render Cortex', /cortex/i.test(boardsPane), false);
 }
 
 // 1c. Theme edits belong to the chip they were made on. Saving used to write
@@ -978,10 +960,7 @@ check(
 	// The page renders client-side, so read the list only once it is drawn.
 	await admin.locator('.admin-nav .item').first().waitFor();
 	const sections = await admin.locator('.admin-nav .item').allTextContents();
-	// Seventeen sections, one of them Cortex's, which is not offered while it is
-	// switched off.
 	check('admin has a section per feature', sections.length, 16);
-	check('admin offers no Cortex section', sections.includes('Cortex'), false);
 	check('admin lists its sections in three groups', await admin.locator('.admin-nav .group').count(), 3);
 	for (const label of sections) {
 		adminProblems.length = 0;
@@ -992,14 +971,8 @@ check(
 		check(`admin ${label} shows something`, (body?.height ?? 0) > 80);
 		check(`admin ${label} renders quietly`, adminProblems, []);
 	}
-	await admin.goto(`${B}/admin?tab=cortex`);
-	await admin.locator('.admin .body h1').waitFor();
-	check(
-		'a link to the Cortex section lands on the first section',
-		await admin.locator('.admin .body h1').innerText(),
-		'Users'
-	);
 	await admin.goto(`${B}/admin?tab=settings`);
+	await admin.locator('.admin .body h1').waitFor();
 	check(
 		'an old tab name lands on the first section',
 		await admin.locator('.admin .body h1').innerText(),
@@ -1290,227 +1263,11 @@ check(
 	if (fail.length) await shot('ask-sheet');
 }
 
-// 8. The Cortex map. A canvas is the one thing on the page whose failure is
-//    completely silent — nothing throws, nothing is missing from the DOM, it
-//    just draws nothing. So this seeds a small lattice, checks the chart put
-//    pixels on the canvas, and checks that rotating it changes them.
-// Kept for when Cortex is switched back on; while it is off its API answers 404
-// and there is no map to draw.
-if ((await page.request.get(`${B}/api/cortex/map`)).status() !== 404) {
-	const areas = {};
-	for (const name of ['Coastal fieldwork', 'Letterpress']) {
-		areas[name] = (
-			await as(ALICE, '/api/cortex/circuits', { method: 'POST', body: JSON.stringify({ name }) })
-		).id;
-	}
-	const ids = {};
-	for (const [name, area] of [
-		['Tide pools', 'Coastal fieldwork'],
-		['Coastal ecology', 'Coastal fieldwork'],
-		['Seabird counts', 'Coastal fieldwork'],
-		['Press maintenance', 'Letterpress'],
-		['Ink mixing', 'Letterpress']
-	]) {
-		ids[name] = (
-			await as(ALICE, '/api/cortex/nodes', {
-				method: 'POST',
-				body: JSON.stringify({ name, description: `${name}, for the chart`, circuits: [areas[area]] })
-			})
-		).id;
-	}
-	// Filed under nothing, so the domain view has an Unfiled group to show. That
-	// group is the whole reason the second view exists.
-	await as(ALICE, '/api/cortex/nodes', {
-		method: 'POST',
-		body: JSON.stringify({ name: 'Loose thought', description: 'filed under nothing yet' })
-	});
-	for (const [a, b] of [
-		['Coastal ecology', 'Tide pools'],
-		['Coastal ecology', 'Seabird counts'],
-		['Press maintenance', 'Ink mixing'],
-		['Tide pools', 'Press maintenance']
-	]) {
-		await as(ALICE, '/api/cortex/links', {
-			method: 'POST',
-			body: JSON.stringify({ source: ids[a], target: ids[b], weight: 0.8 })
-		});
-	}
-
-	problems = [];
-	await page.goto(B + '/cortex');
-	await page.locator('.map canvas').waitFor();
-	await page.waitForTimeout(900);
-	check('the map renders quietly', problems, []);
-
-	/** How much of the canvas is not the background. A blank chart scores 0. */
-	const inked = () =>
-		page.evaluate(() => {
-			const canvas = document.querySelector('.map canvas');
-			const ctx = canvas?.getContext('2d');
-			if (!ctx || !canvas.width) return -1;
-			const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-			let lit = 0;
-			for (let i = 3; i < data.length; i += 4) if (data[i] > 8) lit++;
-			return lit;
-		});
-
-	const first = await inked();
-	check('the chart actually draws', first > 500);
-
-	// Rotating has to move something, which is the whole difference between a
-	// 3D view and a picture of one.
-	const box = await page.locator('.map canvas').boundingBox();
-	const mid = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-	await page.mouse.move(mid.x, mid.y);
-	await page.mouse.down({ button: 'middle' });
-	await page.mouse.move(mid.x + 200, mid.y - 70, { steps: 12 });
-	await page.mouse.up({ button: 'middle' });
-	await page.waitForTimeout(400);
-	check('middle-drag rotates it', (await inked()) !== first);
-
-	// And the angle is remembered, or the chart cannot become spatial memory.
-	const view = await page.evaluate(() => localStorage.getItem('galaxy:cortex-view'));
-	check('the angle is remembered', typeof view === 'string' && view.includes('yaw'));
-
-	// Flat is the escape hatch back to the 2D reading.
-	await page.getByRole('button', { name: 'Flat' }).click();
-	await page.waitForTimeout(400);
-	check('Flat is one click away', await page.getByRole('button', { name: 'Flat' }).isVisible());
-
-	// The panel's second reading of the same list. Sorted by connections it can
-	// say what the lattice is built around and cannot say what has not been
-	// filed, which is the thing that quietly accumulates.
-	await page.getByRole('button', { name: 'By domain' }).click();
-	await page.waitForTimeout(200);
-	// `.group-name` rather than a role and a name: the rename button beside each
-	// header carries the area's name too, so a name match finds both.
-	const heads = () => page.locator('.group-name').allInnerTexts();
-	check(
-		'domains become groups',
-		(await heads()).some((t) => t.includes('Coastal fieldwork'))
-	);
-	check(
-		'the unclassified are visible',
-		(await heads()).some((t) => t.includes('Unfiled'))
-	);
-	// Unfiled leads, because seeing it is the reason to be in this view.
-	check('and lead the list', (await heads())[0].includes('Unfiled'));
-	check(
-		'the chosen view is remembered',
-		await page.evaluate(() => localStorage.getItem('galaxy:cortex-list-mode')),
-		'domain'
-	);
-
-	/**
-	 * Pixels where green clearly dominates. Nothing in the default theme or in
-	 * the generated hues for two areas is green-dominant, so this counts only
-	 * what the picked colour put there.
-	 */
-	const greenish = () =>
-		page.evaluate(() => {
-			const canvas = document.querySelector('.map canvas');
-			const ctx = canvas?.getContext('2d');
-			if (!ctx || !canvas.width) return -1;
-			const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-			let n = 0;
-			for (let i = 0; i < data.length; i += 4) {
-				if (data[i + 1] - Math.max(data[i], data[i + 2]) > 60) n++;
-			}
-			return n;
-		});
-	check('nothing is green to begin with', (await greenish()) < 5);
-
-	// Dispatched rather than filled: the handler listens for `change`, and this
-	// keeps the test independent of how Playwright drives a colour input.
-	await page.locator('.group-head input[type=color]').first().evaluate((el) => {
-		el.value = '#00ff00';
-		el.dispatchEvent(new Event('change', { bubbles: true }));
-	});
-	await page.waitForTimeout(500);
-	check('a domain colour reaches the chart', (await greenish()) > 20);
-
-	// Renaming touches one row, and every concept in the group follows because a
-	// concept stores the area's id rather than its name.
-	const before = (await as(ALICE, '/api/cortex/circuits')).find((c) => c.name === 'Letterpress');
-	await page.getByRole('button', { name: /^Rename Letterpress/ }).click();
-	const field = page.locator('.rename').first();
-	await field.fill('Printing');
-	await field.press('Enter');
-	await page.waitForTimeout(400);
-	check(
-		'the rename shows',
-		(await heads()).some((t) => t.includes('Printing'))
-	);
-	const after = (await as(ALICE, '/api/cortex/circuits')).find((c) => c.id === before.id);
-	check('the rename stored, and took its concepts with it', [after.name, after.count], [
-		'Printing',
-		2
-	]);
-	// The reason the generated hue is hashed from the id rather than taken from a
-	// slot on a wheel: adding an area must not repaint the ones already there.
-	const paintOf = (name) =>
-		page.evaluate((n) => {
-			const head = [...document.querySelectorAll('.group-name')].find((e) =>
-				e.textContent.includes(n)
-			);
-			return head?.querySelector('.dot')?.style.getPropertyValue('--dot') ?? '';
-		}, name);
-	const printingBefore = await paintOf('Printing');
-	check('a generated colour is there to compare', printingBefore.length > 0);
-	// Sorts before both existing areas, which under the old slot rule was exactly
-	// the insert that walked every other hue along one.
-	await as(ALICE, '/api/cortex/nodes', {
-		method: 'POST',
-		body: JSON.stringify({
-			name: 'Anchoring',
-			description: 'a new area that sorts first',
-			circuits: [
-				(
-					await as(ALICE, '/api/cortex/circuits', {
-						method: 'POST',
-						body: JSON.stringify({ name: 'Aardvark husbandry' })
-					})
-				).id
-			]
-		})
-	});
-	await page.goto(B + '/cortex');
-	await page.locator('.map canvas').waitFor();
-	await page.waitForTimeout(900);
-	check('adding an area leaves the others’ colours alone', await paintOf('Printing'), printingBefore);
-
-	// The glow is a matter of taste and of screen, so it is a control rather than
-	// a constant. Turning it right down has to visibly change the chart, or the
-	// slider is decoration.
-	await page.getByRole('button', { name: 'Glow' }).click();
-	const slider = page.locator('.glow-tune input[type=range]');
-	check('the glow slider opens', await slider.isVisible());
-	const litBefore = await inked();
-	await slider.fill('0');
-	await page.waitForTimeout(400);
-	const litOff = await inked();
-	check('turning the glow down dims the chart', litOff < litBefore);
-	check('but the concepts are still drawn', litOff > 200);
-	await slider.fill('2');
-	await page.waitForTimeout(400);
-	check('and turning it up brightens it', (await inked()) > litBefore);
-	check(
-		'the level is remembered',
-		await page.evaluate(() => localStorage.getItem('galaxy:cortex-glow')),
-		'2'
-	);
-	await slider.fill('1');
-	await page.waitForTimeout(300);
-
-	check('the map is still quiet after all that', problems, []);
-	await shot('cortex-map');
-}
-
 // --- 9. the phone ---------------------------------------------------------
 // A second context rather than a resize: hasTouch decides which events fire at
 // all and whether (pointer: coarse) matches, and a narrow desktop window is a
 // different thing wearing the same width. Last, because every block above
-// mutates fixtures — board order, cleared notifications, an added Cortex area —
+// mutates fixtures — board order, cleared notifications —
 // and this should read a populated app rather than race one.
 {
 	const mobile = await browser.newContext({
@@ -2000,7 +1757,6 @@ if ((await page.request.get(`${B}/api/cortex/map`)).status() !== 404) {
 		);
 		// Activity is the Observatory's page, under the name people read. The
 		// docked feed is display:none at this width, so this is the way there.
-		// No Cortex while it is switched off.
 		check('More holds everything the bar could not', items, [
 			'◇ Memory',
 			'▲ Ivory Tower',
@@ -2028,138 +1784,6 @@ if ((await page.request.get(`${B}/api/cortex/map`)).status() !== 404) {
 		await phone.waitForURL(/\/observatory/);
 		check('and it navigates', new URL(phone.url()).pathname, '/observatory');
 		check('closing behind itself', await phone.locator('.more-sheet').count(), 0);
-	}
-
-	// The map on a phone, kept for when Cortex is switched back on.
-	if ((await phone.request.get(`${B}/api/cortex/map`)).status() !== 404) {
-		await phone.goto(`${B}/cortex`);
-		await phone.locator('.map canvas').waitFor();
-		await phone.waitForTimeout(900);
-
-		check('the hint names a gesture a phone has', /pinch/.test(await phone.locator('.map .map-hint').innerText()));
-		check('the map controls are thumb-sized', await undersized(phone, '.map .ctl'), []);
-
-		/**
-		 * The bounding box of everything drawn, in canvas pixels.
-		 *
-		 * inked() above counts lit pixels, and both a zoom and a pan change that
-		 * count — so it cannot tell them apart, which is exactly the distinction
-		 * a pinch test rests on. A zoom moves this box's edges; a pan moves its
-		 * centre. Asserting both halves is what separates them.
-		 */
-		const drawnBox = () =>
-			phone.evaluate(() => {
-				const c = document.querySelector('.map canvas');
-				const ctx = c?.getContext('2d');
-				if (!ctx || !c.width) return null;
-				const { data } = ctx.getImageData(0, 0, c.width, c.height);
-				let minX = 1e9;
-				let minY = 1e9;
-				let maxX = -1;
-				let maxY = -1;
-				for (let y = 0; y < c.height; y += 2) {
-					for (let x = 0; x < c.width; x += 2) {
-						if (data[(y * c.width + x) * 4 + 3] <= 8) continue;
-						if (x < minX) minX = x;
-						if (x > maxX) maxX = x;
-						if (y < minY) minY = y;
-						if (y > maxY) maxY = y;
-					}
-				}
-				return maxX < 0
-					? null
-					: {
-							w: maxX - minX,
-							h: maxY - minY,
-							cx: Math.round((minX + maxX) / 2),
-							cy: Math.round((minY + maxY) / 2)
-						};
-			});
-
-		// CDP rather than dispatched PointerEvents. page.touchscreen is
-		// single-touch, and a synthetic PointerEvent dies on the first move
-		// because setPointerCapture throws NotFoundError for a pointer id the
-		// browser never tracked — which fails looking exactly like the gesture
-		// code being wrong. touchPoints is the full set of currently active
-		// points; Chromium diffs it against the previous list.
-		const cdp = await mobile.newCDPSession(phone);
-		const box = await phone.locator('.map canvas').boundingBox();
-		const cx = box.x + box.width / 2;
-		const cy = box.y + box.height / 2;
-		const touch = (type, pts) =>
-			cdp.send('Input.dispatchTouchEvent', {
-				type,
-				touchPoints: pts.map(([x, y], i) => ({ x, y, id: i, radiusX: 12, radiusY: 12, force: 1 }))
-			});
-
-		/**
-		 * Everything below zooms *out* from a fitted chart, or back towards it,
-		 * and never past it. drawnBox measures ink that is actually on the canvas,
-		 * so it shrinks in both directions: once because the chart got smaller,
-		 * and again once the chart is larger than the canvas and only a few nodes
-		 * are still in frame. Only the range between those is monotonic, and a
-		 * first draft of this block read the second case as a failure to zoom.
-		 */
-		const fitted = async () => {
-			await phone.locator('.map .ctl', { hasText: 'Fit' }).tap();
-			await phone.waitForTimeout(300);
-			return drawnBox();
-		};
-
-		const pinch = async (from, to) => {
-			await touch('touchStart', [
-				[cx - from, cy],
-				[cx + from, cy]
-			]);
-			for (let i = 1; i <= 6; i++) {
-				const d = from + ((to - from) * i) / 6;
-				await touch('touchMove', [
-					[cx - d, cy],
-					[cx + d, cy]
-				]);
-				await phone.waitForTimeout(30);
-			}
-			await touch('touchEnd', []);
-			await phone.waitForTimeout(300);
-			return drawnBox();
-		};
-
-		const before = await fitted();
-		// Fingers together. Symmetric about the middle, so the midpoint never
-		// moves: a pure zoom, which is a narrower drawing with its centre where
-		// it was. Asserting both halves is what separates it from a pan.
-		const zoomedOut = await pinch(120, 40);
-		check('pinching in zooms the chart out', zoomedOut.w < before.w * 0.7);
-		check('and does not drag it sideways while it does', Math.abs(zoomedOut.cx - before.cx) < 40);
-		await phoneShot('cortex-pinch');
-
-		// Straight back out, before anything moves the chart off-centre: zooming
-		// about the canvas middle pushes an off-centre chart off the edge, and the
-		// clipping reads as a failure to zoom.
-		const zoomedIn = await pinch(40, 120);
-		check('pinching out zooms it back in', zoomedIn.w > zoomedOut.w * 1.2);
-
-		// One finger, from a zoomed-out chart that sits in frame with room to
-		// spare — so its box can move without being clipped by the canvas edge.
-		const panBase = await pinch(120, 40);
-		await touch('touchStart', [[cx, cy]]);
-		for (let i = 1; i <= 5; i++) {
-			await touch('touchMove', [[cx + i * 18, cy]]);
-			await phone.waitForTimeout(25);
-		}
-		await touch('touchEnd', []);
-		await phone.waitForTimeout(300);
-		const panned = await drawnBox();
-		check('one finger still pans', panned.cx > panBase.cx + 20);
-		check('and does not zoom while it does', Math.abs(panned.w - panBase.w) < 30);
-
-		// The explicit way, for anyone who does not know the gesture exists.
-		const beforeButton = await fitted();
-		await phone.locator('.map .ctl[aria-label="Zoom out"]').tap();
-		await phone.waitForTimeout(300);
-		check('the zoom buttons work too', (await drawnBox()).w < beforeButton.w * 0.95);
-
-		check('the map is still quiet on a phone', phoneProblems, []);
 	}
 
 	check('the phone is still quiet after all that', phoneProblems, []);

@@ -2,10 +2,11 @@
  * Where everything lives in Admin, and how the rest of the app names it.
  *
  * Admin was twelve tabs, one of them called Settings holding twelve unrelated
- * cards, and each feature was configured in three to five of them: Cortex's
- * schedule under Cortex, its model under Tasks, its write switch under Tools,
- * its history under Settings → History retention. It is now one section per
- * feature, holding that feature's settings, its task prompts and its retention.
+ * cards, and each feature was configured in three to five of them: a feature's
+ * schedule under its own tab, its model under Tasks, its write switch under
+ * Tools, its history under Settings → History retention. It is now one section
+ * per feature, holding that feature's settings, its task prompts and its
+ * retention.
  *
  * The paths are built here because forty-odd messages across the server and
  * the pages spelled "Admin → Settings → GitHub" by hand, and several already
@@ -14,8 +15,6 @@
  * No server imports: the admin page reads this as well as the engine.
  */
 
-import { cortexEnabled } from '$lib/features';
-
 export type AdminGroup = 'Platform' | 'Features' | 'Operations';
 
 export interface AdminSection {
@@ -23,11 +22,6 @@ export interface AdminSection {
 	group: AdminGroup;
 	/** The core tasks whose prompt and models are edited in this section. */
 	tasks: readonly string[];
-	/**
-	 * For a feature that is switched off: the section keeps its tasks (so each
-	 * core task still has exactly one home) and is simply not offered.
-	 */
-	available?: () => boolean;
 }
 
 export const ADMIN_SECTIONS = [
@@ -45,7 +39,6 @@ export const ADMIN_SECTIONS = [
 	{ label: 'Coding', group: 'Features', tasks: ['coding', 'subagent'] },
 	{ label: 'Memory and skills', group: 'Features', tasks: ['memory', 'skill-optimiser'] },
 	{ label: 'Boards', group: 'Features', tasks: ['board'] },
-	{ label: 'Cortex', group: 'Features', tasks: ['cortex-groom'], available: cortexEnabled },
 	{
 		label: 'Ivory Tower',
 		group: 'Features',
@@ -63,16 +56,6 @@ export type AdminSectionLabel = (typeof ADMIN_SECTIONS)[number]['label'];
 export const ADMIN_SECTION_LABELS: readonly AdminSectionLabel[] = ADMIN_SECTIONS.map(
 	(s) => s.label
 );
-
-/** The sections Admin offers, which leaves out any whose feature is off. */
-export function availableSections(): (typeof ADMIN_SECTIONS)[number][] {
-	return ADMIN_SECTIONS.filter((s) => ('available' in s ? s.available() : true));
-}
-
-/** Their labels, for reading the section out of the URL. */
-export function availableSectionLabels(): AdminSectionLabel[] {
-	return availableSections().map((s) => s.label);
-}
 
 /** "Admin → Coding → GitHub", for a message that sends someone there. */
 export function adminPath(section: AdminSectionLabel, card?: string): string {

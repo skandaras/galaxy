@@ -93,7 +93,7 @@ describe('createResizablePane', () => {
 	});
 });
 
-describe('which side the pane is on', () => {
+describe('dragging the handle', () => {
 	/** A pointerdown/move pair, since the handle drives both through events. */
 	function drag(pane: ReturnType<typeof createResizablePane>, dx: number) {
 		const listeners: Record<string, (e: never) => void> = {};
@@ -113,7 +113,7 @@ describe('which side the pane is on', () => {
 		return pane.width;
 	}
 
-	it('widens to the right when the pane is left of the handle', () => {
+	it('widens to the right, away from the pane', () => {
 		const pane = createResizablePane({
 			key: 'k',
 			min: 100,
@@ -122,36 +122,5 @@ describe('which side the pane is on', () => {
 			storage: null
 		});
 		expect(drag(pane, 50)).toBe(350);
-	});
-
-	it('widens to the left when the pane is right of the handle', () => {
-		// Cortex's panel. Dragging toward the panel used to widen it, which is
-		// backwards from every other handle in the app.
-		const right = () =>
-			createResizablePane({
-				key: 'k',
-				anchor: 'right',
-				min: 100,
-				max: 600,
-				initial: 300,
-				storage: null
-			});
-		// A pane each, since a drag leaves the width where it put it.
-		expect(drag(right(), 50)).toBe(250);
-		expect(drag(right(), -50)).toBe(350);
-	});
-
-	it('turns the arrow keys round with it', () => {
-		const pane = createResizablePane({
-			key: 'k',
-			anchor: 'right',
-			min: 100,
-			max: 600,
-			initial: 300,
-			storage: null
-		});
-		pane.nudge({ key: 'ArrowLeft', preventDefault() {} } as never);
-		// Left grows a right-anchored pane, because left is toward its edge.
-		expect(pane.width).toBe(310);
 	});
 });

@@ -6,7 +6,6 @@ const BASE: NavLink[] = [
 	{ href: '/chat', label: 'Chat' },
 	{ href: '/boards', label: 'Boards' },
 	{ href: '/library', label: 'Library' },
-	{ href: '/cortex', label: 'Cortex' },
 	{ href: '/memory', label: 'Memory' },
 	{ href: '/settings', label: 'Settings' },
 	{ href: '/observatory', label: 'Activity' }
@@ -23,14 +22,14 @@ const hrefs = (links: NavLink[]) => links.map((l) => l.href);
 describe('splitNav', () => {
 	it('fills the tabs by priority, not by the order the rail gave', () => {
 		const { tabs, more } = splitNav(BASE);
-		expect(hrefs(tabs)).toEqual(['/chat', '/boards', '/library', '/cortex']);
-		expect(hrefs(more)).toEqual(['/memory', '/settings', '/observatory']);
+		expect(hrefs(tabs)).toEqual(['/chat', '/boards', '/library', '/memory']);
+		expect(hrefs(more)).toEqual(['/settings', '/observatory']);
 	});
 
-	it('gives Code a tab when the grant is there, and Cortex the seat it took', () => {
+	it('gives Code a tab when the grant is there, and Memory the seat it took', () => {
 		const { tabs, more } = splitNav(withCode);
 		expect(hrefs(tabs)).toEqual(['/chat', '/code', '/boards', '/library']);
-		expect(hrefs(more)).toEqual(['/cortex', '/memory', '/settings', '/observatory']);
+		expect(hrefs(more)).toEqual(['/memory', '/settings', '/observatory']);
 	});
 
 	it('does not move a taught tab when a new destination arrives', () => {

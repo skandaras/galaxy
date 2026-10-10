@@ -316,6 +316,20 @@
       "when": 1791324905295,
       "tag": "0044_jittery_blockbuster",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1791607163995,
+      "tag": "0045_drop_cortex",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "6",
+      "when": 1791607164914,
+      "tag": "0046_drop_cortex_rows",
+      "breakpoints": true
     }
   ]
 }

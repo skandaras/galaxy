@@ -27,8 +27,6 @@ import {
 } from '$lib/server/library';
 import { UNFILED } from '$lib/library-tree';
 import { toolResultMaxChars } from '../limits';
-import { cortexDigest } from '$lib/server/cortex';
-import { cortexEnabled } from '$lib/features';
 import { memoryDigest, memoryTitle, readMemory } from '../memory';
 import { boardsDigest } from './boards';
 
@@ -50,11 +48,6 @@ export function bootstrapContext(userId: string, task?: string): string {
 		'',
 		'[Task boards: yours plus any shared with you. Read them with board_read, one card in full with card_read]',
 		boardsDigest(userId),
-		// Ahead of the memory digest on purpose. Placed after it, Cortex read as
-		// more of the same — another record of things that already happened — and
-		// an agent that takes it for an archive never thinks to consult it before
-		// answering. The map comes first, then the log.
-		cortexEnabled() ? cortexDigest(userId) : '',
 		// Only this user's memories — never another user's observations.
 		memoryDigest(userId)
 	].join('\n');

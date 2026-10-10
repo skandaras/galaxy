@@ -47,9 +47,9 @@ through web push, a phone. Feed adds one notification kind and nothing else.
 topic always checks and whose corroboration carries weight — are user-authored
 only. There is deliberately no agent write path to them.
 
-## Boundary with the Library and Cortex
+## Boundary with the Library
 
-All three end up holding things a person cares about, so the line has to be
+Both end up holding things a person cares about, so the line has to be
 explicit or they will drift.
 
 - **Feed items are perishable.** A tile is an observation with a timestamp and a
@@ -57,11 +57,8 @@ explicit or they will drift.
   record.
 - **The Library is where something goes to be kept.** Saving a tile to the
   Library is the promotion path (backlog, not F1–F4).
-- **Cortex is relational and personal.** A feed item is about the world; a
-  Cortex node is about how this person's concepts connect. Feed never writes to
-  the lattice.
 
-Feed may *read* both — `localContext(userId, question, deps)` already exists to
+Feed may *read* the Library — `localContext(userId, question, deps)` already exists to
 aim a query using what someone already holds, and it is explicit that those are
 never sources and are never cited. Same rule here.
 
@@ -121,7 +118,7 @@ handles the same trade.
 The corollary is the skip: when deduplication leaves no unseen URL, the run
 files nothing and **makes no model call at all**. A quiet topic costs one search
 round. That is what makes a short cadence affordable, and it is the same
-reasoning `DEFAULT_CORTEX_GROOM.intervalHours` is built on.
+reasoning the memory job's skip on an empty watermark window is built on.
 
 ## Storage
 
@@ -156,8 +153,8 @@ export const feedTopics = sqliteTable(
 		intervalHours: integer('interval_hours').notNull().default(0),
 		enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
 		/**
-		 * On the row rather than in settings, unlike memory and cortex-groom.
-		 * Those are one job per user; this is one job per *topic*, and the sweep
+		 * On the row rather than in settings, unlike memory.
+		 * That is one job per user; this is one job per *topic*, and the sweep
 		 * has to order by it to decide who has waited longest.
 		 */
 		lastRunAt: integer('last_run_at', { mode: 'timestamp_ms' }),
@@ -347,8 +344,8 @@ In order:
   assertion rather than news.
 
 **One extraction this needs first.** `canonicalUrlKey` and `registrableDomain`
-live in `research.ts`, which is 126 KB and pulls in the provider registry, the
-Cortex lattice and the Library. A pure gates module importing that for two
+live in `research.ts`, which is 126 KB and pulls in the provider registry and
+the Library. A pure gates module importing that for two
 string functions drags the whole graph into a test that should need nothing.
 `engine/prompts.ts` exists for exactly this reason (its header says the engine
 should not pull `seedSkills` and `deleteEmptyChats` into its module graph to get
@@ -379,7 +376,7 @@ needs a guarantee. Five layers:
    because a pinned domain is the one thing in this feature that raises trust.
 
 Layers 2–4 are asserted in `feed-privacy.test.ts`, in the spirit of
-`alignment-privacy.test.ts` and `cortex-privacy.test.ts`: a fixture page that
+`alignment-privacy.test.ts`: a fixture page that
 attempts all four attacks, and assertions that none of them moves the admitted
 tier or reaches the notification body.
 
