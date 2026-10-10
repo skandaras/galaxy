@@ -38,9 +38,9 @@ export const ADMIN_SECTIONS = [
 	{ label: 'Research', group: 'Features', tasks: ['deep-research'] },
 	{ label: 'Coding', group: 'Features', tasks: ['coding', 'subagent'] },
 	{
-		label: 'Memory and skills',
+		label: 'Profile and skills',
 		group: 'Features',
-		tasks: ['memory', 'profile-parse', 'skill-optimiser']
+		tasks: ['profile-learn', 'profile-parse', 'skill-optimiser']
 	},
 	{ label: 'Boards', group: 'Features', tasks: ['board'] },
 	{
@@ -86,7 +86,7 @@ export const ADMIN_PATHS = {
 	webSearch: adminPath('Research', 'Web search'),
 	deepResearch: adminPath('Research', 'Deep research'),
 	language: adminPath('Language'),
-	memory: adminPath('Memory and skills'),
-	skills: adminPath('Memory and skills', 'Skills'),
+	profile: adminPath('Profile and skills'),
+	skills: adminPath('Profile and skills', 'Skills'),
 	usage: adminPath('Spend', 'Usage')
 } as const;

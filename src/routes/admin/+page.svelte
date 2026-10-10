@@ -4,7 +4,7 @@
 	import Tasks from '$lib/components/admin/Tasks.svelte';
 	import Skills from '$lib/components/admin/Skills.svelte';
 	import Tools from '$lib/components/admin/Tools.svelte';
-	import Memory from '$lib/components/admin/Memory.svelte';
+	import Learning from '$lib/components/admin/Learning.svelte';
 	import Users from '$lib/components/admin/Users.svelte';
 	import Boards from '$lib/components/admin/Boards.svelte';
 	import Ux from '$lib/components/admin/Ux.svelte';
@@ -47,8 +47,8 @@
 		{:else if active === 'Coding'}
 			<Settings cards={['coding', 'github']} />
 			<Tasks only={tasks} />
-		{:else if active === 'Memory and skills'}
-			<Memory />
+		{:else if active === 'Profile and skills'}
+			<Learning />
 			<Skills />
 			<Tasks only={tasks} />
 		{:else if active === 'Boards'}

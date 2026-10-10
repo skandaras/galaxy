@@ -211,6 +211,9 @@ const comparable = (s: string) =>
  * same table, and "remember that they love crypto" inside one must not count
  * as something they said. A hidden chat is never in the table, so it never
  * matches.
+ *
+ * Never a hand-off (`agent_task`): its opening message is a board card under
+ * the person's name, and on a shared board someone else may have written it.
  */
 export function findUserQuote(userId: string, chatId: string, quote: string): string | null {
 	const wanted = comparable(quote);
@@ -219,7 +222,14 @@ export function findUserQuote(userId: string, chatId: string, quote: string): st
 		.select({ id: messages.id, content: messages.content })
 		.from(messages)
 		.innerJoin(chats, eq(chats.id, messages.chatId))
-		.where(and(eq(messages.chatId, chatId), eq(chats.userId, userId), eq(messages.role, 'user')))
+		.where(
+			and(
+				eq(messages.chatId, chatId),
+				eq(chats.userId, userId),
+				isNull(chats.agentTask),
+				eq(messages.role, 'user')
+			)
+		)
 		.orderBy(desc(messages.seq))
 		.all();
 	return rows.find((r) => comparable(r.content).includes(wanted))?.id ?? null;

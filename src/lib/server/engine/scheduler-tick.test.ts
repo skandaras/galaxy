@@ -20,24 +20,43 @@ import { setSetting } from '$lib/server/settings';
  * mock is hoisted over the whole file.
  */
 
-let failMemory = false;
+let failLearning = false;
 
 const ran = {
-	memory: 0,
+	learning: 0,
+	profile: 0,
 	alignment: 0,
 	uxAudit: 0,
 	skills: 0
 };
 
+vi.mock('./profile-learn', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('./profile-learn')>();
+	return {
+		...actual,
+		runLearning: async () => {
+			ran.learning++;
+			if (failLearning) throw new Error('provider exploded');
+			return { ran: true };
+		}
+	};
+});
+
+vi.mock('$lib/server/profile', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('$lib/server/profile')>();
+	return {
+		...actual,
+		expireDue: () => {
+			ran.profile++;
+			return 0;
+		}
+	};
+});
+
 vi.mock('./memory', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('./memory')>();
 	return {
 		...actual,
-		runMemory: async () => {
-			ran.memory++;
-			if (failMemory) throw new Error('provider exploded');
-			return { ran: true };
-		},
 		runSkillOptimiser: async () => {
 			ran.skills++;
 			return { ran: true };
@@ -77,7 +96,7 @@ beforeAll(() => {
 
 beforeEach(() => {
 	for (const key of Object.keys(ran) as (keyof typeof ran)[]) ran[key] = 0;
-	failMemory = false;
+	failLearning = false;
 	db.delete(users).run();
 	db.insert(users)
 		.values({
@@ -92,15 +111,15 @@ beforeEach(() => {
 
 	// Everything on, every last run cleared, so nothing is skipped for a reason
 	// unrelated to what is being asserted.
-	setSetting('memory', { enabled: true, intervalHours: 0 });
+	setSetting('profile', { enabled: true, intervalHours: 1 });
 	setSetting('alignment', { enabled: true, synthesisIntervalHours: 0 });
 	setSetting('uxaudit', { enabled: true, intervalHours: 0 });
 	setSetting('alignment.userEnabled', true, ANA);
-	setSetting('memory.userEnabled', true, ANA);
+	setSetting('profile.learn', true, ANA);
 	// Reset explicitly rather than relied on: settings persist between tests in
 	// one database, so a case that opts a user out would otherwise silently opt
 	// them out of every case after it.
-	setSetting('memory.lastRun', 0, ANA);
+	setSetting('profile.lastRun', 0, ANA);
 	setSetting('alignment.synthesis.lastRun', 0, ANA);
 	setSetting('ux.lastRun', 0);
 	// The one agent that ships off. Every case here is about whether tick reaches
@@ -112,7 +131,8 @@ beforeEach(() => {
 describe('one tick', () => {
 	it('reaches every sweep, including the one that shipped uncalled', async () => {
 		await tick();
-		expect(ran.memory, 'the memory audit').toBeGreaterThan(0);
+		expect(ran.learning, 'learning for the profile').toBeGreaterThan(0);
+		expect(ran.profile, 'the profile sweep').toBeGreaterThan(0);
 		expect(ran.alignment, 'the alignment letter').toBeGreaterThan(0);
 		expect(ran.uxAudit, 'the UX audit').toBeGreaterThan(0);
 		expect(ran.skills, 'the skill optimiser').toBeGreaterThan(0);
@@ -128,23 +148,25 @@ describe('one tick', () => {
 	});
 
 	it('honours the switch on each one', async () => {
-		setSetting('memory', { enabled: false, intervalHours: 0 });
+		setSetting('profile', { enabled: false, intervalHours: 1 });
 		await tick();
-		expect(ran.memory).toBe(0);
+		expect(ran.learning).toBe(0);
+		// Expiry calls no model and is not what the switch is about.
+		expect(ran.profile).toBeGreaterThan(0);
 		expect(ran.uxAudit).toBeGreaterThan(0);
 	});
 
-	it('skips a user who opted their own memory out', async () => {
-		setSetting('memory.userEnabled', false, ANA);
+	it('skips a user who turned learning off for themselves', async () => {
+		setSetting('profile.learn', false, ANA);
 		await tick();
-		expect(ran.memory).toBe(0);
-		// Their opt-out is about their memory, not about the jobs that run for
-		// everybody.
+		expect(ran.learning).toBe(0);
+		// Their switch is about being learnt from, not about the jobs that run
+		// for everybody.
 		expect(ran.alignment).toBeGreaterThan(0);
 	});
 
 	it('does not let one sweep failing take the rest of the tick with it', async () => {
-		failMemory = true;
+		failLearning = true;
 		await expect(tick()).resolves.toBeUndefined();
 		// One person's provider falling over is not a reason for everybody else's
 		// jobs to be skipped for the rest of the day.

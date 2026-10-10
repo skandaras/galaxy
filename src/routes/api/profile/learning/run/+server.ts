@@ -1,10 +1,10 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
-import { runMemory } from '$lib/server/engine/memory';
+import { runLearning } from '$lib/server/engine/profile-learn';
 
-/** Audit the caller's own activity. Users can only ever run their own. */
+/** Look through the caller's new conversations now, rather than at the next scheduled run. */
 export const POST: RequestHandler = async ({ locals }) => {
 	const user = requireUser(locals);
-	return json(await runMemory('manual', user.id));
+	return json(await runLearning('manual', user.id));
 };

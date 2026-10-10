@@ -1,8 +1,14 @@
 import { randomBytes } from 'node:crypto';
-import { and, asc, count, eq, gt, inArray, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { profileEntities, profileEntries, profileSubdomains } from '$lib/server/db/schema';
+import {
+	profileEntities,
+	profileEntries,
+	profileProposals,
+	profileSubdomains
+} from '$lib/server/db/schema';
 import { ftsQuery } from '$lib/server/library';
+import { profileSettings } from '$lib/server/settings';
 import {
 	DOMAINS,
 	ENTITY_KINDS,
@@ -275,7 +281,12 @@ export function deleteEntity(userId: string, id: string): boolean {
 			.all()
 			.map((r) => r.id);
 		unindex(tx, card);
-		if (card.length) tx.delete(profileEntries).where(inArray(profileEntries.id, card)).run();
+		if (card.length) {
+			tx.delete(profileEntries).where(inArray(profileEntries.id, card)).run();
+			tx.delete(profileProposals)
+				.where(and(eq(profileProposals.userId, userId), inArray(profileProposals.entryId, card)))
+				.run();
+		}
 		const elsewhere = tx
 			.select()
 			.from(profileEntries)
@@ -313,7 +324,7 @@ export function subdomainsOf(userId: string, domain: Domain): string[] {
 }
 
 /** "Board games" as the subdomain it would be: `board-games`. */
-function subdomainName(raw: unknown): string {
+export function subdomainName(raw: unknown): string {
 	return oneLine(raw)
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, '-')
@@ -362,7 +373,7 @@ function subdomainExists(userId: string, domain: Domain, subdomain: string): boo
 	return subdomainsOf(userId, domain).includes(subdomain);
 }
 
-function defaultSensitivity(userId: string, domain: Domain, subdomain: string): Sensitivity {
+export function defaultSensitivity(userId: string, domain: Domain, subdomain: string): Sensitivity {
 	if (domain === 'people') return 'personal';
 	const seeded = PATH_SENSITIVITY[`${domain}/${subdomain}`];
 	if (seeded) return seeded;
@@ -456,12 +467,22 @@ function briefCharsUsed(userId: string, now: Date, except?: string): number {
 		.reduce((sum, e) => sum + briefLine(e).length + 1, 0);
 }
 
+/**
+ * The pinned brief's size, which an admin sets. Lowering it never unpins
+ * anything: what is already pinned stays, and the next pin is refused until
+ * the person is back under, which the page's meter shows.
+ */
+export function briefBudget(): number {
+	return profileSettings().briefChars;
+}
+
 function assertPinFits(userId: string, entry: Parameters<typeof briefLine>[0], now: Date, except?: string) {
 	const used = briefCharsUsed(userId, now, except);
 	const needed = briefLine(entry).length + 1;
-	if (used + needed > LIMITS.briefChars) {
+	const budget = briefBudget();
+	if (used + needed > budget) {
 		throw new ProfileError(
-			`The pinned brief is full (${used} of ${LIMITS.briefChars} characters). Unpin something first.`
+			`The pinned brief is full (${used} of ${budget} characters). Unpin something first.`
 		);
 	}
 }
@@ -726,6 +747,9 @@ export function deleteEntry(userId: string, id: string): number {
 		tx.delete(profileEntries)
 			.where(and(eq(profileEntries.userId, userId), inArray(profileEntries.id, chain)))
 			.run();
+		tx.delete(profileProposals)
+			.where(and(eq(profileProposals.userId, userId), inArray(profileProposals.entryId, chain)))
+			.run();
 	});
 	return chain.length;
 }
@@ -766,6 +790,9 @@ export function wipeProfile(userId: string): void {
 		tx.delete(profileEntries).where(eq(profileEntries.userId, userId)).run();
 		tx.delete(profileEntities).where(eq(profileEntities.userId, userId)).run();
 		tx.delete(profileSubdomains).where(eq(profileSubdomains.userId, userId)).run();
+		// Rejections too: they are "never propose this again" about a profile
+		// that no longer exists.
+		tx.delete(profileProposals).where(eq(profileProposals.userId, userId)).run();
 	});
 }
 
@@ -826,7 +853,7 @@ function inScope(userId: string, scope: ProfileScope, now: Date, where?: SQL): P
 		.all();
 }
 
-function pathLabel(e: ProfileEntry, entities: Map<string, ProfileEntity>): string {
+export function pathLabel(e: ProfileEntry, entities: Map<string, ProfileEntity>): string {
 	return e.domain === 'people'
 		? `people/${entities.get(e.subdomain)?.name ?? e.subdomain}`
 		: `${e.domain}/${e.subdomain}`;
@@ -1044,7 +1071,7 @@ export interface ProfileView {
 	domains: { domain: Domain; subdomains: ProfileSubdomainView[] }[];
 	entities: ProfileEntity[];
 	count: number;
-	/** Characters the pinned brief is using, against LIMITS.briefChars. */
+	/** Characters the pinned brief is using, against `briefBudget()`. */
 	briefUsed: number;
 }
 
@@ -1351,4 +1378,227 @@ export function confirmDraft(
 		return { ok: false, refusals };
 	}
 	return { ok: true, ...counts };
+}
+
+// --- proposals --------------------------------------------------------------
+
+export type ProfileProposal = typeof profileProposals.$inferSelect;
+export type NewProposal = Omit<typeof profileProposals.$inferInsert, 'id' | 'userId' | 'status' | 'createdAt'>;
+
+/**
+ * At most this many wait for a person at once. Past it the learning job stops
+ * proposing, because every proposal costs the person a decision and a queue
+ * of a hundred is one nobody reads.
+ */
+export const MAX_WAITING = 30;
+
+/** "Still true?" questions waiting at once: a few at a time, not a year's worth in one go. */
+const MAX_STILL_TRUE = 3;
+const STILL_TRUE_AFTER_MS = 365 * 86_400_000;
+
+export interface WaitingProposal extends ProfileProposal {
+	/** The entry an update, retire or "still true?" is about, as it stands. */
+	entry: { id: string; claim: string; place: string } | null;
+}
+
+/** Pending proposals, newest first, with the entry each is about. */
+export function listProposals(userId: string): WaitingProposal[] {
+	const rows = db
+		.select()
+		.from(profileProposals)
+		.where(and(eq(profileProposals.userId, userId), eq(profileProposals.status, 'pending')))
+		.orderBy(desc(profileProposals.createdAt), asc(profileProposals.id))
+		.all();
+	const entities = entityMap(userId);
+	return rows.map((p) => {
+		const e = p.entryId ? ownEntry(userId, p.entryId) : null;
+		return { ...p, entry: e ? { id: e.id, claim: e.claim, place: pathLabel(e, entities) } : null };
+	});
+}
+
+/** Proposals by status, newest first, for the learning job's dedup and its prompt. */
+export function proposalsWith(userId: string, status: ProfileProposal['status'], limit = 500): ProfileProposal[] {
+	return db
+		.select()
+		.from(profileProposals)
+		.where(and(eq(profileProposals.userId, userId), eq(profileProposals.status, status)))
+		.orderBy(desc(profileProposals.createdAt))
+		.limit(limit)
+		.all();
+}
+
+export function countWaiting(userId: string): number {
+	const [{ n }] = db
+		.select({ n: count() })
+		.from(profileProposals)
+		.where(and(eq(profileProposals.userId, userId), eq(profileProposals.status, 'pending')))
+		.all();
+	return n;
+}
+
+export function saveProposals(userId: string, rows: NewProposal[], now = new Date()): void {
+	if (!rows.length) return;
+	db.insert(profileProposals)
+		.values(rows.map((r) => ({ ...r, id: newId(), userId, status: 'pending' as const, createdAt: now })))
+		.run();
+}
+
+function expire(userId: string, id: string): void {
+	db.update(profileEntries)
+		.set({ status: 'expired' })
+		.where(and(eq(profileEntries.userId, userId), eq(profileEntries.id, id)))
+		.run();
+}
+
+/**
+ * Approve or turn down something the learning job proposed.
+ *
+ * Approving an addition is the only way an `inferred` entry is written, and
+ * the person may reword it, move it or change its kind first. A rejection is
+ * kept, so the job never proposes it again. A proposal about an entry that has
+ * since gone is closed as not found rather than kept as a rejection: the
+ * person did not turn it down.
+ */
+export function decideProposal(
+	userId: string,
+	id: string,
+	approve: boolean,
+	edits: { claim?: string; path?: string; kind?: Kind } = {},
+	now = new Date()
+): ProfileProposal {
+	const p = db
+		.select()
+		.from(profileProposals)
+		.where(
+			and(
+				eq(profileProposals.userId, userId),
+				eq(profileProposals.id, id),
+				eq(profileProposals.status, 'pending')
+			)
+		)
+		.get();
+	if (!p) throw new ProfileNotFound('Nothing like that is waiting.');
+	const entry = p.entryId ? ownEntry(userId, p.entryId) : null;
+	if (p.action !== 'add' && !isCurrent(entry, now)) {
+		db.delete(profileProposals).where(eq(profileProposals.id, id)).run();
+		throw new ProfileNotFound('That entry has gone, so there is nothing left to decide.');
+	}
+	const close = (status: 'approved' | 'rejected') =>
+		db.update(profileProposals)
+			.set({ status, decidedAt: now })
+			.where(eq(profileProposals.id, id))
+			.run();
+
+	if (!approve) {
+		// "Not any more" to a "still true?" is the person saying it has ended.
+		db.transaction(() => {
+			if (p.action === 'confirm') expire(userId, entry!.id);
+			close('rejected');
+		});
+		return { ...p, status: 'rejected', decidedAt: now };
+	}
+
+	db.transaction(() => {
+		if (p.action === 'add') {
+			const path = edits.path ?? p.path ?? '';
+			const [domain, ...rest] = oneLine(path).split('/');
+			const name = rest.join('/').trim();
+			// Someone new is created only here, on a yes, and only for the card the
+			// job proposed them on.
+			if (domain.toLowerCase() === 'people' && p.person && !findEntity(userId, name)) {
+				createEntity(
+					userId,
+					{ kind: p.person.kind as EntityKind, name, relation: p.person.relation },
+					now
+				);
+			}
+			const place = draftPlace(userId, path, now);
+			addEntry(
+				userId,
+				{
+					...place,
+					kind: edits.kind ?? p.kind ?? 'fact',
+					claim: edits.claim ?? p.claim ?? '',
+					// Someone named in another proposal not decided yet is not here to be
+					// about; the line is still worth keeping without the link.
+					about: place.domain !== 'people' && p.about && findEntity(userId, p.about) ? p.about : null,
+					quote: p.quote,
+					messageId: p.messageId,
+					expiresAt: untilDate(p.until)
+				},
+				{ source: 'inferred', now }
+			);
+		} else if (p.action === 'update') {
+			// A merge proposed to bring a full place back under its cap has no quote
+			// of its own; the merged line keeps the words and source it had.
+			correctEntry(
+				userId,
+				entry!.id,
+				{
+					claim: edits.claim ?? p.claim ?? '',
+					quote: p.quote ?? entry!.quote,
+					messageId: p.quote ? p.messageId : entry!.messageId
+				},
+				{ source: p.quote ? 'inferred' : entry!.source, now }
+			);
+		} else if (p.action === 'retire') {
+			expire(userId, entry!.id);
+		} else {
+			db.update(profileEntries)
+				.set({ confirmedAt: now })
+				.where(and(eq(profileEntries.userId, userId), eq(profileEntries.id, entry!.id)))
+				.run();
+		}
+		close('approved');
+	});
+	return { ...p, status: 'approved', decidedAt: now };
+}
+
+/**
+ * Move every entry past its date to `expired`, for everyone. Reads already
+ * leave them out by date; this makes the status say so, and closes anything
+ * still waiting on them.
+ */
+export function expireDue(now = new Date()): number {
+	const due = db
+		.select({ id: profileEntries.id })
+		.from(profileEntries)
+		.where(and(eq(profileEntries.status, 'active'), lte(profileEntries.expiresAt, now)))
+		.all()
+		.map((r) => r.id);
+	if (!due.length) return 0;
+	db.transaction((tx) => {
+		tx.update(profileEntries).set({ status: 'expired' }).where(inArray(profileEntries.id, due)).run();
+		tx.delete(profileProposals)
+			.where(and(eq(profileProposals.status, 'pending'), inArray(profileProposals.entryId, due)))
+			.run();
+	});
+	return due.length;
+}
+
+/**
+ * Ask about entries nobody has confirmed for a year. A few at a time, and
+ * none about an entry something is already waiting on.
+ */
+export function raiseStillTrue(userId: string, now = new Date()): number {
+	const pending = proposalsWith(userId, 'pending');
+	const asking = pending.filter((p) => p.action === 'confirm').length;
+	const room = Math.min(MAX_STILL_TRUE - asking, MAX_WAITING - pending.length);
+	if (room <= 0) return 0;
+	const spoken = new Set(pending.map((p) => p.entryId).filter(Boolean));
+	const stale = listEntries(userId, now)
+		.filter((e) => e.confirmedAt.getTime() < now.getTime() - STILL_TRUE_AFTER_MS && !spoken.has(e.id))
+		.sort((a, b) => a.confirmedAt.getTime() - b.confirmedAt.getTime())
+		.slice(0, room);
+	saveProposals(
+		userId,
+		stale.map((e) => ({
+			action: 'confirm' as const,
+			entryId: e.id,
+			why: 'Nobody has said this is still true for a year.',
+			source: `still-true ${isoDate(now)}`
+		})),
+		now
+	);
+	return stale.length;
 }

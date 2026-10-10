@@ -81,13 +81,13 @@ describe('the Observatory feed', () => {
 	});
 });
 
-describe('the memory agent', () => {
+describe('the learning agent', () => {
 	it('does not read alignment tables when gathering activity', async () => {
-		// gatherActivity is private, so this exercises the whole run: with no model
-		// configured it either finds nothing to do or fails at the model call, and
-		// in both cases nothing from Alignment may appear in what it recorded.
-		const { runMemory } = await import('$lib/server/engine/memory');
-		await runMemory('manual', ALICE);
+		// This exercises the whole run: with no model configured it either finds
+		// nothing to do or fails at the model call, and in both cases nothing from
+		// Alignment may appear in what it recorded.
+		const { runLearning } = await import('$lib/server/engine/profile-learn');
+		await runLearning('manual', ALICE);
 
 		const serialised = JSON.stringify(db.select().from(events).all());
 		expect(serialised).not.toContain(SECRET_ENTRY);
@@ -95,12 +95,13 @@ describe('the memory agent', () => {
 	});
 
 	it('has no alignment table in its source', async () => {
-		// The belt to the braces above: the memory digest is assembled from a
-		// fixed list of tables, and this asserts alignment is not on it even in a
-		// branch the tests above never reach.
+		// The belt to the braces above: what it reads is a fixed list of tables,
+		// and this asserts alignment is not on it even in a branch the tests
+		// above never reach.
 		const { readFileSync } = await import('node:fs');
-		const source = readFileSync('src/lib/server/engine/memory.ts', 'utf8');
-		expect(source).not.toMatch(/alignment/i);
+		for (const file of ['src/lib/server/engine/profile-learn.ts', 'src/lib/server/engine/memory.ts']) {
+			expect(readFileSync(file, 'utf8'), file).not.toMatch(/alignment/i);
+		}
 	});
 });
 

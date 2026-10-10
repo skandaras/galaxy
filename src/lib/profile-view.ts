@@ -51,3 +51,54 @@ export function entryMarks(e: {
 		e.expiresAt ? `until ${e.expiresAt.slice(0, 10)}` : ''
 	].filter(Boolean);
 }
+
+export type ProposalAction = 'add' | 'update' | 'retire' | 'confirm';
+
+/** What a proposal is called on the page, and what its two buttons say. */
+export function proposalWords(action: ProposalAction): {
+	badge: string;
+	yes: string;
+	no: string;
+	editable: boolean;
+} {
+	switch (action) {
+		case 'add':
+			return { badge: 'New', yes: 'Approve', no: 'Reject', editable: true };
+		case 'update':
+			return { badge: 'Change', yes: 'Approve', no: 'Reject', editable: true };
+		case 'retire':
+			return { badge: 'Retire', yes: 'Retire it', no: 'Keep it', editable: false };
+		case 'confirm':
+			return { badge: 'Still true?', yes: 'Still true', no: 'Not any more', editable: false };
+	}
+}
+
+/** `people/Nikau` as the page writes a place: "people / Nikau". */
+export const placeLabel = (path: string | null | undefined) => (path ?? '').replace('/', ' / ');
+
+export interface ReadingView {
+	running: boolean;
+	done: number;
+	total: number;
+	proposals: number;
+	failed: number;
+	stopped?: string;
+}
+
+/** Where reading past conversations has got to, or how the last reading ended when it went wrong. */
+export function readingText(r: ReadingView | null): { text: string; error: boolean } | null {
+	if (!r) return null;
+	const batches = `${r.total} ${r.total === 1 ? 'batch' : 'batches'}`;
+	if (r.running) {
+		return {
+			text: `Reading your past conversations: ${r.done} of ${batches}, ${r.proposals} proposed so far.`,
+			error: false
+		};
+	}
+	if (!r.stopped && !r.failed) return null;
+	const failed = r.failed ? `, and ${r.failed} of its ${batches} could not be read` : '';
+	return {
+		text: `The last reading ${r.stopped ? `stopped early: ${r.stopped}` : 'finished'}${failed}.`,
+		error: true
+	};
+}

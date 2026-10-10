@@ -283,7 +283,7 @@ export const CORE_TASKS = [
 	'deep-research',
 	'visual',
 	'vision',
-	'memory',
+	'profile-learn',
 	'profile-parse',
 	'skill-optimiser',
 	'ux-audit',
@@ -650,7 +650,48 @@ export const profileSubdomains = sqliteTable(
 	(t) => [primaryKey({ columns: [t.userId, t.domain, t.name] })]
 );
 
-// Skills proposed by the memory/optimiser agents. Never auto-activated:
+/**
+ * What the learning job thinks a person's profile should gain, change or
+ * lose, waiting on that person. Nothing it reads reaches an agent until they
+ * approve it, and a rejection stays here as "never propose this again".
+ *
+ * The place is a path in text (`people/Nikau`, `interests/sailing`) rather
+ * than ids, and resolved when the person says yes: someone new, or a
+ * subdomain of their own, is created only then, so a proposal turned down
+ * leaves nothing behind.
+ */
+export const profileProposals = sqliteTable(
+	'profile_proposals',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id').notNull(),
+		action: text('action', { enum: ['add', 'update', 'retire', 'confirm'] }).notNull(),
+		/** The entry an update, retire or "still true?" is about. */
+		entryId: text('entry_id'),
+		path: text('path'),
+		kind: text('kind', { enum: ['fact', 'preference', 'constraint', 'goal'] }),
+		claim: text('claim'),
+		/** A person's name, someone already here or in `person`. */
+		about: text('about'),
+		/** `YYYY-MM-DD`, the day it stops being true. */
+		until: text('until'),
+		/** Someone the add would create: their kind and what they are to this person. */
+		person: text('person', { mode: 'json' }).$type<{ kind: string; relation: string } | null>(),
+		quote: text('quote'),
+		messageId: text('message_id'),
+		why: text('why').notNull().default(''),
+		status: text('status', { enum: ['pending', 'approved', 'rejected'] })
+			.notNull()
+			.default('pending'),
+		/** The run that raised it. */
+		source: text('source').notNull().default(''),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		decidedAt: integer('decided_at', { mode: 'timestamp_ms' })
+	},
+	(t) => [index('profile_proposals_user_status_idx').on(t.userId, t.status)]
+);
+
+// Skills proposed by the learning job, the optimiser and agents. Never auto-activated:
 // a human approves (which writes the real skill) or rejects.
 export const skillCandidates = sqliteTable('skill_candidates', {
 	id: text('id').primaryKey(),

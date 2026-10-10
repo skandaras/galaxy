@@ -39,7 +39,7 @@ because some functions have one.
 
 - `src/lib/server/engine/` — the agent loop (`loop.ts`), the task entry points (`engine.ts` chat, `coding/session.ts`, `research.ts`), background agents, and `tools/`.
 - `src/lib/server/` — domain modules: `chats`, `boards`, `library`, `profile`, `alignment`, `skills`, `settings`, `auth`, `api`.
-- `src/routes/api/**/+server.ts` — 122 endpoints, thin. Logic belongs in the domain module.
+- `src/routes/api/**/+server.ts` — 123 endpoints, thin. Logic belongs in the domain module.
 - `src/lib/components/`, `src/routes/**/+page.svelte` — the UI.
 
 Prefer extending an existing module to adding one. Two files worth knowing before you write
@@ -49,7 +49,7 @@ factories — a new tool appears in Admin without being registered twice).
 
 ## Rules that are not style
 
-**Every route guards.** All 122 call `requireUser`, `requireAdmin`, `requireCoder` or
+**Every route guards.** All 123 call `requireUser`, `requireAdmin`, `requireCoder` or
 `requireAlignment` from `$lib/server/api`. A new route with no guard is a bug, not an
 omission.
 
@@ -68,7 +68,7 @@ commit the generated SQL.
 the call can be priced — `getBudgetStatus()` sums `cost_usd`, and a call that reaches a
 provider without reaching `logUsage` is spend the cap cannot see.
 
-**Hidden chats.** A hidden chat is never written to the DB, never reaches the memory job, and
+**Hidden chats.** A hidden chat is never written to the DB, never reaches the learning job, and
 its id must not survive in `usage_log` or in stored `events`. The spend still counts; the
 identifier does not. Alignment and the Profile have their own boundaries, asserted in
 `alignment-privacy.test.ts` and `profile-privacy.test.ts` — read those before touching

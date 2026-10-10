@@ -4,7 +4,7 @@
 > exists yet. Milestones F1–F4 below are the intended landing order.
 
 Every place knowledge arrives in Galaxy today is *pulled*. You ask chat a
-question, you start a research run, you write a Library doc. The memory job and
+question, you start a research run, you write a Library doc. The learning job and
 the UX audit run unasked, but both of them only look inward — at what you have
 already done, and at the platform itself. Nothing watches the world on your
 behalf.
@@ -118,7 +118,7 @@ handles the same trade.
 The corollary is the skip: when deduplication leaves no unseen URL, the run
 files nothing and **makes no model call at all**. A quiet topic costs one search
 round. That is what makes a short cadence affordable, and it is the same
-reasoning the memory job's skip on an empty watermark window is built on.
+reasoning the learning job's skip on an empty watermark window is built on.
 
 ## Storage
 

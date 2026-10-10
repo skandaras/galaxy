@@ -1,6 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { db, runMigrations } from '$lib/server/db';
-import { profileEntries } from '$lib/server/db/schema';
+import { profileEntries, profileProposals } from '$lib/server/db/schema';
+import { deleteSetting, setSetting } from '$lib/server/settings';
+import { eq } from 'drizzle-orm';
 import type { Draft, DraftEntry } from '$lib/profile-draft';
 import {
 	addEntry,
@@ -8,6 +10,8 @@ import {
 	cleanDraft,
 	confirmDraft,
 	correctEntry,
+	decideProposal,
+	expireDue,
 	createEntity,
 	deleteEntity,
 	deleteEntry,
@@ -16,12 +20,16 @@ import {
 	history,
 	LIMITS,
 	listEntries,
+	listProposals,
 	lookup,
 	parseExport,
+	proposalsWith,
+	raiseStillTrue,
 	ProfileError,
 	ProfileNotFound,
 	profileBlock,
 	resolvePath,
+	saveProposals,
 	setPinned,
 	setSensitivity,
 	subdomainsOf,
@@ -43,6 +51,7 @@ beforeAll(() => {
 beforeEach(() => {
 	wipeProfile(ALICE);
 	wipeProfile(BOB);
+	deleteSetting('profile');
 });
 
 const add = (
@@ -59,6 +68,7 @@ const add = (
 
 /** Distinct claims, since the tests that fill a cap need many. */
 const nth = (i: number) => `Uses tool number ${i} every day.`;
+const eqId = (id: string) => eq(profileEntries.id, id);
 
 describe('writing an entry', () => {
 	it('stores one claim, active, with the path’s sensitivity', () => {
@@ -637,5 +647,119 @@ describe('saving a draft', () => {
 			leftOut: []
 		});
 		expect(() => cleanDraft({ entries: Array(LIMITS.entriesPerUser + 1).fill({}) })).toThrow(ProfileError);
+	});
+});
+
+describe('deciding a proposal', () => {
+	const propose = (row: Parameters<typeof saveProposals>[1][number], user = ALICE) => {
+		const before = new Set(proposalsWith(user, 'pending').map((p) => p.id));
+		saveProposals(user, [{ source: 'test', ...row }], NOW);
+		return proposalsWith(user, 'pending').find((p) => !before.has(p.id))!;
+	};
+	const later = new Date(NOW.getTime() + 1000);
+
+	it('writes an approved addition as inferred, with the words it rests on', () => {
+		const p = propose({ action: 'add', path: 'work/tools', kind: 'fact', claim: 'Uses Neovim daily.', quote: 'I use neovim', messageId: 'm1' });
+		decideProposal(ALICE, p.id, true, {}, later);
+		expect(listEntries(ALICE, later)).toMatchObject([
+			{ claim: 'Uses Neovim daily.', source: 'inferred', quote: 'I use neovim', messageId: 'm1' }
+		]);
+		expect(proposalsWith(ALICE, 'approved')).toHaveLength(1);
+	});
+
+	it('creates someone new, or a subdomain of their own, only on a yes, and takes the person’s edits', () => {
+		const card = propose({ action: 'add', path: 'people/Nikau', person: { kind: 'person', relation: 'son' }, claim: 'Goes to Kowhai School.', quote: 'Nikau' });
+		const place = propose({ action: 'add', path: 'interests/sailing', claim: 'Races dinghies.', quote: 'race' });
+		decideProposal(ALICE, place.id, false, {}, later);
+		expect(subdomainsOf(ALICE, 'interests')).not.toContain('sailing');
+		expect(findEntity(ALICE, 'Nikau')).toBeNull();
+		decideProposal(ALICE, card.id, true, { claim: 'Started at Kowhai School in 2025.' }, later);
+		expect(findEntity(ALICE, 'Nikau')).toMatchObject({ relation: 'son' });
+		expect(listEntries(ALICE, later)[0].claim).toBe('Started at Kowhai School in 2025.');
+		const again = propose({ action: 'add', path: 'interests/boats', claim: 'Builds wooden boats.', quote: 'boats', about: 'Nobody' });
+		decideProposal(ALICE, again.id, true, {}, later);
+		expect(subdomainsOf(ALICE, 'interests')).toContain('boats');
+		// About someone not in the profile: kept, about no one.
+		expect(listEntries(ALICE, later).find((e) => e.claim.startsWith('Builds'))?.about).toBeNull();
+	});
+
+	it('remembers a rejection, and writes nothing', () => {
+		const p = propose({ action: 'add', path: 'work/tools', claim: 'Uses Emacs at home.', quote: 'emacs' });
+		decideProposal(ALICE, p.id, false, {}, later);
+		expect(listEntries(ALICE, later)).toEqual([]);
+		expect(proposalsWith(ALICE, 'rejected').map((r) => r.claim)).toEqual(['Uses Emacs at home.']);
+	});
+
+	it('changes an entry with history, and a merge keeps the words and source it had', () => {
+		const { entry } = add({ claim: 'Works at Acme in sales.' }, 'survey');
+		const p = propose({ action: 'update', entryId: entry.id, claim: 'Works at Acme in marketing.' });
+		decideProposal(ALICE, p.id, true, {}, later);
+		const [now] = listEntries(ALICE, later);
+		expect(now).toMatchObject({ claim: 'Works at Acme in marketing.', source: 'survey', supersedes: entry.id });
+		const q = propose({ action: 'update', entryId: now.id, claim: 'Works at Globex now.', quote: 'joined Globex', messageId: 'm2' });
+		decideProposal(ALICE, q.id, true, {}, later);
+		expect(listEntries(ALICE, later)[0]).toMatchObject({ source: 'inferred', quote: 'joined Globex' });
+		expect(history(ALICE, entry.id)).toHaveLength(3);
+	});
+
+	it('retires an entry, and asks whether one is still true', () => {
+		const a = add({ claim: 'Plays squash weekly.' }).entry;
+		const b = add({ claim: 'Uses Neovim daily.' }).entry;
+		const c = add({ claim: 'Uses Docker at work.' }).entry;
+		decideProposal(ALICE, propose({ action: 'retire', entryId: a.id }).id, true, {}, later);
+		decideProposal(ALICE, propose({ action: 'confirm', entryId: b.id }).id, true, {}, later);
+		decideProposal(ALICE, propose({ action: 'confirm', entryId: c.id }).id, false, {}, later);
+		expect(listEntries(ALICE, later).map((e) => e.claim)).toEqual(['Uses Neovim daily.']);
+		expect(listEntries(ALICE, later)[0].confirmedAt).toEqual(later);
+	});
+
+	it('closes a proposal whose entry has gone, and treats someone else’s as not found', () => {
+		const { entry } = add({ claim: 'Plays squash weekly.' });
+		const p = propose({ action: 'retire', entryId: entry.id });
+		expect(() => decideProposal(BOB, p.id, true)).toThrow(ProfileNotFound);
+		db.delete(profileEntries).where(eqId(entry.id)).run();
+		expect(() => decideProposal(ALICE, p.id, true, {}, later)).toThrow(/has gone/);
+		expect(db.select().from(profileProposals).all()).toEqual([]);
+	});
+
+	it('goes with the entry it is about, and with a wipe', () => {
+		const { entry } = add({ claim: 'Plays squash weekly.' });
+		propose({ action: 'retire', entryId: entry.id });
+		propose({ action: 'add', path: 'work/tools', claim: 'Uses Emacs at home.', quote: 'emacs' });
+		deleteEntry(ALICE, entry.id);
+		expect(listProposals(ALICE).map((p) => p.action)).toEqual(['add']);
+		wipeProfile(ALICE);
+		expect(db.select().from(profileProposals).all()).toEqual([]);
+	});
+});
+
+describe('time passing', () => {
+	it('moves entries past their date to expired, and closes what waits on them', () => {
+		const { entry } = add({ claim: 'Moving house soon.', expiresAt: new Date(NOW.getTime() + DAY) });
+		saveProposals(ALICE, [{ action: 'retire', entryId: entry.id, source: 't' }], NOW);
+		expect(expireDue(new Date(NOW.getTime() + 2 * DAY))).toBe(1);
+		expect(db.select().from(profileEntries).all()[0].status).toBe('expired');
+		expect(listProposals(ALICE)).toEqual([]);
+	});
+
+	it('asks about a few entries nobody has confirmed for a year, once each', () => {
+		for (let i = 0; i < 5; i++) add({ claim: nth(i) });
+		const nextYear = new Date(NOW.getTime() + 366 * DAY);
+		expect(raiseStillTrue(ALICE, nextYear)).toBe(3);
+		expect(raiseStillTrue(ALICE, nextYear)).toBe(0);
+		expect(listProposals(ALICE).every((p) => p.action === 'confirm' && p.entry)).toBe(true);
+		expect(raiseStillTrue(ALICE, new Date(NOW.getTime() + DAY))).toBe(0);
+	});
+});
+
+describe('the brief budget', () => {
+	it('is the admin’s setting, and lowering it unpins nothing', () => {
+		add({ claim: 'x'.repeat(150), pinned: true });
+		setSetting('profile', { briefChars: 800 });
+		for (let i = 0; i < 4; i++) add({ claim: `${'y'.repeat(150)} ${i}`, pinned: true });
+		expect(() => add({ claim: 'z'.repeat(150), pinned: true })).toThrow(/of 800 characters/);
+		setSetting('profile', { briefChars: 100 });
+		// Clamped to the least an admin may set, and what was pinned stays pinned.
+		expect(listEntries(ALICE).filter((e) => e.pinned)).toHaveLength(5);
 	});
 });

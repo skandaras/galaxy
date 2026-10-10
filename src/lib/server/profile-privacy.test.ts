@@ -1,8 +1,8 @@
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db, runMigrations } from '$lib/server/db';
 import { alignmentPrinciples, events } from '$lib/server/db/schema';
 import { savePrinciple } from '$lib/server/alignment';
-import { appendMessage, createChat } from '$lib/server/chats';
+import { appendMessage, createChat, findUserQuote } from '$lib/server/chats';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import type { StreamEvent } from '$lib/server/providers/types';
 import { createJob } from '$lib/server/engine/jobs';
@@ -29,6 +29,25 @@ import {
  *
  * Distinctive words, so a substring check means something.
  */
+
+/** What the learning job sent its model, for the case that checks it. */
+const learnPrompts: string[] = [];
+vi.mock('$lib/server/engine/engine', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('$lib/server/engine/engine')>();
+	return {
+		...actual,
+		pickModel: () => ({
+			model: { id: 'm', modelKey: 'mock/learn', displayName: 'Learner', supportsReasoning: false, reasoningMode: 'auto' },
+			provider: {},
+			adapter: {
+				complete: async (req: { messages: { content: string }[] }) => {
+					learnPrompts.push(req.messages.map((m) => m.content).join('\n'));
+					return { text: '{}', usage: null };
+				}
+			}
+		})
+	};
+});
 
 const ALICE = 'user-alice';
 const BOB = 'user-bob';
@@ -247,6 +266,31 @@ describe('a draft', () => {
 		expect(result.ok).toBe(false);
 		expect(!result.ok && result.refusals).toHaveLength(2);
 		expect(everything(ALICE, 'chat')).not.toContain('Bob');
+	});
+});
+
+describe('the learning job', () => {
+	it('shows its model nothing private and nothing of anyone else', async () => {
+		const chat = createChat({ userId: ALICE });
+		appendMessage(chat.id, { role: 'user', content: 'I have started running on Mondays.' });
+		const { runLearning } = await import('$lib/server/engine/profile-learn');
+		learnPrompts.length = 0;
+		await runLearning('manual', ALICE);
+		expect(learnPrompts).toHaveLength(1);
+		const [prompt] = learnPrompts;
+		expect(prompt).toContain(TOOL);
+		for (const marker of [HEALTH, BOB_SECRET, 'Bobpartner', PRINCIPLE]) expect(prompt).not.toContain(marker);
+	});
+});
+
+describe('a quote', () => {
+	it('is never taken from a hand-off, whose opening card someone else may have written', () => {
+		const handoff = createChat({ userId: ALICE, agentTask: 'board' });
+		appendMessage(handoff.id, { role: 'user', content: 'Card: Alice is a quokkavegan.' });
+		expect(findUserQuote(ALICE, handoff.id, 'quokkavegan')).toBeNull();
+		const own = createChat({ userId: ALICE });
+		appendMessage(own.id, { role: 'user', content: 'I am a quokkavegan.' });
+		expect(findUserQuote(ALICE, own.id, 'quokkavegan')).toBeTruthy();
 	});
 });
 

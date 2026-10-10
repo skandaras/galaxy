@@ -10,6 +10,7 @@ import {
 	DEFAULT_FETCH,
 	DEFAULT_IVORY,
 	DEFAULT_MEMORY,
+	DEFAULT_PROFILE,
 	DEFAULT_RESEARCH,
 	DEFAULT_RETENTION,
 	DEFAULT_LANGUAGE,
@@ -18,6 +19,7 @@ import {
 	DEFAULT_WEB_SEARCH,
 	getSetting,
 	normaliseIvorySettings,
+	normaliseProfileSettings,
 	normaliseResearchSettings,
 	normaliseLanguageSettings,
 	normaliseWebSearchSettings,
@@ -31,6 +33,7 @@ const KNOWN_KEYS = [
 	'budget',
 	'github',
 	'memory',
+	'profile',
 	'research',
 	'coding',
 	'uxaudit',
@@ -47,6 +50,7 @@ const DEFAULTS: Record<string, unknown> = {
 	budget: DEFAULT_BUDGET,
 	github: {},
 	memory: DEFAULT_MEMORY,
+	profile: DEFAULT_PROFILE,
 	research: DEFAULT_RESEARCH,
 	coding: DEFAULT_CODING,
 	uxaudit: DEFAULT_UX_AUDIT,
@@ -74,6 +78,7 @@ const DEFAULTS: Record<string, unknown> = {
  */
 const NORMALISERS: Record<string, (v: Record<string, unknown>) => Record<string, unknown>> = {
 	ivory: (v) => normaliseIvorySettings(v) as unknown as Record<string, unknown>,
+	profile: (v) => normaliseProfileSettings(v) as unknown as Record<string, unknown>,
 	research: (v) => normaliseResearchSettings(v) as unknown as Record<string, unknown>,
 	language: (v) => normaliseLanguageSettings(v) as unknown as Record<string, unknown>,
 	websearch: (v) => normaliseWebSearchSettings(v) as unknown as Record<string, unknown>

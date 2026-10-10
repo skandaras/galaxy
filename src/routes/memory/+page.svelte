@@ -19,23 +19,6 @@
 		content: string;
 		why: string;
 	}
-	interface Rebuild {
-		running: boolean;
-		done: number;
-		total: number;
-		proposals: number;
-		failed: number;
-		stopped?: string;
-	}
-	interface Candidate {
-		id: string;
-		name: string;
-		description: string;
-		rationale: string;
-		tasks: string;
-		body: string;
-		status: 'pending' | 'approved' | 'rejected';
-	}
 	/** A row being reworded, whether a held memory or a proposal about to be approved. */
 	interface Draft {
 		id: string;
@@ -46,15 +29,7 @@
 
 	let items = $state<MemoryItem[]>([]);
 	let proposals = $state<Proposal[]>([]);
-	let myCandidates = $state<Candidate[]>([]);
-	let enabled = $state(true);
-	let scheduleEnabled = $state(true);
-	let intervalHours = $state(12);
-	let lastRun = $state(0);
-	let nextDue = $state(0);
 	let cap = $state(50);
-	let rebuild = $state<Rebuild | null>(null);
-	let busy = $state<'run' | 'consolidate' | 'rebuild' | null>(null);
 	let draft = $state<Draft | null>(null);
 	let notice = $state<{ text: string; error?: boolean } | null>(null);
 	let loadFailed = $state(false);
@@ -69,24 +44,10 @@
 		const data = await res.json();
 		items = data.items;
 		proposals = data.proposals ?? [];
-		myCandidates = data.myCandidates ?? [];
-		enabled = data.enabled;
-		scheduleEnabled = data.scheduleEnabled;
-		intervalHours = data.intervalHours;
-		lastRun = data.lastRun;
-		nextDue = data.nextDue;
 		cap = data.cap ?? cap;
-		rebuild = data.rebuild ?? null;
 	}
 	$effect(() => {
 		void load();
-	});
-	// While a rebuild reads history in the background, follow it here: the
-	// queue fills as each window is read.
-	$effect(() => {
-		if (!rebuild?.running) return;
-		const timer = setInterval(() => void load(), 3000);
-		return () => clearInterval(timer);
 	});
 
 	/** Read the server's reason for a refusal, so the notice says what it said. */
@@ -94,77 +55,6 @@
 		if (!res) return fallback;
 		const body = await res.json().catch(() => null);
 		return body?.message ?? fallback;
-	}
-
-	async function toggleEnabled() {
-		const next = !enabled;
-		const res = await fetch('/api/memory/settings', {
-			method: 'PUT',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ enabled: next })
-		}).catch(() => null);
-		if (res?.ok) enabled = next;
-		else notice = { text: 'Could not change that setting.', error: true };
-	}
-
-	async function runNow() {
-		busy = 'run';
-		notice = null;
-		const res = await fetch('/api/memory/run', { method: 'POST' }).catch(() => null);
-		busy = null;
-		if (!res?.ok) {
-			notice = { text: await reason(res, 'The review did not run.'), error: true };
-			return;
-		}
-		const result = await res.json();
-		const n = result.proposals ?? 0;
-		notice = result.ran
-			? {
-					text: `${n ? `${n} ${n === 1 ? 'proposal' : 'proposals'} waiting for you below` : 'Nothing worth proposing'}${result.candidates ? `, and ${result.candidates} skill ${result.candidates === 1 ? 'candidate' : 'candidates'}` : ''}.`
-				}
-			: { text: `Nothing to do: ${result.reason}` };
-		await load();
-	}
-
-	async function consolidate() {
-		busy = 'consolidate';
-		notice = null;
-		const res = await fetch('/api/memory/consolidate', { method: 'POST' }).catch(() => null);
-		busy = null;
-		if (!res?.ok) {
-			notice = { text: await reason(res, 'Consolidation did not run.'), error: true };
-			return;
-		}
-		const result = await res.json();
-		notice = !result.ran
-			? { text: `Nothing to do: ${result.reason}` }
-			: result.proposals
-				? { text: `${result.proposals} changes proposed below. Nothing changes until you approve them.` }
-				: { text: 'Nothing worth merging: the list is already tight.' };
-		await load();
-	}
-
-	async function startRebuild() {
-		if (
-			!(await ask({
-				title: 'Wipe and rebuild your memory?',
-				body:
-					'Every memory you hold, everything waiting for you, and your "Long term user memory" document are deleted now. ' +
-					'Then your whole history is read again, and what it suggests waits here for you to approve.',
-				confirm: 'Wipe and rebuild',
-				danger: true
-			}))
-		)
-			return;
-		busy = 'rebuild';
-		notice = null;
-		const res = await fetch('/api/memory/rebuild', { method: 'POST' }).catch(() => null);
-		busy = null;
-		if (!res?.ok) {
-			notice = { text: await reason(res, 'The rebuild did not start.'), error: true };
-			return;
-		}
-		await load();
 	}
 
 	async function decide(p: Proposal, approve: boolean) {
@@ -225,20 +115,6 @@
 		await load();
 	}
 
-	async function decideSkill(c: Candidate, approve: boolean) {
-		const res = await fetch(`/api/skills/candidates/${c.id}`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ approve })
-		}).catch(() => null);
-		if (!res?.ok) {
-			notice = { text: await reason(res, 'Could not record that decision.'), error: true };
-			return;
-		}
-		notice = { text: approve ? `${c.name} is now one of your skills.` : `${c.name} rejected.` };
-		await load();
-	}
-
 	const edit = (row: { id: string; title: string; content: string; kind: string | null }) =>
 		(draft = {
 			id: row.id,
@@ -254,7 +130,6 @@
 		return words.slice(0, 8).join(' ') + (words.length > 8 ? '…' : '');
 	};
 	const heldItem = (id: string | null) => items.find((i) => i.id === id);
-	const when = (ts: number) => (ts ? new Date(ts).toLocaleString() : 'never');
 	const active = $derived(items.filter((i) => i.status === 'active'));
 	const archived = $derived(items.filter((i) => i.status === 'archived'));
 	/** What the titles cost per message: the bodies stay out until an agent asks. */
@@ -284,57 +159,11 @@
 	<article class="card">
 		<h3>Your memory</h3>
 		<p class="hint">
-			Every {intervalHours}h the memory agent reads <em>your</em> recent chats and coding sessions
-			for how you like to work: standing preferences and patterns that will still be true in six
-			months. Not what you asked about, and not facts about your world. It only proposes: nothing
-			reaches your agents until you approve it below. Your agents see each memory's title and read
-			the rest only when it bears on what you asked. Private to you; hidden chats are never read.
+			Memory no longer learns. What Galaxy learns about you now goes to your
+			<a href="/profile">Profile</a>, where you approve each line before any agent sees it. What
+			is held here still reaches your agents by title, and you can still edit, archive or delete
+			it, or decide anything that was already waiting.
 		</p>
-		<div class="row">
-			<label class="chk">
-				<input type="checkbox" checked={enabled} onchange={toggleEnabled} />
-				keep proposing memories
-			</label>
-			<button class="btn" disabled={busy !== null || rebuild?.running} onclick={runNow}>
-				{busy === 'run' ? 'Reviewing…' : 'Run now'}
-			</button>
-			<button
-				class="btn"
-				disabled={busy !== null || rebuild?.running}
-				title="Look for memories that say the same thing and propose a shorter list."
-				onclick={consolidate}
-			>
-				{busy === 'consolidate' ? 'Consolidating…' : 'Consolidate'}
-			</button>
-			<button
-				class="btn danger"
-				disabled={busy !== null || rebuild?.running}
-				title="Delete everything held and waiting, then read your whole history again."
-				onclick={startRebuild}
-			>
-				{busy === 'rebuild' ? 'Starting…' : 'Wipe and rebuild'}
-			</button>
-			<span class="meta">
-				last run {when(lastRun)}
-				<!-- Counted from the last run, so before the first one it came out as
-				     1970. Until then the next scheduled check is the first run. -->
-				{#if enabled && scheduleEnabled && lastRun} · next {when(nextDue)}{/if}
-				{#if !scheduleEnabled} · automatic runs are off platform-wide{/if}
-			</span>
-		</div>
-		{#if rebuild?.running}
-			<p class="notice" role="status">
-				Reading your history: {rebuild.done} of {rebuild.total}
-				{rebuild.total === 1 ? 'batch' : 'batches'} of conversations, {rebuild.proposals} proposed so
-				far.
-			</p>
-		{:else if rebuild && (rebuild.stopped || rebuild.failed)}
-			<p class="notice error" role="alert">
-				The last rebuild {rebuild.stopped ? `stopped early: ${rebuild.stopped}` : 'finished'}{rebuild.failed
-					? `, and ${rebuild.failed} of its ${rebuild.total} batches could not be read`
-					: ''}.
-			</p>
-		{/if}
 	</article>
 
 	<article class="card" class:waiting={proposals.length > 0}>
@@ -378,10 +207,7 @@
 				</div>
 			</div>
 		{:else}
-			<p class="hint">
-				Nothing waiting. Proposals appear here after a review finds something; a rejection is
-				remembered, so the same thing is not proposed again.
-			</p>
+			<p class="hint">Nothing waiting.</p>
 		{/each}
 	</article>
 
@@ -463,36 +289,6 @@
 		{/if}
 	</article>
 
-	{#if myCandidates.length}
-		<article class="card skills">
-			<h3>Skills proposed from your work</h3>
-			<p class="hint">
-				A skill is written instructions for a procedure, which your agents load when it applies.
-				Approve one and it is yours: your agents use it and nobody else's do, unless an admin
-				shares it. A rejection is remembered, so the same skill is not proposed again.
-			</p>
-			{#each myCandidates as c (c.id)}
-				<div class="cand">
-					<div class="cand-head">
-						<span class="cand-name">{c.name}</span>
-						<span class="cand-desc">{c.description}</span>
-						<span class="cand-status {c.status}">{c.status}</span>
-					</div>
-					{#if c.status === 'pending'}
-						{#if c.rationale}<p class="hint why">{c.rationale}</p>{/if}
-						<details>
-							<summary>The instructions{c.tasks ? ` (for ${c.tasks})` : ''}</summary>
-							<pre class="skill-body">{c.body}</pre>
-						</details>
-						<div class="row actions">
-							<button class="btn primary" onclick={() => decideSkill(c, true)}>Approve skill</button>
-							<button class="btn" onclick={() => decideSkill(c, false)}>Reject</button>
-						</div>
-					{/if}
-				</div>
-			{/each}
-		</article>
-	{/if}
 </section>
 </div>
 
@@ -560,17 +356,6 @@
 		align-items: center;
 		gap: 0.8rem;
 		flex-wrap: wrap;
-	}
-	.chk {
-		font-size: var(--text-base);
-		color: var(--fg-dim);
-		display: flex;
-		align-items: center;
-		gap: 0.4rem;
-	}
-	.meta {
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
 	}
 	.footprint {
 		margin-bottom: 0.5rem;
@@ -656,42 +441,5 @@
 		color: var(--fg-dim);
 		cursor: pointer;
 		margin-top: 0.6rem;
-	}
-	.cand {
-		padding: 0.45rem 0;
-		border-top: 1px solid var(--border);
-		font-size: var(--text-base);
-	}
-	.cand-head {
-		display: flex;
-		align-items: baseline;
-		gap: 0.6rem;
-	}
-	.skill-body {
-		white-space: pre-wrap;
-		font-family: var(--font-mono);
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
-		margin: 0.4rem 0 0;
-	}
-	.cand-name {
-		color: var(--fg);
-	}
-	.cand-desc {
-		flex: 1;
-		color: var(--fg-dim);
-		font-size: var(--text-sm);
-	}
-	.cand-status {
-		font-size: var(--text-xs);
-		text-transform: uppercase;
-		letter-spacing: 0.1em;
-		color: var(--fg-dim);
-	}
-	.cand-status.approved {
-		color: var(--accent);
-	}
-	.cand-status.rejected {
-		color: var(--danger);
 	}
 </style>
