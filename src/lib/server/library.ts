@@ -673,14 +673,50 @@ export function searchDocs(
 		.map((r) => ({ ...metas.get(r.id)!, match: r.match }));
 }
 
-/** Quote terms so user input can't break FTS5 query syntax. */
-function ftsQuery(q: string): string {
-	return q
-		.split(/\s+/)
-		.filter(Boolean)
+/**
+ * Words too common to narrow anything, dropped from an `any` match. bm25 would
+ * weight them near zero anyway; the reason to drop them outright is that a
+ * query made *entirely* of them would otherwise match the whole table.
+ */
+const FTS_STOPWORDS = new Set([
+	'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'can', 'do', 'for', 'from',
+	'had', 'has', 'have', 'he', 'her', 'his', 'how', 'i', 'in', 'is', 'it', 'its', 'me',
+	'my', 'no', 'not', 'of', 'on', 'or', 'our', 'she', 'so', 'that', 'the', 'their',
+	'them', 'then', 'there', 'these', 'they', 'this', 'to', 'was', 'we', 'were', 'what',
+	'when', 'which', 'who', 'why', 'will', 'with', 'you', 'your'
+]);
+
+/**
+ * Quote terms so user input can't break FTS5 query syntax.
+ *
+ * `match` decides what a multi-word query means, and the two callers want
+ * different things. Library search is given deliberate keywords, so *all*
+ * (FTS5's implicit AND) is right: asking for two words and being shown
+ * documents containing one of them is not a search.
+ *
+ * A profile lookup is written by an agent mid-reply, as a phrase about the
+ * person ("diet restrictions food"), and a one-line claim rarely holds every
+ * word of it. AND would find nothing, so *any* matches on whatever overlaps and
+ * lets bm25 rank by how much did. Two letters is enough to keep: "GP" and "NZ"
+ * are the whole of some claims.
+ */
+export function ftsQuery(q: string, match: 'all' | 'any' = 'all'): string {
+	const terms = q.split(/\s+/).filter(Boolean);
+	const kept =
+		match === 'any'
+			? terms
+					.map((t) => t.replace(/[^\p{L}\p{N}'-]/gu, ''))
+					.filter((t) => t.length >= 2 && !FTS_STOPWORDS.has(t.toLowerCase()))
+			: terms;
+	return kept
 		.slice(0, 8)
-		.map((t) => `"${t.replace(/"/g, '')}"`)
-		.join(' ');
+		.map((t) => {
+			const quoted = `"${t.replace(/"/g, '')}"`;
+			// A prefix, so "Postgres" finds "PostgreSQL". Not below four letters,
+			// where a prefix matches half the table.
+			return match === 'any' && t.length >= 4 ? `${quoted}*` : quoted;
+		})
+		.join(match === 'any' ? ' OR ' : ' ');
 }
 
 const docIdTaken = (id: string) =>

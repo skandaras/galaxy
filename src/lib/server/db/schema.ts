@@ -540,6 +540,115 @@ export const memoryProposals = sqliteTable(
 	(t) => [index('memory_proposals_user_status_idx').on(t.userId, t.status)]
 );
 
+/**
+ * One claim about a person or their world: "Works at Acme", "Vegetarian".
+ *
+ * The bounds live in code (profile.ts) rather than in the schema, because a
+ * CHECK in SQLite means rebuilding the table to change one. Every column the
+ * previous image would never write is nullable or defaulted, and it never
+ * writes this table at all.
+ *
+ * Opaque ids rather than ones that spell the path ("wrk.tools.0012" was the
+ * draft): an entry moved to another subdomain would otherwise carry an id that
+ * names the wrong place, and an agent cites ids back when it corrects one.
+ */
+export const profileEntries = sqliteTable(
+	'profile_entries',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id').notNull(),
+		domain: text('domain', {
+			enum: ['identity', 'work', 'people', 'life', 'interests']
+		}).notNull(),
+		/** A seed, a custom subdomain this person approved, or under `people` an entity id. */
+		subdomain: text('subdomain').notNull(),
+		/** The entity the claim is about, wherever it is filed. */
+		about: text('about'),
+		kind: text('kind', { enum: ['fact', 'preference', 'constraint', 'goal'] }).notNull(),
+		claim: text('claim').notNull(),
+		/** In the brief every agent sees. The person's choice, held to a char budget. */
+		pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
+		sensitivity: text('sensitivity', { enum: ['normal', 'personal', 'private'] })
+			.notNull()
+			.default('normal'),
+		source: text('source', { enum: ['stated', 'survey', 'inferred', 'imported'] }).notNull(),
+		/**
+		 * The person's own words the claim rests on, and the message they came
+		 * from. A claim with a quote cannot have come from a fetched page, which
+		 * is what replaced the draft's `tainted` flag: nearly every chat has web
+		 * content in it, so a flag for that would have been set on everything.
+		 */
+		quote: text('quote'),
+		messageId: text('message_id'),
+		/** Set for what is true for now ("moving house by November"). At most 90 days out. */
+		expiresAt: integer('expires_at', { mode: 'timestamp_ms' }),
+		/**
+		 * A correction supersedes rather than overwrites, so the page can show
+		 * what changed. Agents only ever see `active`.
+		 */
+		status: text('status', { enum: ['active', 'superseded', 'expired'] })
+			.notNull()
+			.default('active'),
+		supersedes: text('supersedes'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+		/** When the person last said it is still true; creation counts. */
+		confirmedAt: integer('confirmed_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	// Every read is "this person's active entries, in some part of the tree".
+	(t) => [index('profile_entries_user_status_path_idx').on(t.userId, t.status, t.domain, t.subdomain)]
+);
+
+/**
+ * The named things a profile's claims are about: people, pets, organisations,
+ * projects, places.
+ *
+ * Their own rows because a claim filed under life ("does the school run on
+ * Tuesdays") is still about Nikau, and a lookup for Nikau should find it. A
+ * relation-named subdomain (`people/family`) could not do that, and would
+ * have put a son and a dog in one bucket.
+ */
+export const profileEntities = sqliteTable(
+	'profile_entities',
+	{
+		id: text('id').primaryKey(),
+		userId: text('user_id').notNull(),
+		kind: text('kind', {
+			enum: ['person', 'pet', 'organisation', 'project', 'place']
+		}).notNull(),
+		name: text('name').notNull(),
+		/** Lower-cased name, so "Aroha" and "aroha" cannot both exist. */
+		nameKey: text('name_key').notNull(),
+		aka: text('aka', { mode: 'json' }).$type<string[]>().notNull().default([]),
+		/** "partner", "son", "employer". Never an age, which goes stale; a birth year is a claim. */
+		relation: text('relation').notNull().default(''),
+		/** On the names line agents see. */
+		named: integer('named', { mode: 'boolean' }).notNull().default(true),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [uniqueIndex('profile_entities_user_name_idx').on(t.userId, t.nameKey)]
+);
+
+/**
+ * Subdomains a person added beyond the seeds, which live in code. Without a
+ * row here a path outside the seeds does not exist, so a model cannot invent
+ * one by writing to it.
+ */
+export const profileSubdomains = sqliteTable(
+	'profile_subdomains',
+	{
+		userId: text('user_id').notNull(),
+		domain: text('domain', {
+			enum: ['identity', 'work', 'people', 'life', 'interests']
+		}).notNull(),
+		name: text('name').notNull(),
+		sensitivity: text('sensitivity', { enum: ['normal', 'personal', 'private'] })
+			.notNull()
+			.default('normal'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+	},
+	(t) => [primaryKey({ columns: [t.userId, t.domain, t.name] })]
+);
+
 // Skills proposed by the memory/optimiser agents. Never auto-activated:
 // a human approves (which writes the real skill) or rejects.
 export const skillCandidates = sqliteTable('skill_candidates', {

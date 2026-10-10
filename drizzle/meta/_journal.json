@@ -330,6 +330,13 @@
       "when": 1791607164914,
       "tag": "0046_drop_cortex_rows",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1791613537434,
+      "tag": "0047_profile",
+      "breakpoints": true
     }
   ]
 }

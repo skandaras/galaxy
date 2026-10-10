@@ -38,7 +38,7 @@ because some functions have one.
 ## Structure
 
 - `src/lib/server/engine/` — the agent loop (`loop.ts`), the task entry points (`engine.ts` chat, `coding/session.ts`, `research.ts`), background agents, and `tools/`.
-- `src/lib/server/` — domain modules: `chats`, `boards`, `library`, `alignment`, `skills`, `settings`, `auth`, `api`.
+- `src/lib/server/` — domain modules: `chats`, `boards`, `library`, `profile`, `alignment`, `skills`, `settings`, `auth`, `api`.
 - `src/routes/api/**/+server.ts` — 106 endpoints, thin. Logic belongs in the domain module.
 - `src/lib/components/`, `src/routes/**/+page.svelte` — the UI.
 
@@ -70,8 +70,9 @@ provider without reaching `logUsage` is spend the cap cannot see.
 
 **Hidden chats.** A hidden chat is never written to the DB, never reaches the memory job, and
 its id must not survive in `usage_log` or in stored `events`. The spend still counts; the
-identifier does not. Alignment has its own boundary, asserted in
-`alignment-privacy.test.ts` — read it before touching Alignment.
+identifier does not. Alignment and the Profile have their own boundaries, asserted in
+`alignment-privacy.test.ts` and `profile-privacy.test.ts` — read those before touching
+either.
 
 **Untrusted input.** Web pages, repo contents, uploads and memory items are attacker-controlled.
 They are fenced and labelled as data, never as instructions, wherever they enter a prompt.

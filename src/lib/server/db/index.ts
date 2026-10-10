@@ -52,4 +52,10 @@ export function runMigrations() {
 	sqlite.exec(
 		`CREATE VIRTUAL TABLE IF NOT EXISTS library_fts USING fts5(id UNINDEXED, title, body)`
 	);
+	// Porter stemming here and not in the Library's: an agent looking something
+	// up about a person writes "runs" when the claim says "running", where a
+	// Library search is given the exact words someone remembers.
+	sqlite.exec(
+		`CREATE VIRTUAL TABLE IF NOT EXISTS profile_fts USING fts5(id UNINDEXED, claim, names, path, tokenize='porter unicode61')`
+	);
 }
