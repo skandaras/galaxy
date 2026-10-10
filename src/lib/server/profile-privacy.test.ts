@@ -1,10 +1,17 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { db, runMigrations } from '$lib/server/db';
-import { alignmentPrinciples } from '$lib/server/db/schema';
+import { alignmentPrinciples, events } from '$lib/server/db/schema';
 import { savePrinciple } from '$lib/server/alignment';
+import { appendMessage, createChat } from '$lib/server/chats';
+import type { ModelChoice } from '$lib/server/providers/registry';
+import type { StreamEvent } from '$lib/server/providers/types';
+import { createJob } from '$lib/server/engine/jobs';
+import { runAgentLoop } from '$lib/server/engine/loop';
+import { bootstrapContext, knowledgeTools } from '$lib/server/engine/tools/knowledge';
 import {
 	addEntry,
 	createEntity,
+	listEntries,
 	lookup,
 	profileBlock,
 	PROFILE_SCOPES,
@@ -143,6 +150,88 @@ describe('Alignment', () => {
 	it('never reaches a profile block or lookup', () => {
 		for (const task of Object.keys(PROFILE_SCOPES)) {
 			expect(everything(ALICE, task)).not.toContain(PRINCIPLE);
+		}
+	});
+});
+
+describe('the Observatory', () => {
+	it('records that the profile tools ran without recording what they were given', async () => {
+		// Admins read the Observatory. The loop writes an event for every tool
+		// call, with its summary, its error and, for arguments it cannot parse, a
+		// snippet of them: for these tools that would be a person's own words.
+		const CLAIM = 'ocelotclaim';
+		const QUOTE = 'ocelotquote';
+		const chat = createChat({ userId: ALICE });
+		appendMessage(chat.id, { role: 'user', content: `I want to say ${QUOTE} plainly.` });
+		db.delete(events).run();
+
+		const calls = [
+			{ name: 'profile_note', arguments: JSON.stringify({ path: 'interests/pursuits', kind: 'fact', claim: `Has an ${CLAIM} habit.`, quote: QUOTE }) },
+			{ name: 'profile_note', arguments: `{"claim": "Has an ${CLAIM} habit", "quote": "${QUOTE}` },
+			{ name: 'profile_note', arguments: JSON.stringify({ path: `people/${PARTNER}`, kind: 'fact', claim: `Not said ${CLAIM}.`, quote: 'never written by them' }) },
+			{ name: 'profile_lookup', arguments: JSON.stringify({ query: `${CLAIM} ${HEALTH}` }) },
+			{ name: 'profile_lookup', arguments: JSON.stringify({ about: PARTNER }) }
+		].map((c, i) => ({ id: `c${i}`, ...c }));
+		let round = 0;
+		const choice = {
+			model: {
+				modelKey: 'mock',
+				displayName: 'Mock',
+				supportsTools: true,
+				supportsVision: false,
+				supportsReasoning: false,
+				reasoningMode: 'auto',
+				promptCostPerMTok: null,
+				completionCostPerMTok: null
+			},
+			provider: {},
+			adapter: {
+				async *stream(): AsyncGenerator<StreamEvent> {
+					if (round++ === 0) {
+						yield { type: 'tool_calls', calls };
+						yield { type: 'done', finishReason: 'tool_calls' };
+						return;
+					}
+					yield { type: 'text', delta: 'Done.' };
+					yield { type: 'done', finishReason: 'stop' };
+				},
+				complete: async () => ({ text: '', usage: null }),
+				listModels: async () => []
+			}
+		} as unknown as ModelChoice;
+		const job = createJob({ chatId: chat.id, userId: ALICE, task: 'chat', persist: true });
+		await runAgentLoop({
+			job,
+			task: 'chat',
+			userId: ALICE,
+			chatId: chat.id,
+			persist: true,
+			primary: choice,
+			backup: null,
+			tools: knowledgeTools(ALICE, { task: 'chat', chatId: chat.id }),
+			maxIterations: 4,
+			buildMessages: () => [{ role: 'system', content: 'You are a test agent.' }],
+			onDone: () => {}
+		});
+
+		// The note went in, so the calls really ran.
+		expect(listEntries(ALICE).some((e) => e.claim.includes(CLAIM))).toBe(true);
+		const rows = db.select().from(events).all();
+		const toolEvents = rows.filter((r) => r.type === 'tool.call');
+		expect(toolEvents).toHaveLength(calls.length);
+		const stored = JSON.stringify(rows);
+		for (const marker of [CLAIM, QUOTE, PARTNER, HEALTH]) expect(stored).not.toContain(marker);
+	});
+});
+
+describe('the bootstrap', () => {
+	it('opens with the profile for a task that has one, and carries none for a task that does not', () => {
+		const chat = bootstrapContext(ALICE, 'chat');
+		expect(chat.trimStart().startsWith('[Profile:')).toBe(true);
+		expect(chat).toContain(PARTNER);
+		expect(bootstrapContext(ALICE, 'coding')).not.toContain(PARTNER);
+		for (const task of [undefined, 'visual', 'subagent']) {
+			expect(bootstrapContext(ALICE, task)).not.toContain('[Profile:');
 		}
 	});
 });

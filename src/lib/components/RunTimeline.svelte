@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { SearchResultRow, TimelineItem, TimelineTool } from '$lib/run-timeline';
+	import type { NotedEntry, SearchResultRow, TimelineItem, TimelineTool } from '$lib/run-timeline';
 
 	/**
 	 * A run as a list of steps, stages and notices in the order they happened.
@@ -28,6 +28,23 @@
 	const drawsResults = (tools: TimelineTool[]) => tools.some((t) => t.results?.length);
 
 	/**
+	 * Something an agent wrote into the person's profile. Kept open for the same
+	 * reason as results: a note folded away the moment it succeeded is a note
+	 * the person never sees and so can never undo.
+	 */
+	const noted = (tools: TimelineTool[]) => tools.some((t) => t.noted);
+
+	/** What became of an Undo, by entry id. Absent until the button is pressed. */
+	let undone = $state<Record<string, 'undone' | 'gone' | 'failed'>>({});
+
+	async function undo(n: NotedEntry) {
+		const res = await fetch(`/api/profile/entries/${n.id}/undo`, { method: 'POST' }).catch(() => null);
+		// A 404 is an entry already removed, on the Profile page or by an earlier
+		// Undo before a reload: the outcome the person wanted either way.
+		undone[n.id] = res?.ok ? 'undone' : res?.status === 404 ? 'gone' : 'failed';
+	}
+
+	/**
 	 * The host a result sits on, shown beside its title.
 	 *
 	 * The full hostname rather than the registrable domain: `docs.` and `blog.` of
@@ -44,6 +61,22 @@
 		}
 	}
 </script>
+
+{#snippet notedChip(n: NotedEntry)}
+	<div class="noted">
+		<span class="chip">Noted: {n.claim}</span>
+		{#if undone[n.id] === 'undone'}
+			<span class="noted-state" role="status">Undone</span>
+		{:else if undone[n.id] === 'gone'}
+			<span class="noted-state" role="status">Already removed</span>
+		{:else}
+			<button class="btn ghost" onclick={() => undo(n)}>Undo</button>
+			{#if undone[n.id] === 'failed'}
+				<span class="notice error" role="alert">That did not undo; try again from your Profile.</span>
+			{/if}
+		{/if}
+	</div>
+{/snippet}
 
 {#snippet resultBox(results: SearchResultRow[])}
 	<!-- Scrolls within itself: twenty results is worth having and worth not
@@ -81,6 +114,7 @@
 					     and left open when it drew results, which are worth reading too. -->
 					<details
 						open={drawsResults(item.tools) ||
+							noted(item.tools) ||
 							(live ? item.status !== 'ok' : item.status === 'error')}
 					>
 						<summary>
@@ -103,6 +137,7 @@
 										</div>
 									{/if}
 									{#if tool.results?.length}{@render resultBox(tool.results)}{/if}
+									{#if tool.noted}{@render notedChip(tool.noted)}{/if}
 								</li>
 							{/each}
 						</ul>
@@ -312,5 +347,16 @@
 		50% {
 			opacity: 0.35;
 		}
+	}
+	.noted {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		margin: 0.3rem 0 0.2rem;
+	}
+	.noted-state {
+		font-size: var(--text-sm);
+		color: var(--fg-dim);
 	}
 </style>

@@ -30,6 +30,7 @@
 		applyStreamText,
 		isTimelineChunk,
 		itemsFromTrace,
+		notedIn,
 		liveActivity,
 		unfinishedNote,
 		type MessageTrace,
@@ -1147,7 +1148,9 @@
 					<div class="msg {msg.role}">
 						{#if msg.role === 'assistant'}
 							{#if msg.trace?.steps?.length}
-								<details class="past-run">
+								<!-- Open when the reply noted something in the profile, so its
+								     Undo is in sight rather than folded under "2 steps". -->
+								<details class="past-run" open={notedIn(msg.trace).length > 0}>
 									<summary>
 										{msg.trace.summary ||
 											`${msg.trace.steps.length} ${msg.trace.steps.length === 1 ? 'step' : 'steps'}`}

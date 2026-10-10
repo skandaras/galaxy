@@ -92,7 +92,9 @@ export function builtinDescriptors(): ToolDescriptor[] {
 
 	// The user id only scopes execution, never the declaration — same placeholder
 	// convention as attachmentTools('*') below.
-	add(knowledgeTools('*'), 'knowledge', ['chat', 'coding']);
+	// Built as chat sees them, so both profile tools are declared: the coding
+	// agent gets the same two, held to its narrower scope when they run.
+	add(knowledgeTools('*', { task: 'chat', chatId: '*' }), 'knowledge', ['chat', 'coding']);
 	// The chat id only affects execution, never the declaration.
 	add(attachmentTools('*'), 'attachments', ['chat', 'coding']);
 	add([{ def: webSearchToolDef, execute: async () => '' }], 'web', ['chat', 'coding']);

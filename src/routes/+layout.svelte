@@ -20,6 +20,7 @@
 		...(data.user?.canCode ? [{ href: '/code', label: 'Code', group: 'work' as const }] : []),
 		{ href: '/boards', label: 'Boards', group: 'work' },
 		{ href: '/library', label: 'Library', group: 'knowledge' },
+		{ href: '/profile', label: 'Profile', group: 'knowledge' },
 		{ href: '/memory', label: 'Memory', group: 'knowledge' },
 		// Behind the coding grant for the same reason as Code: the Shelf is read
 		// and written with the shared GitHub token.

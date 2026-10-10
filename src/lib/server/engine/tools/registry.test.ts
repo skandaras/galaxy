@@ -28,6 +28,8 @@ const EXPECTED = [
 	'library_tree',
 	'library_read',
 	'library_write',
+	'profile_lookup',
+	'profile_note',
 	// attachments
 	'list_attachments',
 	'read_attachment',

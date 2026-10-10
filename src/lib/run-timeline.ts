@@ -24,6 +24,15 @@ export interface SearchResultRow {
 	url: string;
 }
 
+/**
+ * What a profile_note call wrote, so the reply can offer to undo it. Kept on the
+ * call in the person's own trace, never in the Observatory.
+ */
+export interface NotedEntry {
+	id: string;
+	claim: string;
+}
+
 export interface RunToolCall {
 	name: string;
 	/** Whatever the tool's `describe` yielded — a path, a command, a query. */
@@ -37,6 +46,7 @@ export interface RunToolCall {
 	 * defaulted: an old row should draw as it always did, not as an empty box.
 	 */
 	results?: SearchResultRow[];
+	noted?: NotedEntry;
 }
 
 /** One model round-trip that ended in tool calls, and the calls it made. */
@@ -73,6 +83,7 @@ export interface TimelineTool {
 	status: 'running' | 'ok' | 'error';
 	detail?: string;
 	results?: SearchResultRow[];
+	noted?: NotedEntry;
 }
 
 export interface TimelineStep {
@@ -137,6 +148,7 @@ export type TimelineChunk =
 			callId?: string;
 			stepId?: string;
 			results?: SearchResultRow[];
+			noted?: NotedEntry;
 	  }
 	| { type: 'stage'; name: string; detail?: string }
 	| { type: 'notice'; text: string }
@@ -226,7 +238,8 @@ export function applyChunk(items: TimelineItem[], chunk: TimelineChunk): Timelin
 		name: chunk.name,
 		status: chunk.status,
 		detail: chunk.detail,
-		results: chunk.results
+		results: chunk.results,
+		noted: chunk.noted
 	};
 
 	if (stepIdx === -1) {
@@ -259,7 +272,8 @@ export function applyChunk(items: TimelineItem[], chunk: TimelineChunk): Timelin
 			detail: chunk.detail ?? tools[toolIdx].detail,
 			// Same reason as `detail`: the running chunk may be the one carrying the
 			// results, and a terminal chunk without them must not erase the box.
-			results: chunk.results ?? tools[toolIdx].results
+			results: chunk.results ?? tools[toolIdx].results,
+			noted: chunk.noted ?? tools[toolIdx].noted
 		};
 
 	const next = [...items];
@@ -284,6 +298,17 @@ export function unfinishedNote(stopReason: string | undefined | null): string | 
 	return null;
 }
 
+/**
+ * What a finished reply noted in the person's profile. A reply that noted
+ * something opens its run under it, because a note folded into "2 steps" is
+ * one the person never sees and so can never undo.
+ */
+export function notedIn(trace: MessageTrace | null | undefined): NotedEntry[] {
+	return (trace?.steps ?? []).flatMap((s) =>
+		s.toolCalls.flatMap((c) => (c.noted ? [c.noted] : []))
+	);
+}
+
 /** Render a finished run's stored trace as timeline items. */
 export function itemsFromTrace(trace: MessageTrace | null | undefined): TimelineItem[] {
 	return (trace?.steps ?? []).map((s) => ({
@@ -296,7 +321,8 @@ export function itemsFromTrace(trace: MessageTrace | null | undefined): Timeline
 			name: c.name,
 			status: c.status ?? 'ok',
 			detail: c.summary,
-			results: c.results
+			results: c.results,
+			noted: c.noted
 		}))
 	}));
 }

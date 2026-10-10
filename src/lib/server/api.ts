@@ -6,10 +6,26 @@ import {
 	getSetting,
 	type AlignmentSettings
 } from '$lib/server/settings';
+import { ProfileError, ProfileNotFound } from '$lib/server/profile';
 
 export function requireUser(locals: App.Locals): SessionUser {
 	if (!locals.user) error(401, 'Unauthorized');
 	return locals.user;
+}
+
+/**
+ * A Profile call, with its refusals answered as HTTP: not found and not yours
+ * alike as 404, anything else it refused as 400 in its own words, which are
+ * written for the person reading the page.
+ */
+export function profileWrite<T>(fn: () => T): T {
+	try {
+		return fn();
+	} catch (err) {
+		if (err instanceof ProfileNotFound) error(404, err.message);
+		if (err instanceof ProfileError) error(400, err.message);
+		throw err;
+	}
 }
 
 export function requireAdmin(locals: App.Locals): SessionUser {

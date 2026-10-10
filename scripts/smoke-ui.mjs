@@ -280,7 +280,7 @@ const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
 
 // 1. Every page renders, and renders quietly. A page that throws during
 //    hydration still answers 200, so the bash smoke calls it healthy.
-for (const path of ['/chat', '/code', '/boards', '/library', '/memory', '/ivory', '/ivory/new', '/settings', '/observatory', '/alignment']) {
+for (const path of ['/chat', '/code', '/boards', '/library', '/profile', '/memory', '/ivory', '/ivory/new', '/settings', '/observatory', '/alignment']) {
 	problems = [];
 	// Not networkidle: the app holds SSE streams open (notifications, the
 	// Observatory feed), so the network is never idle and every goto would sit
@@ -1091,6 +1091,84 @@ check(
 	if (fail.length) await shot('memory');
 }
 
+// N+0b. The Profile page. Adding, pinning and forgetting happen here, and the
+//       page shows exactly what each agent is given, so all of it has to work
+//       from the page and not only from the API.
+{
+	problems = [];
+	await page.goto(`${B}/profile`);
+	await page.locator('.profile-page h1').waitFor();
+	check(
+		'the rail groups Profile under Knowledge',
+		await page.locator('.nav .cluster', { hasText: 'Knowledge' }).getByRole('link', { name: 'Profile' }).count(),
+		1
+	);
+	const adding = page.locator('.profile-page .card', { hasText: 'Add something' });
+	await adding.locator('select').first().selectOption('life/constraints');
+	await adding.getByLabel('What is true').fill('Allergic to SMOKE-PEANUTS.');
+	await adding.getByRole('button', { name: 'Add', exact: true }).click();
+	const row = page.locator('.profile-page ul.entries > li', { hasText: 'SMOKE-PEANUTS' });
+	await row.waitFor();
+	check('an entry added on the page appears under its domain', await row.count(), 1);
+	await row.getByRole('button', { name: 'Pin', exact: true }).click();
+	await row.locator('.badge', { hasText: 'pinned' }).waitFor();
+	check('pinning it says so', await row.locator('.badge', { hasText: 'pinned' }).count(), 1);
+	const chatBlock = page.locator('.profile-page details', { hasText: 'Chat' });
+	await chatBlock.locator('summary').click();
+	check(
+		'and the chat agent is given it',
+		(await chatBlock.locator('pre').innerText()).includes('SMOKE-PEANUTS'),
+		true
+	);
+	await row.getByRole('button', { name: 'Forget', exact: true }).click();
+	const dialog = page.locator('dialog.confirm');
+	await dialog.waitFor();
+	await dialog.getByRole('button', { name: 'Forget it' }).click();
+	await row.waitFor({ state: 'detached' });
+	check('forgetting it asks first, then removes it', await row.count(), 0);
+	check('the profile page renders quietly throughout', problems, []);
+	if (fail.length) await shot('profile');
+}
+
+// N+0c. A note an agent makes in a chat shows under the reply with an Undo,
+//       and stays in sight once the run has finished rather than folding into
+//       its steps. The mock notes when a message starts NOTE-THIS.
+{
+	problems = [];
+	const noted = async () =>
+		(await as(ALICE, '/api/profile')).domains
+			.flatMap((d) => d.subdomains.flatMap((x) => x.entries))
+			.some((e) => e.claim.includes('PROFILE-NOTED'));
+	const before = new Set((await as(ALICE, '/api/chats')).map((c) => c.id));
+	await page.goto(`${B}/chat`);
+	await page.getByRole('button', { name: '+ New chat' }).click();
+	await page.getByRole('textbox').first().fill('NOTE-THIS I ride an e-bike everywhere');
+	await page.keyboard.press('Enter');
+	const chip = page.locator('.msg.assistant .noted', { hasText: 'PROFILE-NOTED' });
+	await chip.waitFor({ timeout: 20_000 });
+	check('the finished reply shows what was noted', await chip.locator('.chip').innerText(), 'Noted: Gets around by e-bike, PROFILE-NOTED.');
+	check('and it is in the profile', await noted(), true);
+	await chip.getByRole('button', { name: 'Undo' }).click();
+	await chip.locator('.noted-state', { hasText: 'Undone' }).waitFor();
+	check('Undo takes it out of the profile', await noted(), false);
+	// Reopened the way a link does, since the chat page opens a chat only when
+	// the address names it.
+	// The one chat this block made; its title is whatever the titler chose.
+	const noteChat = (await as(ALICE, '/api/chats')).find((c) => !before.has(c.id));
+	await page.goto(`${B}/chat?chat=${noteChat.id}`);
+	const again = page.locator('.msg.assistant .noted', { hasText: 'PROFILE-NOTED' });
+	await again.waitFor();
+	await again.getByRole('button', { name: 'Undo' }).click();
+	await again.locator('.noted-state', { hasText: 'Already removed' }).waitFor();
+	check('and a second Undo, once the chat is reopened, says it is already gone', await again.locator('.noted-state').innerText(), 'Already removed');
+	// The second Undo is answered 404 on purpose, and Chromium logs any 404 a
+	// page fetches. That one line is expected; anything else is not.
+	check('the note and its Undo render quietly', problems, [
+		'console: Failed to load resource: the server responded with a status of 404 (Not Found)'
+	]);
+	if (fail.length) await shot('noted');
+}
+
 // N+1. "+ New chat" must not create anything until a message is sent.
 {
 	problems = [];
@@ -1759,6 +1837,7 @@ check(
 		// docked feed is display:none at this width, so this is the way there.
 		check('More holds everything the bar could not', items, [
 			'◇ Memory',
+			'◐ Profile',
 			'▲ Ivory Tower',
 			'◉ Alignment',
 			'⚙ Settings',

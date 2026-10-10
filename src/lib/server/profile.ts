@@ -112,6 +112,12 @@ export const PROFILE_SCOPES: Record<string, ProfileScope> = {
 /** A write the store refused, worded for the person or agent who attempted it. */
 export class ProfileError extends Error {}
 
+/**
+ * The entry or entity is not there, or is someone else's: the two are worded
+ * the same, so a route answering 404 for both says nothing about which.
+ */
+export class ProfileNotFound extends ProfileError {}
+
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
 
 function newId(): string {
@@ -255,7 +261,7 @@ export function updateEntity(
 		.from(profileEntities)
 		.where(and(eq(profileEntities.userId, userId), eq(profileEntities.id, id)))
 		.get();
-	if (!existing) throw new ProfileError('No such person or thing in this profile.');
+	if (!existing) throw new ProfileNotFound('No such person or thing in this profile.');
 	const name = patch.name !== undefined ? cleanName(patch.name, 'A name') : existing.name;
 	// Through cleanAka either way, so a rename to one of the other names does not
 	// leave it in both places.
@@ -627,6 +633,19 @@ function ownEntry(userId: string, id: string): ProfileEntry | null {
 	);
 }
 
+/** One of this person's entries, any status, or null: someone else's id reads as absent. */
+export function getEntry(userId: string, id: string): ProfileEntry | null {
+	return ownEntry(userId, id);
+}
+
+/** Whether a task may see, and so note into, this part of the profile. */
+export function scopeAllows(task: string, domain: Domain, subdomain: string): boolean {
+	const scope = PROFILE_SCOPES[task];
+	if (!scope) return false;
+	if (scope.paths === '*') return true;
+	return scope.paths.some((p) => p === domain || p === `${domain}/${subdomain}`);
+}
+
 /** Active and not past its date, whether or not anything has swept it yet. */
 const isCurrent = (e: ProfileEntry | null, now: Date): e is ProfileEntry =>
 	!!e && e.status === 'active' && (!e.expiresAt || e.expiresAt.getTime() > now.getTime());
@@ -643,7 +662,7 @@ export function correctEntry(
 ): ProfileEntry {
 	const now = opts.now ?? new Date();
 	const old = ownEntry(userId, id);
-	if (!isCurrent(old, now)) throw new ProfileError(`No current entry ${id}.`);
+	if (!isCurrent(old, now)) throw new ProfileNotFound(`No current entry ${id}.`);
 	return db.transaction(() => {
 		// Superseded first, so the replacement is not counted against the cap the
 		// entry it replaces is already using.
@@ -672,7 +691,7 @@ export function correctEntry(
 
 export function setPinned(userId: string, id: string, pinned: boolean, now = new Date()): ProfileEntry {
 	const entry = ownEntry(userId, id);
-	if (!isCurrent(entry, now)) throw new ProfileError(`No current entry ${id}.`);
+	if (!isCurrent(entry, now)) throw new ProfileNotFound(`No current entry ${id}.`);
 	if (pinned && entry.sensitivity === 'private') {
 		throw new ProfileError('A private entry cannot be pinned: the brief reaches every agent.');
 	}
@@ -687,7 +706,7 @@ export function setPinned(userId: string, id: string, pinned: boolean, now = new
 /** Making something private unpins it, since a private entry never reaches the brief. */
 export function setSensitivity(userId: string, id: string, sensitivity: Sensitivity): ProfileEntry {
 	const entry = ownEntry(userId, id);
-	if (!entry) throw new ProfileError(`No entry ${id}.`);
+	if (!entry) throw new ProfileNotFound(`No entry ${id}.`);
 	const pinned = sensitivity === 'private' ? false : entry.pinned;
 	db.update(profileEntries)
 		.set({ sensitivity, pinned })
@@ -730,6 +749,30 @@ export function deleteEntry(userId: string, id: string): number {
 			.run();
 	});
 	return chain.length;
+}
+
+/**
+ * Take back a note an agent just made. A new entry goes; a correction goes and
+ * the version it replaced is current again, which is what the person meant by
+ * pressing Undo on it.
+ */
+export function undoNote(userId: string, id: string): boolean {
+	const entry = ownEntry(userId, id);
+	if (!entry || entry.status !== 'active') return false;
+	const previous = entry.supersedes ? ownEntry(userId, entry.supersedes) : null;
+	db.transaction((tx) => {
+		unindex(tx, [id]);
+		tx.delete(profileEntries)
+			.where(and(eq(profileEntries.userId, userId), eq(profileEntries.id, id)))
+			.run();
+		if (previous?.status === 'superseded') {
+			tx.update(profileEntries)
+				.set({ status: 'active' })
+				.where(and(eq(profileEntries.userId, userId), eq(profileEntries.id, previous.id)))
+				.run();
+		}
+	});
+	return true;
 }
 
 export function wipeProfile(userId: string): void {
@@ -1005,4 +1048,90 @@ export function lookup(
 	);
 	const found = ids.map((id) => rows.get(id)).filter((e): e is ProfileEntry => !!e);
 	return capped(found.map(line), LIMITS.searchLines, total - found.length);
+}
+
+// --- for the person ---------------------------------------------------------
+
+export interface ProfileSubdomainView {
+	name: string;
+	/** What the page calls it: the subdomain, or for people the person's name. */
+	label: string;
+	custom: boolean;
+	sensitivity: Sensitivity;
+	entries: ProfileEntry[];
+}
+
+export interface ProfileView {
+	domains: { domain: Domain; subdomains: ProfileSubdomainView[] }[];
+	entities: ProfileEntity[];
+	count: number;
+	/** Characters the pinned brief is using, against LIMITS.briefChars. */
+	briefUsed: number;
+}
+
+/** Everything current, laid out the way the page and the export read it. */
+export function profileView(userId: string, now = new Date()): ProfileView {
+	const entries = sortEntries(userId, listEntries(userId, now));
+	const entities = listEntities(userId);
+	const domains = DOMAINS.map((domain) => {
+		const custom = domain === 'people' ? [] : customSubdomains(userId, domain).map((s) => s.name);
+		const subdomains = subdomainsOf(userId, domain).map((name) => ({
+			name,
+			label:
+				domain === 'people' ? (entities.find((e) => e.id === name)?.name ?? name) : name,
+			custom: custom.includes(name),
+			sensitivity: defaultSensitivity(userId, domain, name),
+			entries: entries.filter((e) => e.domain === domain && e.subdomain === name)
+		}));
+		return { domain, subdomains };
+	});
+	return { domains, entities, count: entries.length, briefUsed: briefCharsUsed(userId, now) };
+}
+
+/** The block each task gets, so the page can show exactly what an agent is given. */
+export function agentBlocks(userId: string, now = new Date()): { task: string; block: string }[] {
+	return Object.keys(PROFILE_SCOPES).map((task) => ({ task, block: profileBlock(userId, task, now) }));
+}
+
+/** The whole profile as a markdown file a person can read, keep or move elsewhere. */
+export function exportMarkdown(userId: string, now = new Date()): string {
+	const view = profileView(userId, now);
+	const out = [
+		'# Profile',
+		'',
+		`Exported ${isoDate(now)}. Marked: pinned (in the brief every agent sees), private (only a chat agent can look it up), and the date something stops being true.`
+	];
+	const named = (id: string) => view.entities.find((e) => e.id === id);
+	const isPersonal = (id: string) => ['person', 'pet'].includes(named(id)?.kind ?? '');
+	for (const { domain, subdomains } of view.domains) {
+		// People and pets are listed even with nothing on their card: who someone
+		// lives with is worth keeping on its own.
+		const filled = subdomains.filter(
+			(s) => s.entries.length || (domain === 'people' && isPersonal(s.name))
+		);
+		if (!filled.length) continue;
+		out.push('', `## ${domain}`);
+		for (const sub of filled) {
+			const entity = domain === 'people' ? named(sub.name) : null;
+			const heading = entity?.relation ? `${sub.label} (${entity.relation})` : sub.label;
+			out.push('', `### ${heading}`);
+			for (const e of sub.entries) {
+				const marks = [
+					e.pinned ? 'pinned' : '',
+					e.sensitivity === 'private' ? 'private' : '',
+					e.expiresAt ? `until ${isoDate(e.expiresAt)}` : ''
+				].filter(Boolean);
+				out.push(`- ${e.claim}${marks.length ? ` (${marks.join(', ')})` : ''}`);
+			}
+		}
+	}
+	const carded = new Set(
+		view.domains.find((d) => d.domain === 'people')!.subdomains.filter((s) => s.entries.length).map((s) => s.name)
+	);
+	const others = view.entities.filter((e) => !isPersonal(e.id) && !carded.has(e.id));
+	if (others.length) {
+		out.push('', '## other names');
+		for (const e of others) out.push(`- ${e.name}: ${e.kind}${e.relation ? `, ${e.relation}` : ''}`);
+	}
+	return out.join('\n') + '\n';
 }

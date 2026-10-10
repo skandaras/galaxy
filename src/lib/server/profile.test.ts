@@ -8,17 +8,20 @@ import {
 	createEntity,
 	deleteEntity,
 	deleteEntry,
+	exportMarkdown,
 	findEntity,
 	history,
 	LIMITS,
 	listEntries,
 	lookup,
 	ProfileError,
+	ProfileNotFound,
 	profileBlock,
 	resolvePath,
 	setPinned,
 	setSensitivity,
 	subdomainsOf,
+	undoNote,
 	updateEntity,
 	wipeProfile,
 	type EntryInput
@@ -421,5 +424,61 @@ describe('lookup', () => {
 	it('marks a private entry so the agent handles it with care', () => {
 		add({ domain: 'life', subdomain: 'health', claim: 'Coeliac; avoids gluten.' });
 		expect(lookup(ALICE, 'chat', { query: 'gluten' }).lines[0]).toMatch(/\(life\/health\) \(private\)$/);
+	});
+});
+
+describe('undoing a note', () => {
+	it('takes a new entry away', () => {
+		const { entry } = add({ claim: 'Uses Neovim daily.' });
+		expect(undoNote(ALICE, entry.id)).toBe(true);
+		expect(listEntries(ALICE, NOW)).toEqual([]);
+		expect(lookup(ALICE, 'chat', { query: 'Neovim' }).lines).toEqual([]);
+	});
+
+	it('puts back what a correction replaced', () => {
+		const first = add({ claim: 'Works at Acme.' }).entry;
+		const second = correctEntry(ALICE, first.id, { claim: 'Works at Globex.' }, { source: 'stated', now: NOW });
+		expect(undoNote(ALICE, second.id)).toBe(true);
+		expect(listEntries(ALICE, NOW).map((e) => [e.id, e.claim])).toEqual([[first.id, 'Works at Acme.']]);
+		expect(lookup(ALICE, 'chat', { query: 'Acme' }).lines).toHaveLength(1);
+	});
+
+	it('does nothing for someone else, or twice', () => {
+		const { entry } = add({ claim: 'Uses Neovim daily.' });
+		expect(undoNote(BOB, entry.id)).toBe(false);
+		expect(undoNote(ALICE, entry.id)).toBe(true);
+		expect(undoNote(ALICE, entry.id)).toBe(false);
+	});
+});
+
+describe('not found', () => {
+	it('is a ProfileNotFound for a missing entry and for someone else’s alike', () => {
+		const { entry } = add({ claim: 'Uses Neovim daily.' });
+		for (const [user, id] of [[BOB, entry.id], [ALICE, 'nosuchid']]) {
+			expect(() => setPinned(user, id, true)).toThrow(ProfileNotFound);
+			expect(() => setSensitivity(user, id, 'private')).toThrow(ProfileNotFound);
+			expect(() => correctEntry(user, id, { claim: 'Uses Emacs daily.' }, { source: 'stated' })).toThrow(
+				ProfileNotFound
+			);
+		}
+		// A refusal of something that is there is not a not-found.
+		expect(() => add({ claim: 'short' })).toThrow(ProfileError);
+		expect(() => add({ claim: 'short' })).not.toThrow(ProfileNotFound);
+	});
+});
+
+describe('export', () => {
+	it('writes the profile out by domain, with people by name and private things marked', () => {
+		const aroha = createEntity(ALICE, { kind: 'person', name: 'Aroha', relation: 'partner' });
+		createEntity(ALICE, { kind: 'organisation', name: 'Acme', relation: 'employer' });
+		add({ domain: 'people', subdomain: aroha.id, claim: 'Aroha is a GP on weekend shifts.' });
+		add({ domain: 'life', subdomain: 'health', kind: 'constraint', claim: 'Coeliac; avoids gluten.' });
+		add({ claim: 'Uses Neovim daily.', pinned: true });
+		const md = exportMarkdown(ALICE, NOW);
+		expect(md).toContain('## work\n\n### tools\n- Uses Neovim daily. (pinned)');
+		expect(md).toContain('### Aroha (partner)\n- Aroha is a GP on weekend shifts.');
+		expect(md).toContain('- Coeliac; avoids gluten. (private)');
+		expect(md).toContain('## other names\n- Acme: organisation, employer');
+		expect(exportMarkdown(BOB, NOW)).not.toContain('Neovim');
 	});
 });

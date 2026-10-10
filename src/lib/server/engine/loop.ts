@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { reasoningNotes } from '$lib/reasoning-note';
-import type { RunStep, RunToolCall, SearchResultRow } from '$lib/run-timeline';
+import type { NotedEntry, RunStep, RunToolCall, SearchResultRow } from '$lib/run-timeline';
 import { reasoningFor, type ModelChoice } from '$lib/server/providers/registry';
 import type {
 	ChatRequest,
@@ -39,6 +39,8 @@ const ELIDED = '[earlier tool output dropped to stay within the context budget]'
 export interface ToolDisplay {
 	/** Rows to draw under the call, rather than compress into its one-line detail. */
 	results?: SearchResultRow[];
+	/** A profile entry the call wrote, for the reply to offer an undo on. */
+	noted?: NotedEntry;
 }
 
 export interface LoopTool {
@@ -55,6 +57,13 @@ export interface LoopTool {
 	) => Promise<string>;
 	/** Short human-readable summary of a call for traces (e.g. the bash command). */
 	describe?: (args: Record<string, unknown>) => string;
+	/**
+	 * The arguments describe a person, so the Observatory, which admins read,
+	 * gets neither a snippet of them nor an error message that might quote them.
+	 * `describe` still reaches the event, so such a tool keeps it content-free.
+	 * The model and the person's own timeline see everything as usual.
+	 */
+	privateArgs?: boolean;
 	/**
 	 * Safe to run at the same time as other calls in the same batch.
 	 *
@@ -861,6 +870,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 				// Onto the record, so the box survives a reload: the live chunk is gone
 				// the moment the job is, and the trace is all a finished reply keeps.
 				if (display?.results) record.results = display.results;
+				if (display?.noted) record.noted = display.noted;
 				messages.push({ role: 'tool', content: output, tool_call_id: call.id });
 			}
 		}
@@ -1059,7 +1069,12 @@ async function executeToolCall(
 	 * prefix object put the ids between `name` and `status` and broke seven of
 	 * those assertions at once. New fields go on the end.
 	 */
-	const emit = (status: 'running' | 'ok' | 'error', detail?: string, results?: SearchResultRow[]) =>
+	const emit = (
+		status: 'running' | 'ok' | 'error',
+		detail?: string,
+		results?: SearchResultRow[],
+		noted?: NotedEntry
+	) =>
 		pushChunk(job, {
 			type: 'tool',
 			name: call.name,
@@ -1067,7 +1082,8 @@ async function executeToolCall(
 			detail,
 			callId: call.id,
 			stepId,
-			results
+			results,
+			noted
 		});
 	emit('running', summary);
 
@@ -1103,7 +1119,11 @@ async function executeToolCall(
 				name: call.name,
 				status: 'error',
 				durationMs: Date.now() - started,
-				detail: { summary, error, argsChars: call.arguments.length }
+				detail: {
+					summary,
+					error: tool.privateArgs ? `The arguments could not be read (${problem})` : error,
+					argsChars: call.arguments.length
+				}
 			},
 			{ persist }
 		);
@@ -1132,7 +1152,7 @@ async function executeToolCall(
 			},
 			{ persist }
 		);
-		emit('ok', summary, display?.results);
+		emit('ok', summary, display?.results, display?.noted);
 		return { output: capResult(call.name, result), ok: true, display };
 	} catch (err) {
 		emitEvent(
@@ -1146,7 +1166,11 @@ async function executeToolCall(
 				durationMs: Date.now() - started,
 				// What the tool reported before it threw: a refused push carries the
 				// hook runs that refused it, and they were dropped here.
-				detail: { summary, ...meta, error: String(err) }
+				detail: {
+					summary,
+					...meta,
+					error: tool.privateArgs && err instanceof Error ? err.name : String(err)
+				}
 			},
 			{ persist }
 		);
