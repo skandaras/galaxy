@@ -284,6 +284,7 @@ export const CORE_TASKS = [
 	'visual',
 	'vision',
 	'memory',
+	'profile-parse',
 	'skill-optimiser',
 	'ux-audit',
 	'chat-title',

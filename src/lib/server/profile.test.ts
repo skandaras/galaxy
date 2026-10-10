@@ -1,9 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { db, runMigrations } from '$lib/server/db';
 import { profileEntries } from '$lib/server/db/schema';
+import type { Draft, DraftEntry } from '$lib/profile-draft';
 import {
 	addEntry,
 	addSubdomain,
+	cleanDraft,
+	confirmDraft,
 	correctEntry,
 	createEntity,
 	deleteEntity,
@@ -14,6 +17,7 @@ import {
 	LIMITS,
 	listEntries,
 	lookup,
+	parseExport,
 	ProfileError,
 	ProfileNotFound,
 	profileBlock,
@@ -468,17 +472,170 @@ describe('not found', () => {
 });
 
 describe('export', () => {
-	it('writes the profile out by domain, with people by name and private things marked', () => {
-		const aroha = createEntity(ALICE, { kind: 'person', name: 'Aroha', relation: 'partner' });
+	it('writes the profile out by domain, with people by name and anything unusual marked', () => {
+		const aroha = createEntity(ALICE, { kind: 'person', name: 'Aroha', relation: 'partner', aka: ['Ro'] });
 		createEntity(ALICE, { kind: 'organisation', name: 'Acme', relation: 'employer' });
 		add({ domain: 'people', subdomain: aroha.id, claim: 'Aroha is a GP on weekend shifts.' });
 		add({ domain: 'life', subdomain: 'health', kind: 'constraint', claim: 'Coeliac; avoids gluten.' });
+		add({ domain: 'life', subdomain: 'routines', about: aroha.id, claim: 'Swims with her on Mondays.' });
 		add({ claim: 'Uses Neovim daily.', pinned: true });
 		const md = exportMarkdown(ALICE, NOW);
 		expect(md).toContain('## work\n\n### tools\n- Uses Neovim daily. (pinned)');
-		expect(md).toContain('### Aroha (partner)\n- Aroha is a GP on weekend shifts.');
-		expect(md).toContain('- Coeliac; avoids gluten. (private)');
-		expect(md).toContain('## other names\n- Acme: organisation, employer');
+		expect(md).toContain('### Aroha (person, partner; also Ro)\n- Aroha is a GP on weekend shifts.');
+		expect(md).toContain('### Acme (organisation, employer)');
+		expect(md).toContain('- Coeliac; avoids gluten. (constraint, private)');
+		expect(md).toContain('- Swims with her on Mondays. (about Aroha)');
 		expect(exportMarkdown(BOB, NOW)).not.toContain('Neovim');
+	});
+});
+
+describe('reading an export back', () => {
+	/** A profile with something of every shape the file has to carry. */
+	function fill(user: string) {
+		const aroha = createEntity(user, { kind: 'person', name: 'Aroha', relation: 'partner', aka: ['Ro'] });
+		createEntity(user, { kind: 'pet', name: 'Pip', relation: 'dog' });
+		createEntity(user, { kind: 'organisation', name: 'Acme (NZ)', relation: 'employer' });
+		addSubdomain(user, 'interests', 'sailing');
+		const put = (input: Partial<EntryInput> & { claim: string }) => add(input, 'stated', user);
+		put({ claim: 'Uses Neovim daily.', pinned: true });
+		put({ domain: 'people', subdomain: aroha.id, claim: 'Aroha is a GP on weekend shifts.' });
+		put({ domain: 'life', subdomain: 'health', kind: 'constraint', claim: 'Coeliac; avoids gluten.' });
+		put({ domain: 'life', subdomain: 'home', claim: 'Rents a villa in Grey Lynn.', sensitivity: 'normal' });
+		put({ domain: 'life', subdomain: 'routines', about: aroha.id, claim: 'Swims with her on Mondays.' });
+		put({ domain: 'interests', subdomain: 'sailing', kind: 'goal', claim: 'Racing a Laser this summer.' });
+		put({ domain: 'interests', subdomain: 'taste', claim: 'Uses metric (mostly).' });
+		put({
+			domain: 'life',
+			subdomain: 'commitments',
+			kind: 'goal',
+			claim: 'Moving house to Raglan.',
+			pinned: true,
+			expiresAt: new Date('2026-11-01T00:00:00Z')
+		});
+	}
+
+	it('gives back the same file once saved into an empty profile', () => {
+		fill(ALICE);
+		const md = exportMarkdown(ALICE, NOW);
+		const draft = parseExport(md)!;
+		expect(draft.leftOut).toEqual([]);
+		expect(confirmDraft(BOB, draft, 'imported', NOW)).toMatchObject({ ok: true, added: 8, people: 3 });
+		expect(exportMarkdown(BOB, NOW)).toBe(md);
+		expect(listEntries(BOB, NOW).every((e) => e.source === 'imported')).toBe(true);
+	});
+
+	it('keeps a bracket that is not marks as part of what was said', () => {
+		fill(ALICE);
+		const draft = parseExport(exportMarkdown(ALICE, NOW))!;
+		expect(draft.entries.find((e) => e.claim.startsWith('Uses metric'))?.claim).toBe('Uses metric (mostly).');
+		expect(draft.people.find((p) => p.name === 'Acme (NZ)')).toMatchObject({ kind: 'organisation' });
+	});
+
+	it('is not fooled by text that is not an export, and says what it could not place', () => {
+		expect(parseExport('I like sailing and I work at Acme.')).toBeNull();
+		expect(parseExport('# Profile\n\nNothing under any domain.')).toBeNull();
+		const draft = parseExport('# Profile\n\n## work\n\n### tools\n- Uses Neovim daily.\n\n## hobbies\n\n### x\n- Plays chess on Sundays.')!;
+		expect(draft.entries).toHaveLength(1);
+		expect(draft.leftOut[0]).toMatch(/1 line was under a heading/);
+	});
+});
+
+describe('saving a draft', () => {
+	const line = (over: Partial<DraftEntry> & { claim: string }): DraftEntry => ({
+		path: 'work/tools',
+		kind: 'fact',
+		pinned: false,
+		until: null,
+		about: null,
+		sensitivity: null,
+		...over
+	});
+	const draftOf = (entries: DraftEntry[], people: Draft['people'] = []): Draft => ({
+		people,
+		entries,
+		notCarried: [],
+		leftOut: []
+	});
+
+	it('writes nothing when one line is refused, and says which', () => {
+		const result = confirmDraft(
+			ALICE,
+			draftOf(
+				[line({ claim: 'Uses Neovim daily.' }), line({ claim: 'short' }), line({ path: 'work/nowhere/x', claim: 'Filed nowhere at all.' })],
+				[{ name: 'Aroha', kind: 'person', relation: 'partner', aka: [] }]
+			),
+			'survey',
+			NOW
+		);
+		expect(result.ok).toBe(false);
+		expect(!result.ok && result.refusals.map((r) => [r.at, r.index])).toEqual([
+			['entry', 1],
+			['entry', 2]
+		]);
+		expect(listEntries(ALICE, NOW)).toEqual([]);
+		expect(findEntity(ALICE, 'Aroha')).toBeNull();
+		expect(subdomainsOf(ALICE, 'work')).not.toContain('nowhere-x');
+	});
+
+	it('skips a line already held word for word, and reuses someone already there', () => {
+		const aroha = createEntity(ALICE, { kind: 'person', name: 'Aroha', relation: 'partner' });
+		add({ claim: 'Uses Neovim daily.' });
+		const result = confirmDraft(
+			ALICE,
+			draftOf(
+				[
+					line({ claim: 'uses neovim  daily.' }),
+					line({ path: 'people/aroha', claim: 'Works weekend shifts.' }),
+					line({ path: 'life/routines', about: 'Aroha', claim: 'Swims with her on Mondays.' })
+				],
+				[{ name: 'aroha', kind: 'person', relation: '', aka: [] }]
+			),
+			'survey',
+			NOW
+		);
+		expect(result).toEqual({ ok: true, added: 2, skipped: 1, people: 0 });
+		expect(listEntries(ALICE, NOW).filter((e) => e.about === aroha.id)).toHaveLength(2);
+		expect(listEntries(ALICE, NOW).find((e) => e.subdomain === 'routines')?.source).toBe('survey');
+	});
+
+	it('creates a subdomain of their own that a line names, and someone new before their card', () => {
+		const result = confirmDraft(
+			ALICE,
+			draftOf(
+				[
+					line({ path: 'people/Nikau', claim: 'Started school in 2025.' }),
+					line({ path: 'interests/Board games', claim: 'Plays Catan on Fridays.' })
+				],
+				[{ name: 'Nikau', kind: 'person', relation: 'son', aka: [] }]
+			),
+			'survey',
+			NOW
+		);
+		expect(result).toMatchObject({ ok: true, added: 2, people: 1 });
+		expect(subdomainsOf(ALICE, 'interests')).toContain('board-games');
+	});
+
+	it('takes the path’s privacy unless the line says otherwise, and never a fourth kind of privacy', () => {
+		confirmDraft(ALICE, draftOf([line({ path: 'life/health', claim: 'Coeliac; avoids gluten.' })]), 'survey', NOW);
+		expect(listEntries(ALICE, NOW)[0].sensitivity).toBe('private');
+		const bad = confirmDraft(
+			ALICE,
+			draftOf([line({ claim: 'Uses Neovim daily.', sensitivity: 'secret' as never })]),
+			'survey',
+			NOW
+		);
+		expect(!bad.ok && bad.refusals[0].message).toMatch(/one of: normal, personal, private/);
+		expect(() => setSensitivity(ALICE, listEntries(ALICE, NOW)[0].id, 'secret' as never)).toThrow(ProfileError);
+	});
+
+	it('reads a draft sent over the wire as the types it claims', () => {
+		const draft = cleanDraft({ entries: [{ path: 'work/tools', claim: 7, pinned: 'yes', until: 3 }], people: 'Aroha' });
+		expect(draft).toEqual({
+			people: [],
+			entries: [{ path: 'work/tools', kind: '', claim: '', pinned: false, until: null, about: null, sensitivity: null }],
+			notCarried: [],
+			leftOut: []
+		});
+		expect(() => cleanDraft({ entries: Array(LIMITS.entriesPerUser + 1).fill({}) })).toThrow(ProfileError);
 	});
 });

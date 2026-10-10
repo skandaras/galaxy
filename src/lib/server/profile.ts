@@ -3,6 +3,20 @@ import { and, asc, count, eq, gt, inArray, isNull, ne, or, sql, type SQL } from 
 import { db } from '$lib/server/db';
 import { profileEntities, profileEntries, profileSubdomains } from '$lib/server/db/schema';
 import { ftsQuery } from '$lib/server/library';
+import {
+	DOMAINS,
+	ENTITY_KINDS,
+	KINDS,
+	LIMITS,
+	PATH_SENSITIVITY,
+	SEED_SUBDOMAINS,
+	SENSITIVITIES,
+	type Domain,
+	type EntityKind,
+	type Kind,
+	type Sensitivity
+} from '$lib/profile-taxonomy';
+import { emptyDraft, type Draft, type DraftEntry, type DraftPerson } from '$lib/profile-draft';
 
 /**
  * The Profile: what a person has told Galaxy about themselves and their world.
@@ -15,68 +29,12 @@ import { ftsQuery } from '$lib/server/library';
  * is a request and a model under a long context does not always honour it.
  */
 
-export const DOMAINS = ['identity', 'work', 'people', 'life', 'interests'] as const;
-export type Domain = (typeof DOMAINS)[number];
-
-export const KINDS = ['fact', 'preference', 'constraint', 'goal'] as const;
-export type Kind = (typeof KINDS)[number];
-
-export const ENTITY_KINDS = ['person', 'pet', 'organisation', 'project', 'place'] as const;
-export type EntityKind = (typeof ENTITY_KINDS)[number];
-
-export type Sensitivity = 'normal' | 'personal' | 'private';
+export { DOMAINS, ENTITY_KINDS, KINDS, LIMITS, SEED_SUBDOMAINS, SENSITIVITIES };
+export type { Domain, EntityKind, Kind, Sensitivity };
 export type Source = 'stated' | 'survey' | 'inferred' | 'imported';
 
 export type ProfileEntry = typeof profileEntries.$inferSelect;
 export type ProfileEntity = typeof profileEntities.$inferSelect;
-
-/**
- * Suggestions, in the order a person reads them. `people` has none: its second
- * level is the person, because a relation-named bucket ("family") would hold a
- * son and a dog together and a partner alone.
- */
-export const SEED_SUBDOMAINS: Record<Exclude<Domain, 'people'>, readonly string[]> = {
-	identity: ['basics', 'background', 'culture'],
-	work: ['role', 'organisation', 'expertise', 'tools', 'projects'],
-	life: ['home', 'routines', 'commitments', 'logistics', 'constraints', 'health', 'money'],
-	interests: ['pursuits', 'taste', 'learning']
-};
-
-/**
- * Decided by the path, so a model filing a claim never decides how private it
- * is. A person can change it per entry.
- */
-const SEED_SENSITIVITY: Record<string, Sensitivity> = {
-	'identity/culture': 'personal',
-	'life/home': 'personal',
-	'life/health': 'private',
-	'life/money': 'private'
-};
-
-export const LIMITS = {
-	entriesPerUser: 500,
-	entriesPerSubdomain: 25,
-	/** A person's card, `people/<id>`. Their claims elsewhere count where they are filed. */
-	entriesPerPerson: 8,
-	entitiesPerUser: 60,
-	customSubdomainsPerDomain: 4,
-	/** The pinned brief, in characters: tokens depend on the provider, characters do not. */
-	briefChars: 2_400,
-	namesShown: 12,
-	namesChars: 400,
-	claimMin: 8,
-	claimMax: 160,
-	quoteMax: 280,
-	nameMax: 40,
-	akaCount: 4,
-	relationMax: 32,
-	subdomainMax: 24,
-	expiryDays: 90,
-	searchLines: 12,
-	/** A subdomain read shows the whole subdomain, so it is held to the subdomain's cap. */
-	pathLines: 25,
-	lookupChars: 4_000
-} as const;
 
 interface ProfileScope {
 	/** Domains or `domain/subdomain` paths this task may see; `*` is everything. */
@@ -132,6 +90,10 @@ function isDomain(raw: unknown): raw is Domain {
 
 function isKind(raw: unknown): raw is Kind {
 	return (KINDS as readonly string[]).includes(raw as string);
+}
+
+export function isSensitivity(raw: unknown): raw is Sensitivity {
+	return (SENSITIVITIES as readonly string[]).includes(raw as string);
 }
 
 const notExpired = (now: Date) =>
@@ -350,6 +312,14 @@ export function subdomainsOf(userId: string, domain: Domain): string[] {
 	return [...SEED_SUBDOMAINS[domain], ...customSubdomains(userId, domain).map((s) => s.name)];
 }
 
+/** "Board games" as the subdomain it would be: `board-games`. */
+function subdomainName(raw: unknown): string {
+	return oneLine(raw)
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+}
+
 export function addSubdomain(
 	userId: string,
 	domain: Domain,
@@ -358,13 +328,13 @@ export function addSubdomain(
 	now = new Date()
 ): string {
 	if (!isDomain(domain)) throw new ProfileError(`No domain called "${domain}".`);
+	if (!isSensitivity(sensitivity)) {
+		throw new ProfileError(`Who may see it is one of: ${SENSITIVITIES.join(', ')}.`);
+	}
 	if (domain === 'people') {
 		throw new ProfileError('People are added as people, not as subdomains.');
 	}
-	const name = oneLine(rawName)
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-+|-+$/g, '');
+	const name = subdomainName(rawName);
 	if (!name || name.length > LIMITS.subdomainMax) {
 		throw new ProfileError(`A subdomain name is 1 to ${LIMITS.subdomainMax} letters, digits or dashes.`);
 	}
@@ -394,7 +364,7 @@ function subdomainExists(userId: string, domain: Domain, subdomain: string): boo
 
 function defaultSensitivity(userId: string, domain: Domain, subdomain: string): Sensitivity {
 	if (domain === 'people') return 'personal';
-	const seeded = SEED_SENSITIVITY[`${domain}/${subdomain}`];
+	const seeded = PATH_SENSITIVITY[`${domain}/${subdomain}`];
 	if (seeded) return seeded;
 	return customSubdomains(userId, domain).find((s) => s.name === subdomain)?.sensitivity ?? 'normal';
 }
@@ -603,6 +573,12 @@ function prepareEntry(userId: string, input: EntryInput, source: Source, now: Da
 		const latest = now.getTime() + LIMITS.expiryDays * 86_400_000;
 		if (expiresAt.getTime() > latest) expiresAt = new Date(latest);
 	}
+	// Checked here, not only in the routes: the column is text, so a value
+	// outside the three would be stored, and every privacy rule compares
+	// against 'private' and would read it as something less.
+	if (input.sensitivity != null && !isSensitivity(input.sensitivity)) {
+		throw new ProfileError(`Who may see it is one of: ${SENSITIVITIES.join(', ')}.`);
+	}
 	const sensitivity = input.sensitivity ?? defaultSensitivity(userId, input.domain, subdomain);
 	const pinned = !!input.pinned;
 	if (pinned && sensitivity === 'private') {
@@ -705,6 +681,9 @@ export function setPinned(userId: string, id: string, pinned: boolean, now = new
 
 /** Making something private unpins it, since a private entry never reaches the brief. */
 export function setSensitivity(userId: string, id: string, sensitivity: Sensitivity): ProfileEntry {
+	if (!isSensitivity(sensitivity)) {
+		throw new ProfileError(`Who may see it is one of: ${SENSITIVITIES.join(', ')}.`);
+	}
 	const entry = ownEntry(userId, id);
 	if (!entry) throw new ProfileNotFound(`No entry ${id}.`);
 	const pinned = sensitivity === 'private' ? false : entry.pinned;
@@ -1093,45 +1072,283 @@ export function agentBlocks(userId: string, now = new Date()): { task: string; b
 	return Object.keys(PROFILE_SCOPES).map((task) => ({ task, block: profileBlock(userId, task, now) }));
 }
 
-/** The whole profile as a markdown file a person can read, keep or move elsewhere. */
+/**
+ * What a path gives an entry, leaving aside a subdomain of the person's own.
+ * The export marks a sensitivity only where an entry differs from this, and
+ * reading the file back starts from it, so the two agree without the file
+ * having to say how each custom subdomain was set up.
+ */
+function pathDefault(domain: Domain, subdomain: string): Sensitivity {
+	return domain === 'people' ? 'personal' : (PATH_SENSITIVITY[`${domain}/${subdomain}`] ?? 'normal');
+}
+
+/**
+ * The whole profile as a markdown file a person can read, keep, or import
+ * into another Galaxy.
+ *
+ * It carries what reading it back needs (each person's kind and other names,
+ * an entry's kind, who it is about, a sensitivity off its path's default) and
+ * nothing a person would not recognise as theirs: no ids, quotes or history.
+ */
 export function exportMarkdown(userId: string, now = new Date()): string {
 	const view = profileView(userId, now);
 	const out = [
 		'# Profile',
 		'',
-		`Exported ${isoDate(now)}. Marked: pinned (in the brief every agent sees), private (only a chat agent can look it up), and the date something stops being true.`
+		`Exported ${isoDate(now)}. Marks in brackets after a line: its kind when it is not a fact, who it is about, pinned (in the brief every agent sees), normal, personal or private where that is not the usual for its place (private: only a chat agent can look it up), and the date it stops being true. Import this file on the Profile page to bring it back.`
 	];
-	const named = (id: string) => view.entities.find((e) => e.id === id);
-	const isPersonal = (id: string) => ['person', 'pet'].includes(named(id)?.kind ?? '');
+	const named = new Map(view.entities.map((e) => [e.id, e]));
 	for (const { domain, subdomains } of view.domains) {
-		// People and pets are listed even with nothing on their card: who someone
-		// lives with is worth keeping on its own.
-		const filled = subdomains.filter(
-			(s) => s.entries.length || (domain === 'people' && isPersonal(s.name))
-		);
-		if (!filled.length) continue;
+		// Everyone is listed under people, with a card or without: who someone
+		// lives with, and what their employer is called, are worth keeping alone.
+		const listed = domain === 'people' ? subdomains : subdomains.filter((s) => s.entries.length);
+		if (!listed.length) continue;
 		out.push('', `## ${domain}`);
-		for (const sub of filled) {
-			const entity = domain === 'people' ? named(sub.name) : null;
-			const heading = entity?.relation ? `${sub.label} (${entity.relation})` : sub.label;
-			out.push('', `### ${heading}`);
+		for (const sub of listed) {
+			const entity = domain === 'people' ? named.get(sub.name) : null;
+			out.push('', `### ${entity ? personHeading(entity) : sub.label}`);
 			for (const e of sub.entries) {
+				const about = e.about && e.domain !== 'people' ? named.get(e.about)?.name : null;
 				const marks = [
+					e.kind === 'fact' ? '' : e.kind,
+					about ? `about ${about}` : '',
 					e.pinned ? 'pinned' : '',
-					e.sensitivity === 'private' ? 'private' : '',
+					e.sensitivity === 'private' || e.sensitivity !== pathDefault(e.domain, e.subdomain)
+						? e.sensitivity
+						: '',
 					e.expiresAt ? `until ${isoDate(e.expiresAt)}` : ''
 				].filter(Boolean);
 				out.push(`- ${e.claim}${marks.length ? ` (${marks.join(', ')})` : ''}`);
 			}
 		}
 	}
-	const carded = new Set(
-		view.domains.find((d) => d.domain === 'people')!.subdomains.filter((s) => s.entries.length).map((s) => s.name)
-	);
-	const others = view.entities.filter((e) => !isPersonal(e.id) && !carded.has(e.id));
-	if (others.length) {
-		out.push('', '## other names');
-		for (const e of others) out.push(`- ${e.name}: ${e.kind}${e.relation ? `, ${e.relation}` : ''}`);
-	}
 	return out.join('\n') + '\n';
+}
+
+function personHeading(e: ProfileEntity): string {
+	const meta = [e.kind, e.relation].filter(Boolean).join(', ');
+	return `${e.name} (${meta}${e.aka.length ? `; also ${e.aka.join(', ')}` : ''})`;
+}
+
+/** A trailing bracket: "Vegetarian. (constraint, pinned)" or "Aroha (person, partner)". */
+const TRAILING = /^(.*\S)\s+\(([^()]*)\)$/;
+
+function readPersonHeading(heading: string): DraftPerson {
+	const m = TRAILING.exec(heading);
+	if (!m) return { name: heading, kind: 'person', relation: '', aka: [] };
+	const [meta, also = ''] = m[2].split('; also ');
+	const [first, ...rest] = meta.split(',').map((s) => s.trim());
+	const kind = (ENTITY_KINDS as readonly string[]).includes(first) ? (first as EntityKind) : null;
+	return {
+		name: m[1],
+		kind: kind ?? 'person',
+		relation: (kind ? rest : [first, ...rest]).filter(Boolean).join(', '),
+		aka: also
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean)
+	};
+}
+
+function readLine(text: string, domain: Domain, place: string): DraftEntry {
+	const entry: DraftEntry = {
+		path: `${domain}/${place}`,
+		kind: 'fact',
+		claim: text,
+		pinned: false,
+		until: null,
+		about: null,
+		sensitivity: pathDefault(domain, place)
+	};
+	const m = TRAILING.exec(text);
+	if (!m) return entry;
+	const marked: DraftEntry = { ...entry, claim: m[1] };
+	for (const raw of m[2].split(',')) {
+		const t = raw.trim();
+		if (isKind(t)) marked.kind = t;
+		else if (t === 'pinned') marked.pinned = true;
+		else if (isSensitivity(t)) marked.sensitivity = t;
+		else if (/^until \d{4}-\d{2}-\d{2}$/.test(t)) marked.until = t.slice(6);
+		else if (/^about \S/.test(t)) marked.about = t.slice(6).trim();
+		// A bracket that is not all marks is part of what was said: "Uses metric (mostly)".
+		else return entry;
+	}
+	return marked;
+}
+
+/**
+ * The Profile's own export read back into a draft, or null when the text is
+ * not one. No model: the format is this file's, so a parser is exact and
+ * costs nothing, and the person still reviews every line before it is saved.
+ */
+export function parseExport(markdown: string): Draft | null {
+	const lines = markdown.split(/\r?\n/).map((l) => l.trim());
+	if (lines.find(Boolean) !== '# Profile') return null;
+	const heading = (l: string) => (l.startsWith('## ') ? l.slice(3).trim().toLowerCase() : null);
+	if (!lines.some((l) => isDomain(heading(l)))) return null;
+
+	const draft = emptyDraft();
+	let domain: Domain | null = null;
+	let place: string | null = null;
+	let unread = 0;
+	for (const line of lines) {
+		const d = heading(line);
+		if (d !== null) {
+			domain = isDomain(d) ? d : null;
+			place = null;
+		} else if (line.startsWith('### ')) {
+			const text = line.slice(4).trim();
+			if (domain === 'people') {
+				const person = readPersonHeading(text);
+				draft.people.push(person);
+				place = person.name;
+			} else {
+				place = text.toLowerCase();
+			}
+		} else if (line.startsWith('- ')) {
+			if (domain && place) draft.entries.push(readLine(line.slice(2).trim(), domain, place));
+			else unread++;
+		}
+	}
+	if (unread) {
+		draft.leftOut.push(
+			`${unread} ${unread === 1 ? 'line was' : 'lines were'} under a heading this profile does not have.`
+		);
+	}
+	return draft;
+}
+
+/** A draft as it arrived over the wire, with every field made the type it claims to be. */
+export function cleanDraft(raw: unknown): Draft {
+	const d = (raw ?? {}) as Record<string, unknown>;
+	const list = (v: unknown) => (Array.isArray(v) ? v : []);
+	const text = (v: unknown) => (typeof v === 'string' ? v : '');
+	const people = list(d.people).map((p): DraftPerson => ({
+		name: text(p?.name),
+		kind: text(p?.kind) as EntityKind,
+		relation: text(p?.relation),
+		aka: list(p?.aka).map(text).filter(Boolean)
+	}));
+	const entries = list(d.entries).map((e): DraftEntry => ({
+		path: text(e?.path),
+		kind: text(e?.kind) as Kind,
+		claim: text(e?.claim),
+		pinned: e?.pinned === true,
+		until: text(e?.until) || null,
+		about: text(e?.about) || null,
+		sensitivity: (text(e?.sensitivity) || null) as Sensitivity | null
+	}));
+	if (people.length > LIMITS.entitiesPerUser || entries.length > LIMITS.entriesPerUser) {
+		throw new ProfileError(
+			`A draft holds at most ${LIMITS.entriesPerUser} entries and ${LIMITS.entitiesPerUser} people.`
+		);
+	}
+	return { people, entries, notCarried: [], leftOut: [] };
+}
+
+export interface DraftRefusal {
+	at: 'person' | 'entry';
+	/** Its position in the draft as sent, so the review can say it beside the line. */
+	index: number;
+	message: string;
+}
+
+export type ConfirmResult =
+	| { ok: true; added: number; skipped: number; people: number }
+	| { ok: false; refusals: DraftRefusal[] };
+
+/** Where a draft line goes, making the subdomain of their own it names if it is new. */
+function draftPlace(userId: string, path: string, now: Date): { domain: Domain; subdomain: string } {
+	const [rawDomain, ...rest] = oneLine(path).split('/');
+	const domain = rawDomain.toLowerCase();
+	if (!isDomain(domain) || domain === 'people' || rest.length !== 1) return resolvePath(userId, path);
+	const name = subdomainName(rest[0]);
+	if (!subdomainExists(userId, domain, name)) addSubdomain(userId, domain, name, 'normal', now);
+	return { domain, subdomain: name };
+}
+
+function untilDate(raw: string | null): Date | null {
+	if (!raw) return null;
+	const date = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? new Date(`${raw}T00:00:00Z`) : null;
+	if (!date || Number.isNaN(date.getTime())) throw new ProfileError('A date is written YYYY-MM-DD.');
+	return date;
+}
+
+/**
+ * Write a draft the person has reviewed, all of it or none of it.
+ *
+ * One refusal undoes the rest, and every refusal comes back against its line:
+ * half a survey saved, with the person left to work out which half, is worse
+ * than being asked to fix one line and save again. A line already held word
+ * for word is skipped, so saving the same export twice adds nothing.
+ */
+export function confirmDraft(
+	userId: string,
+	draft: Draft,
+	source: Extract<Source, 'survey' | 'imported'>,
+	now = new Date()
+): ConfirmResult {
+	const refusals: DraftRefusal[] = [];
+	const counts = { added: 0, skipped: 0, people: 0 };
+	const attempt = (at: DraftRefusal['at'], index: number, fn: () => void) => {
+		try {
+			fn();
+		} catch (err) {
+			if (!(err instanceof ProfileError)) throw err;
+			refusals.push({ at, index, message: err.message });
+		}
+	};
+	const undo = new Error('a line was refused');
+	try {
+		db.transaction(() => {
+			draft.people.forEach((p, index) =>
+				attempt('person', index, () => {
+					if (findEntity(userId, p.name)) return;
+					createEntity(userId, { kind: p.kind, name: p.name, relation: p.relation, aka: p.aka }, now);
+					counts.people++;
+				})
+			);
+			draft.entries.forEach((e, index) =>
+				attempt('entry', index, () => {
+					const { domain, subdomain } = draftPlace(userId, e.path, now);
+					const claim = oneLine(e.claim).toLowerCase();
+					const held = db
+						.select({ claim: profileEntries.claim })
+						.from(profileEntries)
+						.where(
+							and(
+								activeFor(userId, now),
+								eq(profileEntries.domain, domain),
+								eq(profileEntries.subdomain, subdomain)
+							)
+						)
+						.all();
+					if (held.some((h) => h.claim.toLowerCase() === claim)) {
+						counts.skipped++;
+						return;
+					}
+					addEntry(
+						userId,
+						{
+							domain,
+							subdomain,
+							kind: e.kind,
+							claim: e.claim,
+							about: domain === 'people' ? null : e.about,
+							pinned: e.pinned,
+							sensitivity: e.sensitivity ?? undefined,
+							expiresAt: untilDate(e.until)
+						},
+						{ source, now }
+					);
+					counts.added++;
+				})
+			);
+			if (refusals.length) throw undo;
+		});
+	} catch (err) {
+		if (err !== undo) throw err;
+		return { ok: false, refusals };
+	}
+	return { ok: true, ...counts };
 }

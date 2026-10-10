@@ -280,7 +280,7 @@ const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
 
 // 1. Every page renders, and renders quietly. A page that throws during
 //    hydration still answers 200, so the bash smoke calls it healthy.
-for (const path of ['/chat', '/code', '/boards', '/library', '/profile', '/memory', '/ivory', '/ivory/new', '/settings', '/observatory', '/alignment']) {
+for (const path of ['/chat', '/code', '/boards', '/library', '/profile', '/profile/survey', '/profile/import', '/memory', '/ivory', '/ivory/new', '/settings', '/observatory', '/alignment']) {
 	problems = [];
 	// Not networkidle: the app holds SSE streams open (notifications, the
 	// Observatory feed), so the network is never idle and every goto would sit
@@ -1167,6 +1167,71 @@ check(
 		'console: Failed to load resource: the server responded with a status of 404 (Not Found)'
 	]);
 	if (fail.length) await shot('noted');
+}
+
+// N+0d. The survey and an import. Both make a draft the person reads line by
+//       line, and only saving it writes anything. The mock's parse files a
+//       line from the PARSE-ALPHA marker, invents one that must be left out,
+//       and returns any line about bullet points as not carried over.
+{
+	problems = [];
+	const held = async () =>
+		(await as(ALICE, '/api/profile')).domains
+			.flatMap((d) => d.subdomains.flatMap((x) => x.entries))
+			.map((e) => e.claim);
+	await as(ALICE, '/api/profile', { method: 'DELETE' });
+	await page.goto(`${B}/profile`);
+	const start = page.locator('.profile-page .card', { hasText: 'Start your profile' });
+	await start.waitFor();
+	await start.getByRole('link', { name: 'Answer a few questions' }).click();
+	await page.locator('.survey-page h3', { hasText: 'Basics' }).waitFor();
+	check(
+		'an empty profile offers the survey, which fills in the time zone',
+		(await page.getByLabel('Your time zone').inputValue()).length > 0,
+		true
+	);
+	await page.getByLabel('What should agents call you?').fill('SMOKE-TAMA');
+	await page.getByRole('button', { name: 'Interests', exact: true }).click();
+	await page.getByLabel('What do you like in books, music, food or design?').fill(
+		'I sail a dinghy, PARSE-ALPHA, and like replies as bullet points.'
+	);
+	await page.getByRole('button', { name: 'Review', exact: true }).click();
+	const review = page.locator('.survey-page .draft');
+	await review.waitFor({ timeout: 20_000 });
+	const lines = await review.locator('input.claim').evaluateAll((els) => els.map((e) => e.value));
+	check('a short answer becomes a line', lines.includes('Goes by SMOKE-TAMA.'), true);
+	check('a longer one is sorted by the model', lines.includes('Sails a dinghy called PARSE-ALPHA.'), true);
+	check('a line the person never wrote is left out', lines.some((l) => l.includes('PARSE-INVENTED')), false);
+	check('and the review says so', await review.locator('.hint', { hasText: 'not in what you wrote' }).count(), 1);
+	check(
+		'how to reply is set apart, not filed',
+		await review.locator('.carried li').allInnerTexts(),
+		['Prefers replies as bullet points.']
+	);
+	check('nothing is saved before the person says so', (await held()).length, 0);
+	await review.getByRole('button', { name: /^Save / }).click();
+	await page.locator('.survey-page .notice', { hasText: 'Saved' }).waitFor();
+	check('saving puts the lines in the profile', (await held()).includes('Goes by SMOKE-TAMA.'), true);
+	await page.getByRole('link', { name: 'Back to your profile' }).click();
+	await page.locator('.profile-page ul.entries > li', { hasText: 'SMOKE-TAMA' }).waitFor();
+	check('where the Profile page shows them', await page.locator('.profile-page ul.entries > li', { hasText: 'SMOKE-TAMA' }).count(), 1);
+
+	await page.getByRole('link', { name: 'Import', exact: true }).click();
+	await page.locator('.import-page textarea').fill('I race dinghies, PARSE-ALPHA, most weekends.');
+	await page.getByRole('button', { name: 'Read it' }).click();
+	const imported = page.locator('.import-page .draft');
+	await imported.waitFor({ timeout: 20_000 });
+	const claim = imported.locator('input.claim').first();
+	await claim.fill('short');
+	check('a line too short to keep says so beside it', await imported.locator('.notice.error').first().innerText(), 'A line is 8 to 160 characters; this one is 5.');
+	check('and cannot be saved', await imported.getByRole('button', { name: /^Save / }).isDisabled(), true);
+	await claim.fill('Sails a dinghy called PARSE-ALPHA.');
+	await imported.getByRole('button', { name: /^Save / }).click();
+	const said = page.locator('.import-page .notice', { hasText: 'Saved' });
+	await said.waitFor();
+	check('a line already held is not saved twice', await said.innerText(), 'Saved 0 lines to your profile; 1 was already there.');
+	check('the survey and import render quietly', problems, []);
+	if (fail.length) await shot('survey');
 }
 
 // N+1. "+ New chat" must not create anything until a message is sent.

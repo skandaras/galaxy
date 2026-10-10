@@ -624,7 +624,33 @@ FJ=$(api -X POST $B/api/chats/$FC/messages -d '{"content":"NOTE-FAKE","webSearch
 check "a note quoting words the person never wrote is refused" \
   "$(curl -sN --max-time 20 $B/api/jobs/$FJ/stream)" 'NOTE-RESULT Not noted'
 check "and writes nothing" "$(api $B/api/profile | grep -c PROFILE-NOTED)" "0"
-check "the export is the person's profile as markdown" "$(curl -s $B/api/profile/export)" '- Vegetarian, PROFILE-ALPHA. (pinned)'
+check "the export is the person's profile as markdown" "$(curl -s $B/api/profile/export)" '- Vegetarian, PROFILE-ALPHA. (constraint, pinned)'
+
+# Imports and the survey make a draft; only confirming one writes anything.
+draft_body() { node -e 'process.stdout.write(JSON.stringify({ draft: JSON.parse(process.argv[1]), source: process.argv[2] }))' "$1" "$2"; }
+EXPORT_MD=$(curl -s $B/api/profile/export)
+PCOUNT=$(api $B/api/profile | jqn .count)
+IMP=$(api -X POST $B/api/profile/import -d "$(node -e 'process.stdout.write(JSON.stringify({ text: process.argv[1] }))' "$EXPORT_MD")")
+check "an export reads back as a draft, without a model" "$IMP" '"from":"export"'
+check "holding what was exported" "$IMP" 'Vegetarian, PROFILE-ALPHA.'
+check "and reading it saves nothing" "$(api $B/api/profile | jqn .count)" "$PCOUNT"
+api -X DELETE $B/api/profile > /dev/null
+check "confirming it into an empty profile" "$(api -X POST $B/api/profile/confirm -d "$(draft_body "$IMP" imported)")" '"ok":true'
+check "gives back the file it came from" "$(curl -s $B/api/profile/export)" "$EXPORT_MD"
+check "and confirming it again adds nothing" "$(api -X POST $B/api/profile/confirm -d "$(draft_body "$IMP" imported)")" '"added":0'
+HALF='{"source":"survey","draft":{"people":[],"entries":[{"path":"work/tools","kind":"fact","claim":"Uses PROFILE-HALF daily."},{"path":"work/tools","kind":"fact","claim":"short"}]}}'
+check "a draft with a line the store refuses names that line" \
+  "$(curl -s -X POST -H 'content-type: application/json' -d "$HALF" $B/api/profile/confirm)" '"at":"entry","index":1'
+check_absent "and saves none of it" "$(api $B/api/profile)" 'PROFILE-HALF'
+SUR=$(api -X POST $B/api/profile/survey -d '{"answers":{"text":{"name":"Tama","taste":"I sail a dinghy, PARSE-ALPHA, and like replies as bullet points."}}}')
+check "the survey makes a line from a short answer" "$SUR" 'Goes by Tama.'
+check "and has the model sort a longer one" "$SUR" 'Sails a dinghy called PARSE-ALPHA.'
+check_absent "leaving out a line the person never wrote" "$SUR" 'PARSE-INVENTED'
+check "and saying so" "$SUR" 'not in what you wrote'
+check "with how to reply set apart" "$SUR" '"notCarried":["Prefers replies as bullet points."]'
+check "saving the survey" "$(api -X POST $B/api/profile/confirm -d "$(draft_body "$SUR" survey)")" '"ok":true'
+check "puts it in the profile" "$(api $B/api/profile)" 'Sails a dinghy called PARSE-ALPHA.'
+check_absent "and not how to reply" "$(api $B/api/profile)" 'bullet points'
 
 # ---------------------------------------------------------------------------
 # UX audit → backlog. The interesting parts are that the agent is handed live

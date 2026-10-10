@@ -148,7 +148,9 @@ Internet ─► Proxy ──┤
   that matter, the pinned brief) and look up the rest; a stated fact is noted with a quote
   from the person's own message, and anything inferred waits for their sign-off. It holds
   nothing about how agents should reply: that is platform configuration. An onboarding
-  survey and a ChatGPT/Claude memory import seed it.
+  survey, a Profile export or another assistant's memory seeds it, each as a draft the
+  person reads line by line before any of it is saved; lines about how to reply are set
+  apart rather than filed.
 - **GitHub App + PR watching** — review agent, CI auto-fix via webhooks, replacing the PAT. Opening the pull request itself is shipped (`open_pull_request`, and a button on the session header).
 - **Artifacts pane** — sandboxed iframe rendering of interactive HTML/SVG the agents produce.
 - **Image generation providers** + a gallery surface in the Library; deep image analysis (OCR, structured extraction).
