@@ -518,7 +518,7 @@ BUD=$(api $B/api/usage/budget)
 check "budget status readable" "$BUD" '"spentUsd"'
 check "budget status reports pricing gaps" "$BUD" '"unpricedCalls"'
 
-# library + skills + memory
+# library + skills
 api -X POST $B/api/library -d '{"title":"Smoke Doc","content":"The smoke marker is LANTERN-9"}' > /dev/null
 check "library search" "$(api "$B/api/library?q=LANTERN")" 'Smoke Doc'
 
@@ -595,8 +595,6 @@ check "what it proposes quotes the person" "$LWAIT" '"quote":"gamma-topic"'
 check_absent "and is never a line they did not say" "$LWAIT" 'LEARN-INVENTED'
 check_absent "or anything private" "$LWAIT" 'LEARN-PRIVATE'
 check_absent "so the profile holds none of it yet" "$(api $B/api/profile)" 'GAMMA-LEARN'
-check "memory no longer learns" \
-  "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/memory/run)" "404"
 
 # ---------------------------------------------------------------------------
 # Profile: what a person has told Galaxy about themselves, reaching their
@@ -715,7 +713,7 @@ done
 check "manifest served" "$(curl -s -o /dev/null -w '%{http_code}' $B/manifest.webmanifest)" "200"
 
 # ---------------------------------------------------------------------------
-# Multi-user: memory must be private per user. Needs real identities, so a
+# Multi-user: what each person has must stay theirs. Needs real identities, so a
 # second instance runs in authelia mode against the same data dir and is driven
 # with Remote-User headers (same technique as the M0 auth checks).
 # ---------------------------------------------------------------------------
@@ -776,7 +774,7 @@ check "and it is hers" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User
 check "and not bob's" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/skills/alpha-learn-checklist)" "404"
 
 # The admin view carries counts and times, never a line of anyone's profile.
-ADMIN_VIEW=$(asadmin $M/api/admin/memory)
+ADMIN_VIEW=$(asadmin $M/api/admin/learning)
 check "admin sees per-user status" "$ADMIN_VIEW" '"username":"alice"'
 check_absent "admin cannot read alice's profile" "$ADMIN_VIEW" 'ALPHA-LEARN'
 check_absent "admin cannot read bob's" "$ADMIN_VIEW" 'BETA-LEARN'

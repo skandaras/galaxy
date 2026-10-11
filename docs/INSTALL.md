@@ -324,10 +324,11 @@ No — and it is worth knowing exactly why, because it is easy to break later:
   `down`/`up` is safe.
 - **Promote/Rollback only retag images.** They never touch volumes.
 - Migrations run on boot and are **additive**; a rollback to `:stable-prev` meets
-  a newer schema it can still read (added columns are nullable). The single
-  exception is documented in the release notes for per-user memory, which
-  intentionally clears `memory_items` (and nothing else) — memories regenerate
-  from each user's own activity.
+  a newer schema it can still read (added columns are nullable). Two releases
+  are exceptions. Per-user memory cleared `memory_items`, and the release that
+  replaced Memory with the Profile dropped `memory_items` and `memory_proposals`:
+  rolled back across that one, the previous image fails every chat and coding
+  turn until you roll forward again.
 
 ## 7c. Web search
 

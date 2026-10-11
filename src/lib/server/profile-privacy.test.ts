@@ -159,7 +159,7 @@ describe('a private entry', () => {
 
 describe('a task with no scope', () => {
 	it('gets nothing at all', () => {
-		for (const task of ['visual', 'memory', 'subagent', 'board', 'ivory-read', 'ux-audit']) {
+		for (const task of ['visual', 'profile-learn', 'subagent', 'board', 'ivory-read', 'ux-audit']) {
 			const seen = everything(ALICE, task);
 			for (const marker of [...ALICE_MARKERS, TOOL]) expect(seen).not.toContain(marker);
 		}

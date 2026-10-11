@@ -27,7 +27,6 @@ import {
 } from '$lib/server/library';
 import { UNFILED } from '$lib/library-tree';
 import { toolResultMaxChars } from '../limits';
-import { memoryDigest, memoryTitle, readMemory } from '../memory';
 import { profileBlock } from '$lib/server/profile';
 import { boardsDigest } from './boards';
 import { profileTools } from './profile';
@@ -54,14 +53,12 @@ export function bootstrapContext(userId: string, task?: string): string {
 		libraryDigest(userId),
 		'',
 		'[Task boards: yours plus any shared with you. Read them with board_read, one card in full with card_read]',
-		boardsDigest(userId),
-		// Only this user's memories — never another user's observations.
-		memoryDigest(userId)
+		boardsDigest(userId)
 	].join('\n');
 }
 
 /**
- * Tools shared by every agent: skills, memory and the Library.
+ * Tools shared by every agent: skills, the Library and the Profile.
  *
  * `userId` scopes every Library call to what that person may see. It is not
  * optional — the Library is the one store whose contents reach a *different*
@@ -220,27 +217,6 @@ export function knowledgeTools(
 					.run();
 				proposed = true;
 				return `Proposed ${name}. It waits for the person's approval on their Profile page; say so in your reply.`;
-			}
-		},
-		{
-			parallelSafe: true,
-			def: {
-				name: 'memory_read',
-				description:
-					"Read one of this person's memories in full, by the title the Memory index shows. " +
-					'Only when it bears on the reply: most turns need none of them.',
-				parameters: {
-					type: 'object',
-					properties: { title: { type: 'string' } },
-					required: ['title']
-				}
-			},
-			describe: (a) => String(a.title ?? ''),
-			execute: async (a) => {
-				// Scoped to this person: readMemory only ever reads their own rows.
-				const found = readMemory(userId, String(a.title ?? ''));
-				if (!found.length) throw new Error(`No memory titled "${a.title}"`);
-				return found.map((m) => `${memoryTitle(m)} (${m.kind})\n${m.content}`).join('\n\n');
 			}
 		},
 		{

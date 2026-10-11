@@ -166,8 +166,8 @@ describe('moving a subtree', () => {
 	it('leaves a doc where it is when the parent is not mentioned', () => {
 		const [root, child] = chain(2);
 		saveDoc({ id: child, title: 'Level 2', body: 'edited', author: 'user', ownerId: ALICE });
-		// A save from somewhere with no notion of the tree — the memory job, a
-		// plain edit — must not lift a doc out of it.
+		// A save from somewhere with no notion of the tree, such as an agent's
+		// library_write or a plain edit, must not lift a doc out of it.
 		expect(getDoc(child, ALICE)?.meta.parentId).toBe(root);
 	});
 

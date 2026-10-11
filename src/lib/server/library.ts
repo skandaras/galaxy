@@ -533,8 +533,8 @@ export function saveDoc(opts: {
 	writeFileSync(join(libraryDir(), `${id}.md`), opts.body);
 
 	// An omitted parent means "leave it where it sits", so that a save from
-	// somewhere with no notion of the tree — the memory job, a plain edit — does
-	// not lift a doc out of it.
+	// somewhere with no notion of the tree, such as an agent's library_write or a
+	// plain edit, does not lift a doc out of it.
 	const parentId = opts.parentId === undefined ? (existing?.parentId ?? null) : opts.parentId;
 	if (parentId && parentId !== existing?.parentId) {
 		const placed = canPlace(existing?.id ?? id, parentId);

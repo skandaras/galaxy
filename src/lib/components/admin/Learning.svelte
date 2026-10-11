@@ -21,7 +21,6 @@
 	}
 
 	let profile = $state({ enabled: true, intervalHours: 12, timeoutSeconds: 180, briefChars: 2400 });
-	let memory = $state({ maxItems: 50 });
 	let userStatus = $state<UserStatus[]>([]);
 	let candidates = $state<Candidate[]>([]);
 	let expandedCand = $state<string | null>(null);
@@ -31,11 +30,10 @@
 
 	async function load() {
 		const [status, settings] = await Promise.all([
-			fetch('/api/admin/memory').then((r) => r.json()),
+			fetch('/api/admin/learning').then((r) => r.json()),
 			fetch('/api/admin/settings').then((r) => r.json())
 		]);
 		profile = { ...settings.profile };
-		memory = { maxItems: settings.memory.maxItems };
 		userStatus = status.userStatus;
 		candidates = status.candidates;
 	}
@@ -53,7 +51,7 @@
 			.catch(() => false);
 
 	async function saveSettings() {
-		const saved = (await put('profile', profile)) && (await put('memory', memory));
+		const saved = await put('profile', profile);
 		notice = saved ? 'Saved' : 'Not saved. Try again.';
 		noticeFailed = !saved;
 		await load();
@@ -64,7 +62,7 @@
 		notice = null;
 		noticeFailed = false;
 		const result = await (
-			await fetch('/api/admin/memory/run?kind=optimise', { method: 'POST' })
+			await fetch('/api/admin/skills/optimise', { method: 'POST' })
 		).json();
 		busy = false;
 		notice = result.ran
@@ -74,7 +72,7 @@
 	}
 
 	async function decide(c: Candidate, action: 'approve' | 'reject') {
-		await fetch(`/api/admin/memory/candidates/${c.id}`, {
+		await fetch(`/api/admin/skills/candidates/${c.id}`, {
 			method: 'PATCH',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ action })
@@ -129,10 +127,6 @@
 				pinned brief (characters)
 				<input type="number" min="800" max="4000" step="100" bind:value={profile.briefChars} />
 			</label>
-			<label>
-				memories kept each
-				<input type="number" min="5" max="100" bind:value={memory.maxItems} />
-			</label>
 		</div>
 		<div class="row-buttons">
 			<button class="btn primary" onclick={saveSettings}>Save</button>
@@ -150,8 +144,7 @@
 			The pinned brief reaches every agent on every turn; lowering it unpins nothing, but no
 			one can pin more until they are back under. The time limit is the whole of one model call:
 			a background call is not streamed, so unlike a chat turn it gets no allowance for going
-			quiet. Memory no longer learns; the number kept still bounds approving what was already
-			waiting for someone.
+			quiet.
 		</p>
 	</article>
 

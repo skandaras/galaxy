@@ -511,7 +511,7 @@
 			</label>
 			<p class="hint">
 				Chat, coding, deep research, the sub-agent, the Ivory Tower steps and the background
-				reviewers. Not chat titles, run summaries, the memory audit or the alignment assessor, whose
+				reviewers. Not chat titles, run summaries, the learning job or the alignment assessor, whose
 				replies have a fixed shape. Leave task prompts to say what an agent does; how it writes
 				belongs here, once.
 			</p>

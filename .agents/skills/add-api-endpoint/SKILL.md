@@ -11,7 +11,7 @@ Any new `src/routes/api/**/+server.ts`, or a new method on an existing one.
 ## Steps
 
 1. **Put the logic in the domain module first** (`src/lib/server/chats.ts`, `boards.ts`,
-   `library.ts`, `engine/memory.ts`, …). The route parses the request, calls one function and
+   `library.ts`, `profile.ts`, …). The route parses the request, calls one function and
    shapes the answer. If you are writing a query in the route, it belongs in the module.
 2. **Guard the route as its first line.** `requireUser`, `requireAdmin`, `requireCoder` or
    `requireAlignment` from `$lib/server/api`. A route with no guard is a bug, whatever it reads.

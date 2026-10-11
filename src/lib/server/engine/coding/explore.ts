@@ -22,8 +22,8 @@ import { taskPath } from '$lib/admin-sections';
  *
  * That only holds if the sub-agent itself runs lean, which is the whole design:
  *
- * - **No bootstrapContext.** Every other agent gets the skill index, library
- *   digest, boards digest and memory digest prepended. A sub-agent inheriting
+ * - **No bootstrapContext.** Every other agent gets the profile block, skill
+ *   index, library digest and boards digest prepended. A sub-agent inheriting
  *   all of that would pay for it on every one of its own iterations and would
  *   lose money on exactly the small jobs it exists for.
  * - **Read-only tools, and only the coding ones.** No web, no library, no

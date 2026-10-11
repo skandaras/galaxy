@@ -15,7 +15,7 @@ import { assessEntry } from '$lib/server/engine/alignment';
 
 /**
  * Alignment holds the most private data in the platform, and the promise made
- * on its settings page is specific: it is never read by the memory agent, never
+ * on its settings page is specific: it is never read by the learning job, never
  * added to any other agent's context, and never visible to an admin.
  *
  * That promise currently holds because of what the other modules *don't* do,
@@ -99,7 +99,7 @@ describe('the learning agent', () => {
 		// and this asserts alignment is not on it even in a branch the tests
 		// above never reach.
 		const { readFileSync } = await import('node:fs');
-		for (const file of ['src/lib/server/engine/profile-learn.ts', 'src/lib/server/engine/memory.ts']) {
+		for (const file of ['src/lib/server/engine/profile-learn.ts', 'src/lib/server/profile.ts']) {
 			expect(readFileSync(file, 'utf8'), file).not.toMatch(/alignment/i);
 		}
 	});

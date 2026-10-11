@@ -69,8 +69,8 @@ interface HiddenChat {
 }
 
 // Hidden chats never touch the DB or disk: they live here, are visible only
-// to their owner for the lifetime of the process, and are excluded from
-// memory consolidation by construction.
+// to their owner for the lifetime of the process, and are out of the
+// learning job's reach by construction.
 const hiddenChats = new Map<string, HiddenChat>();
 
 function uploadsDir(chatId: string): string {
@@ -96,7 +96,7 @@ export function listChats(userId: string): ChatMeta[] {
  * Archived chats, most recently archived first.
  *
  * Archiving is not deletion and not hiding: the chat keeps its messages, still
- * opens by id, and still counts as context for the memory agent. It is only out
+ * opens by id, and the learning job still reads it. It is only out
  * of the way.
  */
 export function listArchivedChats(userId: string): ChatMeta[] {
@@ -106,7 +106,7 @@ export function listArchivedChats(userId: string): ChatMeta[] {
 		.where(and(eq(chats.userId, userId), isNotNull(chats.archivedAt)))
 		// id as a tie-break: archiving two chats in quick succession stamps them
 		// in the same millisecond, and without it their order reshuffles between
-		// identical queries (same reason listMemoryItems does this).
+		// identical queries.
 		.orderBy(desc(chats.archivedAt), chats.id)
 		.all()
 		.map(rowToMeta);

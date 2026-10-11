@@ -23,7 +23,6 @@ const EXPECTED = [
 	'skill_load',
 	'skill_read',
 	'propose_skill',
-	'memory_read',
 	'library_search',
 	'library_tree',
 	'library_read',

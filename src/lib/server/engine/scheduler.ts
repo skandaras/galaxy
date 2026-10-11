@@ -19,7 +19,7 @@ import {
 import { getSynthesisStatus, runAlignmentSynthesis } from './alignment';
 import { emitEvent } from './events';
 import { expireDue, raiseStillTrue } from '$lib/server/profile';
-import { runSkillOptimiser } from './memory';
+import { runSkillOptimiser } from './skill-optimiser';
 import { learningStatus, runLearning } from './profile-learn';
 import { runUxAudit } from './ux-audit';
 
@@ -159,7 +159,7 @@ async function sweepAlignmentSynthesis(): Promise<void> {
 		if (!getSetting<boolean>(ALIGNMENT_ENABLED_KEY, false, user.id)) continue;
 		const { lastRun } = getSynthesisStatus(user.id);
 		if (now < lastRun + cfg.synthesisIntervalHours * 3_600_000) continue;
-		// Sequential for the same reason the memory sweep is, and one person's
+		// Sequential for the same reason the learning sweep is, and one person's
 		// failure must not stop the rest.
 		await runSweep('alignment-synthesis', user.id, () =>
 			runAlignmentSynthesis('schedule', user.id)

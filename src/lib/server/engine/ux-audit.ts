@@ -132,10 +132,10 @@ export function fingerprint(title: string): string {
  * Aggregated platform telemetry for the window.
  *
  * Everything here is a count, a duration or a name the platform itself chose
- * (a task, a tool, an event name). No message, chat title, memory or attachment
+ * (a task, a tool, an event name). No message, chat title, profile or attachment
  * content is read — the auditor is a platform-wide, admin-visible surface, and
  * the rule that one user's conversation content never crosses into one of those
- * holds here exactly as it does for the memory agent.
+ * holds here exactly as it does for the learning job.
  */
 export function telemetryDigest(sinceMs: number, now = Date.now()): string {
 	const days = Math.max(1, Math.round((now - sinceMs) / 86_400_000));

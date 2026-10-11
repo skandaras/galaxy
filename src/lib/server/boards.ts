@@ -479,7 +479,7 @@ export function listCards(boardId: string): Card[] {
  * The context digest needs a number per board and nothing else. Asking
  * `listCards(b.id).length` per board fetched every column of every card to
  * arrive at it, once per board, on every turn — the same N+1 that
- * `memoryStatusByUser` already avoids with a grouped count.
+ * `learningStatusByUser` already avoids with a grouped count.
  */
 export function openCardCounts(boardIds: string[]): Map<string, number> {
 	if (!boardIds.length) return new Map();

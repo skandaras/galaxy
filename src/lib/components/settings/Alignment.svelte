@@ -108,7 +108,7 @@
 		<p class="hint">
 			It is a mirror, not a verdict, and it is not therapy. Nothing is ever scored automatically:
 			an entry is only read when you press Assess. Your journal and your constitution are private
-			to you — they are never shown to admins, never read by the memory agent, and never added to
+			to you — they are never shown to admins, never read by the learning job, and never added to
 			any other agent's context.
 		</p>
 		{#if !platformEnabled}

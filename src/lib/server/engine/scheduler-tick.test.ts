@@ -53,8 +53,8 @@ vi.mock('$lib/server/profile', async (importOriginal) => {
 	};
 });
 
-vi.mock('./memory', async (importOriginal) => {
-	const actual = await importOriginal<typeof import('./memory')>();
+vi.mock('./skill-optimiser', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('./skill-optimiser')>();
 	return {
 		...actual,
 		runSkillOptimiser: async () => {

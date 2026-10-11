@@ -424,24 +424,6 @@ export interface BudgetSettings {
 
 export const DEFAULT_BUDGET: BudgetSettings = { enabled: false, limitUsd: 25, period: 'month' };
 
-export interface MemorySettings {
-	/**
-	 * How many memories a person keeps at once.
-	 *
-	 * The audit used to add without ever removing, so the stored list grew
-	 * forever, and its own prompt carried every line of it, which is how a job
-	 * that had always worked started timing out. Every change now needs the
-	 * person's approval and an approval past the ceiling is refused, so this is
-	 * what keeps both the prompt and the review queue bounded.
-	 *
-	 * Fifty rather than twenty since only titles reach a prompt: a memory costs a
-	 * few words per turn rather than a sentence or two.
-	 */
-	maxItems: number;
-}
-
-export const DEFAULT_MEMORY: MemorySettings = { maxItems: 50 };
-
 export interface ProfileSettings {
 	/** Learning from conversations, platform-wide. Each person can also turn it off for themselves. */
 	enabled: boolean;

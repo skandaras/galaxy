@@ -1125,7 +1125,7 @@
 		if (
 			!(await ask({
 				title: 'Make this chat hidden?',
-				body: 'It stops being stored and memory never sees it. Its files move into memory, and any already missing are dropped.',
+				body: 'It stops being stored, and Galaxy never learns from it. Its files are kept only while the server runs, and any already missing are dropped.',
 				confirm: 'Make hidden'
 			}))
 		)
@@ -1189,7 +1189,7 @@
 	>
 		<div class="list-actions">
 			<button class="btn" onclick={() => newChat(false)}>+ New chat</button>
-			<button class="btn ghost" title="Hidden: not stored, invisible to memory" onclick={() => newChat(true)}>
+			<button class="btn ghost" title="Hidden: not stored, and never learnt from" onclick={() => newChat(true)}>
 				+ Hidden
 			</button>
 		</div>
@@ -1300,7 +1300,7 @@
 				{/if}
 			{/if}
 			{#if isHidden}
-				<span class="hidden-badge" title="Nothing here is stored, and memory never sees it">
+				<span class="hidden-badge" title="Nothing here is stored, and Galaxy never learns from it">
 					◌ Hidden
 				</span>
 				<button class="btn ghost keep" onclick={() => void toggleHidden()}>Keep this chat</button>
