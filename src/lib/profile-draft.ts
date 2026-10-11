@@ -42,7 +42,7 @@ export interface DraftEntry {
 export interface Draft {
 	people: DraftPerson[];
 	entries: DraftEntry[];
-	/** Lines about how an assistant should reply, kept out so they can go to platform settings. */
+	/** Lines about how an assistant should reply, which the profile doesn't hold; the review lists them apart. */
 	notCarried: string[];
 	/** What reading the text left out, and why, a sentence each. */
 	leftOut: string[];

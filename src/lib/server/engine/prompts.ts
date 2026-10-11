@@ -79,8 +79,8 @@ const PROFILE_PARSE_PROMPT =
 	'world; a constraint is something an answer has to respect; a goal is something they are ' +
 	'working towards.\n\n' +
 	'How they want an assistant to reply is not about them: tone, length, format, the spelling or ' +
-	'language of replies, what to call things. Return each such line as written in not_carried, ' +
-	'so they can put it in their settings instead. The languages they speak, where they live and ' +
+	'language of replies, what to call things. Return each such line as written in not_carried. ' +
+	'The languages they speak, where they live and ' +
 	'what they do are about them, and are entries.\n\n' +
 	'Every entry carries a quote, words copied exactly from the text that say it. Code checks ' +
 	'each one and throws away any entry whose quote is not there.\n\n' +

@@ -205,8 +205,9 @@
 	{#if draft.notCarried.length}
 		<h4>Not carried over</h4>
 		<p class="hint">
-			These say how an assistant should reply, which is a setting rather than something about you,
-			so they stay out of your profile. Copy any you want to keep.
+			These are about how an assistant should reply rather than about you, so they stay out of
+			your profile. Nothing else in Galaxy stores them either: copy any you want to keep before
+			you leave this page.
 		</p>
 		<ul class="carried">
 			{#each draft.notCarried as line, i (i)}<li>{line}</li>{/each}
