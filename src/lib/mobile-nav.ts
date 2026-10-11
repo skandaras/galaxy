@@ -29,16 +29,15 @@ export const TAB_SLOTS = 4;
 /**
  * Promotion order. Admin and Observatory sit at the bottom deliberately: both
  * appear for some people and not others, and neither may displace a tab the
- * rest of the interface has taught. Memory sits after Library, so it takes the
- * fourth tab only for someone without Code. Profile came later, so it sits
- * after Memory rather than taking a seat someone had already learnt.
+ * rest of the interface has taught. Profile sits after Library, so it takes the
+ * fourth tab only for someone without Code: the seat Memory held before the
+ * Profile replaced it.
  */
 const PRIORITY = [
 	'/chat',
 	'/code',
 	'/boards',
 	'/library',
-	'/memory',
 	'/profile',
 	'/ivory',
 	'/alignment',
@@ -75,7 +74,6 @@ const GLYPHS: Record<string, string> = {
 	'/code': '❯',
 	'/boards': '▦',
 	'/library': '▤',
-	'/memory': '◇',
 	'/profile': '◐',
 	'/ivory': '▲',
 	'/alignment': '◉',

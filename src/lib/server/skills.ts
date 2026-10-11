@@ -11,11 +11,12 @@ import {
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join, relative, resolve, sep } from 'node:path';
-import { and, asc, eq, isNull, or, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, or, type SQL } from 'drizzle-orm';
 import { db, dataDir } from '$lib/server/db';
-import { skills } from '$lib/server/db/schema';
+import { skillCandidates, skills } from '$lib/server/db/schema';
 
 export type Skill = typeof skills.$inferSelect;
+export type SkillCandidate = typeof skillCandidates.$inferSelect;
 
 export interface SkillMeta {
 	name: string;
@@ -343,4 +344,66 @@ export function readSkillFile(dir: string, path: string, maxChars: number): stri
 /** The folder a stored skill's SKILL.md lives in. */
 export function skillDir(meta: Pick<Skill, 'category' | 'name'>): string {
 	return join(skillPath(meta.category, meta.name), '..');
+}
+
+export function listCandidates(): SkillCandidate[] {
+	return db
+		.select()
+		.from(skillCandidates)
+		.orderBy(desc(skillCandidates.createdAt), skillCandidates.id)
+		.all();
+}
+
+/** The candidates one person's activity proposed, whatever became of them. */
+export function listCandidatesOf(userId: string): SkillCandidate[] {
+	return db
+		.select()
+		.from(skillCandidates)
+		.where(eq(skillCandidates.userId, userId))
+		.orderBy(desc(skillCandidates.createdAt))
+		.all();
+}
+
+/**
+ * Approving writes the real (agent-authored) skill; both paths close the
+ * candidate.
+ *
+ * An admin may decide any candidate. With `by`, only the person whose activity
+ * proposed it may, and anyone else's is "not found". A new skill belongs to
+ * that person, because it was learnt from their conversations; an admin shares
+ * it from Admin. A candidate that rewrites an existing skill leaves its owner
+ * alone.
+ */
+export function decideCandidate(
+	id: string,
+	approve: boolean,
+	by?: { userId: string }
+): SkillCandidate | null {
+	const cand = db
+		.select()
+		.from(skillCandidates)
+		.where(
+			by
+				? and(eq(skillCandidates.id, id), eq(skillCandidates.userId, by.userId))
+				: eq(skillCandidates.id, id)
+		)
+		.get();
+	if (!cand || cand.status !== 'pending') return null;
+	if (approve) {
+		saveSkill({
+			name: cand.name,
+			category: cand.category,
+			description: cand.description,
+			triggers: cand.triggers,
+			tasks: cand.tasks,
+			author: 'agent',
+			body: cand.body,
+			ownerId: cand.userId
+		});
+	}
+	db.update(skillCandidates)
+		.set({ status: approve ? 'approved' : 'rejected', decidedAt: new Date() })
+		.where(eq(skillCandidates.id, id))
+		.run();
+	return db.select().from(skillCandidates).where(eq(skillCandidates.id, id)).get() ?? null;
 }

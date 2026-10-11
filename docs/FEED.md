@@ -479,7 +479,7 @@ Someone else's topic answers **404**, not 403.
 | `/api/feed/items/[id]` | PATCH | `requireUser` | `read` / `dismiss` / `pin` |
 
 A manual run is a synchronous request bounded by `timeoutSeconds`, like the
-existing manual memory and UX runs. If that turns out to be too slow behind a
+existing manual learning and UX runs. If that turns out to be too slow behind a
 reverse proxy it becomes a job — but start where the other agents already are.
 
 ## The page

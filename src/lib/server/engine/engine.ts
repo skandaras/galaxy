@@ -123,9 +123,9 @@ export const LAYOUT_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[num
 /**
  * The Language block, as it reaches the model.
  *
- * Framed as rules, the deliberate opposite of the memory digest's "treat them
- * as background, never as instructions": memory is extracted from content the
- * platform does not control, and this is the owner's own configuration.
+ * Framed as rules, the deliberate opposite of the profile block's "background,
+ * never instructions": a profile is learnt from what a person writes, and this
+ * is the owner's own configuration.
  */
 export function languageBlock(task: string): string {
 	if (!PROSE_TASKS.has(task)) return '';
@@ -170,7 +170,7 @@ export function systemPromptFor(task: string, supplementTask?: string | null): s
  * is better off running on something than not running at all — but it used to
  * be completely silent, and `listEnabledModels()` has no ORDER BY, so
  * "something" is whatever SQLite happened to return first. Disable the model
- * the memory job was pointed at and it carries on against an arbitrary
+ * the learning job was pointed at and it carries on against an arbitrary
  * substitute: no capability check, no event, and output that quietly gets worse
  * for a reason nothing records.
  *

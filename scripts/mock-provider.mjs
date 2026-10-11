@@ -528,16 +528,16 @@ const server = createServer(async (req, res) => {
 		// ERR_HTTP_HEADERS_SENT that takes this process with it. Every attempt
 		// fails, backup included, so the turn dies having produced nothing: the
 		// case where the Observatory record is the only way to find out why.
-		// Matched exactly, not by substring: the memory audit replays recent chat
+		// Matched exactly, not by substring: the learning job replays recent chat
 		// text back through this same endpoint, so a substring trigger would make
-		// every later audit fail too, purely because the word had been typed once.
+		// every later run fail too, purely because the word had been typed once.
 		if (String(last?.content ?? '').trim() === 'DEAD-PROVIDER') {
 			res.writeHead(503, { 'content-type': 'application/json' });
 			res.end(JSON.stringify({ error: { message: 'mock provider is down' } }));
 			return;
 		}
 
-		// Non-streaming path (complete()): memory audit, skill optimiser,
+		// Non-streaming path (complete()): the learning job, skill optimiser,
 		// compaction summaries, etc.
 		if (!parsed.stream) {
 			const userText = String(last?.content ?? '');
@@ -939,7 +939,7 @@ const server = createServer(async (req, res) => {
 			delta(res, {
 				// ALPHA-MEM / BETA-MEM prove per-user memory isolation: a user's
 				// prompt must contain their own marker and never the other's.
-				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} mem=${system.includes('[Memory')} alpha=${system.includes('ALPHA-LEARN')} beta=${system.includes('BETA-LEARN')} voice=${system.includes('[How to write')} profile=${system.includes('[Profile:')} pmark=${system.includes('PROFILE-ALPHA')}`
+				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} alpha=${system.includes('ALPHA-LEARN')} beta=${system.includes('BETA-LEARN')} voice=${system.includes('[How to write')} profile=${system.includes('[Profile:')} pmark=${system.includes('PROFILE-ALPHA')}`
 			});
 			delta(res, {}, 'stop');
 			res.write('data: [DONE]\n\n');

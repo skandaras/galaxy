@@ -1,7 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireAdmin } from '$lib/server/api';
-import { decideCandidate } from '$lib/server/engine/memory';
+import { decideCandidate } from '$lib/server/skills';
 import { emitEvent } from '$lib/server/engine/events';
 
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {
@@ -14,7 +14,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	if (!result) error(404, 'Candidate not found or already decided');
 	emitEvent({
 		userId: admin.id,
-		task: 'memory',
+		task: 'profile-learn',
 		type: 'admin',
 		name: `skill-candidate.${body.action} ${result.name}`,
 		status: 'ok'

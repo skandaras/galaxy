@@ -1,7 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
-import { decideCandidate } from '$lib/server/engine/memory';
+import { decideCandidate } from '$lib/server/skills';
 import { emitEvent } from '$lib/server/engine/events';
 
 /**

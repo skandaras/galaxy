@@ -129,7 +129,7 @@ export function startResearchTurn(opts: {
 		job,
 		{ ...opts, content: asked },
 		choice,
-		// Same bootstrap the chat loop gets: memory, the skills index, the
+		// Same bootstrap the chat loop gets: the profile, the skills index, the
 		// library and boards. Research had none of it, so it could not know
 		// something the user had already told the platform.
 		systemPromptFor('deep-research') + bootstrapContext(opts.userId, 'deep-research'),

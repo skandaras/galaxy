@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types';
 import { requireAdmin } from '$lib/server/api';
 import { db } from '$lib/server/db';
 import { users } from '$lib/server/db/schema';
-import { listCandidates } from '$lib/server/engine/memory';
+import { listCandidates } from '$lib/server/skills';
 import { learningStatusByUser } from '$lib/server/engine/profile-learn';
 import { profileSettings } from '$lib/server/settings';
 

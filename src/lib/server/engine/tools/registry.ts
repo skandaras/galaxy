@@ -32,7 +32,7 @@ export type ToolSource = 'builtin' | 'mcp';
  * The only tasks that assemble a toolset and therefore consult applyToolPolicy:
  * `startChatTurn` (engine.ts), `startCodingTurn` (coding/session.ts) and the
  * Ivory Tower agents (ivory/run.ts). Deep
- * research runs a hardcoded pipeline, and the visual/memory/skill-optimiser
+ * research runs a hardcoded pipeline, and the visual/profile-learn/skill-optimiser
  * tasks never build a LoopTool array — offering those as scope options would be
  * a control that does nothing. Keep in step with the applyToolPolicy call sites.
 

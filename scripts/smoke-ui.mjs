@@ -280,7 +280,7 @@ const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
 
 // 1. Every page renders, and renders quietly. A page that throws during
 //    hydration still answers 200, so the bash smoke calls it healthy.
-for (const path of ['/chat', '/code', '/boards', '/library', '/profile', '/profile/survey', '/profile/import', '/memory', '/ivory', '/ivory/new', '/settings', '/observatory', '/alignment']) {
+for (const path of ['/chat', '/code', '/boards', '/library', '/profile', '/profile/survey', '/profile/import', '/ivory', '/ivory/new', '/settings', '/observatory', '/alignment']) {
 	problems = [];
 	// Not networkidle: the app holds SSE streams open (notifications, the
 	// Observatory feed), so the network is never idle and every goto would sit
@@ -366,8 +366,8 @@ check(
 		'Theme'
 	);
 
-	// Memory left Settings for a page of its own; an old link to its tab still
-	// lands somewhere rather than on nothing.
+	// Memory left Settings for a page of its own, and later went altogether; an
+	// old link to its tab still lands somewhere rather than on nothing.
 	await page.goto(`${B}/settings?tab=memory`);
 	await page.locator('.tabs button[aria-selected="true"]').waitFor();
 	check(
@@ -375,20 +375,16 @@ check(
 		await page.locator('.tabs button[aria-selected="true"]').innerText(),
 		'Theme'
 	);
+	// Memory was retired for the Profile; a bookmark to it lands there.
 	problems = [];
 	await page.goto(`${B}/memory`);
-	await page.locator('.memory-page h1').waitFor();
-	check('Memory is a page of its own', await page.locator('.memory-page .card').count() > 0);
+	await page.locator('.profile-page h1').waitFor();
+	check('an old link to Memory lands on the Profile page', new URL(page.url()).pathname, '/profile');
 	check('and renders quietly', problems, []);
 	check(
-		'the rail groups it under Knowledge',
-		await page.locator('.nav .cluster', { hasText: 'Knowledge' }).getByRole('link', { name: 'Memory' }).count(),
-		1
-	);
-	check(
-		'the rail marks it as the current page',
-		await page.locator('.nav a[aria-current="page"]').innerText(),
-		'Memory'
+		'the rail no longer offers Memory',
+		await page.locator('.nav').getByRole('link', { name: 'Memory', exact: true }).count(),
+		0
 	);
 }
 
@@ -1141,10 +1137,6 @@ check(
 		0
 	);
 
-	await page.goto(`${B}/memory`);
-	const note = page.locator('.memory-page .card', { hasText: 'Memory no longer learns' });
-	await note.waitFor();
-	check('the Memory page says it no longer learns', await note.count(), 1);
 	check('learning renders quietly throughout', problems, []);
 	if (fail.length) await shot('learning');
 }
@@ -1959,7 +1951,6 @@ check(
 		// Activity is the Observatory's page, under the name people read. The
 		// docked feed is display:none at this width, so this is the way there.
 		check('More holds everything the bar could not', items, [
-			'◇ Memory',
 			'◐ Profile',
 			'▲ Ivory Tower',
 			'◉ Alignment',

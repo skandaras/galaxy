@@ -2,9 +2,12 @@ import { beforeAll, beforeEach, describe, it, expect } from 'vitest';
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataDir, db, runMigrations } from '$lib/server/db';
-import { skills } from '$lib/server/db/schema';
+import { randomUUID } from 'node:crypto';
+import { skillCandidates, skills } from '$lib/server/db/schema';
 import {
+	decideCandidate,
 	getSkill,
+	listCandidates,
 	listSkills,
 	normalizeSkillName,
 	normalizeTasks,
@@ -162,5 +165,64 @@ describe('files beside a skill', () => {
 	it('caps a long file', () => {
 		writeFileSync(join(dir, 'long.md'), 'x'.repeat(50));
 		expect(readSkillFile(dir, 'long.md', 10)).toMatch(/^x{10}\n\n\[truncated at 10 characters\]$/);
+	});
+});
+
+describe('a decided skill candidate', () => {
+	const ALICE = 'u-cand-alice';
+	const BOB = 'u-cand-bob';
+
+	beforeAll(() => runMigrations());
+	beforeEach(() => {
+		db.delete(skillCandidates).run();
+		db.delete(skills).run();
+	});
+
+	const propose = (name: string) => {
+		const id = randomUUID();
+		db.insert(skillCandidates)
+			.values({
+				id,
+				userId: ALICE,
+				name,
+				category: 'general',
+				description: 'd',
+				triggers: 't',
+				body: 'b',
+				rationale: 'r',
+				status: 'pending',
+				createdAt: new Date()
+			})
+			.run();
+		return id;
+	};
+
+	it('is never proposed again, whichever way it was decided', () => {
+		// The exclusion set used to be built from pending candidates only, so a
+		// rejected skill came back on every run for ever.
+		const rejected = propose('tidy-inbox');
+		decideCandidate(rejected, false);
+
+		const names = new Set(listCandidates().map((c) => c.name));
+		expect(names.has('tidy-inbox')).toBe(true);
+		expect(listCandidates().find((c) => c.name === 'tidy-inbox')?.status).toBe('rejected');
+	});
+
+	it('cannot be decided twice', () => {
+		const id = propose('tidy-inbox');
+		expect(decideCandidate(id, false)).not.toBeNull();
+		expect(decideCandidate(id, true)).toBeNull();
+	});
+
+	it('may be decided by the person it was learnt from, and by nobody else', () => {
+		const id = propose('tidy-inbox');
+		expect(decideCandidate(id, true, { userId: BOB })).toBeNull();
+		expect(decideCandidate(id, true, { userId: ALICE })?.status).toBe('approved');
+	});
+
+	it('becomes a skill of that person, not of everyone', () => {
+		decideCandidate(propose('tidy-inbox'), true);
+		expect(getSkill('tidy-inbox', ALICE)).not.toBeNull();
+		expect(getSkill('tidy-inbox', BOB)).toBeNull();
 	});
 });

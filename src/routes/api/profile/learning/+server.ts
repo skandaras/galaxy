@@ -1,7 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
-import { listCandidatesOf } from '$lib/server/engine/memory';
+import { listCandidatesOf } from '$lib/server/skills';
 import { learningStatus, readingStatus, setLearning } from '$lib/server/engine/profile-learn';
 import { listProposals, MAX_WAITING } from '$lib/server/profile';
 import { profileSettings } from '$lib/server/settings';

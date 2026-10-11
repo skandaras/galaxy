@@ -160,7 +160,7 @@ export interface LoopOptions {
 	 * How hard the model should think on each leg of this turn.
 	 *
 	 * The job that reads material and emits JSON or a short label has asked for
-	 * `'low'` since `reasoningFor` existed — chat-title, memory, compaction,
+	 * `'low'` since `reasoningFor` existed — chat-title, learning, compaction,
 	 * run-summary, ux-audit, alignment and vision all do. This loop
 	 * asked for nothing, and it is the path a person sits and waits on.
 	 *
