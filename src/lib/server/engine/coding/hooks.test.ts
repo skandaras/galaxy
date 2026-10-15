@@ -1,9 +1,10 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataDir, runMigrations } from '$lib/server/db';
 import { getExecutor } from './executor';
 import { HOOKS_FILE, HookFailure, parseHooks, readRepoHooks, runRepoHooks } from './hooks';
+import { loadState, recordChecks } from './state';
 import { codingTools, type CodingToolContext } from './tools';
 
 const ROOT = 'workspaces/hooks-test';
@@ -91,6 +92,10 @@ describe('repository hooks', () => {
 		const push = tool(ctx, 'git_push').execute({}, (m) => reports.push(m));
 		await expect(push).rejects.toThrow(/pre_push check .* failed \(exit 3\)[\s\S]*the marker is missing/);
 		expect(reports.at(-1)?.hooks).toMatchObject([{ stage: 'pre_push', code: 3 }]);
+		const checks = loadState(ctx.chatId!)?.checks?.pre_push;
+		expect(checks?.runs).toHaveLength(1);
+		expect(checks?.runs[0]?.command).toBe(MARKER_GATE.pre_push[0].run);
+		expect(checks?.runs[0]?.code).toBe(3);
 		// Nothing reached the remote.
 		const remote = await getExecutor().exec('git ls-remote --heads origin galaxy/session-test', {
 			cwdRel: ctx.workspaceRel
@@ -105,6 +110,11 @@ describe('repository hooks', () => {
 		const reports: Record<string, unknown>[] = [];
 		await tool(ctx, 'git_push').execute({}, (m) => reports.push(m));
 		expect(reports.at(-1)?.hooks).toMatchObject([{ stage: 'pre_push', code: 0 }]);
+		const checks = loadState(ctx.chatId!)?.checks;
+		expect(checks?.pre_commit?.runs[0]?.code).toBe(0);
+		expect(checks?.pre_push?.runs).toHaveLength(1);
+		expect(checks?.pre_push?.runs[0]?.command).toBe(MARKER_GATE.pre_push[0].run);
+		expect(checks?.pre_push?.runs[0]?.code).toBe(0);
 		const remote = await sh(ctx.workspaceRel, 'git ls-remote --heads origin galaxy/session-test');
 		expect(remote).toContain('galaxy/session-test');
 	});
@@ -133,10 +143,71 @@ describe('repository hooks', () => {
 		writeFileSync(join(dataDir, ctx.workspaceRel, 'ok'), '');
 		await tool(ctx, 'git_commit').execute({ message: 'add marker' });
 		expect(await runRepoHooks('pre_push', ctx)).toHaveLength(1);
+		// A cached pass must not overwrite checks recorded by another action.
+		recordChecks(ctx.chatId!, 'pre_push', {
+			runs: [{ command: 'another check', code: 7, durationMs: 10 }]
+		});
+		const previous = loadState(ctx.chatId!)?.checks?.pre_push;
 		expect(await runRepoHooks('pre_push', ctx)).toEqual([]);
+		expect(loadState(ctx.chatId!)?.checks?.pre_push).toEqual(previous);
 		// A new commit is new work, and is checked again.
 		writeFileSync(join(dataDir, ctx.workspaceRel, 'more.txt'), 'x');
 		await tool(ctx, 'git_commit').execute({ message: 'more' });
 		expect(await runRepoHooks('pre_push', ctx)).toHaveLength(1);
+	});
+
+	it('record an executor rejection without an exit code or stored credentials', async () => {
+		const ctx = await fixture('exec-reject', { pre_commit: ['true'] });
+		const secret = 'ghp_fixtureSecret123456789';
+		const failure = new Error(`runner failed for https://x-access-token:${secret}@example.invalid/repo`);
+		const executor = getExecutor();
+		const exec = executor.exec.bind(executor);
+		const spy = vi.spyOn(executor, 'exec')
+			.mockImplementationOnce(exec)
+			.mockRejectedValueOnce(failure);
+		try {
+			await expect(runRepoHooks('pre_commit', ctx)).rejects.toThrow(failure);
+			const checks = loadState(ctx.chatId!)?.checks?.pre_commit;
+			expect(checks?.runs).toHaveLength(1);
+			expect(checks?.runs[0]?.command).toBe('true');
+			expect(checks?.runs[0]?.code).toBeNull();
+			expect(checks?.runs[0]?.error).toContain('runner failed');
+			expect(checks?.runs[0]?.error).toContain('x-access-token:***@');
+			expect(checks?.runs[0]?.error).not.toContain(secret);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it('records a clean-HEAD rejection as a stage error with no runs', async () => {
+		const ctx = await fixture('clean-head-reject', { pre_push: ['true'] });
+		const failure = new Error('git status failed');
+		const executor = getExecutor();
+		const exec = executor.exec.bind(executor);
+		const spy = vi.spyOn(executor, 'exec')
+			.mockImplementationOnce(exec)
+			.mockRejectedValueOnce(failure);
+		try {
+			await expect(runRepoHooks('pre_push', ctx)).rejects.toThrow(failure);
+			const checks = loadState(ctx.chatId!)?.checks?.pre_push;
+			expect(checks?.error).toBe('git status failed');
+			expect(checks?.runs).toEqual([]);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it('record a malformed base hooks file as a stage error with no runs', async () => {
+		const ctx = await fixture('malformed', { pre_commit: ['true'] });
+		await runRepoHooks('pre_commit', ctx);
+		const seed = `${ROOT}/malformed/seed`;
+		writeFileSync(join(dataDir, seed, HOOKS_FILE), '{ pre_commit: [');
+		await sh(seed, 'git add -A && git commit -qm "break hooks" && git push -q origin main');
+		await sh(ctx.workspaceRel, 'git fetch -q origin main');
+
+		await expect(runRepoHooks('pre_commit', ctx)).rejects.toThrow(/not valid JSON/);
+		const checks = loadState(ctx.chatId!)?.checks?.pre_commit;
+		expect(checks?.error).toContain('not valid JSON');
+		expect(checks?.runs).toEqual([]);
 	});
 });

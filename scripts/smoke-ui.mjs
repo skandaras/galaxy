@@ -12,9 +12,9 @@
  * what lets one of them raise a notification the other has to look at.
  */
 import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -291,6 +291,69 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/profile', '/profi
 	check(`${path} renders without errors`, problems, []);
 	const body = await page.locator('body').boundingBox();
 	check(`${path} draws something`, (body?.height ?? 0) > 100);
+}
+
+// The panel needs a real session: without a local origin its useful sections
+// are empty, which made a successful render say nothing about what it showed.
+{
+	const origin = join(dataDir, 'code-panel-origin');
+	const bareOrigin = `${origin}.git`;
+	mkdirSync(origin, { recursive: true });
+	execFileSync('git', ['init', '-q', '-b', 'main', origin]);
+	writeFileSync(join(origin, 'README.md'), '# Panel fixture\n');
+	execFileSync('git', ['-C', origin, 'add', '-A']);
+	execFileSync('git', [
+		'-C', origin,
+		'-c', 'user.email=t@t',
+		'-c', 'user.name=t',
+		'commit', '-qm', 'init'
+	]);
+	execFileSync('git', ['clone', '-q', '--bare', origin, bareOrigin]);
+	const session = await as(ALICE, '/api/code/sessions', {
+		method: 'POST',
+		body: JSON.stringify({ repoUrl: bareOrigin, repoName: 'local/origin', mode: 'plan' })
+	});
+	const codeUrl = `${B}/code?chat=${session.chatId}`;
+	problems = [];
+	await page.setViewportSize({ width: 1280, height: 900 });
+	await page.goto(codeUrl);
+	const panel = page.locator('#session-panel');
+	// The section, not the panel: the panel draws "Loading…" before the
+	// overview lands, and asserting on that raced the request.
+	await panel.getByText('Environment').waitFor();
+	check('the desktop session panel is visible', await panel.isVisible());
+	check('the desktop panel shows Environment', (await panel.innerText()).includes('Environment'));
+	await page.getByRole('button', { name: 'Details', exact: true }).click();
+	await panel.waitFor({ state: 'hidden' });
+	check('Details hides the desktop panel', await panel.isVisible(), false);
+	await page.reload();
+	await panel.waitFor({ state: 'hidden' });
+	check('the hidden desktop choice survives a reload', await panel.isVisible(), false);
+	await page.getByRole('button', { name: 'Details', exact: true }).click();
+	await panel.waitFor({ state: 'visible' });
+	check('Details shows the desktop panel again', await panel.isVisible());
+	await shot('code-panel');
+
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.goto(codeUrl);
+	const sheet = page.locator('#session-panel.sheet');
+	await sheet.waitFor();
+	check('the phone details sheet starts closed', await page.locator('#session-panel.sheet.open').isVisible(), false);
+	await page.getByRole('button', { name: 'Details', exact: true }).click();
+	const openSheet = page.locator('#session-panel.sheet.open');
+	await openSheet.waitFor({ state: 'visible' });
+	check('Details opens the phone sheet', await openSheet.isVisible());
+	await shot('code-panel-phone');
+	await openSheet.getByRole('button', { name: 'Close', exact: true }).click();
+	await openSheet.waitFor({ state: 'hidden' });
+	check('Close shuts the phone sheet', await openSheet.isVisible(), false);
+	await page.getByRole('button', { name: 'Details', exact: true }).click();
+	await openSheet.waitFor({ state: 'visible' });
+	await page.keyboard.press('Escape');
+	await openSheet.waitFor({ state: 'hidden' });
+	check('Escape shuts the phone sheet', await openSheet.isVisible(), false);
+	check('the session panel interactions render without errors', problems, []);
+	await page.setViewportSize({ width: 1400, height: 900 });
 }
 
 // 1a. The Shelf with no GitHub token says so, instead of hanging on "Reading".

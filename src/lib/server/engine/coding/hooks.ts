@@ -1,5 +1,6 @@
 import { toolResultMaxChars } from '../limits';
 import { getExecutor } from './executor';
+import { recordChecks, type CheckRun } from './state';
 import { scrubSecrets, shellQuote } from './workspace';
 
 /**
@@ -118,21 +119,49 @@ async function cleanHead(workspaceRel: string): Promise<string | null> {
  */
 export async function runRepoHooks(
 	stage: HookStage,
-	target: { workspaceRel: string; baseBranch: string }
+	target: { workspaceRel: string; baseBranch: string; chatId?: string }
 ): Promise<HookRun[]> {
-	const hooks = (await readRepoHooks(target))[stage];
+	// Kept in session state when there is a session to keep it in, for the
+	// panel. Every way out records first, a failure that never reached an exit
+	// code included: otherwise the panel would go on showing the last pass.
+	const record = (runs: CheckRun[], error?: string) => {
+		if (target.chatId) recordChecks(target.chatId, stage, { runs, ...(error ? { error } : {}) });
+	};
+
+	let hooks: RepoHook[];
+	try {
+		hooks = (await readRepoHooks(target))[stage];
+	} catch (err) {
+		record([], shortError(err));
+		throw err;
+	}
 	if (!hooks.length) return [];
 
-	const head = stage === 'pre_push' ? await cleanHead(target.workspaceRel) : null;
+	let head: string | null;
+	try {
+		head = stage === 'pre_push' ? await cleanHead(target.workspaceRel) : null;
+	} catch (err) {
+		record([], shortError(err));
+		throw err;
+	}
 	if (head && passedPush.get(target.workspaceRel) === head) return [];
 
 	const runs: HookRun[] = [];
 	for (const hook of hooks) {
 		const started = Date.now();
-		const res = await getExecutor().exec(hook.run, {
-			cwdRel: target.workspaceRel,
-			timeoutMs: hook.timeoutSeconds * 1000
-		});
+		let res;
+		try {
+			res = await getExecutor().exec(hook.run, {
+				cwdRel: target.workspaceRel,
+				timeoutMs: hook.timeoutSeconds * 1000
+			});
+		} catch (err) {
+			record([
+				...runs,
+				{ command: hook.run, code: null, durationMs: Date.now() - started, error: shortError(err) }
+			]);
+			throw err;
+		}
 		runs.push({
 			stage,
 			command: hook.run,
@@ -140,6 +169,7 @@ export async function runRepoHooks(
 			durationMs: Date.now() - started
 		});
 		if (res.code !== 0) {
+			record(runs);
 			const output = scrubSecrets(`${res.stdout}\n${res.stderr}`).trim();
 			const cap = Math.max(1_000, toolResultMaxChars() - 500);
 			const tail = output.length > cap ? `…${output.slice(-cap)}` : output;
@@ -151,7 +181,12 @@ export async function runRepoHooks(
 		}
 	}
 	if (head) passedPush.set(target.workspaceRel, head);
+	record(runs);
 	return runs;
+}
+
+function shortError(err: unknown): string {
+	return scrubSecrets(err instanceof Error ? err.message : String(err)).slice(0, 200);
 }
 
 /** A refusal, carrying the runs so far for the Observatory. */

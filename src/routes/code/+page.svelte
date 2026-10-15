@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ADMIN_PATHS } from '$lib/admin-sections';
 	import { ask } from '$lib/confirm.svelte';
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import Markdown from '$lib/components/Markdown.svelte';
 	import { attachmentIcon } from '$lib/attachment-types';
 	import { uploadStaged, type AttachmentRef } from '$lib/composer-upload';
@@ -22,6 +22,7 @@
 	import GalaxyOrb from '$lib/components/GalaxyOrb.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
+	import SessionPanel from '$lib/components/SessionPanel.svelte';
 	import ListPill from '$lib/components/ListPill.svelte';
 	import Composer from '$lib/components/thread/Composer.svelte';
 	import ModelSelect from '$lib/components/thread/ModelSelect.svelte';
@@ -36,6 +37,7 @@
 		type MessageTrace,
 		type TimelineItem
 	} from '$lib/run-timeline';
+	import { refreshesOverview, type AgentRow, type SessionOverview } from '$lib/session-panel';
 
 	interface ChatMeta {
 		id: string;
@@ -135,20 +137,55 @@
 	let prUrl = $state<string | null>(null);
 	let prBusy = $state(false);
 
-	interface AgentRow {
-		id: string;
-		kind: string;
-		label: string;
-		status: 'running' | 'ok' | 'error';
-		detail?: string;
-		startedAt: number;
-	}
 	/** Sub-agents this run has out, keyed by id so an update converges. */
 	let subAgents = $state<AgentRow[]>([]);
 	/** Server time the running turn began; null when nothing is running. */
 	let runStartedAt = $state<number | null>(null);
-	/** Ticks the elapsed clocks once a second while anything is running. */
-	let now = $state(Date.now());
+
+	/** What the session panel shows. Null until the first fetch for a session lands. */
+	let overview = $state<SessionOverview | null>(null);
+	let overviewFailed = $state(false);
+	/** Bumped per request, so a slow response cannot land on top of a newer one. */
+	let overviewSeq = 0;
+	let overviewTimer: ReturnType<typeof setTimeout> | null = null;
+	let overviewLast = 0;
+	/**
+	 * At most one overview fetch this often while a run streams. A reattach
+	 * replays the whole chunk history at once, and every settled step in it
+	 * would otherwise ask again.
+	 */
+	const OVERVIEW_EVERY_MS = 3000;
+
+	/** The narrowest the conversation may get with the panel beside it. */
+	const MIN_THREAD_PX = 420;
+	let shellWidth = $state(0);
+	const PANEL_KEY = 'galaxy:code-panel';
+	/** The column's own choice, remembered per browser like its width. */
+	let panelShown = $state(readPanelShown());
+	/** The sheet's, which is not remembered: it covers the thread. */
+	let sheetOpen = $state(false);
+	let detailsChip = $state<HTMLButtonElement | null>(null);
+	const panelPane = createResizablePane({
+		key: 'galaxy:code-panel-width',
+		min: 240,
+		max: 400,
+		initial: 280,
+		side: 'right'
+	});
+	/**
+	 * Beside the thread only when the list, the narrowest panel and a readable
+	 * thread all fit in the width this page has; otherwise the panel is a sheet
+	 * over the thread. A viewport breakpoint got this wrong, because the nav
+	 * rail and a widened session list come out of the same width.
+	 */
+	const columnFits = $derived(shellWidth >= listPane.width + panelPane.min + MIN_THREAD_PX);
+	/** The dragged width, given up as far as it must for the thread to keep its minimum. */
+	const panelWidth = $derived(
+		Math.max(panelPane.min, Math.min(panelPane.width, shellWidth - listPane.width - MIN_THREAD_PX))
+	);
+	/** Said in the diff's header when a file asked for from the panel is not in it. */
+	let diffNote = $state<string | null>(null);
+	let diffEl = $state<HTMLElement | null>(null);
 
 	let selectedModelId = $state('');
 	let webSearch = $state(true);
@@ -245,6 +282,7 @@
 	// added another loop to the pile that woke up together.
 	onDestroy(() => {
 		viewGeneration++;
+		cancelOverview();
 		closeStream();
 	});
 
@@ -309,20 +347,29 @@
 	async function select(chatId: string) {
 		stashDraft();
 		// Anything recovering the previous session is now stale.
-		viewGeneration++;
+		const generation = ++viewGeneration;
 		closeStream();
 		errorBanner = null;
 		diff = null;
+		diffNote = null;
 		openFiles = new Set();
 		prUrl = null;
+		cancelOverview();
+		overview = null;
+		overviewFailed = false;
 		// The pane is session-scoped: nothing from the session being left may
 		// survive into the one being opened.
 		subAgents = [];
 		runStartedAt = null;
+		// closeStream leaves the timeline, and the panel lists the files a live
+		// run wrote from it: the session just left would show its own here.
+		timeline = [];
 		// Before the fetch, as Chat does, so a failed open does not leave the
 		// drawer's scrim over the page with nothing to say why.
 		listOpen = false;
 		const res = await fetch(`/api/code/sessions/${chatId}`).catch(() => null);
+		// A slower answer for a session clicked earlier must not replace this one.
+		if (generation !== viewGeneration) return;
 		if (!res?.ok) {
 			errorBanner =
 				res?.status === 404
@@ -331,8 +378,10 @@
 			return;
 		}
 		const data = await res.json();
+		if (generation !== viewGeneration) return;
 		current = data.session;
 		prUrl = data.session.prUrl ?? null;
+		void refreshOverview();
 		applySessionModel(current);
 		messages = data.messages.filter((m: Msg) => m.role !== 'tool');
 		creating = false;
@@ -473,7 +522,6 @@
 		// would otherwise sit there claiming to be running.
 		subAgents = [];
 		runStartedAt = startedAt ?? Date.now();
-		now = Date.now();
 		lastStopReason = null;
 		question = null;
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
@@ -490,6 +538,7 @@
 			// Only chunks past the replayed prefix count as the stream working — a
 			// reattach replays the whole buffer before a single live chunk.
 			if (noteChunk(replay)) recoveries = 0;
+			if (refreshesOverview(chunk)) scheduleOverview();
 			if (chunk.type === 'meta') {
 				// New (re)attempt: drop partial text from a failed attempt. The
 				// timeline is left alone — "tried, failed over, retried" is exactly
@@ -548,6 +597,8 @@
 			else if (chunk.type === 'error') {
 				errorBanner = chunk.message;
 				finalize(false);
+				// A run that failed may still have committed, or run the checks.
+				void refreshOverview();
 			}
 		};
 		source.onerror = () => {
@@ -594,7 +645,10 @@
 				answered: restored.at(-1)?.role === 'assistant',
 				noun: 'session'
 			});
-			if (plan.kind === 'settled') return;
+			if (plan.kind === 'settled') {
+				void refreshOverview();
+				return;
+			}
 			if (plan.kind === 'incomplete') {
 				appendLocalAssistant(partial, partialModel);
 				errorBanner = plan.banner;
@@ -643,6 +697,7 @@
 		current = { ...current, title: data.session.title, prUrl: data.session.prUrl ?? null };
 		prUrl = data.session.prUrl ?? prUrl;
 		sessions = sessions.map((s) => (s.id === chatId ? { ...s, title: data.session.title } : s));
+		void refreshOverview();
 		// The diff panel showed the branch as it stood when it was opened, and
 		// stayed that way through every later run with nothing to say so.
 		if (diff !== null) void fetchDiff();
@@ -785,6 +840,7 @@
 		if (!current) return;
 		if (diff !== null) {
 			diff = null;
+			diffNote = null;
 			return;
 		}
 		await fetchDiff();
@@ -792,12 +848,16 @@
 
 	async function fetchDiff() {
 		if (!current) return;
+		// The diff of the session being left used to land in the one just opened.
+		const generation = viewGeneration;
 		const res = await fetch(`/api/code/sessions/${current.chatId}/diff`).catch(() => null);
+		if (generation !== viewGeneration) return;
 		if (!res?.ok) {
 			errorBanner = 'Could not read the diff for this session.';
 			return;
 		}
 		const fresh = await res.json();
+		if (generation !== viewGeneration) return;
 		const keepOpen = diff !== null;
 		diff = fresh;
 		// One changed file is the common case and there is nothing to choose
@@ -819,17 +879,43 @@
 		if (!current || prBusy) return;
 		prBusy = true;
 		errorBanner = null;
+		const generation = viewGeneration;
+		// Caught, or a dropped connection left the button disabled for good.
 		const res = await fetch(`/api/code/sessions/${current.chatId}/pr`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({})
-		});
+		}).catch(() => null);
+		// Read before the generation check, so nothing is awaited after it.
+		const body = res ? await res.json().catch(() => ({})) : null;
 		prBusy = false;
-		if (!res.ok) {
-			errorBanner = (await res.json().catch(() => ({})))?.message ?? 'Could not open a pull request';
+		if (generation !== viewGeneration) return;
+		// Opening it ran the pre-push checks, passed or not.
+		void refreshOverview();
+		if (!res) {
+			errorBanner = 'Could not reach the server to open the pull request.';
 			return;
 		}
-		prUrl = (await res.json()).url;
+		if (!res.ok || !body?.url) {
+			errorBanner = body?.message ?? 'Could not open a pull request';
+			return;
+		}
+		prUrl = body.url;
+	}
+
+	/**
+	 * Leave the open session for the new-session form. This only set flags, so
+	 * a session clicked a moment before could finish loading over the form.
+	 */
+	function startNew() {
+		viewGeneration++;
+		closeStream();
+		cancelOverview();
+		overview = null;
+		timeline = [];
+		creating = true;
+		current = null;
+		listOpen = false;
 	}
 
 	async function removeSession(chatId: string, ev?: Event) {
@@ -869,33 +955,93 @@
 		setTimeout(() => (diffCopied = false), 2000);
 	}
 
-	// One interval for the whole pane, and only while something is running.
-	$effect(() => {
-		if (!streaming) return;
-		const timer = setInterval(() => (now = Date.now()), 1000);
-		return () => clearInterval(timer);
-	});
-
 	/**
-	 * "1m 12s", rolling to "1h 04m" — always two segments, so the column keeps
-	 * its width and a row does not shuffle sideways once a second.
+	 * Re-read the session panel. Checked against the view generation and its
+	 * own sequence after the await: a session id comparison passes a response
+	 * for A that lands after A, then B, then A again were opened.
 	 */
-	function elapsed(from: number): string {
-		const total = Math.max(0, Math.round((now - from) / 1000));
-		if (total < 3600) {
-			return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
-		}
-		const hours = Math.floor(total / 3600);
-		return `${hours}h ${String(Math.floor((total % 3600) / 60)).padStart(2, '0')}m`;
+	async function refreshOverview() {
+		const chatId = current?.chatId;
+		if (!chatId) return;
+		const generation = viewGeneration;
+		const seq = ++overviewSeq;
+		overviewLast = Date.now();
+		const res = await fetch(`/api/code/sessions/${chatId}/overview`).catch(() => null);
+		const data = res?.ok ? ((await res.json().catch(() => null)) as SessionOverview | null) : null;
+		if (generation !== viewGeneration || seq !== overviewSeq) return;
+		// A failed refresh keeps what is on screen and says so beside it.
+		if (data) overview = data;
+		overviewFailed = !data;
 	}
 
-	/** Only the sub-agents still working; a finished one is history, not status. */
-	const liveAgents = $derived(subAgents.filter((a) => a.status === 'running'));
-	/** Defensive: toolConcurrency caps dispatches at 4, but not from in here. */
-	const MAX_AGENT_ROWS = 4;
-	const shownAgents = $derived(liveAgents.slice(0, MAX_AGENT_ROWS));
-	const hiddenAgents = $derived(liveAgents.length - shownAgents.length);
-	const agentCount = $derived(streaming ? 1 + liveAgents.length : 0);
+	function scheduleOverview() {
+		if (overviewTimer) return;
+		const wait = Math.max(0, overviewLast + OVERVIEW_EVERY_MS - Date.now());
+		overviewTimer = setTimeout(() => {
+			overviewTimer = null;
+			void refreshOverview();
+		}, wait);
+	}
+
+	function cancelOverview() {
+		if (overviewTimer) clearTimeout(overviewTimer);
+		overviewTimer = null;
+	}
+
+	function readPanelShown(): boolean {
+		try {
+			return localStorage.getItem(PANEL_KEY) !== 'hidden';
+		} catch {
+			return true; // storage disabled (private mode, blocked cookies)
+		}
+	}
+
+	function toggleDetails() {
+		if (!columnFits) {
+			sheetOpen = !sheetOpen;
+			// One sheet at a time on a phone: both cover the thread.
+			if (sheetOpen) listOpen = false;
+			return;
+		}
+		panelShown = !panelShown;
+		try {
+			localStorage.setItem(PANEL_KEY, panelShown ? 'shown' : 'hidden');
+		} catch {
+			/* storage disabled: the toggle still worked, it just won't be remembered */
+		}
+	}
+
+	function closeSheet() {
+		sheetOpen = false;
+		detailsChip?.focus();
+	}
+
+	// The session list opening, from its pill or the tab bar, puts the sheet away.
+	$effect(() => {
+		if (listOpen) sheetOpen = false;
+	});
+
+	/** A file named in the panel, shown in the diff with its patch open. */
+	async function openFileInDiff(path: string) {
+		if (!current) return;
+		const generation = viewGeneration;
+		if (sheetOpen) closeSheet();
+		if (diff === null) await fetchDiff();
+		if (generation !== viewGeneration || diff === null) return;
+		if (!diff.files.some((f) => f.path === path)) {
+			diffNote = diff.truncated
+				? `${path} is not in the part of the diff shown here.`
+				: `${path} has no changes in this diff. The edit may have been undone, or git does not track the file yet.`;
+			return;
+		}
+		diffNote = null;
+		openFiles = new Set([...openFiles, path]);
+		await tick();
+		if (generation !== viewGeneration) return;
+		diffEl
+			?.querySelector(`[data-path="${CSS.escape(path)}"]`)
+			?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+	}
 
 	/**
 	 * One line saying what the main agent is doing, from what the run is already
@@ -949,7 +1095,7 @@
 	);
 </script>
 
-<div class="code-shell">
+<div class="code-shell" bind:clientWidth={shellWidth}>
 	<aside
 		class="session-list page-list"
 		class:open={listOpen}
@@ -958,7 +1104,7 @@
 	>
 		<button
 			class="btn primary wide"
-			onclick={() => ((creating = true), (current = null), (listOpen = false))}
+			onclick={startNew}
 		>
 			+ New session
 		</button>
@@ -1038,11 +1184,12 @@
 		{:else if current}
 			<header class="session-head">
 				<div class="head-main">
-					{#if current.title && current.title !== current.repoName}
-						<span class="session-title" title={current.title}>{current.title}</span>
-					{/if}
-					<span class="repo">{current.repoName}</span>
-					<span class="branch">{current.workBranch}</span>
+					<!-- The repo name until the first request retitles the session: repo
+					     and branch now live in the panel, and a new session would
+					     otherwise have nothing here to say which it is. -->
+					<span class="session-title" title={current.title || current.repoName}
+						>{current.title || current.repoName}</span
+					>
 					<span class="mode-badge {current.mode}">{current.mode}</span>
 					{#if current.mode === 'implement'}
 						<button class="chip" onclick={() => setMode('plan')}>Back to plan</button>
@@ -1056,47 +1203,24 @@
 						</button>
 					{/if}
 					<ModelSelect {models} bind:value={selectedModelId} kind="tool-capable" />
+					<button
+						class="chip"
+						class:on={columnFits ? panelShown : sheetOpen}
+						bind:this={detailsChip}
+						aria-expanded={columnFits ? panelShown : sheetOpen}
+						aria-controls={columnFits && !panelShown ? undefined : 'session-panel'}
+						onclick={toggleDetails}>Details</button
+					>
 				</div>
-
-				<!-- What this session has working right now. Session-scoped on purpose:
-				     another session's run is not this session's business. -->
-				<aside class="agents" aria-label="Agents working on this session">
-					{#if !streaming}
-						<p class="agents-idle">No agent running</p>
-					{:else}
-						<!-- The count only. The coding row below carries the run's age,
-						     and showing the same number twice reads as two facts. -->
-						<p class="agents-count">{agentCount} agent{agentCount === 1 ? '' : 's'}</p>
-						<div class="agent-row">
-							<span class="dot" class:parked={!!question}></span>
-							<span class="agent-name">coding</span>
-							{#if runStartedAt !== null}<span class="age">{elapsed(runStartedAt)}</span>{/if}
-						</div>
-						<p class="agent-doing" title={mainActivity}>{mainActivity}</p>
-						{#each shownAgents as agent (agent.id)}
-							<div class="agent-row sub">
-								<span class="branch-mark">└</span>
-								<span class="dot"></span>
-								<span class="agent-name" title={agent.label}>{agent.kind}</span>
-								<span class="age">{elapsed(agent.startedAt)}</span>
-							</div>
-							<p class="agent-doing sub" title={agent.detail || agent.label}>
-								{agent.detail || agent.label}
-							</p>
-						{/each}
-						{#if hiddenAgents > 0}
-							<p class="agent-doing sub">+{hiddenAgents} more</p>
-						{/if}
-					{/if}
-				</aside>
 			</header>
 
 			{#if diff !== null}
-				<div class="diff-wrap">
+				<div class="diff-wrap" bind:this={diffEl}>
 					<div class="diff-head">
 						<span class="dim">
 							{diff.files.length} file{diff.files.length === 1 ? '' : 's'} changed
 							{#if diff.truncated}· diff truncated{/if}
+							{#if diffNote}<span role="status"> · {diffNote}</span>{/if}
 						</span>
 						<button
 							class="diff-copy"
@@ -1115,7 +1239,7 @@
 					<!-- Collapsed by default: a session touching twenty files used to render
 					     as one scrolling block, which is where reviewing it stops happening. -->
 					{#each diff.files as file (file.path)}
-						<div class="file">
+						<div class="file" data-path={file.path}>
 							<button class="file-head" onclick={() => toggleFile(file.path)}>
 								<span class="caret">{openFiles.has(file.path) ? '▾' : '▸'}</span>
 								<span class="file-path">{file.path}</span>
@@ -1245,6 +1369,30 @@
 			<div class="empty center">Select a session or start a new one.</div>
 		{/if}
 	</section>
+
+	{#if current && !creating}
+		{#if !columnFits || panelShown}
+			{#if columnFits}
+				<PaneResizer pane={panelPane} label="Resize the session details" side="right" />
+			{/if}
+			<SessionPanel
+				{overview}
+				failed={overviewFailed}
+				onretry={() => void refreshOverview()}
+				{timeline}
+				{streaming}
+				{runStartedAt}
+				activity={mainActivity}
+				parked={!!question}
+				agents={subAgents}
+				onopenfile={(path) => void openFileInDiff(path)}
+				sheet={!columnFits}
+				open={sheetOpen}
+				onclose={closeSheet}
+				width={panelWidth}
+			/>
+		{/if}
+	{/if}
 </div>
 
 {#if question && current}
@@ -1425,43 +1573,6 @@
 		min-width: 0;
 	}
 
-	/* The agent readout. Every row is one line with an ellipsis and the full
-	   text on `title`: a model's narration is capped at 100 characters server
-	   side, which is still three lines in a column this narrow, and a wrapping
-	   row would grow the header under the thread. */
-	.agents {
-		flex: 0 0 auto;
-		width: clamp(13rem, 26%, 20rem);
-		min-width: 0;
-		border-left: 1px solid var(--border);
-		padding-left: 0.7rem;
-		font-size: var(--text-sm);
-		line-height: 1.35;
-	}
-	.agents p {
-		margin: 0;
-	}
-	.agents-idle {
-		color: var(--fg-dim);
-	}
-	.agents-count {
-		color: var(--fg-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.1em;
-		font-size: var(--text-xs);
-		margin-bottom: 0.2rem;
-	}
-	.agent-row {
-		display: flex;
-		align-items: baseline;
-		gap: 0.35rem;
-	}
-	.agent-row.sub {
-		padding-left: 0.5rem;
-	}
-	.branch-mark {
-		color: var(--fg-dim);
-	}
 	.dot {
 		flex: 0 0 auto;
 		width: 0.45rem;
@@ -1470,32 +1581,6 @@
 		background: var(--accent);
 		animation: pulse 1.4s ease-in-out infinite;
 	}
-	.dot.parked {
-		background: var(--danger);
-	}
-	.agent-name {
-		flex: 1;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.age {
-		flex: 0 0 auto;
-		color: var(--fg-dim);
-		/* Fixed-width digits, so a row does not shuffle sideways every second. */
-		font-variant-numeric: tabular-nums;
-	}
-	.agent-doing {
-		color: var(--fg-dim);
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		padding-left: 0.8rem;
-	}
-	.agent-doing.sub {
-		padding-left: 1.75rem;
-	}
 	.session-title {
 		font-size: var(--text-md);
 		color: var(--fg);
@@ -1503,9 +1588,6 @@
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
-	}
-	.repo {
-		font-size: var(--text-md);
 	}
 	.banner-action {
 		background: transparent;
@@ -1517,10 +1599,6 @@
 		padding: 0.1rem 0.5rem;
 		margin-left: 0.5rem;
 		cursor: pointer;
-	}
-	.branch {
-		color: var(--fg-dim);
-		font-size: var(--text-sm);
 	}
 	.mode-badge {
 		font-size: var(--text-xs);
@@ -1791,23 +1869,6 @@
 		margin-top: 0.3rem;
 	}
 
-
-	@media (max-width: 720px) {
-		/* One column: the pane drops full width under the chips rather than
-		   squeezing them into half a phone. */
-		.session-head {
-			flex-direction: column;
-			align-items: stretch;
-			gap: 0.5rem;
-		}
-		.agents {
-			width: auto;
-			border-left: none;
-			border-top: 1px solid var(--border);
-			padding-left: 0;
-			padding-top: 0.45rem;
-		}
-	}
 
 	/* Set from the drag handle and remembered per browser — see PaneResizer, which
 	   also draws the dividing line this used to carry as a border. Desktop only:

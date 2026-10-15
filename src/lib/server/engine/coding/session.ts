@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { codeSessions, type AttachmentRef } from '$lib/server/db/schema';
 import {
@@ -74,9 +74,19 @@ export type CodeSession = typeof codeSessions.$inferSelect;
  */
 const CHECKPOINT_SUMMARY_WAIT_MS = 6_000;
 
+/**
+ * The owner is part of the query. This read the row by id and compared the
+ * owner afterwards in JS, which is the shape AGENTS.md calls a leak waiting to
+ * happen: correct only for as long as every caller remembers the second half.
+ */
 export function getSession(chatId: string, userId: string): CodeSession | null {
-	const row = db.select().from(codeSessions).where(eq(codeSessions.chatId, chatId)).get();
-	return row && row.userId === userId ? row : null;
+	return (
+		db
+			.select()
+			.from(codeSessions)
+			.where(and(eq(codeSessions.chatId, chatId), eq(codeSessions.userId, userId)))
+			.get() ?? null
+	);
 }
 
 export async function createSession(opts: {

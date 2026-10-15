@@ -63,6 +63,16 @@ describe('createResizablePane', () => {
 		expect(pane.width).toBe(300);
 	});
 
+	it('runs the arrow keys the other way for a pane on the right of its handle', () => {
+		// The handle moves the way the arrow points, which for a right-hand pane
+		// makes it wider on ArrowLeft.
+		const pane = createResizablePane({ ...opts, side: 'right', storage: storage() });
+		pane.nudge(arrow('ArrowLeft'));
+		expect(pane.width).toBe(310);
+		pane.nudge(arrow('ArrowRight', true));
+		expect(pane.width).toBe(270);
+	});
+
 	it('persists after a keyboard resize', () => {
 		const store = storage();
 		const pane = createResizablePane({ ...opts, storage: store });

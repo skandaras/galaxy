@@ -1,5 +1,35 @@
-import { describe, expect, it } from 'vitest';
-import { continuationMessage, splitPatch } from './session';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { db, runMigrations } from '$lib/server/db';
+import { codeSessions } from '$lib/server/db/schema';
+import { continuationMessage, getSession, splitPatch } from './session';
+
+beforeAll(() => {
+	runMigrations();
+});
+
+describe('getSession', () => {
+	it('returns an existing session only to its owner', () => {
+		const row = {
+			chatId: 'session-owner-check',
+			userId: 'session-owner',
+			repoUrl: 'https://github.com/o/r.git',
+			repoName: 'r',
+			baseBranch: 'main',
+			workBranch: 'galaxy/session-owner-check',
+			workspaceRel: 'workspaces/session-owner-check',
+			mode: 'plan' as const,
+			prUrl: null,
+			createdAt: new Date()
+		};
+		db.insert(codeSessions).values(row).run();
+
+		expect(getSession(row.chatId, 'another-user')).toBeNull();
+		expect(getSession(row.chatId, row.userId)).toMatchObject({
+			chatId: row.chatId,
+			userId: row.userId
+		});
+	});
+});
 
 const PATCH = [
 	'diff --git a/src/a.ts b/src/a.ts',

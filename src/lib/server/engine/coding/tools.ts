@@ -454,6 +454,12 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 							parameters: {
 								type: 'object',
 								properties: {
+									goal: {
+										type: 'string',
+										description:
+											'What the work is for, in a few words, e.g. "Session details panel for the coding page". ' +
+											'The person sees it beside the session. Send it the first time and again only when the aim changes.'
+									},
 									items: {
 										type: 'array',
 										items: {
@@ -473,7 +479,7 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 						execute: async (a: Record<string, unknown>) => {
 							const items = readPlan(a);
 							if (!items.length) throw new Error('items is required');
-							setPlan(ctx.chatId as string, items);
+							setPlan(ctx.chatId as string, items, typeof a.goal === 'string' ? a.goal : undefined);
 							return `Plan updated — ${summarisePlan(items)}.`;
 						}
 					} satisfies LoopTool

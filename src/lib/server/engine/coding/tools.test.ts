@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataDir, runMigrations } from '$lib/server/db';
 import { getExecutor } from './executor';
+import { clearState, loadState } from './state';
 import { codingTools, readOnlyCodingTools, renderLines, type CodingToolContext } from './tools';
 
 const WS = 'workspaces/tools-test';
@@ -222,6 +223,18 @@ describe('the toolset offered', () => {
 
 describe('update_plan', () => {
 	const run = (args: Record<string, unknown>) => tool('update_plan').execute(args);
+
+	it('stores a goal and keeps it when a later call only updates the checklist', async () => {
+		clearState(ctx.chatId!);
+		await run({
+			goal: 'Track coding progress',
+			items: [{ text: 'Read the loop', status: 'todo' }]
+		});
+		expect(loadState(ctx.chatId!)?.goal).toBe('Track coding progress');
+		await run({ items: [{ text: 'Read the loop', status: 'done' }] });
+		expect(loadState(ctx.chatId!)?.goal).toBe('Track coding progress');
+		expect(loadState(ctx.chatId!)?.plan).toEqual([{ text: 'Read the loop', status: 'done' }]);
+	});
 
 	it('keeps the checklist and reports what is left', async () => {
 		const out = await run({

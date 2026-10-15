@@ -18,6 +18,8 @@ import { ADMIN_PATHS } from '$lib/admin-sections';
  */
 
 export interface PullRequestTarget {
+	/** The session's chat, so the pre-push checks this runs reach the session panel. */
+	chatId?: string;
 	repoUrl: string;
 	workspaceRel: string;
 	baseBranch: string;
@@ -33,10 +35,30 @@ export interface PullRequestResult {
 	hooks: HookRun[];
 }
 
-/** `owner/repo` for a github.com remote, or null for anywhere else. */
+/** A GitHub owner or repository name, as GitHub itself allows them. */
+const SLUG_SEGMENT = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * `owner/repo` for a github.com remote, or null for anywhere else.
+ *
+ * Read from a parsed URL and rebuilt from its two path segments. This was a
+ * regex whose repository group took any run of non-slash characters, so
+ * `https://github.com/o/r?access_token=…` came back with the token inside the
+ * slug, which the session panel would then have put in a link.
+ */
 export function githubRepoSlug(repoUrl: string): string | null {
-	const m = /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(repoUrl.trim());
-	return m ? `${m[1]}/${m[2]}` : null;
+	let url: URL;
+	try {
+		url = new URL(repoUrl.trim());
+	} catch {
+		return null;
+	}
+	if (url.protocol !== 'https:' || url.hostname !== 'github.com' || url.port) return null;
+	if (url.username || url.password || url.search || url.hash) return null;
+	const parts = url.pathname.split('/').filter(Boolean);
+	if (parts.length !== 2) return null;
+	const [owner, repo] = [parts[0], parts[1].replace(/\.git$/, '')];
+	return SLUG_SEGMENT.test(owner) && SLUG_SEGMENT.test(repo) ? `${owner}/${repo}` : null;
 }
 
 async function api(
