@@ -437,6 +437,11 @@ function serverOffersTask(server: McpServer, task: string): boolean {
 	return !server.tasks || server.tasks.includes(task);
 }
 
+/** The servers a task's turn is offered, which the session panel lists too. */
+export function serversFor(task: string): McpServer[] {
+	return listServers().filter((s) => s.enabled && serverOffersTask(s, task));
+}
+
 /**
  * Tools from every enabled server scoped to this task, built from the cached
  * catalogue so no network call happens while assembling a turn.
@@ -446,7 +451,7 @@ function serverOffersTask(server: McpServer, task: string): boolean {
  * capability, and the server row records the error for admin.
  */
 export function mcpLoopTools(task: string): LoopTool[] {
-	const servers = listServers().filter((s) => s.enabled && serverOffersTask(s, task));
+	const servers = serversFor(task);
 	const out: LoopTool[] = [];
 
 	for (const server of servers) {

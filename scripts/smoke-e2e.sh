@@ -407,6 +407,9 @@ check "coding pushed to origin" "$(git -C $ORIGIN.git log --all --oneline)" "Add
 # Sessions were all titled with their repo, so two on one repo looked the same
 # in the list. The first request names the session instead.
 check "the first request names the session" "$(api $B/api/code/sessions/$SID | jqn .session.title)" "Update the README"
+OVERVIEW=$(api $B/api/code/sessions/$SID/overview)
+check "the session overview names its repository" "$(echo "$OVERVIEW" | jqn .environment.repoName)" "local/origin"
+check "the session overview includes this leg's change totals" "$(echo "$OVERVIEW" | jqn '.changes.totals != null')" "true"
 
 # A lead-in that runs to a paragraph belongs on its step, not in the reply. It
 # used to land on both sides of a 200-character line from one leg to the next,
@@ -855,6 +858,19 @@ check "granting access opens the door" \
   "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: alice' $M/api/github/repos)" "200"
 check "a non-admin cannot reach the user list" \
   "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/admin/users)" "403"
+
+# Session ids are private too; a valid id must not turn into another user's data.
+BOB_ID=$(asadmin $M/api/admin/users | node -pe "JSON.parse(require('fs').readFileSync(0)).find(u=>u.username==='bob').id")
+asadmin -X PATCH $M/api/admin/users -d "{\"id\":\"$BOB_ID\",\"canCode\":true}" > /dev/null
+BOB_ORIGIN=$DATA/bob-origin
+git init -q -b main "$BOB_ORIGIN" && echo "# bob origin" > "$BOB_ORIGIN/README.md"
+git -C "$BOB_ORIGIN" add -A && git -C "$BOB_ORIGIN" -c user.email=t@t -c user.name=t commit -qm init
+git clone -q --bare "$BOB_ORIGIN" "$BOB_ORIGIN.git"
+BOB_SESSION=$(as bob -X POST $M/api/code/sessions -d "{\"repoUrl\":\"$BOB_ORIGIN.git\",\"repoName\":\"local/origin\",\"mode\":\"plan\"}" | jqn .chatId)
+check "alice gets 404 for bob's coding session" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: alice' $M/api/code/sessions/$BOB_SESSION)" "404"
+check "alice gets 404 for bob's session overview" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: alice' $M/api/code/sessions/$BOB_SESSION/overview)" "404"
 
 # ---------------------------------------------------------------------------
 # Boards. Membership is the whole access model — a board's owner gets a member

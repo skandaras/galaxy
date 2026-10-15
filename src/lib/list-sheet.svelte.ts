@@ -16,15 +16,24 @@ export interface Point {
 	y: number;
 }
 
+/** The edge a sheet slides in from, and so the way it is pushed back out. */
+export type SheetSide = 'left' | 'right';
+
 /**
- * The sheet slides in from the left, so dismissing it is a leftward drag.
+ * A sheet from the left is dismissed by a leftward drag, one from the right
+ * by a rightward drag.
  *
  * The second half of the test is the one that matters: a drag that travels
  * further down than sideways is someone scrolling the list, and closing the
  * sheet under them loses the row they were reaching for.
  */
-export function isDismissSwipe(from: Point, to: Point, threshold = SWIPE_CLOSE_PX): boolean {
-	const dx = to.x - from.x;
+export function isDismissSwipe(
+	from: Point,
+	to: Point,
+	threshold = SWIPE_CLOSE_PX,
+	side: SheetSide = 'left'
+): boolean {
+	const dx = (to.x - from.x) * (side === 'right' ? -1 : 1);
 	const dy = to.y - from.y;
 	return dx < -threshold && Math.abs(dx) > Math.abs(dy);
 }
@@ -37,14 +46,20 @@ export function isDismissSwipe(from: Point, to: Point, threshold = SWIPE_CLOSE_P
  * this file's header and nowhere a thumb could reach it. "A way back out with
  * the thumb that opened it" was still the omission it was written to fix.
  */
-export function swipeToClose(node: HTMLElement, close: () => void) {
+export function swipeToClose(
+	node: HTMLElement,
+	// A Svelte action gets one parameter, so the side rides along with the
+	// callback rather than as a third argument no call site could pass.
+	param: (() => void) | { close: () => void; side: SheetSide }
+) {
+	const { close, side } = typeof param === 'function' ? { close: param, side: 'left' as const } : param;
 	let from: Point | null = null;
 	const down = (e: PointerEvent) => {
 		from = { x: e.clientX, y: e.clientY };
 	};
 	const move = (e: PointerEvent) => {
 		if (!from) return;
-		if (!isDismissSwipe(from, { x: e.clientX, y: e.clientY })) return;
+		if (!isDismissSwipe(from, { x: e.clientX, y: e.clientY }, SWIPE_CLOSE_PX, side)) return;
 		// Consumed, so one drag closes once rather than firing for every
 		// remaining pointermove of the same gesture.
 		from = null;

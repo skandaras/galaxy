@@ -20,4 +20,20 @@ describe('githubRepoSlug', () => {
 		expect(githubRepoSlug('file:///tmp/origin.git')).toBeNull();
 		expect(githubRepoSlug('')).toBeNull();
 	});
+
+	it('rejects anything beyond a plain owner/repo path', () => {
+		// The query case is the one that mattered: the old pattern returned
+		// `o/r?access_token=secret` as the slug.
+		for (const url of [
+			'https://github.com/o/r?access_token=secret',
+			'https://github.com/o/r#x',
+			'https://user:tok@github.com/o/r.git',
+			'https://github.com:8443/o/r',
+			'http://github.com/o/r',
+			'https://github.com/o/r/extra',
+			'https://github.com/o/r%2Fx'
+		]) {
+			expect(githubRepoSlug(url)).toBeNull();
+		}
+	});
 });

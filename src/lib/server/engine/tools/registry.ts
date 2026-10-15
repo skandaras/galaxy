@@ -291,18 +291,27 @@ export function applyToolPolicy(tools: LoopTool[], task: string): LoopTool[] {
 	const settings = loadToolSettings();
 	const out: LoopTool[] = [];
 	for (const tool of tools) {
+		if (!toolAllowed(tool.def.name, task, settings)) continue;
 		const s = settings.get(tool.def.name);
-		if (!s) {
-			out.push(tool);
-			continue;
-		}
-		if (!s.enabled) continue;
-		if (s.tasks && !s.tasks.includes(task)) continue;
 		out.push(
-			s.descriptionOverride
+			s?.descriptionOverride
 				? { ...tool, def: { ...tool.def, description: s.descriptionOverride } }
 				: tool
 		);
 	}
 	return out;
+}
+
+/**
+ * Whether the admin overrides let a tool run for a task. Shared with the
+ * session panel's connector count, which has to agree with what a turn is
+ * actually given.
+ */
+export function toolAllowed(
+	name: string,
+	task: string,
+	settings: Map<string, ToolSetting> = loadToolSettings()
+): boolean {
+	const s = settings.get(name);
+	return !s || (s.enabled && (!s.tasks || s.tasks.includes(task)));
 }

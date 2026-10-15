@@ -1,7 +1,16 @@
 <script lang="ts">
 	import type { ResizablePane } from '$lib/resizable-pane.svelte';
 
-	let { pane, label }: { pane: ResizablePane; label: string } = $props();
+	let {
+		pane,
+		label,
+		side = 'left'
+	}: {
+		pane: ResizablePane;
+		label: string;
+		/** Which side of the handle the pane it sizes sits on. */
+		side?: 'left' | 'right';
+	} = $props();
 </script>
 
 <!-- A slider rather than a separator role: this is a value the user sets, and
@@ -9,6 +18,7 @@
 <div
 	class="resizer"
 	class:dragging={pane.dragging}
+	class:right={side === 'right'}
 	role="slider"
 	aria-orientation="vertical"
 	aria-label={label}
@@ -39,6 +49,14 @@
 		border-right: 4px solid transparent;
 		cursor: col-resize;
 		touch-action: none;
+	}
+	/* Mirrored for a pane on the right: the grab area reaches into the content
+	   on the left, which is the side the handle does not size. */
+	.resizer.right {
+		margin-right: 0;
+		margin-left: -4px;
+		border-right: none;
+		border-left: 4px solid transparent;
 	}
 	.resizer:hover,
 	.resizer:focus-visible,

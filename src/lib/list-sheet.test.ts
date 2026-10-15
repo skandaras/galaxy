@@ -27,6 +27,17 @@ describe('isDismissSwipe', () => {
 		expect(isDismissSwipe(at(200, 400), at(120, 420))).toBe(true);
 	});
 
+	it('closes a sheet from the right on a rightward drag, and not a leftward one', () => {
+		// The session details sheet comes in from the right; the left-hand rule
+		// would have closed it when a thumb dragged further into it.
+		const far = SWIPE_CLOSE_PX + 1;
+		expect(isDismissSwipe(at(200, 400), at(200 + far, 400), SWIPE_CLOSE_PX, 'right')).toBe(true);
+		expect(isDismissSwipe(at(200, 400), at(200 - far, 400), SWIPE_CLOSE_PX, 'right')).toBe(false);
+		expect(isDismissSwipe(at(200, 400), at(200 + far, 400 + far * 2), SWIPE_CLOSE_PX, 'right')).toBe(
+			false
+		);
+	});
+
 	it('takes a threshold, so a wider sheet can ask for more travel', () => {
 		expect(isDismissSwipe(at(200, 400), at(140, 400), 100)).toBe(false);
 		expect(isDismissSwipe(at(200, 400), at(60, 400), 100)).toBe(true);
