@@ -425,9 +425,9 @@ function purgeChatTrail(tx: Tx, chatId: string): void {
 	tx.delete(jobs).where(eq(jobs.chatId, chatId)).run();
 	tx.delete(events).where(eq(events.chatId, chatId)).run();
 	tx.update(usageLog).set({ chatId: null }).where(eq(usageLog.chatId, chatId)).run();
-	// State kept per chat as settings rows: a coding session's carried state, an
-	// Ivory run's scope, a plan waiting on approval. A chat id is a UUID, so this
-	// cannot reach a user's settings or the global ones.
+	// State kept per chat as settings rows, such as a coding session's carried
+	// state. A chat id is a UUID, so this cannot reach a user's settings or the
+	// global ones.
 	tx.delete(settings).where(eq(settings.scope, chatId)).run();
 }
 

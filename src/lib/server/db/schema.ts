@@ -292,11 +292,7 @@ export const CORE_TASKS = [
 	'subagent',
 	'board',
 	'alignment',
-	'alignment-synthesis',
-	'ivory-read',
-	'ivory-plan',
-	'ivory-synthesise',
-	'ivory-redteam'
+	'alignment-synthesis'
 ] as const;
 export type CoreTask = (typeof CORE_TASKS)[number];
 

@@ -32,18 +32,6 @@
 		createdAt: number;
 	}
 
-	/**
-	 * Model advice for the tasks where the choice of model is part of the
-	 * method, not only a matter of cost.
-	 */
-	const TASK_NOTES: Record<string, string> = {
-		'ivory-read': 'A small model is enough: it reads and quotes.',
-		'ivory-plan': 'A large model: it decides what the project does next.',
-		'ivory-synthesise': 'A mid-size model: it turns notes into claims.',
-		'ivory-redteam':
-			'Pick a model from a different family than ivory-synthesise’s. A claim reviewed by its own model family is refused.'
-	};
-
 	let configs = $state<TaskConfig[]>([]);
 	let models = $state<ModelOption[]>([]);
 	let historyTask = $state<string | null>(null);
@@ -137,7 +125,6 @@
 					{cfg.task}
 					{#if cfg.overridden}<span class="badge">edited</span>{/if}
 				</h3>
-				{#if TASK_NOTES[cfg.task]}<p class="task-note">{TASK_NOTES[cfg.task]}</p>{/if}
 				<div class="model-row">
 					<label>
 						primary
@@ -194,11 +181,6 @@
 </section>
 
 <style>
-	.task-note {
-		margin: 0 0 0.4rem;
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
-	}
 	.card {
 		margin-bottom: 0.9rem;
 	}

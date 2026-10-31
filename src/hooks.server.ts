@@ -7,7 +7,8 @@ import {
 	seedSkills,
 	migrateSettings,
 	migrateToPromptOverrides,
-	migrateChats
+	migrateChats,
+	removeIvoryTower
 } from '$lib/server/bootstrap';
 import { ensureSkillsRepo } from '$lib/server/skills';
 import { unfileReservedLabels } from '$lib/server/library';
@@ -30,6 +31,9 @@ migrateChats();
 migrateToPromptOverrides();
 seedTaskConfigs();
 ensureSkillsRepo();
+// After the repository exists, because removing the Ivory skill commits there,
+// and before the scheduler, so no sweep reads a chat about to be deleted.
+removeIvoryTower();
 seedSkills();
 // Before the scheduler, and before any request can read a chat: the live job
 // map does not survive a restart but the rows do, and a row left at 'running'

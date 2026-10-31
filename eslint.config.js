@@ -23,7 +23,9 @@ export default ts.config(
 			'node_modules/',
 			'drizzle/',
 			'static/',
-			'package-lock.json'
+			'package-lock.json',
+			// Switched-off features kept for reference; never built or type-checked.
+			'archive/'
 		]
 	},
 	js.configs.recommended,

@@ -280,7 +280,7 @@ const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
 
 // 1. Every page renders, and renders quietly. A page that throws during
 //    hydration still answers 200, so the bash smoke calls it healthy.
-for (const path of ['/chat', '/code', '/boards', '/library', '/profile', '/profile/survey', '/profile/import', '/ivory', '/ivory/new', '/settings', '/observatory', '/alignment']) {
+for (const path of ['/chat', '/code', '/boards', '/library', '/profile', '/profile/survey', '/profile/import', '/settings', '/observatory', '/alignment']) {
 	problems = [];
 	// Not networkidle: the app holds SSE streams open (notifications, the
 	// Observatory feed), so the network is never idle and every goto would sit
@@ -356,27 +356,10 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/profile', '/profi
 	await page.setViewportSize({ width: 1400, height: 900 });
 }
 
-// 1a. The Shelf with no GitHub token says so, instead of hanging on "Reading".
-//     This instance has no token, which is the state a fresh install is in.
+// 1a. Ivory Tower is switched off; an old link lands on chat rather than a 404.
 await page.goto(`${B}/ivory`);
-check(
-	'/ivory explains that no GitHub token is configured',
-	await page
-		.getByText('no GitHub token is configured')
-		.waitFor({ timeout: 5000 })
-		.then(() => true, () => false),
-	true
-);
-// The new-project form says the same instead of offering a form that cannot save.
-await page.goto(`${B}/ivory/new`);
-check(
-	'/ivory/new explains that no GitHub token is configured',
-	await page
-		.getByText('No GitHub token is configured, so there is nowhere to create a project')
-		.waitFor({ timeout: 5000 })
-		.then(() => true, () => false),
-	true
-);
+await page.waitForURL(/\/chat/, { timeout: 5000 }).catch(() => {});
+check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 
 // 1b. Every settings tab has a pane, and shows only its own.
 //
@@ -1019,7 +1002,7 @@ check(
 	// The page renders client-side, so read the list only once it is drawn.
 	await admin.locator('.admin-nav .item').first().waitFor();
 	const sections = await admin.locator('.admin-nav .item').allTextContents();
-	check('admin has a section per feature', sections.length, 16);
+	check('admin has a section per feature', sections.length, 15);
 	check('admin lists its sections in three groups', await admin.locator('.admin-nav .group').count(), 3);
 	for (const label of sections) {
 		adminProblems.length = 0;
@@ -1602,7 +1585,7 @@ check(
 	// the abort as a console error, which looks exactly like a broken page.
 	await phone.waitForTimeout(500);
 
-	for (const path of ['/chat', '/code', '/boards', '/library', '/ivory', '/settings']) {
+	for (const path of ['/chat', '/code', '/boards', '/library', '/settings']) {
 		phoneProblems = [];
 		await phone.goto(B + path);
 		// The same wait as the desktop loop, which is the whole payoff of leaving
@@ -2015,7 +1998,6 @@ check(
 		// docked feed is display:none at this width, so this is the way there.
 		check('More holds everything the bar could not', items, [
 			'◐ Profile',
-			'▲ Ivory Tower',
 			'◉ Alignment',
 			'⚙ Settings',
 			'◎ Activity'

@@ -123,8 +123,8 @@ describe('groupNav', () => {
 	});
 
 	it('drops a cluster with nothing in it, so Reflect is absent until something is', () => {
-		// Alignment is off by default and Ivory needs the coding grant, so for
-		// most people Reflect would be a heading over nothing.
+		// Alignment is off by default, so for most people Reflect would be a
+		// heading over nothing.
 		expect(groupNav(rail).some((c) => c.id === 'reflect')).toBe(false);
 	});
 
