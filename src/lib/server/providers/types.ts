@@ -187,6 +187,20 @@ export interface ChatRequest {
 	 * the same reason as `modalities`.
 	 */
 	imageConfig?: { aspect_ratio?: string; image_size?: string };
+	/**
+	 * OpenRouter's provider routing, to hold the serving endpoint fixed while
+	 * something else is compared. Sent as given and only when given; nothing in
+	 * production sets it, only the evaluation runner.
+	 */
+	provider?: ProviderRouting;
+}
+
+/** The subset of OpenRouter's `provider` object a comparison needs. */
+export interface ProviderRouting {
+	order?: string[];
+	only?: string[];
+	allow_fallbacks?: boolean;
+	require_parameters?: boolean;
 }
 
 /**

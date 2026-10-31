@@ -38,7 +38,16 @@ import { profileTools } from './profile';
  * what skills and Library knowledge exist. Bodies load on demand through the
  * knowledge tools (progressive disclosure — the index stays cheap).
  */
-export function bootstrapContext(userId: string, task?: string): string {
+export function bootstrapContext(
+	userId: string,
+	task?: string,
+	/**
+	 * Leave out the Library index and the boards digest, tools still offered.
+	 * Only the evaluation runner asks for it, to measure whether a lighter
+	 * prompt answers everyday questions better; nothing in production does.
+	 */
+	opts: { lean?: boolean } = {}
+): string {
 	const profile = task ? profileBlock(userId, task) : '';
 	return [
 		// First, because it changes least. A write to the Library or a board
@@ -50,12 +59,16 @@ export function bootstrapContext(userId: string, task?: string): string {
 		// Only this person's skills and shared ones, and only those meant for
 		// this task: a coding prompt has no use for the Figma skill's line.
 		skillIndexText(userId, task),
-		'',
-		'[Library index: a line per folder, naming what sits at the top of it and nothing nested inside that. These are the docs you can see: your own plus anything shared. A "(N beneath)" is a whole subtree collapsed to one number: open it with library_tree. This is a catalogue, not their contents: search inside them with library_search, read one with library_read, save durable knowledge with library_write, filed inside an existing document wherever it belongs under one, which costs this block nothing]',
-		libraryDigest(userId),
-		'',
-		'[Task boards: yours plus any shared with you. Read them with board_read, one card in full with card_read]',
-		boardsDigest(userId)
+		...(opts.lean
+			? []
+			: [
+					'',
+					'[Library index: a line per folder, naming what sits at the top of it and nothing nested inside that. These are the docs you can see: your own plus anything shared. A "(N beneath)" is a whole subtree collapsed to one number: open it with library_tree. This is a catalogue, not their contents: search inside them with library_search, read one with library_read, save durable knowledge with library_write, filed inside an existing document wherever it belongs under one, which costs this block nothing]',
+					libraryDigest(userId),
+					'',
+					'[Task boards: yours plus any shared with you. Read them with board_read, one card in full with card_read]',
+					boardsDigest(userId)
+				])
 	].join('\n');
 }
 

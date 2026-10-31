@@ -7,7 +7,8 @@ import {
 	getMessages,
 	listAttachments,
 	recentEvidence,
-	updateChat
+	updateChat,
+	type ChatMeta
 } from '$lib/server/chats';
 import {
 	listEnabledModels,
@@ -21,8 +22,10 @@ import {
 	webSearchSettings,
 	getSetting,
 	languageSettings,
-	type FetchSettings
+	type FetchSettings,
+	type LanguageSettings
 } from '$lib/server/settings';
+import type { ProviderRouting, ReasoningEffort } from '$lib/server/providers/types';
 import { typstReady } from '$lib/server/pdf';
 import { assertBudget, getBudgetStatus } from './budget';
 import { buildContext } from './context';
@@ -132,9 +135,11 @@ export const LAYOUT_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[num
  * never instructions": a profile is learnt from what a person writes, and this
  * is the owner's own configuration.
  */
-export function languageBlock(task: string): string {
+export function languageBlock(task: string, override?: LanguageSettings): string {
 	if (!PROSE_TASKS.has(task)) return '';
-	const { voice, layout } = languageSettings();
+	// The override is the evaluation runner's, for comparing another text
+	// against the owner's without touching what they saved.
+	const { voice, layout } = override ?? languageSettings();
 	const rules = [voice, LAYOUT_TASKS.has(task) ? layout : ''].filter(Boolean);
 	if (!rules.length) return '';
 	// Leading blank lines because this is concatenated onto the end of a prompt
@@ -162,10 +167,14 @@ export function languageBlock(task: string): string {
  * chat one. It is read raw and is never itself in PROSE_TASKS, so the block
  * cannot be composed twice.
  */
-export function systemPromptFor(task: string, supplementTask?: string | null): string {
+export function systemPromptFor(
+	task: string,
+	supplementTask?: string | null,
+	opts: { language?: LanguageSettings } = {}
+): string {
 	const parts = [taskPrompt(task)];
 	if (supplementTask) parts.push(taskPrompt(supplementTask));
-	return parts.filter(Boolean).join('\n\n') + languageBlock(task);
+	return parts.filter(Boolean).join('\n\n') + languageBlock(task, opts.language);
 }
 
 /**
@@ -256,36 +265,68 @@ export function withUnlinkedAttachments(
 }
 
 /**
- * Run one chat turn as a background job. Returns the job immediately;
- * streaming happens via the job's subscriber channel.
+ * What only the evaluation runner sets, to change one thing at a time against
+ * the instance's own configuration. Production never passes any of it, so none
+ * of it is reachable from Admin. See src/lib/server/eval.
  */
-export function startChatTurn(opts: TurnOptions): LiveJob {
-	const chat = getChat(opts.chatId, opts.userId);
-	if (!chat) throw new EngineError('Chat not found');
-	assertBudget(opts.userId, 'chat');
+export interface TurnOverrides {
+	/** A Language text to use in place of the owner's saved one. */
+	language?: LanguageSettings;
+	/** Reasoning effort for the turn, in place of chat's `low`. */
+	reasoning?: ReasoningEffort;
+	/** Leave the Library index and boards digest out of the system prompt. */
+	lean?: boolean;
+	/** False to withhold what the last replies' tools read. */
+	evidence?: boolean;
+	/** OpenRouter routing, to hold the serving endpoint fixed. */
+	provider?: ProviderRouting;
+}
 
+/** The model a chat turn runs on and the backup it fails over to. */
+export function chatModels(modelId?: string): { choice: ModelChoice | null; backup: ModelChoice | null } {
 	const cfg = getTaskConfig('chat');
-	const choice = pickModel(opts.modelId ?? cfg?.primaryModelId ?? null, 'chat');
-	if (!choice) {
-		throw new EngineError('No usable model — add a provider and enable a model in admin');
-	}
+	const choice = pickModel(modelId ?? cfg?.primaryModelId ?? null, 'chat');
 	const backup = cfg?.backupModelId ? resolveTextModel(cfg.backupModelId) : null;
-	const systemPrompt = systemPromptFor('chat', chat.agentTask);
+	return { choice, backup };
+}
 
-	appendMessage(chat.id, {
-		role: 'user',
-		content: opts.content,
-		attachments: opts.attachments
-	});
-	if (chat.title === 'New chat') {
-		updateChat(chat.id, { title: opts.content.slice(0, 48) || 'New chat' });
-	}
-	// Remember the model actually used, so reopening this chat restores it
-	// rather than inheriting whatever the composer was last set to.
-	updateChat(chat.id, { modelId: choice.model.id });
+export interface PreparedTurn {
+	/** The task prompt with supplement and Language, which compaction also reads. */
+	systemPrompt: string;
+	/** What the model is sent as its system message. */
+	fullSystemPrompt: string;
+	/** The volatile notes that ride before the person's message. */
+	tail: string;
+	tools: LoopTool[];
+	reasoning: ReasoningEffort;
+	provider?: ProviderRouting;
+	/** Attachments on the chat before the turn, to tell what it made. */
+	attachmentsBefore: Set<string>;
+	/** Whether the agent named the chat itself during the turn. */
+	namedItself: () => boolean;
+}
 
-	const persist = !chat.hidden;
-	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'chat', persist });
+/**
+ * Everything a chat turn sends the model, assembled the one way: the prompt,
+ * the bootstrap, the tools and their policy, the notes about the last attempt
+ * and what the last replies read. Called after the person's message is saved,
+ * since whether the chat still needs a name depends on it.
+ *
+ * Its own function so the evaluation runner measures the request production
+ * actually sends; a copy of this assembly in the runner would drift from it on
+ * the first change, and the comparison would then be of something nobody runs.
+ */
+export function prepareChatTurn(opts: {
+	chat: ChatMeta;
+	userId: string;
+	choice: ModelChoice;
+	job: LiveJob;
+	webSearch: boolean;
+	overrides?: TurnOverrides;
+}): PreparedTurn {
+	const { chat, choice, job } = opts;
+	const overrides = opts.overrides ?? {};
+	const systemPrompt = systemPromptFor('chat', chat.agentTask, { language: overrides.language });
 
 	const searchCfg = webSearchSettings();
 	const tools: LoopTool[] = [
@@ -334,7 +375,9 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		tools.push(webSearchTool(searchCfg));
 	}
 	const fullSystemPrompt =
-		systemPrompt + bootstrapContext(opts.userId, 'chat') + (needsName ? nameThisChatNote() : '');
+		systemPrompt +
+		bootstrapContext(opts.userId, 'chat', { lean: overrides.lean }) +
+		(needsName ? nameThisChatNote() : '');
 	// Read before the turn starts, so it describes the *previous* attempt and
 	// stays fixed for the whole of this one. Carried as a tail note rather than
 	// in the system message: it changes every turn, and in front of the prompt
@@ -344,11 +387,57 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	// or a search can be answered from what was actually read. Volatile like the
 	// run note, so it rides the tail too, and read once so a failover attempt
 	// sees the same material.
-	const evidence = evidenceNote(recentEvidence(chat));
-	const activeTools = applyToolPolicy([...tools, ...mcpLoopTools('chat')], 'chat');
-	// Everything already on this chat, so anything the run makes can be told
-	// apart from it afterwards. See the back-stop in onDone.
-	const attachmentsBefore = new Set(listAttachments(chat.id).map((a) => a.id));
+	const evidence = overrides.evidence === false ? '' : evidenceNote(recentEvidence(chat));
+	return {
+		systemPrompt,
+		fullSystemPrompt,
+		tail: [priorRun, evidence].filter(Boolean).join('\n\n'),
+		tools: applyToolPolicy([...tools, ...mcpLoopTools('chat')], 'chat'),
+		// The turn a person is sitting and watching, so it asks for the floor.
+		// Chat asked for nothing, and on a reasoning model "nothing" means the
+		// provider's own default: four fifths of one turn's output went on
+		// deliberation before a word of the reply, for a question that wanted a
+		// plain answer. An admin who wants a given model to think harder sets
+		// `reasoningMode` on its row, which wins — see reasoningFor.
+		reasoning: overrides.reasoning ?? 'low',
+		...(overrides.provider ? { provider: overrides.provider } : {}),
+		// Everything already on this chat, so anything the run makes can be told
+		// apart from it afterwards. See the back-stop in onDone.
+		attachmentsBefore: new Set(listAttachments(chat.id).map((a) => a.id)),
+		namedItself: () => namedItself
+	};
+}
+
+/**
+ * Run one chat turn as a background job. Returns the job immediately;
+ * streaming happens via the job's subscriber channel.
+ */
+export function startChatTurn(opts: TurnOptions): LiveJob {
+	const chat = getChat(opts.chatId, opts.userId);
+	if (!chat) throw new EngineError('Chat not found');
+	assertBudget(opts.userId, 'chat');
+
+	const { choice, backup } = chatModels(opts.modelId);
+	if (!choice) {
+		throw new EngineError('No usable model — add a provider and enable a model in admin');
+	}
+
+	appendMessage(chat.id, {
+		role: 'user',
+		content: opts.content,
+		attachments: opts.attachments
+	});
+	if (chat.title === 'New chat') {
+		updateChat(chat.id, { title: opts.content.slice(0, 48) || 'New chat' });
+	}
+	// Remember the model actually used, so reopening this chat restores it
+	// rather than inheriting whatever the composer was last set to.
+	updateChat(chat.id, { modelId: choice.model.id });
+
+	const persist = !chat.hidden;
+	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'chat', persist });
+	const turn = prepareChatTurn({ chat, userId: opts.userId, choice, job, webSearch: opts.webSearch });
+	const { systemPrompt, attachmentsBefore } = turn;
 
 	void runAgentLoop({
 		job,
@@ -358,26 +447,20 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 		persist,
 		primary: choice,
 		backup,
-		tools: activeTools,
+		tools: turn.tools,
 		maxIterations: chatMaxSteps(),
-		// The turn a person is sitting and watching, so it asks for the floor.
-		// Chat asked for nothing, and on a reasoning model "nothing" means the
-		// provider's own default: four fifths of one turn's output went on
-		// deliberation before a word of the reply, for a question that wanted a
-		// plain answer. An admin who wants a given model to think harder sets
-		// `reasoningMode` on its row, which wins — see reasoningFor.
-		reasoning: 'low',
+		reasoning: turn.reasoning,
 		// Coding has always re-checked mid-run; chat never did, so a turn with a
 		// dozen round-trips in it was gated exactly once, before the first token.
 		// Board agents route through here too and inherited the same gap.
 		budgetBlocked: () => getBudgetStatus().blocked,
 		buildMessages: () =>
 			buildContext({
-				systemPrompt: fullSystemPrompt,
+				systemPrompt: turn.fullSystemPrompt,
 				chat: getChat(chat.id, opts.userId)!,
 				history: getMessages(chat.id),
 				supportsVision: choice.model.supportsVision,
-				tail: [priorRun, evidence].filter(Boolean).join('\n\n')
+				tail: turn.tail
 			}),
 		onDone: (text, _usage, usedChoice, summary) => {
 			const content = withUnlinkedAttachments(chat.id, text, attachmentsBefore);
@@ -394,7 +477,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 			// streaming, and neither can fail the turn.
 			void (async () => {
 				// Only when the agent didn't take the offer.
-				if (!namedItself) {
+				if (!turn.namedItself()) {
 					await maybeTitleChat(chat.id, opts.userId).catch(() => {
 						// maybeTitleChat reports its own failures via events
 					});

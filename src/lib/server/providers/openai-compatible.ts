@@ -39,67 +39,11 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
 		...opts.extraHeaders
 	});
 
-	const body = (req: ChatRequest, stream: boolean) => ({
-		model: req.modelKey,
-		messages: withCacheBreakpoints(req.messages, req.cacheMode).map((m) => ({
-			role: m.role,
-			content: m.content,
-			...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-			...(m.tool_calls?.length
-				? {
-						tool_calls: m.tool_calls.map((t) => ({
-							id: t.id,
-							type: 'function',
-							function: { name: t.name, arguments: t.arguments }
-						}))
-					}
-				: {}),
-			// Handed back exactly as the same model row returned it. An endpoint
-			// that never emits the field never receives it, the same caution
-			// `modalities` carries, and loop.ts drops it before a request goes to
-			// any other row.
-			...(m.reasoningDetails?.items.length ? { reasoning_details: m.reasoningDetails.items } : {})
-		})),
-		...(req.tools?.length
-			? {
-					tools: req.tools.map((t) => ({
-						type: 'function',
-						function: { name: t.name, description: t.description, parameters: t.parameters }
-					}))
-				}
-			: {}),
-		...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-		...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
-		/**
-		 * How hard to think, and only when asked.
-		 *
-		 * Three things this must not do, each of which breaks a real endpoint:
-		 *
-		 * **Never send it unsolicited.** The same caution `modalities` carries —
-		 * an endpoint that has never heard of the field may reject the request.
-		 * The caller only asks when the model advertised support.
-		 *
-		 * **Never send `reasoning_effort` beside this.** Reasoning models return
-		 * 400 when both forms arrive, so there is exactly one form here.
-		 *
-		 * **Never send `exclude: true`.** It keeps the chain-of-thought out of the
-		 * response, which is the only thing `reasonedOnly` below can be detected
-		 * from — the retry that rescues a model which thought itself out of room
-		 * would go blind to the case it exists for. It saves no time either: the
-		 * model still reasons, it just does not tell us.
-		 */
-		...(req.reasoning ? { reasoning: { effort: req.reasoning } } : {}),
-		...(req.modalities?.length ? { modalities: req.modalities } : {}),
-		...(req.imageConfig && Object.keys(req.imageConfig).length ? { image_config: req.imageConfig } : {}),
-		stream,
-		...(stream ? { stream_options: { include_usage: true } } : {})
-	});
-
 	async function post(req: ChatRequest, stream: boolean, signal?: AbortSignal) {
 		const res = await fetch(`${opts.baseUrl}/chat/completions`, {
 			method: 'POST',
 			headers: headers(),
-			body: JSON.stringify(body(req, stream)),
+			body: JSON.stringify(requestBody(req, stream)),
 			signal
 		});
 		if (!res.ok) {
@@ -246,6 +190,70 @@ export function sniffImage(base64: string): string {
 	if (base64.startsWith('R0lGOD')) return 'image/gif';
 	if (base64.startsWith('PHN2Zy') || base64.startsWith('PD94')) return 'image/svg+xml';
 	return 'image/png';
+}
+
+/**
+ * The JSON body of a chat-completions request, exactly as it is sent: cache
+ * breakpoints marked and reasoning blocks attached. Exported so the evaluation
+ * runner can show what a model is actually handed.
+ */
+export function requestBody(req: ChatRequest, stream: boolean): Record<string, unknown> {
+	return {
+		model: req.modelKey,
+		messages: withCacheBreakpoints(req.messages, req.cacheMode).map((m) => ({
+			role: m.role,
+			content: m.content,
+			...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+			...(m.tool_calls?.length
+				? {
+						tool_calls: m.tool_calls.map((t) => ({
+							id: t.id,
+							type: 'function',
+							function: { name: t.name, arguments: t.arguments }
+						}))
+					}
+				: {}),
+			// Handed back exactly as the same model row returned it. An endpoint
+			// that never emits the field never receives it, the same caution
+			// `modalities` carries, and loop.ts drops it before a request goes to
+			// any other row.
+			...(m.reasoningDetails?.items.length ? { reasoning_details: m.reasoningDetails.items } : {})
+		})),
+		...(req.tools?.length
+			? {
+					tools: req.tools.map((t) => ({
+						type: 'function',
+						function: { name: t.name, description: t.description, parameters: t.parameters }
+					}))
+				}
+			: {}),
+		...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+		...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
+		/**
+		 * How hard to think, and only when asked.
+		 *
+		 * Three things this must not do, each of which breaks a real endpoint:
+		 *
+		 * **Never send it unsolicited.** The same caution `modalities` carries —
+		 * an endpoint that has never heard of the field may reject the request.
+		 * The caller only asks when the model advertised support.
+		 *
+		 * **Never send `reasoning_effort` beside this.** Reasoning models return
+		 * 400 when both forms arrive, so there is exactly one form here.
+		 *
+		 * **Never send `exclude: true`.** It keeps the chain-of-thought out of the
+		 * response, which is the only thing `reasonedOnly` below can be detected
+		 * from — the retry that rescues a model which thought itself out of room
+		 * would go blind to the case it exists for. It saves no time either: the
+		 * model still reasons, it just does not tell us.
+		 */
+		...(req.reasoning ? { reasoning: { effort: req.reasoning } } : {}),
+		...(req.modalities?.length ? { modalities: req.modalities } : {}),
+		...(req.imageConfig && Object.keys(req.imageConfig).length ? { image_config: req.imageConfig } : {}),
+		...(req.provider ? { provider: req.provider } : {}),
+		stream,
+		...(stream ? { stream_options: { include_usage: true } } : {})
+	};
 }
 
 /**

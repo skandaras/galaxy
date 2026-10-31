@@ -7,6 +7,7 @@ import type {
 	ChatRequest,
 	ProviderAdapter,
 	ProviderMessage,
+	ProviderRouting,
 	ReasoningDetail,
 	ReasoningEffort,
 	StreamEvent,
@@ -199,6 +200,8 @@ export interface LoopOptions {
 	 * that call is about.
 	 */
 	reasoning?: ReasoningEffort;
+	/** OpenRouter routing to send on every call; only the evaluation runner sets it. */
+	provider?: ProviderRouting;
 	/**
 	 * Re-checked every few steps on a long run. `assertBudget` only guards the
 	 * start of a turn, which is not enough once turns can run for dozens of
@@ -261,6 +264,33 @@ export function turnBudgetNote(maxIterations: number, hasSearch = false, legs = 
 				]
 			: ['If the work will not fit, answer with what you have and say plainly what you could not check.'])
 	].join('\n');
+}
+
+/**
+ * Put the turn budget note on the system message, once. Shared with the
+ * evaluation runner's request dump, which has to show what the model is
+ * actually sent, and this is the last thing added before it is.
+ */
+export function withBudgetNote(
+	messages: ProviderMessage[],
+	maxIterations: number,
+	tools: LoopTool[],
+	legs?: number
+): void {
+	const note = turnBudgetNote(
+		maxIterations,
+		tools.some((t) => t.def.name === 'web_search'),
+		legs
+	);
+	// A continued leg arrives with the note already on its system message, and
+	// appending it again would also change the prefix the provider has cached.
+	if (
+		messages[0]?.role === 'system' &&
+		typeof messages[0].content === 'string' &&
+		!messages[0].content.endsWith(note)
+	) {
+		messages[0] = { ...messages[0], content: messages[0].content + note };
+	}
 }
 
 /** Pushed into the transcript near the cap, so it lands rather than stops. */
@@ -676,21 +706,7 @@ async function executeWithModel(
 	// Appended here rather than by each caller: the loop owns the budget, so it
 	// is the only thing that can describe it accurately. Only worth saying when
 	// there are tools to batch.
-	const budgetNote = turnBudgetNote(
-		opts.maxIterations,
-		opts.tools.some((t) => t.def.name === 'web_search'),
-		opts.leg?.of
-	);
-	// A continued leg arrives with the note already on its system message, and
-	// appending it again would also change the prefix the provider has cached.
-	if (
-		toolDefs.length &&
-		messages[0]?.role === 'system' &&
-		typeof messages[0].content === 'string' &&
-		!messages[0].content.endsWith(budgetNote)
-	) {
-		messages[0] = { ...messages[0], content: messages[0].content + budgetNote };
-	}
+	if (toolDefs.length) withBudgetNote(messages, opts.maxIterations, opts.tools, opts.leg?.of);
 	const finalLeg = !opts.leg || opts.leg.index >= opts.leg.of;
 
 	/**
@@ -784,7 +800,8 @@ async function executeWithModel(
 						// it is entitled to reject the whole request — and lets an
 						// admin's `reasoningMode` on the model row override what the
 						// task asked for, in either direction.
-						reasoning: reasoningFor(choice, opts.reasoning)
+						reasoning: reasoningFor(choice, opts.reasoning),
+						...(opts.provider ? { provider: opts.provider } : {})
 					},
 				// The user pressing stop drops the provider connection immediately;
 				// the idle watchdog inside handles a connection that goes quiet.

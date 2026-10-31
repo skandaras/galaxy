@@ -2,7 +2,7 @@
 
 Galaxy is a self-hosted, model-agnostic AI workspace: SvelteKit 2 + Svelte 5 on Node 22,
 Drizzle + better-sqlite3, deployed as one Docker image. `PLAN.md` holds the architecture and
-the feature map; `docs/` holds install, accessibility, MCP, mobile and Feed.
+the feature map; `docs/` holds install, accessibility, MCP, mobile, Feed and the chat evaluation harness.
 
 It maintains itself. The coding agent running in this app is what edits this repository, so
 these are the conventions it is expected to already know.
