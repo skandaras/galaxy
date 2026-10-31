@@ -79,6 +79,26 @@ function sseChunk(res, obj) {
 	res.write(`data: ${JSON.stringify(obj)}\n\n`);
 }
 
+// The reasoning blocks REASONING-DETAILS streams in fragments, and what they
+// must add up to when they come back.
+const RD_TEXT = { type: 'reasoning.text', index: 0, format: 'anthropic-claude-v1' };
+const RD_ENC = { type: 'reasoning.encrypted', index: 1, id: 'rd_1', format: 'openai-responses-v1' };
+const RD_EXPECTED = [
+	{ ...RD_TEXT, text: 'Weighing the library', signature: 'sig-RD-7' },
+	{ ...RD_ENC, data: 'ENC-RD-PART1ENC-RD-PART2' }
+];
+
+/** JSON with sorted keys, so a comparison is about content and not key order. */
+function canonical(value) {
+	const sort = (v) =>
+		Array.isArray(v)
+			? v.map(sort)
+			: v && typeof v === 'object'
+				? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sort(v[k])]))
+				: v;
+	return JSON.stringify(sort(value));
+}
+
 function delta(res, d, finish = null) {
 	sseChunk(res, {
 		id: 'mock',
@@ -537,6 +557,31 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
+		// Structured reasoning has to come back, unmodified, on the next request
+		// of the tool chain it belongs to; a real endpoint can refuse the request
+		// without it. So once the chain started by REASONING-DETAILS is in the
+		// messages, anything but the exact blocks sent is a 400, which the loop
+		// does not retry, and the turn fails where the smoke can see it.
+		const rdChain = (parsed.messages ?? []).find(
+			(m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.id === 'call_rd')
+		);
+		const sentBack = rdChain && canonical(rdChain.reasoning_details ?? null);
+		if (rdChain && sentBack !== canonical(RD_EXPECTED)) {
+			res.writeHead(400, { 'content-type': 'application/json' });
+			res.end(JSON.stringify({ error: { message: 'reasoning_details missing or altered' } }));
+			return;
+		}
+		// And on the next turn nothing of it may be replayed: a stored reply
+		// carries no reasoning.
+		if (
+			String(last?.content ?? '').trim() === 'REASONING-DETAILS-AGAIN' &&
+			(parsed.messages ?? []).some((m) => m.reasoning_details)
+		) {
+			res.writeHead(400, { 'content-type': 'application/json' });
+			res.end(JSON.stringify({ error: { message: 'reasoning_details replayed across turns' } }));
+			return;
+		}
+
 		// Non-streaming path (complete()): the learning job, skill optimiser,
 		// compaction summaries, etc.
 		if (!parsed.stream) {
@@ -638,6 +683,37 @@ const server = createServer(async (req, res) => {
 			'content-type': 'text/event-stream',
 			'cache-control': 'no-cache'
 		});
+
+		if (String(last?.content ?? '').trim() === 'REASONING-DETAILS') {
+			delta(res, { reasoning: 'Weighing ', reasoning_details: [{ ...RD_TEXT, text: 'Weighing ' }] });
+			delta(res, { reasoning: 'the library', reasoning_details: [{ ...RD_TEXT, text: 'the library' }] });
+			delta(res, { reasoning_details: [{ type: 'reasoning.text', index: 0, signature: 'sig-RD-7' }] });
+			delta(res, { reasoning_details: [{ ...RD_ENC, data: 'ENC-RD-PART1' }] });
+			delta(res, { reasoning_details: [{ type: 'reasoning.encrypted', index: 1, data: 'ENC-RD-PART2' }] });
+			delta(res, {
+				tool_calls: [
+					{ index: 0, id: 'call_rd', function: { name: 'library_search', arguments: '{"query":"nebula"}' } }
+				]
+			});
+			delta(res, {}, 'tool_calls');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+		if (rdChain && last?.role === 'tool') {
+			delta(res, { content: 'REASONING-DETAILS-OK' });
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+		if (String(last?.content ?? '').trim() === 'REASONING-DETAILS-AGAIN') {
+			delta(res, { content: 'RD-NOT-REPLAYED' });
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
 
 		// A prompt one of the suites scripts by marker. Framing, planning and
 		// consolidation arrive here now that they are bounded by silence rather

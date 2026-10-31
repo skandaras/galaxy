@@ -1,12 +1,13 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
+	accumulateReasoningDetails,
 	createOpenAiCompatAdapter,
 	defaultCacheMode,
 	parseChatCompletionStream,
 	readUsage,
 	withCacheBreakpoints
 } from './openai-compatible';
-import type { ProviderMessage, StreamEvent } from './types';
+import type { ProviderMessage, ReasoningDetail, StreamEvent } from './types';
 
 function streamOf(...lines: string[]): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
@@ -523,5 +524,161 @@ describe('image output', () => {
 			['vendor/painter', true, false],
 			['vendor/talker', false, true]
 		]);
+	});
+});
+
+/**
+ * Reasoning that has to go back on the next request of a tool chain.
+ *
+ * OpenRouter streams each block in fragments and expects the assembled blocks
+ * returned unmodified, in order, on the assistant message that made the calls.
+ * The fragments below are the awkward shapes: text split across chunks, a
+ * signature on its own in a later chunk, an encrypted blob split mid-string,
+ * blocks with and without an index.
+ */
+describe('reasoning details', () => {
+	const textBlock = { type: 'reasoning.text', index: 0, format: 'anthropic-claude-v1' };
+
+	it('assembles fragmented blocks into one event, before the tool calls', async () => {
+		const events = await collect(
+			streamOf(
+				chunk({ choices: [{ delta: { reasoning: 'Check ', reasoning_details: [{ ...textBlock, text: 'Check ' }] } }] }),
+				chunk({ choices: [{ delta: { reasoning: 'the docs', reasoning_details: [{ ...textBlock, text: 'the docs' }] } }] }),
+				chunk({ choices: [{ delta: { reasoning_details: [{ type: 'reasoning.text', index: 0, signature: 'sig-7' }] } }] }),
+				chunk({
+					choices: [
+						{
+							delta: {
+								reasoning_details: [
+									{ type: 'reasoning.encrypted', index: 1, id: 'rs_1', format: 'openai-responses-v1', data: 'ENC-PART1' }
+								]
+							}
+						}
+					]
+				}),
+				chunk({ choices: [{ delta: { reasoning_details: [{ type: 'reasoning.encrypted', index: 1, data: '-PART2' }] } }] }),
+				chunk({
+					choices: [
+						{
+							delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'lookup', arguments: '{}' } }] },
+							finish_reason: 'tool_calls'
+						}
+					]
+				}),
+				'data: [DONE]\n\n'
+			)
+		);
+		const at = events.findIndex((e) => e.type === 'reasoning_details');
+		expect(at).toBeGreaterThan(-1);
+		expect(at).toBeLessThan(events.findIndex((e) => e.type === 'tool_calls'));
+		expect(events.filter((e) => e.type === 'reasoning_details')).toHaveLength(1);
+		expect((events[at] as { details: ReasoningDetail[] }).details).toEqual([
+			{ type: 'reasoning.text', index: 0, format: 'anthropic-claude-v1', text: 'Check the docs', signature: 'sig-7' },
+			{ type: 'reasoning.encrypted', index: 1, id: 'rs_1', format: 'openai-responses-v1', data: 'ENC-PART1-PART2' }
+		]);
+		// The readable channel is unchanged: the UI's notes still come from it.
+		expect(events.filter((e) => e.type === 'reasoning').map((e) => (e as { delta: string }).delta)).toEqual([
+			'Check ',
+			'the docs'
+		]);
+	});
+
+	it('survives a chunk split mid-JSON across reads', async () => {
+		const line = chunk({ choices: [{ delta: { reasoning_details: [{ type: 'reasoning.text', text: 'whole' }] } }] });
+		const events = await collect(streamOf(line.slice(0, 25), line.slice(25), 'data: [DONE]\n\n'));
+		expect(events.find((e) => e.type === 'reasoning_details')).toEqual({
+			type: 'reasoning_details',
+			details: [{ type: 'reasoning.text', text: 'whole' }]
+		});
+	});
+
+	it('keeps the watchdog fed while only encrypted blocks are arriving', async () => {
+		const events = await collectAll(
+			streamOf(
+				chunk({ choices: [{ delta: { reasoning_details: [{ type: 'reasoning.encrypted', data: 'x' }] } }] }),
+				'data: [DONE]\n\n'
+			)
+		);
+		expect(events.some((e) => e.type === 'progress')).toBe(true);
+	});
+
+	it('emits nothing for a stream with no blocks, or an empty list', async () => {
+		const events = await collect(
+			streamOf(
+				chunk({ choices: [{ delta: { content: 'hi', reasoning_details: [] } }] }),
+				'data: [DONE]\n\n'
+			)
+		);
+		expect(events.some((e) => e.type === 'reasoning_details')).toBe(false);
+	});
+
+	it('continues an unindexed block, starts a new one on a change of type, and keeps unknown fields', () => {
+		const acc: ReasoningDetail[] = [];
+		accumulateReasoningDetails(acc, [{ type: 'reasoning.text', text: 'a' }]);
+		accumulateReasoningDetails(acc, [{ type: 'reasoning.text', text: 'b' }]);
+		// A signature-only fragment with no type belongs to the block before it.
+		accumulateReasoningDetails(acc, [{ signature: 's' }]);
+		accumulateReasoningDetails(acc, [{ type: 'reasoning.summary', summary: 'sum', vendor_extra: 1 }]);
+		expect(acc).toEqual([
+			{ type: 'reasoning.text', text: 'ab', signature: 's' },
+			{ type: 'reasoning.summary', summary: 'sum', vendor_extra: 1 }
+		]);
+		expect(accumulateReasoningDetails(acc, [])).toBe(false);
+		// Same type, different ids: two blocks, never one ciphertext under one id.
+		const enc: ReasoningDetail[] = [];
+		accumulateReasoningDetails(enc, [{ type: 'reasoning.encrypted', id: 'block_a', data: 'AAA' }]);
+		accumulateReasoningDetails(enc, [{ type: 'reasoning.encrypted', id: 'block_b', data: 'BBB' }]);
+		expect(enc).toEqual([
+			{ type: 'reasoning.encrypted', id: 'block_a', data: 'AAA' },
+			{ type: 'reasoning.encrypted', id: 'block_b', data: 'BBB' }
+		]);
+		expect(accumulateReasoningDetails(acc, undefined)).toBe(false);
+	});
+
+	describe('on the way back', () => {
+		let sent: Record<string, unknown> = {};
+		afterEach(() => vi.unstubAllGlobals());
+
+		const adapter = () => {
+			vi.stubGlobal('fetch', async (_url: string, init: RequestInit = {}) => {
+				sent = JSON.parse(String(init.body));
+				return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+					headers: { 'content-type': 'application/json' }
+				});
+			});
+			return createOpenAiCompatAdapter({ baseUrl: 'https://example.test/v1' });
+		};
+		const items: ReasoningDetail[] = [{ type: 'reasoning.text', text: 'why', signature: 'sig' }];
+		const chain = (content: string): ProviderMessage[] => [
+			{ role: 'system', content: 'sys' },
+			{ role: 'user', content: 'go' },
+			{
+				role: 'assistant',
+				content,
+				tool_calls: [{ id: 'c1', name: 'lookup', arguments: '{}' }],
+				reasoningDetails: { modelId: 'row-1', items }
+			},
+			{ role: 'tool', content: 'result', tool_call_id: 'c1' }
+		];
+		const assistant = () => (sent.messages as Record<string, unknown>[])[2];
+
+		it('rides the assistant message that made the calls, exactly as received', async () => {
+			await adapter().complete({ modelKey: 'm', messages: chain('') });
+			expect(assistant().reasoning_details).toEqual(items);
+			// Our own tag never leaves the process.
+			expect(JSON.stringify(sent)).not.toContain('row-1');
+			expect(assistant().reasoningDetails).toBeUndefined();
+		});
+
+		it('is still there when an explicit cache breakpoint rewrites that message', async () => {
+			await adapter().complete({ modelKey: 'm', messages: chain('Looking it up'), cacheMode: 'explicit' });
+			expect(Array.isArray(assistant().content)).toBe(true);
+			expect(assistant().reasoning_details).toEqual(items);
+		});
+
+		it('is never sent for a message that has none', async () => {
+			await adapter().complete({ modelKey: 'm', messages: [{ role: 'user', content: 'hi' }] });
+			expect(JSON.stringify(sent)).not.toContain('reasoning_details');
+		});
 	});
 });

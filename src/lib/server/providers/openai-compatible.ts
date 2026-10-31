@@ -5,6 +5,7 @@ import type {
 	MessageContent,
 	ProviderAdapter,
 	ProviderMessage,
+	ReasoningDetail,
 	RemoteModel,
 	StreamEvent,
 	ToolCall,
@@ -44,7 +45,12 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
 							function: { name: t.name, arguments: t.arguments }
 						}))
 					}
-				: {})
+				: {}),
+			// Handed back exactly as the same model row returned it. An endpoint
+			// that never emits the field never receives it, the same caution
+			// `modalities` carries, and loop.ts drops it before a request goes to
+			// any other row.
+			...(m.reasoningDetails?.items.length ? { reasoning_details: m.reasoningDetails.items } : {})
 		})),
 		...(req.tools?.length
 			? {
@@ -149,10 +155,13 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
  * it. The final message is deliberately left outside — it is the one that
  * changed, and there is nothing to reuse behind it.
  *
- * Only plain, non-empty string content is marked. A tool result or an assistant
- * message holding tool calls carries structure that not every gateway will
- * accept rewritten into a content-part array, and a marker is never worth
- * risking the call itself over.
+ * Only plain, non-empty string content is marked, and never a tool result: its
+ * structure is not something every gateway will accept rewritten into a
+ * content-part array, and a marker is never worth risking the call itself
+ * over. An assistant message holding tool calls is marked when its narration
+ * is non-empty, which is what keeps the breakpoint moving down a tool chain;
+ * only its `content` is rewritten, so the calls and any reasoning beside them
+ * go out untouched.
  *
  * Exported for tests.
  */
@@ -301,6 +310,7 @@ export async function* parseChatCompletionStream(
 	stream: ReadableStream<Uint8Array>
 ): AsyncGenerator<StreamEvent> {
 	const pendingCalls = new Map<number, { id: string; name: string; args: string }>();
+	const details: ReasoningDetail[] = [];
 	let usage: Usage | null = null;
 	let finishReason: string | null = null;
 	let sawToolCallFinish = false;
@@ -344,8 +354,15 @@ export async function* parseChatCompletionStream(
 		// token budget as the answer. Dropping it entirely (the old behaviour)
 		// made a model that thought until its cap look like it returned nothing.
 		const reasoning = delta.reasoning_content ?? delta.reasoning;
-		if (typeof reasoning === 'string' && reasoning) {
+		const spoke = typeof reasoning === 'string' && reasoning.length > 0;
+		if (spoke) {
 			yield { type: 'reasoning', delta: reasoning };
+		}
+		// An encrypted block arrives with no readable reasoning beside it, so a
+		// chunk carrying only this would otherwise be silence to the idle
+		// watchdog, which re-arms on events and nothing else.
+		if (accumulateReasoningDetails(details, delta.reasoning_details) && !spoke && !delta.content) {
+			yield { type: 'progress' };
 		}
 		const toolCalls = delta.tool_calls as
 			| { index?: number; id?: string; function?: { name?: string; arguments?: unknown } }[]
@@ -375,6 +392,7 @@ export async function* parseChatCompletionStream(
 		}
 	}
 
+	if (details.length) yield { type: 'reasoning_details', details };
 	if ((sawToolCallFinish || pendingCalls.size) && pendingCalls.size) {
 		const calls: ToolCall[] = [...pendingCalls.entries()]
 			.sort(([a], [b]) => a - b)
@@ -383,6 +401,59 @@ export async function* parseChatCompletionStream(
 	}
 	if (usage) yield { type: 'usage', usage };
 	yield { type: 'done', finishReason };
+}
+
+/** Fields whose fragments are pieces of one string; every other field is whole. */
+const CONCATENATED = new Set(['text', 'summary', 'data']);
+
+/**
+ * Fold one chunk's `reasoning_details` fragments into the blocks so far.
+ *
+ * OpenRouter streams each block in pieces: text across several chunks, the
+ * signature in a later one on its own, an encrypted blob split anywhere. A
+ * fragment with an `index` belongs to the block of that index. One without
+ * continues the last block if that is of the same type, also unindexed, and not
+ * carrying a different id, and starts a new one otherwise. Pieces of `text`, `summary` and `data` are
+ * concatenated; any other field takes its latest non-empty value, which is how
+ * a signature that arrives after the text it signs lands on that block.
+ * Unknown fields are kept, since the blocks go back verbatim.
+ *
+ * Returns whether the chunk carried anything. Exported for tests.
+ */
+export function accumulateReasoningDetails(acc: ReasoningDetail[], fragments: unknown): boolean {
+	if (!Array.isArray(fragments) || !fragments.length) return false;
+	let took = false;
+	for (const raw of fragments) {
+		if (!raw || typeof raw !== 'object') continue;
+		const frag = raw as Record<string, unknown>;
+		const type = typeof frag.type === 'string' ? frag.type : '';
+		const index = typeof frag.index === 'number' ? frag.index : undefined;
+		const id = typeof frag.id === 'string' && frag.id ? frag.id : undefined;
+		const last = acc.at(-1);
+		// Two blocks of one type in a row are still two blocks when their ids
+		// differ: merged, the ciphertext of both would go back under one id.
+		const continues =
+			last &&
+			last.index === undefined &&
+			(!type || last.type === type) &&
+			!(id && last.id && id !== last.id);
+		const into = index !== undefined ? acc.find((d) => d.index === index) : continues ? last : undefined;
+		const target: ReasoningDetail = into ?? { type };
+		if (!into) acc.push(target);
+		for (const [key, value] of Object.entries(frag)) {
+			if (key === 'type' && target.type) continue;
+			if (CONCATENATED.has(key) && typeof value === 'string') {
+				target[key] = `${(target[key] as string | undefined) ?? ''}${value}`;
+			} else if (value !== undefined && value !== null && value !== '') {
+				target[key] = value;
+			}
+		}
+		took = true;
+	}
+	// In index order where every block has one, which is the order they were
+	// produced in; an unindexed stream is already in arrival order.
+	if (acc.every((d) => d.index !== undefined)) acc.sort((a, b) => a.index! - b.index!);
+	return took;
 }
 
 /**

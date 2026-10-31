@@ -15,11 +15,43 @@ export interface ToolCall {
 	arguments: string;
 }
 
+/**
+ * One block of a model's structured reasoning, as OpenRouter returns it in
+ * `reasoning_details`: plain text, a summary, or an encrypted blob, any of them
+ * with a signature. Opaque to us. The only thing done with one is to hand it
+ * back, unmodified and in order, on the next request of the same tool chain.
+ * Unknown fields are carried for the same reason.
+ */
+export interface ReasoningDetail {
+	type: string;
+	index?: number;
+	id?: string | null;
+	format?: string | null;
+	text?: string;
+	summary?: string;
+	data?: string;
+	signature?: string | null;
+	[key: string]: unknown;
+}
+
 export interface ProviderMessage {
 	role: 'system' | 'user' | 'assistant' | 'tool';
 	content: MessageContent;
 	tool_call_id?: string;
 	tool_calls?: ToolCall[];
+	/**
+	 * The reasoning that produced this assistant message's tool calls, and the
+	 * model row that produced it.
+	 *
+	 * Anthropic's thinking with tools and Gemini's thought signatures both
+	 * expect the reasoning back on the tool-call message when the chain
+	 * continues; without it the model loses its train of thought between steps,
+	 * and some endpoints refuse the request. The model id travels with the
+	 * blocks because a signature is only good at the endpoint that issued it:
+	 * failover strips anything tagged with another row (see `forModel` in
+	 * loop.ts). Never persisted, never sent to the browser.
+	 */
+	reasoningDetails?: { modelId: string; items: ReasoningDetail[] };
 }
 
 export interface ToolDef {
@@ -89,6 +121,11 @@ export type StreamEvent =
 	 * bytes arrived.
 	 */
 	| { type: 'progress' }
+	/**
+	 * The structured reasoning of this completion, assembled from its stream
+	 * fragments, emitted once and before `tool_calls`. Only when there was some.
+	 */
+	| { type: 'reasoning_details'; details: ReasoningDetail[] }
 	| { type: 'tool_calls'; calls: ToolCall[] }
 	| { type: 'usage'; usage: Usage }
 	| { type: 'done'; finishReason: string | null };

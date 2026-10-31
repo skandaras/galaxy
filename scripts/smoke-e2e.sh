@@ -80,6 +80,20 @@ check "chat stream carries the results it found" "$STREAM" '"results":[{"title":
 check_absent "the stream carries no snippets" "$STREAM" 'Snippet about'
 check "chat stream completes" "$STREAM" '"type":"done"'
 
+# Structured reasoning goes back on the next request of a tool chain, exactly as
+# it came. The mock answers 400 when the follow-up's blocks are missing or
+# altered, so the reply only arrives if they made the round trip intact; and
+# none of it may reach the browser, the stored reply, or the next turn.
+RDCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+RDJOB=$(api -X POST $B/api/chats/$RDCHAT/messages -d '{"content":"REASONING-DETAILS"}' | jqn .jobId)
+RDSTREAM=$(curl -sN --max-time 30 $B/api/jobs/$RDJOB/stream)
+check "reasoning details make the round trip intact" "$RDSTREAM" 'REASONING-DETAILS-OK'
+check_absent "the signature never reaches the stream" "$RDSTREAM" 'sig-RD-7'
+check_absent "nor the encrypted block" "$RDSTREAM" 'ENC-RD-PART'
+check_absent "nor the stored chat" "$(api $B/api/chats/$RDCHAT)" 'sig-RD-7'
+RDJOB2=$(api -X POST $B/api/chats/$RDCHAT/messages -d '{"content":"REASONING-DETAILS-AGAIN"}' | jqn .jobId)
+check "and the next turn replays none of it" "$(curl -sN --max-time 30 $B/api/jobs/$RDJOB2/stream)" 'RD-NOT-REPLAYED'
+
 # A blocked provider must surface a visible error, never a silent empty list.
 api -X PUT $B/api/admin/settings -d "{\"key\":\"websearch\",\"value\":{\"provider\":\"searxng\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/searxng-blocked\",\"fallbackProvider\":\"none\"}}" > /dev/null
 BLOCKED=$(api -X POST $B/api/admin/settings/test-search)

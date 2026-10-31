@@ -6,6 +6,7 @@ import type {
 	ChatRequest,
 	ProviderAdapter,
 	ProviderMessage,
+	ReasoningDetail,
 	ReasoningEffort,
 	StreamEvent,
 	ToolCall,
@@ -546,19 +547,43 @@ export function elideOldToolOutput(messages: ProviderMessage[], budget: number):
 	for (const m of messages) total += carriedChars(m);
 	if (total <= budget) return 0;
 
+	// The results after the newest assistant message are the ones the model is
+	// about to read for the first time. Dropping those would send it a request
+	// carrying calls whose answers it never saw, so they are never candidates.
+	const unread = messages.findLastIndex((m) => m.role === 'assistant');
+	const readable = (i: number) => unread === -1 || i < unread;
+
 	let dropped = 0;
-	for (const m of messages) {
+	for (const [i, m] of messages.entries()) {
 		if (total <= budget) break;
-		if (m.role === 'assistant' && m.tool_calls?.length) {
+		// The arguments under a signed reasoning block stay as they were on this
+		// pass: Gemini's thought signatures cover the call they came with, and a
+		// rewritten call under an intact signature is a request it is entitled
+		// to refuse.
+		if (m.role === 'assistant' && m.tool_calls?.length && !m.reasoningDetails) {
 			const before = carriedChars(m);
 			m.tool_calls = m.tool_calls.map((c) => ({ ...c, arguments: shrinkArguments(c.arguments) }));
 			total -= before - carriedChars(m);
 			continue;
 		}
-		if (m.role !== 'tool' || m.content === ELIDED) continue;
+		if (m.role !== 'tool' || m.content === ELIDED || !readable(i)) continue;
 		total -= m.content.length - ELIDED.length;
 		m.content = ELIDED;
 		dropped++;
+	}
+	// Still over, and what is left is signed. The oldest exchanges give up their
+	// reasoning first, and with it the reason their calls could not shrink: a
+	// step that loses its thinking is a smaller loss than a chain that has to
+	// stall or a request that never fits.
+	for (const [i, m] of messages.entries()) {
+		if (total <= budget) break;
+		if (m.role !== 'assistant' || !m.reasoningDetails || !readable(i)) continue;
+		const before = carriedChars(m);
+		delete m.reasoningDetails;
+		if (m.tool_calls) {
+			m.tool_calls = m.tool_calls.map((c) => ({ ...c, arguments: shrinkArguments(c.arguments) }));
+		}
+		total -= before - carriedChars(m);
 	}
 	return dropped;
 }
@@ -569,9 +594,32 @@ const ARG_KEEP_CHARS = 200;
 function carriedChars(m: ProviderMessage): number {
 	if (m.role === 'tool') return m.content.length;
 	if (m.role === 'assistant' && m.tool_calls) {
-		return m.tool_calls.reduce((n, c) => n + c.arguments.length, 0);
+		// Reasoning rides the same message and is re-sent with it, so it counts;
+		// an encrypted block can outweigh the call it explains.
+		const reasoning = m.reasoningDetails ? JSON.stringify(m.reasoningDetails.items).length : 0;
+		return m.tool_calls.reduce((n, c) => n + c.arguments.length, reasoning);
 	}
 	return 0;
+}
+
+/**
+ * The messages as `modelId` may be sent them: reasoning blocks another model
+ * row produced are taken off.
+ *
+ * Only reachable through a continued coding leg, whose transcript is carried
+ * from the leg before and may have been written by the backup. A chat attempt
+ * rebuilds its messages from stored history, which never holds reasoning. The
+ * stripped messages are copies, because that transcript is shared between the
+ * attempts of one leg and the primary's retry must still see its own blocks.
+ *
+ * Exported for tests.
+ */
+export function forModel(messages: ProviderMessage[], modelId: string): ProviderMessage[] {
+	return messages.map((m) => {
+		if (!m.reasoningDetails || m.reasoningDetails.modelId === modelId) return m;
+		const { reasoningDetails: _other, ...rest } = m;
+		return rest;
+	});
 }
 
 /** Exported for tests. Always returns a JSON object, which is what a provider replays. */
@@ -596,7 +644,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 
 	const toolDefs: ToolDef[] = choice.model.supportsTools ? opts.tools.map((t) => t.def) : [];
 	const toolByName = new Map(opts.tools.map((t) => [t.def.name, t]));
-	const messages = opts.buildMessages();
+	const messages = forModel(opts.buildMessages(), choice.model.id);
 	// Appended here rather than by each caller: the loop owns the budget, so it
 	// is the only thing that can describe it accurately. Only worth saying when
 	// there are tools to batch.
@@ -685,6 +733,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		callUsage = null;
 		let iterationText = '';
 		let toolCalls: ToolCall[] = [];
+		let details: ReasoningDetail[] = [];
 		// Per-iteration rather than per-run: each model call reasons afresh, and
 		// carrying the previous leg's thought over showed a note about a search
 		// that had already come back.
@@ -725,6 +774,8 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 					// was reported as the model being slow; the model was working
 					// and the interface would not say so.
 					noteReasoning(ev.delta);
+				} else if (ev.type === 'reasoning_details') {
+					details = ev.details;
 				} else if (ev.type === 'tool_calls') {
 					toolCalls = ev.calls;
 				} else if (ev.type === 'usage') {
@@ -833,7 +884,14 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		// the answer and must stay put.
 		pushChunk(job, { type: 'step', id: stepId, label, status: 'running', consumedText, note });
 
-		messages.push({ role: 'assistant', content: iterationText, tool_calls: toolCalls });
+		messages.push({
+			role: 'assistant',
+			content: iterationText,
+			tool_calls: toolCalls,
+			// Kept for the next round trip of this chain and nowhere else: no chunk,
+			// event or trace sees it, and nothing persists the transcript.
+			...(details.length ? { reasoningDetails: { modelId: choice.model.id, items: details } } : {})
+		});
 		// Round-trip boundary. A tool that limits what one round-trip may do —
 		// rather than what one turn may do — learns here that a new one has begun.
 		for (const tool of opts.tools) tool.beginStep?.();
