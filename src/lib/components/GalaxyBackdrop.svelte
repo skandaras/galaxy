@@ -10,9 +10,23 @@
 
 	let art = $state(generateGalaxy(BACKDROP_COLS, BACKDROP_ROWS));
 
+	/**
+	 * Whether the person has asked for less motion, kept live. It used to be
+	 * read once when the effect started, so turning the setting on in the OS
+	 * left the spiral turning until the next reload.
+	 */
+	let reduced = $state(false);
 	$effect(() => {
-		if (!animate) return;
-		if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+		const query = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+		if (!query) return;
+		reduced = query.matches;
+		const changed = (e: MediaQueryListEvent) => (reduced = e.matches);
+		query.addEventListener('change', changed);
+		return () => query.removeEventListener('change', changed);
+	});
+
+	$effect(() => {
+		if (!animate || reduced) return;
 
 		// A phone renders the same 110x34 grid as a desktop, at a size where most
 		// of it is off the side of the screen anyway, and pays for it out of a
@@ -37,6 +51,7 @@
 </script>
 
 <div class="backdrop" aria-hidden="true">
+	<div class="nebula"></div>
 	<pre>{art}</pre>
 </div>
 
@@ -52,7 +67,22 @@
 		pointer-events: none;
 		user-select: none;
 	}
+	/* A faint wash of the theme's two accents behind the characters, so the
+	   spiral has depth to sit in rather than floating on flat black. The opacity
+	   is the bound: at its brightest point 7% took Galaxy's dim text to 4.36:1
+	   against the page, under AA; at 4% every preset with the backdrop on stays
+	   at or above 4.5:1. */
+	.nebula {
+		position: absolute;
+		inset: -10%;
+		background:
+			radial-gradient(ellipse 45% 35% at 35% 45%, var(--galaxy, var(--accent)), transparent 70%),
+			radial-gradient(ellipse 35% 30% at 68% 58%, var(--accent-2, var(--accent)), transparent 70%);
+		opacity: 0.04;
+		filter: blur(30px);
+	}
 	pre {
+		position: relative;
 		margin: 0;
 		/* Deliberately not --font-mono. The art is made of characters and needs
 		   every glyph the same width; --font-galaxy is fixed in themeCss and no

@@ -67,9 +67,12 @@
 		padding: 1.1rem 1.2rem 1rem;
 		width: min(26rem, calc(100vw - 2rem));
 		box-sizing: border-box;
+		box-shadow: var(--shadow-2);
 	}
 	.confirm::backdrop {
 		background: rgb(0 0 0 / 0.55);
+		-webkit-backdrop-filter: blur(3px);
+		backdrop-filter: blur(3px);
 	}
 	.title {
 		margin: 0 0 0.5rem;

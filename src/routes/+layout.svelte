@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { onNavigate } from '$app/navigation';
 	import Observatory from '$lib/components/Observatory.svelte';
 	import BudgetBar from '$lib/components/BudgetBar.svelte';
 	import NotificationBell from '$lib/components/NotificationBell.svelte';
@@ -43,6 +44,28 @@
 			document.documentElement.style.setProperty(name, value)
 		)
 	);
+
+	// Pages arrive with a short rise rather than a hard cut. Only where the
+	// browser has view transitions and nobody asked for less motion; anywhere
+	// else navigation is exactly as it was.
+	onNavigate((navigation) => {
+		if (!document.startViewTransition) return;
+		if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+		// The name goes on for the length of the transition only; see .main.
+		const root = document.documentElement;
+		root.dataset.navigating = '';
+		return new Promise<void>((resolve) => {
+			const transition = document.startViewTransition(async () => {
+				resolve();
+				await navigation.complete;
+			});
+			// finished rejects when the update callback does; the name has to come
+			// off either way.
+			void transition.finished
+				.finally(() => delete root.dataset.navigating)
+				.catch(() => {});
+		});
+	});
 </script>
 
 <svelte:head>
@@ -61,8 +84,19 @@
 {/if}
 
 <div class="shell">
-	<aside class="pane">
-		<div class="brand">✦ GALAXY</div>
+	<aside class="pane glass">
+		<div class="brand">
+			<!-- The app icon's orbit, drawn in the theme's colours rather than the
+			     icon's fixed ones, so it follows the preset. -->
+			<svg class="mark" viewBox="0 0 128 128" aria-hidden="true">
+				<g fill="none" stroke-width="7" stroke-linecap="round">
+					<ellipse cx="64" cy="64" rx="48" ry="17" transform="rotate(-24 64 64)" stroke="var(--accent)" opacity="0.9" />
+					<ellipse cx="64" cy="64" rx="30" ry="10" transform="rotate(-24 64 64)" stroke="var(--accent-2)" opacity="0.6" />
+				</g>
+				<circle cx="64" cy="64" r="10" fill="var(--fg)" />
+			</svg>
+			<span>GALAXY</span>
+		</div>
 		<nav class="nav" aria-label="Sections">
 			{#each clusters as cluster (cluster.id)}
 				<div class="cluster" role="group" aria-label={cluster.label ?? 'More'}>
@@ -215,13 +249,25 @@
 	.pane {
 		width: 260px;
 		flex-shrink: 0;
-		background: var(--bg-pane);
-		border-right: 1px solid var(--border);
+		/* Glass (the shared class), with its right edge drawn by ::after below. */
 		display: flex;
 		flex-direction: column;
 		padding: 1rem;
 		box-sizing: border-box;
 		overflow-y: auto;
+		position: relative;
+	}
+	/* A hairline that brightens toward the top, where the wordmark is, and fades
+	   out toward the bottom, instead of a ruled border the full height. */
+	.pane::after {
+		content: '';
+		position: absolute;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		width: 1px;
+		background: linear-gradient(180deg, var(--edge), var(--border) 45%, transparent);
+		pointer-events: none;
 	}
 	.brand {
 		/* The wordmark's letter-spacing was drawn against a monospace face and
@@ -231,6 +277,15 @@
 		letter-spacing: 0.35em;
 		font-size: var(--text-lg);
 		margin-bottom: 2rem;
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+	}
+	.mark {
+		width: 1.6em;
+		height: 1.6em;
+		flex-shrink: 0;
+		filter: drop-shadow(0 0 6px var(--glow));
 	}
 	.nav {
 		display: flex;
@@ -244,7 +299,7 @@
 	}
 	.cluster-label {
 		font-size: var(--text-xs);
-		letter-spacing: 0.15em;
+		letter-spacing: 0.16em;
 		text-transform: uppercase;
 		color: var(--label);
 		padding: 0 0.6rem 0.2rem;
@@ -252,20 +307,23 @@
 	.nav-item {
 		color: var(--fg-dim);
 		font-size: var(--text-md);
-		padding: 0.35rem 0.6rem;
+		padding: 0.4rem 0.7rem;
 		border-radius: var(--radius);
 		text-decoration: none;
 	}
 	.nav-item:hover {
 		color: var(--fg);
+		background: color-mix(in srgb, var(--accent-wash) 60%, transparent);
 	}
-	/* The background alone is --border, about 1.2:1 against the rail, so where
-	   you are rested on a tint most people could not see. The accent edge is
-	   what says it. */
+	/* A tint alone is too faint to say where you are, so the accent bar does it,
+	   lit with the theme's glow; the wash behind is the accent at a whisper,
+	   held to AA under --fg (theme.test.ts). */
 	.nav-item.active {
 		color: var(--fg);
-		background: var(--border);
-		box-shadow: inset 3px 0 0 var(--accent);
+		background: linear-gradient(90deg, var(--accent-wash), transparent);
+		box-shadow:
+			inset 2px 0 0 var(--accent),
+			-6px 0 14px -10px var(--glow);
 	}
 	.bell-dock {
 		border-top: 1px solid var(--border);
@@ -288,7 +346,7 @@
 		color: var(--bg);
 		background: var(--accent);
 		padding: 0.1rem 0.5rem;
-		border-radius: 3px;
+		border-radius: var(--radius-sm);
 		text-transform: uppercase;
 		letter-spacing: 0.1em;
 	}
@@ -343,6 +401,25 @@
 		min-height: 0;
 		overflow: hidden;
 	}
+	/* Named so a navigation animates the page and leaves the chrome still, but
+	   only while one is running. A view-transition-name makes the element a
+	   stacking context, and when it sat on .main permanently every modal inside
+	   the page painted under the phone's top strip and tab bar, whatever its
+	   z-index: a board card's Close button was covered by the strip. */
+	:global(:root[data-navigating]) .main {
+		view-transition-name: galaxy-main;
+	}
+	:global(::view-transition-old(galaxy-main)) {
+		animation: var(--dur-1) var(--ease-out) both galaxy-fade-out;
+	}
+	:global(::view-transition-new(galaxy-main)) {
+		animation: var(--dur-2) var(--ease-out) both galaxy-rise;
+	}
+	@keyframes -global-galaxy-fade-out {
+		to {
+			opacity: 0;
+		}
+	}
 	@media (max-width: 720px) {
 		:global(:root) {
 			--chrome-top: calc(var(--strip-h) + env(safe-area-inset-top, 0px));
@@ -360,6 +437,9 @@
 		.main {
 			min-height: 0;
 		}
+		.pane::after {
+			display: none;
+		}
 		.pane {
 			position: fixed;
 			inset: 0 0 auto 0;
@@ -367,8 +447,8 @@
 			height: var(--chrome-top);
 			flex-direction: row;
 			align-items: center;
-			border-right: none;
 			border-bottom: 1px solid var(--border);
+			border-image: linear-gradient(90deg, var(--edge), var(--border) 50%, var(--edge)) 1;
 			/* Clears the notch when installed to a phone home screen. */
 			padding: env(safe-area-inset-top, 0px) 0.75rem 0;
 			box-sizing: border-box;

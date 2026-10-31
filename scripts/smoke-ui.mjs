@@ -361,6 +361,24 @@ await page.goto(`${B}/ivory`);
 await page.waitForURL(/\/chat/, { timeout: 5000 }).catch(() => {});
 check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 
+// 1a'. The browser's own controls follow the theme. app.html pins them to dark
+//      for the paint before the theme arrives, and Paper used to keep that.
+{
+	const schemeOnceThemed = async () => {
+		await page.waitForFunction(() => document.getElementById('galaxy-theme'));
+		return page.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+	};
+	const saved = await as(ALICE, '/api/settings/theme');
+	check('a dark theme asks for dark browser controls', await schemeOnceThemed(), 'dark');
+	await as(ALICE, '/api/settings/theme', {
+		method: 'PUT',
+		body: JSON.stringify({ theme: saved.presets.Paper })
+	});
+	await page.reload();
+	check('Paper asks for light ones', await schemeOnceThemed(), 'light');
+	await as(ALICE, '/api/settings/theme', { method: 'PUT', body: JSON.stringify({ theme: saved.theme }) });
+}
+
 // 1b. Every settings tab has a pane, and shows only its own.
 //
 //     A pane once shipped with no tab at all: it was written one level of
@@ -508,6 +526,16 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 	const pane = await page.locator('aside.pane').boundingBox();
 	check('the alerts panel is wider than the pane', panel.width > pane.width);
 	check('and is not clipped by it', panel.x + panel.width > pane.x + pane.width);
+	// Bounding boxes ignore clipping, which is how a panel cut off at the rail's
+	// edge passed the two checks above when the rail had a backdrop filter.
+	// Hit testing does not.
+	check(
+		'and is drawn past the rail, not clipped at its edge',
+		await page.evaluate(
+			({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.panel'),
+			{ x: panel.x + panel.width - 12, y: panel.y + panel.height / 2 }
+		)
+	);
 
 	const titles = await page.locator('.panel .title').allTextContents();
 	check('it lists what needs looking at', titles.length > 0);
@@ -1687,8 +1715,38 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 		const panel = await phone.locator('.panel').boundingBox();
 		check('the alerts panel clears the tab bar', panel.y + panel.height <= bar.y + 1);
 		check('and clears the top strip', panel.y >= strip.height);
+		check(
+			'and is drawn, not clipped into the strip',
+			await phone.evaluate(
+				({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.panel'),
+				{ x: panel.x + panel.width / 2, y: panel.y + panel.height / 2 }
+			)
+		);
 		await phoneShot('alerts');
 		await phone.keyboard.press('Escape');
+	}
+
+	{
+		// A board card takes the whole screen on a phone. The page pane was once
+		// a stacking context all the time (a view-transition-name left on it),
+		// which put the card under the top strip whatever its z-index, Close
+		// button included.
+		await phone.goto(`${B}/boards`);
+		const card = phone.locator('article.board-card .card-face').first();
+		await card.waitFor();
+		await card.tap();
+		const close = phone.locator('aside.detail button[title="Close"]');
+		await close.waitFor();
+		const box = await close.boundingBox();
+		check(
+			'an open card draws over the top strip',
+			await phone.evaluate(
+				({ x, y }) => !!document.elementFromPoint(x, y)?.closest('aside.detail'),
+				{ x: box.x + box.width / 2, y: box.y + box.height / 2 }
+			)
+		);
+		await phoneShot('card-detail');
+		await close.tap();
 	}
 
 	{

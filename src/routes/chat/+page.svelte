@@ -1902,7 +1902,7 @@
 	}
 	.stage.current {
 		color: var(--accent);
-		animation: pulse 1.4s ease-in-out infinite;
+		animation: galaxy-pulse 1.4s ease-in-out infinite;
 	}
 	.stage-sep {
 		opacity: 0.5;
@@ -1910,7 +1910,7 @@
 	.thinking {
 		color: var(--fg-dim);
 		font-size: var(--text-md);
-		animation: pulse 1.4s ease-in-out infinite;
+		animation: galaxy-pulse 1.4s ease-in-out infinite;
 	}
 	.live {
 		display: flex;
@@ -1958,11 +1958,6 @@
 	}
 	.past-run > summary:hover {
 		color: var(--fg);
-	}
-	@keyframes pulse {
-		50% {
-			opacity: 0.35;
-		}
 	}
 
 

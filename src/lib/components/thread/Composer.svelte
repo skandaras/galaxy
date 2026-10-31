@@ -295,7 +295,7 @@
 		box-sizing: border-box;
 		background: var(--bg-pane);
 		border: 1px solid var(--control-border);
-		border-radius: var(--radius);
+		border-radius: var(--radius-lg);
 		color: var(--fg);
 		font-family: inherit;
 		font-size: var(--text-lg);
@@ -309,8 +309,20 @@
 		resize: none;
 		overflow-y: auto;
 	}
+	/* The field lights from inside when it has focus, the way the rail's active
+	   row does; the accent border is still what marks it. */
 	textarea:focus {
 		border-color: var(--accent);
+		box-shadow:
+			0 0 0 3px var(--accent-wash),
+			0 0 22px -10px var(--glow);
+	}
+	@media (prefers-reduced-motion: no-preference) {
+		textarea {
+			transition:
+				border-color var(--dur-1) var(--ease-out),
+				box-shadow var(--dur-2) var(--ease-out);
+		}
 	}
 	/* --tap on both axes: on touch the send button is the *only* way to send,
 	   since Enter inserts a newline when the pointer is coarse, so a thumb that

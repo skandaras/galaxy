@@ -700,7 +700,7 @@
 		height: 0.45rem;
 		border-radius: 50%;
 		background: var(--accent);
-		animation: pulse 1.4s ease-in-out infinite;
+		animation: galaxy-pulse 1.4s ease-in-out infinite;
 	}
 	.dot.parked {
 		background: var(--danger);
@@ -725,11 +725,6 @@
 	}
 	.agent-doing.sub {
 		padding-left: 1.75rem;
-	}
-	@keyframes pulse {
-		50% {
-			opacity: 0.35;
-		}
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.dot {

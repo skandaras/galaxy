@@ -5,7 +5,11 @@ import {
 	contrastGrade,
 	contrastRatio,
 	controlBorder,
+	deriveTokens,
 	freeName,
+	hexToOklch,
+	mixHex,
+	oklchToHex,
 	normalizeTheme,
 	sameTheme,
 	themeCss,
@@ -475,5 +479,97 @@ describe('freeName', () => {
 	it('numbers past the names already taken, ignoring case', () => {
 		expect(freeName('Galaxy', ['Galaxy'])).toBe('Galaxy 2');
 		expect(freeName('Galaxy', ['galaxy 2', 'Galaxy 3'])).toBe('Galaxy 4');
+	});
+});
+
+describe('derived colours', () => {
+	/**
+	 * The refresh draws with colours no preset states: a second accent for
+	 * gradients, glass panels, a success green. They are computed in hex so the
+	 * same AA bar the shipped palettes clear can be held against what is drawn.
+	 */
+	const pass = (a: string, b: string, label: string) => {
+		const ratio = contrastRatio(a, b);
+		expect(ratio, `${label} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+	};
+
+	/** Every point the browser paints between the stops, interpolated in sRGB as CSS does by default. */
+	const passAlong = (text: string, from: string, to: string, label: string) => {
+		for (let i = 0; i <= 20; i++) pass(text, mixHex(to, from, i / 20), `${label} at ${i * 5}%`);
+	};
+
+	it('keep a primary button readable all along its gradient', () => {
+		for (const [name, preset] of Object.entries(PRESETS)) {
+			passAlong(preset.bg, preset.accent, deriveTokens(preset).accent2, `${name} --bg on the button`);
+		}
+	});
+
+	it('hold the middle of the gradient too, where both stops pass but the mix may not', () => {
+		// Both ends of #0077ff -> its neighbour pass; the sRGB midpoint was 4.21:1.
+		const blue = { ...PRESETS.Galaxy, accent: '#0077ff' };
+		passAlong(blue.bg, blue.accent, deriveTokens(blue).accent2, '#0077ff button');
+	});
+
+	it('darken a derived colour on a mid grey, where white cannot reach AA', () => {
+		// Under the old 0.4 luminance cut this ground counted as dark, so the
+		// second accent was lightened to white and stopped at 2.85:1.
+		const grey = { ...PRESETS.Galaxy, bg: '#999999', bgPane: '#999999', accent: '#102090' };
+		const d = deriveTokens(grey);
+		pass(grey.bg, d.accent2, 'mid grey --bg on accent-2');
+		pass(d.success, grey.bgPane, 'mid grey success on the pane');
+	});
+
+	it('keep text, dim text and links readable on glass and on cards', () => {
+		for (const [name, preset] of Object.entries(PRESETS)) {
+			const d = deriveTokens(preset);
+			for (const ground of ['surfaceGlass', 'surface'] as const) {
+				for (const key of ['fg', 'fgDim', 'accent'] as const) {
+					pass(preset[key], d[ground], `${name} ${key} on ${ground}`);
+				}
+			}
+			// The wash sits under the active row, whose label is --fg.
+			pass(preset.fg, d.accentWash, `${name} fg on accentWash`);
+		}
+	});
+
+	it('keep the success colour readable on the pane', () => {
+		for (const [name, preset] of Object.entries(PRESETS)) {
+			pass(deriveTokens(preset).success, preset.bgPane, `${name} success`);
+		}
+	});
+
+	it('know a light page from a dark one, for the colour scheme the browser draws', () => {
+		expect(deriveTokens(PRESETS.Paper).light).toBe(true);
+		expect(deriveTokens(PRESETS.Galaxy).light).toBe(false);
+		expect(themeCss(PRESETS.Paper)).toContain(':root{color-scheme:light;}');
+		expect(themeCss(PRESETS.Galaxy)).toContain(':root{color-scheme:dark;}');
+	});
+
+	it('round-trip through OKLCH closely enough to be the same colour', () => {
+		for (const hex of ['#7f9cff', '#c084fc', '#fbbf24', '#3d5ccc', '#ffffff', '#05060f']) {
+			const back = oklchToHex(hexToOklch(hex)!);
+			expect(contrastRatio(back, hex)).toBeLessThan(1.02);
+		}
+	});
+
+	it('composite the way a browser lays one colour over another', () => {
+		expect(mixHex('#ffffff', '#000000', 0.5)).toBe('#808080');
+		expect(mixHex('#ff0000', '#0000ff', 1)).toBe('#ff0000');
+	});
+
+	it('are emitted, and survive a hostile accent as plain hex', () => {
+		const css = themeCss(normalizeTheme({ accent: 'red}body{display:none' }));
+		expect(css).not.toContain('display:none');
+		for (const name of ['--accent-2', '--surface', '--surface-glass', '--edge', '--success', '--accent-wash']) {
+			expect(css).toMatch(new RegExp(`${name}:#[0-9a-f]{6};`));
+		}
+	});
+});
+
+describe('motion', () => {
+	it('stops every animation and transition for someone who asked for less', () => {
+		expect(themeCss(DEFAULT_THEME)).toContain(
+			'@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.001ms!important;'
+		);
 	});
 });

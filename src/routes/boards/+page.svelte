@@ -826,7 +826,7 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+		box-shadow: var(--shadow-2);
 		transform-origin: top left;
 		opacity: 0.95;
 	}

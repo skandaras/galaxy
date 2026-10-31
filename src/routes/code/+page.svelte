@@ -1579,7 +1579,7 @@
 		height: 0.45rem;
 		border-radius: 50%;
 		background: var(--accent);
-		animation: pulse 1.4s ease-in-out infinite;
+		animation: galaxy-pulse 1.4s ease-in-out infinite;
 	}
 	.session-title {
 		font-size: var(--text-md);
@@ -1694,7 +1694,7 @@
 		white-space: nowrap;
 	}
 	.stat .add {
-		color: #6fd08c;
+		color: var(--success);
 	}
 	.stat .del {
 		color: var(--danger);
@@ -1715,7 +1715,7 @@
 		line-height: 1.4;
 	}
 	.diff :global(.add) {
-		color: #6fd08c;
+		color: var(--success);
 	}
 	.diff :global(.del) {
 		color: var(--danger);
@@ -1793,11 +1793,6 @@
 		font-size: var(--text-sm);
 		font-style: italic;
 		line-height: 1.45;
-	}
-	@keyframes pulse {
-		50% {
-			opacity: 0.35;
-		}
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.dot {
