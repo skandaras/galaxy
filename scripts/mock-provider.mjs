@@ -982,6 +982,21 @@ const server = createServer(async (req, res) => {
 		// Reports whether the system prompt carried a note about the previous
 		// attempt — the thing that stops a follow-up blindly re-running a turn
 		// that already failed.
+		// What the last turn's tools read, as the next turn is shown it: whether
+		// the fenced evidence arrived at all, and whether it carries the fact the
+		// page held, which the reply that read it never quoted in full.
+		if (String(last?.content ?? '').includes('echo-evidence')) {
+			const all = parsed.messages.map((x) => String(x.content ?? '')).join('\n');
+			const fenced = all.includes('--- BEGIN EVIDENCE ---');
+			delta(res, {
+				content: `EVIDENCECHECK present=${fenced} fact=${fenced && all.includes('born in collapsing clouds')}`
+			});
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
 		if (String(last?.content ?? '').includes('echo-prior')) {
 			// Scanned across every message, not just the system prompt: the note is
 			// carried as a tail note now so it cannot invalidate the cacheable

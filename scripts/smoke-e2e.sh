@@ -231,6 +231,12 @@ UJOB=$(api -X POST $B/api/chats/$UCHAT/messages -d "{\"content\":\"READ-THIS $PA
 USTREAM=$(curl -sN --max-time 40 $B/api/jobs/$UJOB/stream)
 check "chat can read a url" "$USTREAM" '"name":"fetch_url","status":"ok"'
 check "chat reads it without web search on" "$USTREAM" 'Contains FACT-42: true'
+# What the page said reaches the next turn, fenced as material, so a follow-up
+# about it is answered from the page rather than from the reply's summary; and
+# it never rides the chat the browser loads.
+EJOB=$(api -X POST $B/api/chats/$UCHAT/messages -d '{"content":"echo-evidence","webSearch":false}' | jqn .jobId)
+check "the next turn is shown what the page said" "$(curl -sN --max-time 40 $B/api/jobs/$EJOB/stream)" 'EVIDENCECHECK present=true fact=true'
+check_absent "and the browser is never sent it" "$(api $B/api/chats/$UCHAT)" 'born in collapsing clouds'
 
 # The GitHub rewrite (repo URL → README, blob URL → raw file) is asserted in
 # fetch-url.test.ts against a stubbed fetch. It is deliberately not exercised

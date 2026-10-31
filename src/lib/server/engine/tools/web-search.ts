@@ -395,6 +395,21 @@ export function webSearchTool(cfg: WebSearchSettings, deps: SearchToolDeps = {})
 			const lang = normaliseLanguage(args.language);
 			return `${String(args.query ?? '')}${lang ? ` [${lang}]` : ''}`;
 		},
+		// Only a search that ran and found something. A replay, a deferred or
+		// refused search and an empty one report no positive `results`. The
+		// language is part of what was searched, as it is of the memo key: the
+		// same words in two languages are two searches, and one reference for
+		// both would have deduplicated the second away.
+		evidence: (args, output, meta) => {
+			if (typeof meta.results !== 'number' || meta.results <= 0 || meta.cached) return null;
+			const query = String(args.query ?? '').trim();
+			const ref = typeof meta.language === 'string' && meta.language ? `${query} [${meta.language}]` : query;
+			return {
+				ref,
+				title: `Search: ${ref}`,
+				excerpt: output.replace(/\n\((?:\d+ more search|that was the last search)[^\n]*\)\s*$/, '')
+			};
+		},
 		execute: async (args, report) => {
 			const query = String(args.query ?? '').trim();
 			if (!query) throw new Error('query is required');

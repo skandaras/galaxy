@@ -160,11 +160,33 @@ export const messages = sqliteTable(
 		 * written here at all, so its replies cannot carry one by construction.
 		 */
 		feedback: text('feedback', { enum: ['up', 'down'] }),
+		/**
+		 * What the tools behind this reply read, cut down: a page's text, a
+		 * search's results, the document it opened. Replayed to the next turn or
+		 * two so a follow-up has the material the answer rested on, where before
+		 * only the answer itself survived the turn.
+		 *
+		 * Kept out of everything the browser is sent (`getMessages` does not
+		 * select it) and nulled on all but the newest replies, so it is a short
+		 * working memory rather than an archive of every page fetched.
+		 */
+		evidence: text('evidence', { mode: 'json' }).$type<EvidenceItem[] | null>(),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 	},
 	// Every turn reads a whole chat in seq order, so the sort rides the index.
 	(t) => [index('messages_chat_seq_idx').on(t.chatId, t.seq)]
 );
+
+/** One thing a tool read during a turn, as the next turn is shown it. */
+export interface EvidenceItem {
+	/** The tool that read it. */
+	tool: string;
+	/** Where it came from: a URL, a search query, a document or attachment id. */
+	ref: string;
+	title?: string;
+	/** What the model saw, cut down; empty when only the reference is kept. */
+	excerpt: string;
+}
 
 export interface AttachmentRef {
 	id: string;

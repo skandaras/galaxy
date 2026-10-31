@@ -146,3 +146,19 @@ describe('propose_skill', () => {
 		expect(names).toContain('skill_load');
 	});
 });
+
+describe('what a Library read hands on to the next turn', () => {
+	it('is the reference alone, so a later read goes back through who may see it', async () => {
+		const { saveDoc } = await import('$lib/server/library');
+		const doc = saveDoc({ title: 'Evidence field notes', body: 'DOC-SECRET-BODY', author: 'user', ownerId: ALICE });
+		const read = tool('library_read');
+		let meta: Record<string, unknown> = {};
+		const out = await read.execute({ title: 'Evidence field notes' }, (m) => (meta = m));
+		expect(out).toContain('DOC-SECRET-BODY');
+		expect(read.evidence!({ title: 'Evidence field notes' }, out, meta)).toEqual({
+			ref: doc.id,
+			title: 'Evidence field notes',
+			excerpt: ''
+		});
+	});
+});

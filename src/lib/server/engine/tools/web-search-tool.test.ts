@@ -601,3 +601,41 @@ describe('search pacing on the chat path', () => {
 		expect(pacer.pacing.throttled).toBe(true);
 	});
 });
+
+describe('what a search hands on to the next turn', () => {
+	/** Runs one call the way the loop does and asks the tool's hook about it. */
+	async function evidenceOf(tool: ReturnType<typeof webSearchTool>, query: string, language?: string) {
+		let meta: Record<string, unknown> = {};
+		const args = language ? { query, language } : { query };
+		const out = await searchTurn(tool, args, (m) => {
+			const { display: _shown, ...rest } = m;
+			meta = rest;
+		});
+		return tool.evidence!(args, out, meta);
+	}
+
+	it('keeps the same words searched in two languages as two searches', async () => {
+		const tool = webSearchTool(cfg(), { search: stubSearch().search });
+		const de = await evidenceOf(tool, 'galaxy news', 'de');
+		const fr = await evidenceOf(tool, 'galaxy news', 'fr');
+		expect(de?.ref).toBe('galaxy news [de]');
+		expect(fr?.ref).toBe('galaxy news [fr]');
+	});
+
+	it('keeps the results of a search that found something, without the allowance line', async () => {
+		const tool = webSearchTool(cfg(), { search: stubSearch().search });
+		const found = await evidenceOf(tool, 'galaxy news');
+		expect(found?.ref).toBe('galaxy news');
+		expect(found?.excerpt).toContain('Title 1');
+		expect(found?.excerpt).not.toMatch(/more searches? available/);
+	});
+
+	it('keeps nothing from a replay, an empty search or one it refused to run', async () => {
+		const tool = webSearchTool(cfg({ maxSearchesPerTurn: 1 }), { search: stubSearch().search });
+		await evidenceOf(tool, 'galaxy news');
+		expect(await evidenceOf(tool, 'galaxy news')).toBeNull();
+		expect(await evidenceOf(tool, 'something else')).toBeNull();
+		const empty = webSearchTool(cfg(), { search: stubSearch([]).search });
+		expect(await evidenceOf(empty, 'nothing at all')).toBeNull();
+	});
+});

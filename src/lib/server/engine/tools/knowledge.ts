@@ -305,11 +305,19 @@ export function knowledgeTools(
 				}
 			},
 			describe: (a) => String(a.title ?? ''),
-			execute: async (a) => {
+			// The reference alone. Who may see a document can change, and a re-read
+			// goes back through the visibility check in SQL, where an excerpt kept
+			// here would carry on outliving an unshare.
+			evidence: (_a, _output, meta) =>
+				typeof meta.docId === 'string'
+					? { ref: meta.docId, title: String(meta.title ?? ''), excerpt: '' }
+					: null,
+			execute: async (a, report) => {
 				const ref = String(a.title ?? '');
 				const meta = findDocByTitle(ref, userId);
 				const doc = meta ? getDoc(meta.id, userId) : getDoc(ref, userId);
 				if (!doc) throw new Error(`No Library doc matching "${ref}"`);
+				report?.({ docId: doc.meta.id, title: doc.meta.title });
 				// Where it sits, so an agent reading a nested document knows what it
 				// belongs to without walking back up by hand.
 				const path = docPath(doc.meta.id, userId);

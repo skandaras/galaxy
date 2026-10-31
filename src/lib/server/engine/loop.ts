@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { reasoningNotes } from '$lib/reasoning-note';
 import type { NotedEntry, RunStep, RunToolCall, SearchResultRow } from '$lib/run-timeline';
+import type { EvidenceItem } from '$lib/server/db/schema';
 import { reasoningFor, type ModelChoice } from '$lib/server/providers/registry';
 import type {
 	ChatRequest,
@@ -86,6 +87,19 @@ export interface LoopTool {
 	 * cannot see where one round-trip ends and the next begins. This is that seam.
 	 */
 	beginStep?: () => void;
+	/**
+	 * What of this call's result the next turn should be shown, or null.
+	 *
+	 * Handed the capped output the model actually read and whatever the call
+	 * passed to `report`. Only asked on success, never for a `privateArgs` tool
+	 * (a person's profile is not material to carry around), and a hook that
+	 * throws costs the evidence, not the call. See engine/evidence.ts.
+	 */
+	evidence?: (
+		args: Record<string, unknown>,
+		output: string,
+		meta: Record<string, unknown>
+	) => Omit<EvidenceItem, 'tool'> | null;
 }
 
 /**
@@ -135,6 +149,11 @@ export interface TurnSummary {
 	 * continues this array instead. See driveCodingTurn.
 	 */
 	transcript: ProviderMessage[];
+	/**
+	 * What the tools read, in call order, for the caller to keep with the reply.
+	 * Never in the trace, which the browser is sent.
+	 */
+	evidence: EvidenceItem[];
 }
 
 export interface LoopOptions {
@@ -393,6 +412,11 @@ export async function runAgentLoop(opts: LoopOptions): Promise<void> {
 		: [opts.primary, opts.primary];
 	let lastError: unknown = null;
 
+	// Shared across attempts. A retry reruns the same tool instances, which
+	// answer a repeat from their per-turn memo and hand on nothing for a replay,
+	// so evidence collected per attempt left a turn that read a page and then
+	// failed over with nothing to show for it.
+	const read: EvidenceItem[] = [];
 	for (let attempt = 0; attempt < attempts.length; attempt++) {
 		const choice = attempts[attempt];
 		if (job.controller.signal.aborted) {
@@ -423,7 +447,7 @@ export async function runAgentLoop(opts: LoopOptions): Promise<void> {
 			}
 		}
 		try {
-			await executeWithModel(opts, choice);
+			await executeWithModel(opts, choice, read);
 			return;
 		} catch (err) {
 			lastError = err;
@@ -638,7 +662,11 @@ export function shrinkArguments(raw: string): string {
 	return JSON.stringify(kept);
 }
 
-async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise<void> {
+async function executeWithModel(
+	opts: LoopOptions,
+	choice: ModelChoice,
+	read: EvidenceItem[]
+): Promise<void> {
 	const { job, persist } = opts;
 	pushChunk(job, { type: 'meta', model: choice.model.displayName });
 
@@ -923,7 +951,8 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			// Pushed in call order rather than completion order: a tool message has
 			// to line up with the assistant message's tool_calls.
 			for (const [i, { call, record }] of prepared.entries()) {
-				const { output, ok, display } = results[i];
+				const { output, ok, display, evidence } = results[i];
+				if (evidence) read.push(evidence);
 				record.status = ok ? 'ok' : 'error';
 				// Onto the record, so the box survives a reload: the live chunk is gone
 				// the moment the job is, and the trace is all a finished reply keeps.
@@ -984,7 +1013,8 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		toolCalls: toolCallRecords,
 		trace,
 		fallbackReply: usedFallback,
-		transcript: messages
+		transcript: messages,
+		evidence: read
 	};
 	if (stopReason === 'budget') {
 		pushChunk(job, {
@@ -1112,7 +1142,7 @@ async function executeToolCall(
 	call: ToolCall,
 	tool: LoopTool | undefined,
 	stepId: string
-): Promise<{ output: string; ok: boolean; display?: ToolDisplay }> {
+): Promise<{ output: string; ok: boolean; display?: ToolDisplay; evidence?: EvidenceItem }> {
 	const { job, persist } = opts;
 	const { args, problem } = parseToolArgs(call.arguments);
 	const summary = tool?.describe?.(args);
@@ -1211,7 +1241,8 @@ async function executeToolCall(
 			{ persist }
 		);
 		emit('ok', summary, display?.results, display?.noted);
-		return { output: capResult(call.name, result), ok: true, display };
+		const output = capResult(call.name, result);
+		return { output, ok: true, display, evidence: evidenceOf(tool, call.name, args, output, meta) };
 	} catch (err) {
 		emitEvent(
 			{
@@ -1234,6 +1265,22 @@ async function executeToolCall(
 		);
 		emit('error', String(err));
 		return { output: JSON.stringify({ error: String(err) }), ok: false };
+	}
+}
+
+function evidenceOf(
+	tool: LoopTool,
+	name: string,
+	args: Record<string, unknown>,
+	output: string,
+	meta: Record<string, unknown>
+): EvidenceItem | undefined {
+	if (!tool.evidence || tool.privateArgs) return undefined;
+	try {
+		const found = tool.evidence(args, output, meta);
+		return found ? { tool: name, ...found } : undefined;
+	} catch {
+		return undefined;
 	}
 }
 

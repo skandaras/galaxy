@@ -1,7 +1,14 @@
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { taskConfigs, type CORE_TASKS } from '$lib/server/db/schema';
-import { appendMessage, getChat, getMessages, listAttachments, updateChat } from '$lib/server/chats';
+import {
+	appendMessage,
+	getChat,
+	getMessages,
+	listAttachments,
+	recentEvidence,
+	updateChat
+} from '$lib/server/chats';
 import {
 	listEnabledModels,
 	resolveModel,
@@ -22,6 +29,7 @@ import { DEFAULT_PROMPTS } from './prompts';
 import { maybeCompact } from './compaction';
 import { maybeTitleChat, nameThisChatNote, setChatTitleTool } from './chat-title';
 import { emitEvent } from './events';
+import { boundEvidence, evidenceNote } from './evidence';
 import { createJob, failJob, type LiveJob } from './jobs';
 import { chatMaxSteps } from './limits';
 import { runAgentLoop, type LoopTool } from './loop';
@@ -323,6 +331,11 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	// in the system message: it changes every turn, and in front of the prompt
 	// it invalidated the cacheable prefix behind it (see buildContext).
 	const priorRun = previousRunNote(chat.id);
+	// What the tools read for the last reply or two, so a follow-up about a page
+	// or a search can be answered from what was actually read. Volatile like the
+	// run note, so it rides the tail too, and read once so a failover attempt
+	// sees the same material.
+	const evidence = evidenceNote(recentEvidence(chat));
 	const activeTools = applyToolPolicy([...tools, ...mcpLoopTools('chat')], 'chat');
 	// Everything already on this chat, so anything the run makes can be told
 	// apart from it afterwards. See the back-stop in onDone.
@@ -355,7 +368,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 				chat: getChat(chat.id, opts.userId)!,
 				history: getMessages(chat.id),
 				supportsVision: choice.model.supportsVision,
-				tail: priorRun
+				tail: [priorRun, evidence].filter(Boolean).join('\n\n')
 			}),
 		onDone: (text, _usage, usedChoice, summary) => {
 			const content = withUnlinkedAttachments(chat.id, text, attachmentsBefore);
@@ -365,7 +378,8 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 				modelKey: usedChoice.model.modelKey,
 				// Kept with the reply, so a turn that searched and read three pages
 				// still says so when it is scrolled back to.
-				trace: summary.trace.length ? { steps: summary.trace } : null
+				trace: summary.trace.length ? { steps: summary.trace } : null,
+				evidence: boundEvidence(summary.evidence)
 			});
 			// Compaction and titling both run after the reply so neither delays
 			// streaming, and neither can fail the turn.
@@ -381,7 +395,8 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 					const compactionCfg = getSetting('compaction', DEFAULT_COMPACTION);
 					await maybeCompact({
 						chat: fresh,
-						systemPrompt,
+						// The next turn carries this too, so it counts toward the cutoff.
+						systemPrompt: systemPrompt + evidenceNote(recentEvidence(fresh)),
 						choice: usedChoice,
 						settings: compactionCfg
 					});

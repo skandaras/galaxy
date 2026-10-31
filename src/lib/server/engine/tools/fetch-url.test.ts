@@ -324,3 +324,43 @@ describe('fetch_url', () => {
 		await expect(t.execute({})).rejects.toThrow(/url is required/);
 	});
 });
+
+describe('what a read hands on to the next turn', () => {
+	async function evidenceOf(t: ReturnType<typeof fetchUrlTool>, url: string) {
+		let meta: Record<string, unknown> = {};
+		const out = await t.execute({ url }, (m) => (meta = m));
+		return t.evidence!({ url }, out, meta);
+	}
+
+	it('keeps the page text, without the framing around it', async () => {
+		const { t } = tool(() => reply('<p>Nebulae are FACT-42 clouds.</p>'));
+		const found = await evidenceOf(t, 'https://example.com/page');
+		expect(found?.ref).toBe('https://example.com/page');
+		expect(found?.excerpt).toContain('FACT-42');
+		expect(found?.excerpt).not.toContain('BEGIN CONTENT');
+	});
+
+	it('keeps nothing from a second read this turn, an error page or a type it refused', async () => {
+		const { t } = tool((url) =>
+			url.includes('missing')
+				? reply('gone', { status: 404, statusText: 'Not Found' })
+				: url.includes('zip')
+					? reply('PK', { contentType: 'application/zip' })
+					: reply('<p>hello</p>')
+		);
+		await evidenceOf(t, 'https://example.com/a');
+		expect(await evidenceOf(t, 'https://example.com/a')).toBeNull();
+		expect(await evidenceOf(t, 'https://example.com/missing')).toBeNull();
+		expect(await evidenceOf(t, 'https://example.com/file.zip')).toBeNull();
+	});
+
+	it('keeps the address asked for when a GitHub link was resolved, so it reopens the same way', () => {
+		const { t } = tool(() => reply('unused'));
+		const found = t.evidence!({}, 'Fetched x\n--- BEGIN CONTENT ---\n# Readme\n--- END CONTENT ---', {
+			url: 'https://api.github.com/repos/o/r/readme',
+			resolvedFrom: 'https://github.com/o/r',
+			chars: 8
+		});
+		expect(found?.ref).toBe('https://github.com/o/r');
+	});
+});
