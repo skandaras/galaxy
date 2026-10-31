@@ -280,6 +280,12 @@ export interface TurnOverrides {
 	evidence?: boolean;
 	/** OpenRouter routing, to hold the serving endpoint fixed. */
 	provider?: ProviderRouting;
+	/**
+	 * Read the note about the last attempt from this chat instead: a replay
+	 * runs in a fresh chat with no runs of its own, and a follow-up to a failed
+	 * or stopped run is sent that note in production.
+	 */
+	priorRunFrom?: string;
 }
 
 /** The model a chat turn runs on and the backup it fails over to. */
@@ -382,7 +388,7 @@ export function prepareChatTurn(opts: {
 	// stays fixed for the whole of this one. Carried as a tail note rather than
 	// in the system message: it changes every turn, and in front of the prompt
 	// it invalidated the cacheable prefix behind it (see buildContext).
-	const priorRun = previousRunNote(chat.id);
+	const priorRun = previousRunNote(overrides.priorRunFrom ?? chat.id);
 	// What the tools read for the last reply or two, so a follow-up about a page
 	// or a search can be answered from what was actually read. Volatile like the
 	// run note, so it rides the tail too, and read once so a failover attempt

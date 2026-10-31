@@ -100,6 +100,8 @@ export interface RunContext {
 export interface CaseResult {
 	caseId: string;
 	variant: string;
+	/** The turns before the prompt, as a reader of the blind sheet needs them. */
+	context: string;
 	prompt: string;
 	expect: string;
 	reply: string;
@@ -276,7 +278,8 @@ function seedChat(c: EvalCase, v: Variant, ctx: RunContext) {
 			compactedUpTo: Math.min(compaction.compactedUpTo, history.length)
 		});
 	}
-	return { chat: getChat(chat.id, ctx.userId)!, prompt };
+	const context = history.map((t) => `**${t.role === 'user' ? 'Person' : 'Assistant'}:** ${t.content}`).join('\n\n');
+	return { chat: getChat(chat.id, ctx.userId)!, prompt, context };
 }
 
 /**
@@ -318,26 +321,38 @@ export async function runCase(c: EvalCase, v: Variant, ctx: RunContext): Promise
 	const base = {
 		caseId: c.id,
 		variant: v.name,
+		context: '',
 		prompt: c.prompt,
 		expect: c.expect ?? ''
 	};
 	const { choice, backup } = modelsFor(v, ctx);
 	if (!choice) return finish(base, meter, '', '(none)', false, 'No usable chat model.');
 
-	const seeded = seedChat(c, v, ctx);
+	// A case that cannot be set up (a missing chat, no prompt) is a result like
+	// any other. Thrown, it ended the whole run before anything was written,
+	// and the cases already paid for were lost with it.
+	let seeded: ReturnType<typeof seedChat>;
+	let turn: ReturnType<typeof prepareChatTurn>;
+	let job: ReturnType<typeof createJob>;
+	try {
+		seeded = seedChat(c, v, ctx);
+		base.prompt = seeded.prompt;
+		base.context = seeded.context;
+		// Spend is logged under its own task, so it shows apart from real chat in
+		// Admin → Spend and still counts against the cap.
+		job = createJob({ chatId: seeded.chat.id, userId: ctx.userId, task: 'eval', persist: true });
+		turn = prepareChatTurn({
+			chat: seeded.chat,
+			userId: ctx.userId,
+			choice,
+			job,
+			webSearch: c.webSearch ?? false,
+			overrides: { ...v.overrides, ...(c.fromChat ? { priorRunFrom: c.fromChat } : {}) }
+		});
+	} catch (err) {
+		return finish(base, meter, '', choice.model.modelKey, false, `Could not set up the case: ${String(err)}`);
+	}
 	const chat = seeded.chat;
-	base.prompt = seeded.prompt;
-	// Spend is logged under its own task, so it shows apart from real chat in
-	// Admin → Spend and still counts against the cap.
-	const job = createJob({ chatId: chat.id, userId: ctx.userId, task: 'eval', persist: true });
-	const turn = prepareChatTurn({
-		chat,
-		userId: ctx.userId,
-		choice,
-		job,
-		webSearch: c.webSearch ?? false,
-		overrides: v.overrides
-	});
 	let reply = '';
 	let usedModel = choice.model.modelKey;
 	let failover = false;
@@ -378,7 +393,7 @@ export async function runCase(c: EvalCase, v: Variant, ctx: RunContext): Promise
 }
 
 function finish(
-	base: Pick<CaseResult, 'caseId' | 'variant' | 'prompt' | 'expect'>,
+	base: Pick<CaseResult, 'caseId' | 'variant' | 'context' | 'prompt' | 'expect'>,
 	m: Meter,
 	reply: string,
 	model: string,
@@ -413,7 +428,14 @@ export function dumpRequest(c: EvalCase, v: Variant, ctx: RunContext): Record<st
 	if (!choice) throw new Error('No usable chat model.');
 	const { chat } = seedChat(c, v, ctx);
 	const job = createJob({ chatId: chat.id, userId: ctx.userId, task: 'eval', persist: false });
-	const turn = prepareChatTurn({ chat, userId: ctx.userId, choice, job, webSearch: c.webSearch ?? false, overrides: v.overrides });
+	const turn = prepareChatTurn({
+		chat,
+		userId: ctx.userId,
+		choice,
+		job,
+		webSearch: c.webSearch ?? false,
+		overrides: { ...v.overrides, ...(c.fromChat ? { priorRunFrom: c.fromChat } : {}) }
+	});
 	const sent = buildContext({
 		systemPrompt: turn.fullSystemPrompt,
 		chat,
@@ -488,6 +510,7 @@ export function writeRun(dir: string, results: CaseResult[], runName: string): v
 			[
 				`# ${r.caseId} · ${r.variant}`,
 				'',
+				...(r.context ? ['## Before', r.context, ''] : []),
 				'## Prompt',
 				r.prompt,
 				...(r.expect ? ['', '## What a good reply does', r.expect] : []),
@@ -521,7 +544,13 @@ export function writeRun(dir: string, results: CaseResult[], runName: string): v
 	for (const caseId of [...new Set(results.map((r) => r.caseId))]) {
 		const replies = shuffle(results.filter((r) => r.caseId === caseId), `${runName}:${caseId}`);
 		key[caseId] = {};
-		blind.push('', `## ${caseId}`, '', replies[0].prompt);
+		const first = replies[0];
+		// Enough to judge continuity and adherence without opening a file that
+		// names the variant: what came before, and what a good reply does.
+		blind.push('', `## ${caseId}`, '');
+		if (first.context) blind.push('### Before', '', first.context, '');
+		blind.push('### Prompt', '', first.prompt);
+		if (first.expect) blind.push('', `_What a good reply does: ${first.expect}_`);
 		replies.forEach((r, i) => {
 			const letter = String.fromCharCode(65 + i);
 			key[caseId][letter] = r.variant;

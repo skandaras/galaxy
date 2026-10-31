@@ -2,7 +2,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runMigrations } from '$lib/server/db';
+import { db, runMigrations } from '$lib/server/db';
+import { jobs } from '$lib/server/db/schema';
 import { appendMessage, createChat, updateChat } from '$lib/server/chats';
 import type { ModelChoice } from '$lib/server/providers/registry';
 import type { ChatRequest, StreamEvent } from '$lib/server/providers/types';
@@ -150,6 +151,8 @@ describe('a run', () => {
 		expect(csv.split('\n')[0]).toContain('usefulness,judgement,style,adherence,continuity,completion');
 		const blind = readFileSync(join(dir, 'blind.md'), 'utf8');
 		expect(blind).not.toContain('baseline');
+		// What came before, so continuity can be judged without the key.
+		expect(blind).toContain('Read the page.');
 		const key = JSON.parse(readFileSync(join(dir, 'blind-key.json'), 'utf8'));
 		expect(Object.values(key.follow).sort()).toEqual(['baseline', 'lean']);
 	});
@@ -222,6 +225,22 @@ describe('the edges of a run', () => {
 		appendMessage(handoff.id, { role: 'user', content: 'Card: fix the gate' });
 		await runCase({ id: 'board', fromChat: handoff.id, prompt: '' }, parseVariant('baseline'), ctx());
 		expect(String(seen.at(-1)?.messages[0].content)).toContain('You work on task boards in Galaxy');
+	});
+
+	it('records a case that cannot be set up as a result, so the run carries on', async () => {
+		const r = await runCase({ id: 'gone', fromChat: 'no-such-chat', prompt: '' }, parseVariant('baseline'), ctx());
+		expect(r.error).toMatch(/Could not set up the case/);
+		expect(r.calls).toBe(0);
+	});
+
+	it('tells a replayed follow-up about the failed attempt before it, as production would', () => {
+		const real = createChat({ userId: USER, title: 'Failed' });
+		appendMessage(real.id, { role: 'user', content: 'Do the thing.' });
+		db.insert(jobs)
+			.values({ id: 'failed-job', chatId: real.id, userId: USER, task: 'chat', status: 'error', error: 'provider down', createdAt: new Date(), finishedAt: new Date() })
+			.run();
+		const body = dumpRequest({ id: 'retry', fromChat: real.id, prompt: 'Any luck?' }, parseVariant('baseline'), ctx());
+		expect(JSON.stringify(body.messages)).toContain('provider down');
 	});
 
 	it('brings the evidence a lifted chat kept', async () => {
