@@ -809,6 +809,35 @@ check "alice approves her skill" "$(as alice -X POST $M/api/skills/candidates/$A
 check "and it is hers" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: alice' $M/api/skills/alpha-learn-checklist)" "200"
 check "and not bob's" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/skills/alpha-learn-checklist)" "404"
 
+# A skill can be changed, not only added: the agent loads it, proposes exact
+# edits, and the change waits for the person whose skill it is, as a diff.
+PC=$(as alice -X POST $M/api/chats -d '{}' | jqn .id)
+PJ=$(as alice -X POST $M/api/chats/$PC/messages -d '{"content":"PATCH-SKILL","webSearch":false}' | jqn .jobId)
+check "an agent proposes a change to a skill it loaded" \
+  "$(curl -sN --max-time 40 -H 'Remote-User: alice' $M/api/jobs/$PJ/stream)" '"name":"propose_skill_update","status":"ok"'
+ALICE_PATCH=$(as alice $M/api/profile/learning)
+check "the change waits for alice, drawn as a diff" "$ALICE_PATCH" '"kind":"add","text":"3. Check the PATCH-APPLIED health page"'
+PATCH_ID=$(echo "$ALICE_PATCH" | node -pe 'JSON.parse(require("fs").readFileSync(0)).candidates.find((c) => c.kind === "patch" && c.status === "pending").id')
+check "bob cannot decide it" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' -H 'content-type: application/json' \
+     -d '{"approve":true}' $M/api/skills/candidates/$PATCH_ID)" "404"
+check "alice applies it" "$(as alice -X POST $M/api/skills/candidates/$PATCH_ID -d '{"approve":true}')" '"status":"approved"'
+check "and the skill carries the change" "$(as alice $M/api/skills/alpha-learn-checklist)" 'PATCH-APPLIED'
+check "one version on" "$(as alice $M/api/skills/alpha-learn-checklist)" '"version":2'
+
+# The optimiser reads the shared skills' bodies and proposes exact edits an
+# admin applies; approving keeps the skill's tasks rather than widening it.
+asadmin -X POST $M/api/skills -d '{"name":"opt-skill","category":"ops","description":"d","tasks":"chat","body":"Step one: OPT-ORIGINAL."}' > /dev/null
+asadmin -X POST $M/api/admin/skills/optimise > /dev/null
+OPT_VIEW=$(asadmin $M/api/admin/learning)
+check "the optimiser was shown the skill's body" "$OPT_VIEW" 'saw-body=true'
+check "and proposed a change, not a rewrite" "$OPT_VIEW" '"kind":"patch"'
+OPT_ID=$(echo "$OPT_VIEW" | node -pe 'JSON.parse(require("fs").readFileSync(0)).candidates.find((c) => c.kind === "patch" && c.name === "opt-skill").id')
+asadmin -X PATCH $M/api/admin/skills/candidates/$OPT_ID -d '{"action":"approve"}' > /dev/null
+OPT_SKILL=$(asadmin $M/api/skills/opt-skill)
+check "the admin applies it" "$OPT_SKILL" 'OPT-PATCHED'
+check "and the skill keeps its tasks" "$OPT_SKILL" '"tasks":"chat"'
+
 # The admin view carries counts and times, never a line of anyone's profile.
 ADMIN_VIEW=$(asadmin $M/api/admin/learning)
 check "admin sees per-user status" "$ADMIN_VIEW" '"username":"alice"'

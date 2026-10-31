@@ -1,7 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireAdmin } from '$lib/server/api';
-import { decideCandidate } from '$lib/server/skills';
+import { decideCandidate, SkillPatchConflict } from '$lib/server/skills';
 import { emitEvent } from '$lib/server/engine/events';
 
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {
@@ -10,7 +10,13 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	if (body.action !== 'approve' && body.action !== 'reject') {
 		error(400, 'action must be approve or reject');
 	}
-	const result = decideCandidate(params.id, body.action === 'approve');
+	let result;
+	try {
+		result = decideCandidate(params.id, body.action === 'approve');
+	} catch (err) {
+		if (err instanceof SkillPatchConflict) error(409, err.message);
+		throw err;
+	}
 	if (!result) error(404, 'Candidate not found or already decided');
 	emitEvent({
 		userId: admin.id,

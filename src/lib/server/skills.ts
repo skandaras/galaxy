@@ -14,6 +14,7 @@ import { join, relative, resolve, sep } from 'node:path';
 import { and, asc, desc, eq, isNull, or, type SQL } from 'drizzle-orm';
 import { db, dataDir } from '$lib/server/db';
 import { skillCandidates, skills } from '$lib/server/db/schema';
+import { applySkillPatch, lineDiff, type DiffLine, type SkillPatch } from '$lib/skill-patch';
 
 export type Skill = typeof skills.$inferSelect;
 export type SkillCandidate = typeof skillCandidates.$inferSelect;
@@ -266,6 +267,11 @@ export function deleteSkill(name: string): boolean {
 	const existing = db.select().from(skills).where(eq(skills.name, name)).get();
 	if (!existing) return false;
 	db.delete(skills).where(eq(skills.id, existing.id)).run();
+	// A change to a skill that is gone can never apply.
+	db.update(skillCandidates)
+		.set({ status: 'rejected', decidedAt: new Date() })
+		.where(and(eq(skillCandidates.targetSkillId, existing.id), eq(skillCandidates.status, 'pending')))
+		.run();
 	rmSync(join(skillsDir(), existing.category, existing.name), { recursive: true, force: true });
 	commitSkills(`Remove skill ${existing.name}`);
 	return true;
@@ -346,6 +352,207 @@ export function skillDir(meta: Pick<Skill, 'category' | 'name'>): string {
 	return join(skillPath(meta.category, meta.name), '..');
 }
 
+/**
+ * Whether this person already has a skill of this name, or has proposed one.
+ *
+ * Per person, where it used to be global: a check across every skill and every
+ * candidate told one person's agent the names of other people's personal
+ * skills ("already exists"), and let one person's rejection block another's
+ * proposal. A clash this person cannot see is settled when the candidate is
+ * approved, by saving under a free name (see freeSkillName).
+ */
+export function skillNameSeen(userId: string, name: string): boolean {
+	const own = db
+		.select({ id: skills.id })
+		.from(skills)
+		.where(and(eq(skills.name, name), skillVisibleTo(userId)))
+		.get();
+	if (own) return true;
+	return Boolean(
+		db
+			.select({ id: skillCandidates.id })
+			.from(skillCandidates)
+			.where(
+				and(
+					eq(skillCandidates.name, name),
+					eq(skillCandidates.userId, userId),
+					eq(skillCandidates.kind, 'new')
+				)
+			)
+			.get()
+	);
+}
+
+/**
+ * `name`, or `name-2`, `name-3`… whichever no skill holds yet, in the form
+ * saveSkill will store it. Normalised before the check, not after: a prefix
+ * cut to end in a hyphen made `…--2`, which saveSkill collapses into a `…-2`
+ * that may already exist, and would then have overwritten.
+ */
+export function freeSkillName(name: string): string {
+	const taken = (n: string) => db.select({ id: skills.id }).from(skills).where(eq(skills.name, n)).get();
+	const wanted = normalizeSkillName(name);
+	if (!taken(wanted)) return wanted;
+	// The base is cut to leave room for the whole suffix, whatever its length:
+	// a fixed cut let `-1000` be truncated back to `-100`, and the search could
+	// then circle names that were all taken.
+	for (let i = 2; i < 100_000; i++) {
+		const suffix = `-${i}`;
+		const next = `${wanted.slice(0, 64 - suffix.length).replace(/-+$/, '')}${suffix}`;
+		if (!taken(next)) return next;
+	}
+	throw new Error(`No free name near ${wanted}.`);
+}
+
+export function getSkillById(id: string, userId?: string): { meta: Skill; body: string } | null {
+	const meta = db
+		.select()
+		.from(skills)
+		.where(userId ? and(eq(skills.id, id), skillVisibleTo(userId)) : eq(skills.id, id))
+		.get();
+	return meta ? getSkill(meta.name) : null;
+}
+
+/** A change that cannot be applied to the skill as it now stands. */
+export class SkillPatchConflict extends Error {}
+
+/**
+ * File a change to an existing skill for approval.
+ *
+ * Checked against the body as it stands, so a change that could never apply is
+ * refused while its author can still fix it. One waiting change per proposer
+ * and skill: a second would be decided against a body the first may change.
+ * `userId` null is the skill optimiser, whose changes an admin decides.
+ */
+export function proposeSkillPatch(opts: {
+	userId: string | null;
+	skill: { meta: Skill; body: string };
+	patch: SkillPatch;
+	rationale: string;
+}): SkillCandidate {
+	const { meta, body } = opts.skill;
+	const applied = applySkillPatch(body, opts.patch.edits);
+	if (!applied.ok) throw new Error(applied.problem);
+	const waiting = db
+		.select({ id: skillCandidates.id })
+		.from(skillCandidates)
+		.where(
+			and(
+				eq(skillCandidates.kind, 'patch'),
+				eq(skillCandidates.targetSkillId, meta.id),
+				eq(skillCandidates.status, 'pending'),
+				opts.userId === null ? isNull(skillCandidates.userId) : eq(skillCandidates.userId, opts.userId)
+			)
+		)
+		.get();
+	if (waiting) {
+		throw new Error(`A change to ${meta.name} is already waiting for a decision. Mention this one in your reply instead.`);
+	}
+	const row: SkillCandidate = {
+		id: randomUUID(),
+		userId: opts.userId,
+		name: meta.name,
+		category: meta.category,
+		description: opts.patch.description?.trim() || meta.description,
+		triggers: opts.patch.triggers?.trim() || meta.triggers,
+		tasks: meta.tasks,
+		body: applied.body,
+		rationale: opts.rationale.trim().slice(0, 1000),
+		status: 'pending',
+		kind: 'patch',
+		targetSkillId: meta.id,
+		baseVersion: meta.version,
+		patch: opts.patch,
+		createdAt: new Date(),
+		decidedAt: null
+	};
+	db.insert(skillCandidates).values(row).run();
+	return row;
+}
+
+/**
+ * Who may decide a candidate, as a predicate.
+ *
+ * The person whose activity proposed it; and for a change to an existing
+ * skill, only when the skill is also theirs. A change to a shared skill, or to
+ * someone else's, is an admin's to decide, and answers "not found" here.
+ */
+function decidableBy(userId: string): SQL {
+	return and(
+		eq(skillCandidates.userId, userId),
+		or(eq(skillCandidates.kind, 'new'), eq(skills.ownerId, userId))
+	)!;
+}
+
+/** A one-line field a change replaces, as it is and as it would be. */
+export interface FieldChange {
+	from: string;
+	to: string;
+}
+
+export type CandidatePreview =
+	| {
+			kind: 'patch';
+			applies: true;
+			diff: DiffLine[];
+			drifted: boolean;
+			/**
+			 * The description and triggers, where the change replaces them. They
+			 * reach every future agent's skill index, so approving them unseen
+			 * would be approving more than the diff shows.
+			 */
+			fields: { description?: FieldChange; triggers?: FieldChange };
+	  }
+	| { kind: 'patch'; applies: false; problem: string }
+	/** A new skill whose name another skill has taken since; it saves as `savesAs`. */
+	| { kind: 'new'; savesAs: string };
+
+/**
+ * What approving would do, for the person deciding: the diff a change makes to
+ * the skill as it is now, or why it no longer applies. Null for a new skill
+ * with nothing to say.
+ *
+ * With `viewer`, a name clash is reported only when the skill holding the name
+ * is one they can see. Otherwise the preview would answer "does a private skill
+ * of this name exist?" for anyone able to get an agent to propose that name.
+ * Approval still saves under a free name either way, which is the residue a
+ * single namespace for every person's skills leaves.
+ */
+export function candidatePreview(c: SkillCandidate, viewer?: string): CandidatePreview | null {
+	if (c.kind === 'new') {
+		const savesAs = freeSkillName(c.name);
+		if (savesAs === c.name) return null;
+		if (viewer && !skillNameSeenAsSkill(viewer, c.name)) return null;
+		return { kind: 'new', savesAs };
+	}
+	const target = c.targetSkillId ? getSkillById(c.targetSkillId) : null;
+	if (!target) return { kind: 'patch', applies: false, problem: 'The skill this change was for has been deleted.' };
+	const applied = applySkillPatch(target.body, c.patch?.edits ?? []);
+	if (!applied.ok) return { kind: 'patch', applies: false, problem: applied.problem };
+	const field = (to: string | undefined, from: string): FieldChange | undefined =>
+		to?.trim() && to.trim() !== from ? { from, to: to.trim() } : undefined;
+	const description = field(c.patch?.description, target.meta.description);
+	const triggers = field(c.patch?.triggers, target.meta.triggers);
+	return {
+		kind: 'patch',
+		applies: true,
+		diff: lineDiff(target.body, applied.body),
+		drifted: c.baseVersion !== target.meta.version,
+		fields: { ...(description ? { description } : {}), ...(triggers ? { triggers } : {}) }
+	};
+}
+
+/** Whether a skill this person can see holds the name. */
+function skillNameSeenAsSkill(userId: string, name: string): boolean {
+	return Boolean(
+		db
+			.select({ id: skills.id })
+			.from(skills)
+			.where(and(eq(skills.name, normalizeSkillName(name)), skillVisibleTo(userId)))
+			.get()
+	);
+}
+
 export function listCandidates(): SkillCandidate[] {
 	return db
 		.select()
@@ -354,44 +561,71 @@ export function listCandidates(): SkillCandidate[] {
 		.all();
 }
 
-/** The candidates one person's activity proposed, whatever became of them. */
+/**
+ * The candidates one person's activity proposed and they may decide, whatever
+ * became of them. A change they proposed to a shared skill waits in Admin.
+ */
 export function listCandidatesOf(userId: string): SkillCandidate[] {
 	return db
-		.select()
+		.select({ cand: skillCandidates })
 		.from(skillCandidates)
-		.where(eq(skillCandidates.userId, userId))
+		.leftJoin(skills, eq(skills.id, skillCandidates.targetSkillId))
+		.where(decidableBy(userId))
 		.orderBy(desc(skillCandidates.createdAt))
-		.all();
+		.all()
+		.map((r) => r.cand);
 }
 
 /**
- * Approving writes the real (agent-authored) skill; both paths close the
+ * Approving writes the skill or applies the change; both paths close the
  * candidate.
  *
- * An admin may decide any candidate. With `by`, only the person whose activity
- * proposed it may, and anyone else's is "not found". A new skill belongs to
- * that person, because it was learnt from their conversations; an admin shares
- * it from Admin. A candidate that rewrites an existing skill leaves its owner
- * alone.
+ * An admin may decide any candidate. With `by`, only what `decidableBy`
+ * allows, and anything else is "not found". A new skill belongs to the person
+ * whose activity proposed it, because it was learnt from their conversations;
+ * an admin shares it from Admin.
+ *
+ * A new skill whose name is taken by then is saved under a free name. It used
+ * to go through saveSkill's update path instead, which replaced the body of
+ * whatever skill held the name, a shared one or another person's included.
+ *
+ * A change is applied to the skill as it is now, not the body stored with the
+ * candidate. If the skill is gone, or has moved so the change no longer lands
+ * in one place, this throws SkillPatchConflict and the candidate stays pending.
+ * Owner, tasks, enabled state and the files beside SKILL.md are kept.
  */
 export function decideCandidate(
 	id: string,
 	approve: boolean,
 	by?: { userId: string }
 ): SkillCandidate | null {
-	const cand = db
-		.select()
+	const found = db
+		.select({ cand: skillCandidates })
 		.from(skillCandidates)
-		.where(
-			by
-				? and(eq(skillCandidates.id, id), eq(skillCandidates.userId, by.userId))
-				: eq(skillCandidates.id, id)
-		)
+		.leftJoin(skills, eq(skills.id, skillCandidates.targetSkillId))
+		.where(by ? and(eq(skillCandidates.id, id), decidableBy(by.userId)) : eq(skillCandidates.id, id))
 		.get();
+	const cand = found?.cand;
 	if (!cand || cand.status !== 'pending') return null;
-	if (approve) {
+	if (approve && cand.kind === 'patch') {
+		const target = cand.targetSkillId ? getSkillById(cand.targetSkillId) : null;
+		if (!target) throw new SkillPatchConflict('The skill this change was for has been deleted.');
+		const applied = applySkillPatch(target.body, cand.patch?.edits ?? []);
+		if (!applied.ok) {
+			throw new SkillPatchConflict(`The skill has changed since this was proposed: ${applied.problem}`);
+		}
 		saveSkill({
-			name: cand.name,
+			name: target.meta.name,
+			category: target.meta.category,
+			description: cand.patch?.description?.trim() || target.meta.description,
+			triggers: cand.patch?.triggers?.trim() || target.meta.triggers,
+			author: target.meta.author,
+			body: applied.body
+		});
+	} else if (approve) {
+		const name = freeSkillName(cand.name);
+		saveSkill({
+			name,
 			category: cand.category,
 			description: cand.description,
 			triggers: cand.triggers,
@@ -400,6 +634,9 @@ export function decideCandidate(
 			body: cand.body,
 			ownerId: cand.userId
 		});
+		if (name !== cand.name) {
+			db.update(skillCandidates).set({ name }).where(eq(skillCandidates.id, id)).run();
+		}
 	}
 	db.update(skillCandidates)
 		.set({ status: approve ? 'approved' : 'rejected', decidedAt: new Date() })

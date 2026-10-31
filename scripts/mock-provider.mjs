@@ -324,15 +324,15 @@ async function scriptedReply(userText, maxTokens = 0) {
 				]
 			});
 		} else if (userText.includes('SKILL-OPTIMISE')) {
+			// A change quoted from the body it was shown, and a name in another
+			// spelling so normalisation is exercised. saw-body says whether the
+			// optimiser was handed bodies at all, which it used not to be.
 			content = JSON.stringify({
-				skill_candidates: [
+				changes: [
 					{
-						name: 'demo-skill',
-						category: 'general',
-						description: 'Demonstrates the skill system (clarified)',
-						triggers: 'demo, example',
-						body: '## When to use\n\nImproved by the optimiser.',
-						rationale: 'Description was vague'
+						skill: 'Opt Skill',
+						edits: [{ old: 'OPT-ORIGINAL', new: 'OPT-PATCHED' }],
+						rationale: `saw-body=${userText.includes('OPT-ORIGINAL')}`
 					}
 				]
 			});
@@ -1080,6 +1080,52 @@ const server = createServer(async (req, res) => {
 				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} alpha=${system.includes('ALPHA-LEARN')} beta=${system.includes('BETA-LEARN')} voice=${system.includes('[How to write')} profile=${system.includes('[Profile:')} pmark=${system.includes('PROFILE-ALPHA')}`
 			});
 			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
+		// Changing a skill: load it, propose an edit quoting what came back, then
+		// say so. Driven by the person's message rather than the last one, which
+		// is a tool result by the second and third legs.
+		const lastUser = [...(parsed.messages ?? [])].reverse().find((m) => m.role === 'user');
+		if (String(lastUser?.content ?? '').trim() === 'PATCH-SKILL') {
+			const called = (name) =>
+				parsed.messages.some((m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.function?.name === name));
+			if (!called('skill_load')) {
+				delta(res, {
+					tool_calls: [
+						{ index: 0, id: 'call_ps1', function: { name: 'skill_load', arguments: '{"name":"alpha-learn-checklist"}' } }
+					]
+				});
+				delta(res, {}, 'tool_calls');
+			} else if (!called('propose_skill_update')) {
+				delta(res, {
+					tool_calls: [
+						{
+							index: 0,
+							id: 'call_ps2',
+							function: {
+								name: 'propose_skill_update',
+								arguments: JSON.stringify({
+									name: 'alpha-learn-checklist',
+									edits: [
+										{
+											old_string: '2. Promote dev to prod',
+											new_string: '2. Promote dev to prod\n3. Check the PATCH-APPLIED health page'
+										}
+									],
+									rationale: 'They always check health after promoting'
+								})
+							}
+						}
+					]
+				});
+				delta(res, {}, 'tool_calls');
+			} else {
+				delta(res, { content: `PATCH-PROPOSED ${String(last?.content ?? '').slice(0, 80)}` });
+				delta(res, {}, 'stop');
+			}
 			res.write('data: [DONE]\n\n');
 			res.end();
 			return;

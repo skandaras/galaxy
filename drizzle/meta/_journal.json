@@ -386,6 +386,13 @@
       "when": 1793478833278,
       "tag": "0054_model_image_capabilities",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "6",
+      "when": 1793479667638,
+      "tag": "0055_skill_patches",
+      "breakpoints": true
     }
   ]
 }

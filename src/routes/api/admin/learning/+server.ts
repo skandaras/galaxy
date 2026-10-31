@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types';
 import { requireAdmin } from '$lib/server/api';
 import { db } from '$lib/server/db';
 import { users } from '$lib/server/db/schema';
-import { listCandidates } from '$lib/server/skills';
+import { candidatePreview, listCandidates } from '$lib/server/skills';
 import { learningStatusByUser } from '$lib/server/engine/profile-learn';
 import { profileSettings } from '$lib/server/settings';
 
@@ -27,7 +27,8 @@ export const GET: RequestHandler = ({ locals }) => {
 		})),
 		candidates: listCandidates().map((c) => ({
 			...c,
-			proposedBy: c.userId ? (usernames.get(c.userId) ?? 'unknown') : 'skill optimiser'
+			proposedBy: c.userId ? (usernames.get(c.userId) ?? 'unknown') : 'skill optimiser',
+			preview: c.status === 'pending' ? candidatePreview(c) : null
 		}))
 	});
 };

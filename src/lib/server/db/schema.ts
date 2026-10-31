@@ -8,6 +8,7 @@ import {
 	uniqueIndex
 } from 'drizzle-orm/sqlite-core';
 import type { MessageTrace } from '$lib/run-timeline';
+import type { SkillPatch } from '$lib/skill-patch';
 
 export const users = sqliteTable('users', {
 	id: text('id').primaryKey(),
@@ -683,6 +684,25 @@ export const skillCandidates = sqliteTable('skill_candidates', {
 	status: text('status', { enum: ['pending', 'approved', 'rejected'] })
 		.notNull()
 		.default('pending'),
+	/**
+	 * A new skill, or a change to an existing one. A skill used to be fixable
+	 * only by an admin rewriting it, because every name could be proposed once
+	 * and only as a whole new body.
+	 */
+	kind: text('kind', { enum: ['new', 'patch'] })
+		.notNull()
+		.default('new'),
+	/** The skill a patch changes. */
+	targetSkillId: text('target_skill_id'),
+	/** That skill's version when the patch was written, to show drift. */
+	baseVersion: integer('base_version'),
+	/**
+	 * The exact edits. For a patch, `body`, `description`, `triggers` and `tasks`
+	 * above hold the result and the target's current values, so an image from
+	 * before patches existed, which approves any candidate as a whole body,
+	 * still writes a sensible skill rather than an empty one.
+	 */
+	patch: text('patch', { mode: 'json' }).$type<SkillPatch | null>(),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 	decidedAt: integer('decided_at', { mode: 'timestamp_ms' })
 });

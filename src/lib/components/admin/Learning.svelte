@@ -1,4 +1,6 @@
 <script lang="ts">
+	import SkillPatchDiff from '$lib/components/SkillPatchDiff.svelte';
+	import type { DiffLine } from '$lib/skill-patch';
 	interface UserStatus {
 		userId: string;
 		username: string;
@@ -18,12 +20,29 @@
 		rationale: string;
 		status: 'pending' | 'approved' | 'rejected';
 		proposedBy: string;
+		kind: 'new' | 'patch';
+		preview:
+			| {
+					kind: 'patch';
+					applies: true;
+					diff: DiffLine[];
+					drifted: boolean;
+					fields: {
+						description?: { from: string; to: string };
+						triggers?: { from: string; to: string };
+					};
+			  }
+			| { kind: 'patch'; applies: false; problem: string }
+			| { kind: 'new'; savesAs: string }
+			| null;
 	}
 
 	let profile = $state({ enabled: true, intervalHours: 12, timeoutSeconds: 180, briefChars: 2400 });
 	let userStatus = $state<UserStatus[]>([]);
 	let candidates = $state<Candidate[]>([]);
 	let expandedCand = $state<string | null>(null);
+	/** Why the last decision was refused, beside the candidate it was about. */
+	let decideFailed = $state<{ id: string; message: string } | null>(null);
 	let busy = $state(false);
 	let notice = $state<string | null>(null);
 	let noticeFailed = $state(false);
@@ -72,11 +91,18 @@
 	}
 
 	async function decide(c: Candidate, action: 'approve' | 'reject') {
-		await fetch(`/api/admin/skills/candidates/${c.id}`, {
+		decideFailed = null;
+		// A refusal used to vanish into the reload. A change that no longer fits
+		// its skill answers 409 and stays waiting, and that has to be said.
+		const res = await fetch(`/api/admin/skills/candidates/${c.id}`, {
 			method: 'PATCH',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ action })
-		});
+		}).catch(() => null);
+		if (!res?.ok) {
+			const message = (await res?.json().catch(() => null))?.message ?? 'The decision did not go through.';
+			decideFailed = { id: c.id, message };
+		}
 		await load();
 	}
 
@@ -224,12 +250,29 @@
 					<button class="btn primary" onclick={() => decide(c, 'approve')}>Approve</button>
 					<button class="btn danger" onclick={() => decide(c, 'reject')}>Reject</button>
 				</div>
-				<div class="cand-desc">{c.description}</div>
+				<div class="cand-desc">{c.kind === 'patch' ? 'Change to an existing skill. ' : ''}{c.description}</div>
 				<div class="cand-rat">rationale: {c.rationale}</div>
-				<button class="link" onclick={() => (expandedCand = expandedCand === c.id ? null : c.id)}>
-					{expandedCand === c.id ? 'hide body' : 'show body'}
-				</button>
-				{#if expandedCand === c.id}<pre class="cand-body">{c.body}</pre>{/if}
+				{#if c.preview?.kind === 'patch'}
+					{#if c.preview.applies}
+						{#if c.preview.drifted}<p class="hint">The skill has changed since; shown against it as it is now.</p>{/if}
+						<SkillPatchDiff lines={c.preview.diff} />
+						{#if c.preview.fields.description}
+							<p class="hint">Description: “{c.preview.fields.description.from}” becomes “{c.preview.fields.description.to}”</p>
+						{/if}
+						{#if c.preview.fields.triggers}
+							<p class="hint">Triggers: “{c.preview.fields.triggers.from || 'none'}” become “{c.preview.fields.triggers.to}”</p>
+						{/if}
+					{:else}
+						<p class="notice error">No longer fits the skill: {c.preview.problem}</p>
+					{/if}
+				{:else}
+					{#if c.preview?.kind === 'new'}<p class="hint">The name is taken now; it would be saved as {c.preview.savesAs}.</p>{/if}
+					<button class="link" onclick={() => (expandedCand = expandedCand === c.id ? null : c.id)}>
+						{expandedCand === c.id ? 'hide body' : 'show body'}
+					</button>
+					{#if expandedCand === c.id}<pre class="cand-body">{c.body}</pre>{/if}
+				{/if}
+				{#if decideFailed?.id === c.id}<p class="notice error" role="alert">{decideFailed.message}</p>{/if}
 			</div>
 		{:else}
 			<p class="hint">

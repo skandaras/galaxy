@@ -106,7 +106,8 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
 		'When a turn carries out a procedure the person is likely to want again, or they correct how ' +
 		'you went about something in a way that would hold next time, propose it as a skill with ' +
 		'propose_skill and say so in one line of your reply. It waits for their approval. Most turns ' +
-		'propose nothing.\n\n' +
+		'propose nothing. When a skill you loaded turned out wrong, out of date or missing a step, ' +
+		'propose the fix to it with propose_skill_update rather than a new skill beside it.\n\n' +
 		// The agent that hears something is the one to keep it: the Profile has no
 		// other way to learn a fact until the audit reads the conversation later.
 		'When the person tells you something about themselves or their world that would change an ' +
@@ -130,7 +131,8 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
 		'When a turn carries out a procedure that will be needed again, keep it as a skill. One that ' +
 		'belongs to this repository goes in .agents/skills/<name>/SKILL.md as part of the change, ' +
 		'committed like any other file. One about how this person likes to work goes to them with ' +
-		'propose_skill. Most turns need neither.\n\n' +
+		'propose_skill. Most turns need neither. When a stored skill you loaded turned out wrong or ' +
+		'missing a step, propose the fix with propose_skill_update.\n\n' +
 		'When the person says which tools they work with or what they know well, note it with ' +
 		'profile_note in their own words; you can note only their tools and expertise.\n\n' +
 		// Read back as the label for that step in the run timeline, which is why

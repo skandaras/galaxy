@@ -1,7 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
-import { listCandidatesOf } from '$lib/server/skills';
+import { candidatePreview, listCandidatesOf } from '$lib/server/skills';
 import { learningStatus, readingStatus, setLearning } from '$lib/server/engine/profile-learn';
 import { listProposals, MAX_WAITING } from '$lib/server/profile';
 import { profileSettings } from '$lib/server/settings';
@@ -21,6 +21,9 @@ export const GET: RequestHandler = ({ locals }) => {
 			tasks: c.tasks,
 			body: c.body,
 			status: c.status,
+			kind: c.kind,
+			// What approving would do now, computed against the skill as it stands.
+			preview: c.status === 'pending' ? candidatePreview(c, user.id) : null,
 			createdAt: c.createdAt
 		})),
 		enabled: status.enabled,

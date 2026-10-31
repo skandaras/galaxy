@@ -4,7 +4,7 @@ import { reasoningFor, type ModelChoice } from '$lib/server/providers/registry';
 import type { Usage } from '$lib/server/providers/types';
 import { db } from '$lib/server/db';
 import { chats, messages, profileEntries, skillCandidates, users } from '$lib/server/db/schema';
-import { listSkills, normalizeSkillName, normalizeTasks } from '$lib/server/skills';
+import { listSkills, normalizeSkillName, normalizeTasks, skillNameSeen } from '$lib/server/skills';
 import { getSetting, profileSettings, setSetting } from '$lib/server/settings';
 import {
 	countWaiting,
@@ -273,7 +273,10 @@ async function learn(
 		p.action === 'add'
 			? `- add to ${p.path}: ${p.claim}`
 			: `- ${p.action}: ${p.entryId ? (entries.find((e) => e.id === p.entryId)?.claim ?? '(an entry)') : '(an entry)'}${p.claim ? ` → ${p.claim}` : ''}`;
-	const skills = listSkills()
+	// This person's and shared ones only. It listed every skill on the instance,
+	// so one person's model call carried the names of other people's personal
+	// skills, which say something about them by the name alone.
+	const skills = listSkills(userId)
 		.map((s) => s.name)
 		.join(', ');
 
@@ -496,19 +499,14 @@ async function learn(
 	}
 	saveProposals(userId, rows, now);
 
-	const existingSkills = new Set(listSkills().map((s) => s.name));
-	// Every candidate, whatever became of it: a rejection is a decision.
-	const proposedNames = new Set(
-		db
-			.select({ name: skillCandidates.name })
-			.from(skillCandidates)
-			.all()
-			.map((c) => c.name)
-	);
+	// This person's skills and proposals, whatever became of them: a rejection
+	// is a decision. Someone else's are not theirs to clash with; approval
+	// saves under a free name if one is taken (see decideCandidate).
+	const proposedNames = new Set<string>();
 	let candidates = 0;
 	for (const c of list(parsed.skill_candidates).slice(0, 5)) {
 		const name = normalizeSkillName(String(c.name ?? ''));
-		if (!name || existingSkills.has(name) || proposedNames.has(name)) continue;
+		if (!name || proposedNames.has(name) || skillNameSeen(userId, name)) continue;
 		db.insert(skillCandidates)
 			.values({
 				id: randomUUID(),

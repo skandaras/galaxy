@@ -1159,6 +1159,24 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 		'approved'
 	);
 
+	// And changed afterwards: an agent proposes an edit to it, and the Waiting
+	// card draws the edit as a diff the owner applies from the page.
+	const patchChat = await as(ALICE, '/api/chats', { method: 'POST', body: '{}' });
+	await as(ALICE, `/api/chats/${patchChat.id}/messages`, {
+		method: 'POST',
+		body: JSON.stringify({ content: 'PATCH-SKILL', webSearch: false })
+	});
+	const patchWaiting = async () =>
+		(await learning()).candidates.find((c) => c.kind === 'patch' && c.status === 'pending');
+	for (let i = 0; i < 60 && !(await patchWaiting()); i++) await page.waitForTimeout(250);
+	await page.goto(`${B}/profile`);
+	const change = waiting.locator('.proposal[data-skill-candidate="patch"]');
+	await change.waitFor();
+	check('a skill change shows the line it adds', (await change.locator('.diff .add').innerText()).includes('3. Check the PATCH-APPLIED health page'), true);
+	await change.getByRole('button', { name: 'Apply change' }).click();
+	await change.waitFor({ state: 'detached' });
+	check('applying it changes the skill', (await as(ALICE, '/api/skills/alpha-learn-checklist')).body.includes('PATCH-APPLIED'), true);
+
 	// Something to turn down: the mock proposes from "beta-topic" as well.
 	const again = await as(ALICE, '/api/chats', { method: 'POST', body: '{}' });
 	await as(ALICE, `/api/chats/${again.id}/messages`, {

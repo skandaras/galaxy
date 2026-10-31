@@ -1,4 +1,6 @@
 <script lang="ts">
+	import SkillPatchDiff from '$lib/components/SkillPatchDiff.svelte';
+	import type { DiffLine } from '$lib/skill-patch';
 	import { ask } from '$lib/confirm.svelte';
 	import { ENTITY_KINDS, KINDS } from '$lib/profile-taxonomy';
 	import {
@@ -61,6 +63,21 @@
 		tasks: string;
 		body: string;
 		status: 'pending' | 'approved' | 'rejected';
+		kind: 'new' | 'patch';
+		preview:
+			| {
+					kind: 'patch';
+					applies: true;
+					diff: DiffLine[];
+					drifted: boolean;
+					fields: {
+						description?: { from: string; to: string };
+						triggers?: { from: string; to: string };
+					};
+			  }
+			| { kind: 'patch'; applies: false; problem: string }
+			| { kind: 'new'; savesAs: string }
+			| null;
 	}
 	interface Learning {
 		proposals: Proposal[];
@@ -163,7 +180,11 @@
 			`/api/skills/candidates/${c.id}`,
 			'POST',
 			{ approve },
-			approve ? `${c.name} is now one of your skills.` : `${c.name} turned down.`
+			approve
+				? c.kind === 'patch'
+					? `${c.name} is updated.`
+					: `${c.preview?.kind === 'new' ? c.preview.savesAs : c.name} is now one of your skills.`
+				: `${c.name} turned down.`
 		);
 	}
 
@@ -283,6 +304,15 @@
 	{#if step}<a class="ask-link" href="/profile/survey?step={step}">Answer the questions about this</a>{/if}
 {/snippet}
 
+{#snippet fieldChanges(fields: { description?: { from: string; to: string }; triggers?: { from: string; to: string } })}
+	{#if fields.description}
+		<p class="hint">Description: “{fields.description.from}” becomes “{fields.description.to}”</p>
+	{/if}
+	{#if fields.triggers}
+		<p class="hint">Triggers: “{fields.triggers.from || 'none'}” become “{fields.triggers.to}”</p>
+	{/if}
+{/snippet}
+
 {#snippet said(at: string)}
 	{#if notice?.at === at}
 		<p class="notice" class:error={notice.error} role={notice.error ? 'alert' : 'status'}>
@@ -396,21 +426,43 @@
 						</div>
 					{/each}
 					{#each skillsWaiting as c (c.id)}
-						<div class="proposal">
+						<div class="proposal" data-skill-candidate={c.kind}>
 							<div class="row">
-								<span class="badge">Skill</span>
+								<span class="badge">{c.kind === 'patch' ? 'Skill change' : 'Skill'}</span>
 								<strong>{c.name}</strong>
 								<span class="meta">{c.description}</span>
 							</div>
 							{#if c.rationale}<p class="hint why">{c.rationale}</p>{/if}
-							<details>
-								<summary>The instructions{c.tasks ? ` (for ${c.tasks})` : ''}</summary>
-								<pre class="block">{c.body}</pre>
-							</details>
-							<div class="row actions">
-								<button class="btn primary" onclick={() => decideSkill(c, true)}>Approve skill</button>
-								<button class="btn" onclick={() => decideSkill(c, false)}>Reject</button>
-							</div>
+							{#if c.kind === 'patch' && c.preview?.kind === 'patch'}
+								{#if c.preview.applies}
+									{#if c.preview.drifted}
+										<p class="hint">The skill has changed since this was proposed; this is the change against it as it is now.</p>
+									{/if}
+									<SkillPatchDiff lines={c.preview.diff} />
+									{@render fieldChanges(c.preview.fields)}
+									<div class="row actions">
+										<button class="btn primary" onclick={() => decideSkill(c, true)}>Apply change</button>
+										<button class="btn" onclick={() => decideSkill(c, false)}>Reject</button>
+									</div>
+								{:else}
+									<p class="notice error">This change no longer fits the skill: {c.preview.problem}</p>
+									<div class="row actions">
+										<button class="btn" onclick={() => decideSkill(c, false)}>Reject</button>
+									</div>
+								{/if}
+							{:else}
+								{#if c.preview?.kind === 'new'}
+									<p class="hint">Another skill has this name now, so it would be saved as {c.preview.savesAs}.</p>
+								{/if}
+								<details>
+									<summary>The instructions{c.tasks ? ` (for ${c.tasks})` : ''}</summary>
+									<pre class="block">{c.body}</pre>
+								</details>
+								<div class="row actions">
+									<button class="btn primary" onclick={() => decideSkill(c, true)}>Approve skill</button>
+									<button class="btn" onclick={() => decideSkill(c, false)}>Reject</button>
+								</div>
+							{/if}
 							{@render said(c.id)}
 						</div>
 					{/each}
