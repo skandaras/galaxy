@@ -68,12 +68,26 @@ const PAINTER_MODEL = {
 	architecture: { input_modalities: ['text', 'image'], output_modalities: ['text', 'image'] }
 };
 
+// A model that only draws, the way Flux or GPT Image list: image out, no text.
+// It accepts a request for the image alone and refuses one that also asks for
+// text, which is what such endpoints do, so a call shaped for a talking model
+// fails here the way it would for real.
+const STAMP_MODEL = {
+	id: 'mock/stamp-1',
+	name: 'Stamp 1 (mock, image only)',
+	context_length: 8192,
+	pricing: { prompt: '0', completion: '0' },
+	supported_parameters: [],
+	architecture: { input_modalities: ['text', 'image'], output_modalities: ['image'] }
+};
+
 /** A 1×1 PNG: the smallest thing that is genuinely an image file. */
 const PIXEL_PNG =
 	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 const isReasoning = (modelKey) => String(modelKey ?? '').includes('ponder');
 const isPainter = (modelKey) => String(modelKey ?? '').includes('painter');
+const isStamp = (modelKey) => String(modelKey ?? '').includes('stamp');
 
 function sseChunk(res, obj) {
 	res.write(`data: ${JSON.stringify(obj)}\n\n`);
@@ -331,7 +345,7 @@ const server = createServer(async (req, res) => {
 
 	if (req.method === 'GET' && url.pathname === '/v1/models') {
 		res.writeHead(200, { 'content-type': 'application/json' });
-		res.end(JSON.stringify({ data: [MODEL, REASONING_MODEL, BLIND_MODEL, PAINTER_MODEL] }));
+		res.end(JSON.stringify({ data: [MODEL, REASONING_MODEL, BLIND_MODEL, PAINTER_MODEL, STAMP_MODEL] }));
 		return;
 	}
 
@@ -611,6 +625,39 @@ const server = createServer(async (req, res) => {
 							}
 						],
 						usage: { prompt_tokens: 900, completion_tokens: 12 }
+					})
+				);
+				return;
+			}
+			if (isStamp(parsed.model)) {
+				// The image alone, and the shape the prompt asked for when it asked
+				// for a wide one: both have to arrive for there to be a picture.
+				const prompt = textOf(parsed.messages?.find((m) => m.role === 'user')?.content);
+				const problems = [
+					JSON.stringify(parsed.modalities) === '["image"]' ? null : `modalities ${JSON.stringify(parsed.modalities)}`,
+					!prompt.includes('wide') || parsed.image_config?.aspect_ratio === '16:9' ? null : 'no 16:9 image_config'
+				].filter(Boolean);
+				if (problems.length) {
+					res.writeHead(400, { 'content-type': 'application/json' });
+					res.end(JSON.stringify({ error: { message: `stamp refused: ${problems.join(', ')}` } }));
+					return;
+				}
+				res.writeHead(200, { 'content-type': 'application/json' });
+				res.end(
+					JSON.stringify({
+						id: 'mock',
+						choices: [
+							{
+								index: 0,
+								message: {
+									role: 'assistant',
+									content: '',
+									images: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${PIXEL_PNG}` } }]
+								},
+								finish_reason: 'stop'
+							}
+						],
+						usage: { prompt_tokens: 20, completion_tokens: 0, cost: 0.03 }
 					})
 				);
 				return;
@@ -1210,7 +1257,11 @@ const server = createServer(async (req, res) => {
 						id: 'call_img',
 						function: {
 							name: 'generate_image',
-							arguments: JSON.stringify({ prompt: 'a spiral galaxy', name: 'galaxy' })
+							arguments: JSON.stringify(
+								asksFor('wide')
+									? { prompt: 'a wide banner of a spiral galaxy', name: 'banner', aspect_ratio: '16:9' }
+									: { prompt: 'a spiral galaxy', name: 'galaxy' }
+							)
 						}
 					}
 				]

@@ -490,6 +490,19 @@ check "the image is served with sniffing off" "$IHDR" 'x-content-type-options: n
 # od rather than xxd: xxd ships with vim, which a CI runner need not have.
 check "the bytes are a real PNG" "$(curl -s $B$IMG_URL | od -An -tx1 -N4 | tr -d ' ')" '89504e47'
 
+# A model that only draws: imported as such, kept out of the composer's list,
+# offered to the visual task, and asked for the image alone with the shape the
+# agent chose. The mock refuses anything else, so a picture means all of it held.
+STAMP_ID=$(api $B/api/admin/models | node -pe "JSON.parse(require('fs').readFileSync(0)).find(m=>m.modelKey.includes('stamp')).id")
+check "an image-only model is imported as such" "$(api $B/api/admin/models | node -pe "JSON.stringify(JSON.parse(require('fs').readFileSync(0)).find(m=>m.modelKey.includes('stamp')).imageOnly)")" 'true'
+api -X PATCH $B/api/admin/models/$STAMP_ID -d '{"enabled":true}' > /dev/null
+check_absent "the composer is never offered it" "$(api $B/api/models)" 'mock/stamp-1'
+check "the task pickers are" "$(api "$B/api/models?images=1")" 'mock/stamp-1'
+api -X PUT $B/api/admin/task-configs -d "{\"task\":\"visual\",\"primaryModelId\":\"$STAMP_ID\"}" > /dev/null
+SJOB=$(api -X POST $B/api/chats/$ICHAT/messages -d '{"content":"Please draw a wide banner"}' | jqn .jobId)
+check "an image-only model draws the shape asked for" "$(curl -sN --max-time 60 $B/api/jobs/$SJOB/stream)" '"name":"generate_image","status":"ok"'
+api -X PUT $B/api/admin/task-configs -d "{\"task\":\"visual\",\"primaryModelId\":\"$PAINT_ID\"}" > /dev/null
+
 # ---------------------------------------------------------------------------
 # Reading an image, which is the other direction and a longer chain: a chat
 # model with no vision is offered view_image, calls it, and the tool hands the

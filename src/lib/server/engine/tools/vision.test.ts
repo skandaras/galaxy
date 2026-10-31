@@ -48,23 +48,28 @@ vi.mock('../engine', async (importOriginal) => {
 
 vi.mock('$lib/server/providers/registry', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('$lib/server/providers/registry')>();
+	const resolveModel = (id: string) => {
+		const model = known.find((m) => m.id === id);
+		if (!model) return null;
+		return {
+			model,
+			provider: {},
+			adapter: {
+				complete: async (req: Record<string, unknown>) => {
+					requests.push(req);
+					if ('throws' in scripted) throw new Error(scripted.throws);
+					return { text: scripted.text, usage: { promptTokens: 900, completionTokens: 60 } };
+				}
+			}
+		};
+	};
 	return {
 		...actual,
 		listEnabledModels: () => known,
-		resolveModel: (id: string) => {
-			const model = known.find((m) => m.id === id);
-			if (!model) return null;
-			return {
-				model,
-				provider: {},
-				adapter: {
-					complete: async (req: Record<string, unknown>) => {
-						requests.push(req);
-						if ('throws' in scripted) throw new Error(scripted.throws);
-						return { text: scripted.text, usage: { promptTokens: 900, completionTokens: 60 } };
-					}
-				}
-			};
+		resolveModel,
+		resolveTextModel: (id: string) => {
+			const choice = resolveModel(id);
+			return choice && !(choice.model as { imageOnly?: boolean }).imageOnly ? choice : null;
 		}
 	};
 });

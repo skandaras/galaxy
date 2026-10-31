@@ -16,6 +16,7 @@ export function adapterFor(provider: ProviderRow): ProviderAdapter {
 	return createOpenAiCompatAdapter({
 		baseUrl: provider.baseUrl,
 		apiKey,
+		kind: provider.kind,
 		...(provider.kind === 'openrouter'
 			? { extraHeaders: { 'HTTP-Referer': 'https://github.com/skandaras/galaxy', 'X-Title': 'Galaxy' } }
 			: {})
@@ -34,6 +35,17 @@ export function resolveModel(modelId: string): ModelChoice | null {
 	const provider = db.select().from(providers).where(eq(providers.id, model.providerId)).get();
 	if (!provider || !provider.enabled) return null;
 	return { model, provider, adapter: adapterFor(provider) };
+}
+
+/**
+ * As resolveModel, for a call that expects text back: a model that only draws
+ * resolves to nothing. Every path that sends a text request to a configured
+ * model goes through here (a task's backup, the vision model), because a
+ * stored or API-written config is not filtered by any picker.
+ */
+export function resolveTextModel(modelId: string): ModelChoice | null {
+	const choice = resolveModel(modelId);
+	return choice && !choice.model.imageOnly ? choice : null;
 }
 
 /**
@@ -75,11 +87,19 @@ export interface ModelListing {
 	supportsTools: boolean;
 	supportsVision: boolean;
 	supportsImageOutput: boolean;
+	imageOnly: boolean;
 	supportsReasoning: boolean;
 	contextWindow: number | null;
 }
 
-export function listEnabledModels(): ModelListing[] {
+/**
+ * Enabled models, by display name.
+ *
+ * Image-only models are left out unless asked for: every caller but the
+ * `visual` picker wants a model that answers in text, and the first entry of
+ * this list is what pickModel falls back to when a task's model is missing.
+ */
+export function listEnabledModels(opts: { includeImageOnly?: boolean } = {}): ModelListing[] {
 	const providerRows = new Map(
 		db.select().from(providers).where(eq(providers.enabled, true)).all().map((p) => [p.id, p])
 	);
@@ -88,7 +108,7 @@ export function listEnabledModels(): ModelListing[] {
 		.from(models)
 		.where(eq(models.enabled, true))
 		.all()
-		.filter((m) => providerRows.has(m.providerId))
+		.filter((m) => providerRows.has(m.providerId) && (opts.includeImageOnly || !m.imageOnly))
 		.map((m) => ({
 			id: m.id,
 			displayName: m.displayName,
@@ -97,6 +117,7 @@ export function listEnabledModels(): ModelListing[] {
 			supportsTools: m.supportsTools,
 			supportsVision: m.supportsVision,
 			supportsImageOutput: m.supportsImageOutput,
+			imageOnly: m.imageOnly,
 			supportsReasoning: m.supportsReasoning,
 			contextWindow: m.contextWindow
 		}))
@@ -126,6 +147,8 @@ export async function syncProviderModels(provider: ProviderRow): Promise<number>
 					// unlike cacheMode, reasoningMode and enabled below, which an
 					// admin owns.
 					supportsImageOutput: rm.supportsImageOutput,
+					imageOnly: rm.imageOnly,
+					imageApi: rm.imageApi,
 					supportsReasoning: rm.supportsReasoning,
 					promptCostPerMTok: rm.promptCostPerMTok,
 					completionCostPerMTok: rm.completionCostPerMTok
@@ -143,6 +166,8 @@ export async function syncProviderModels(provider: ProviderRow): Promise<number>
 					supportsTools: rm.supportsTools,
 					supportsVision: rm.supportsVision,
 					supportsImageOutput: rm.supportsImageOutput,
+					imageOnly: rm.imageOnly,
+					imageApi: rm.imageApi,
 					supportsReasoning: rm.supportsReasoning,
 					promptCostPerMTok: rm.promptCostPerMTok,
 					completionCostPerMTok: rm.completionCostPerMTok,

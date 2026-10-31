@@ -37,6 +37,15 @@ describe('costOf', () => {
 		expect(costOf(choiceAt(3, 15).model, usage)).toBeCloseTo(2);
 	});
 
+	it('takes the price the provider named over its own arithmetic, discount included', () => {
+		// An image model is billed per image, so token rates on its row say
+		// nothing; and a reported total already has the cache discount in it.
+		const usage = { promptTokens: 1_000_000, completionTokens: 0, cacheDiscountUsd: 1, costUsd: 0.25 };
+		expect(costOf(choiceAt(3, 15).model, usage)).toBeCloseTo(0.25);
+		expect(costOf(choiceAt(null, null).model, { promptTokens: 0, completionTokens: 0, costUsd: 0 })).toBe(0);
+		expect(costOf(null, { promptTokens: 0, completionTokens: 0, costUsd: 0.1 })).toBeCloseTo(0.1);
+	});
+
 	it('never goes negative on the turn that writes the cache', () => {
 		// A cache *write* costs more than plain input, so the discount arrives
 		// negative — but a call can never be worth less than nothing.

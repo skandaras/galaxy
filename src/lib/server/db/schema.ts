@@ -244,6 +244,21 @@ export const models = sqliteTable('models', {
 	supportsImageOutput: integer('supports_image_output', { mode: 'boolean' })
 		.notNull()
 		.default(false),
+	/**
+	 * The model returns images and nothing else (Flux, GPT Image, Sourceful), so
+	 * it can serve `visual` and nothing that expects text back. Set only where
+	 * the listing positively says so; a model with no modality data is assumed
+	 * to talk. A capability, corrected on every sync like the one above.
+	 */
+	imageOnly: integer('image_only', { mode: 'boolean' }).notNull().default(false),
+	/**
+	 * OpenRouter serves this model on its Image API, which takes several
+	 * reference images, a count, quality, background and format. Read from that
+	 * API's own model list on sync. Not every image model is there: the routers
+	 * (`openrouter/auto`) advertise image output and answer only on chat
+	 * completions, so this, not the provider kind, decides the transport.
+	 */
+	imageApi: integer('image_api', { mode: 'boolean' }).notNull().default(false),
 	promptCostPerMTok: real('prompt_cost_per_mtok'),
 	completionCostPerMTok: real('completion_cost_per_mtok'),
 	/**

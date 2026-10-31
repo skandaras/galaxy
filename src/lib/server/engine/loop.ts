@@ -1327,12 +1327,16 @@ function addUsage(a: Usage | null, b: Usage): Usage {
 	// zero however long the model deliberated — the column exists to tell "wrote a
 	// lot" from "thought a lot", and for the loop's rows it could not.
 	const reasoning = sumReported(a?.reasoningTokens, b.reasoningTokens);
+	// The same omission waiting to happen to cost: a field left off this list
+	// never reaches the usage row the call writes.
+	const cost = sumReported(a?.costUsd, b.costUsd);
 	return {
 		promptTokens: (a?.promptTokens ?? 0) + b.promptTokens,
 		completionTokens: (a?.completionTokens ?? 0) + b.completionTokens,
 		...(cached !== undefined ? { cachedPromptTokens: cached } : {}),
 		...(discount !== undefined ? { cacheDiscountUsd: discount } : {}),
-		...(reasoning !== undefined ? { reasoningTokens: reasoning } : {})
+		...(reasoning !== undefined ? { reasoningTokens: reasoning } : {}),
+		...(cost !== undefined ? { costUsd: cost } : {})
 	};
 }
 

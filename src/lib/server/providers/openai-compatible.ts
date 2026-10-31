@@ -2,6 +2,8 @@ import type {
 	CacheMode,
 	ChatRequest,
 	GeneratedImage,
+	ImageRequest,
+	ImageResult,
 	MessageContent,
 	ProviderAdapter,
 	ProviderMessage,
@@ -22,6 +24,12 @@ export interface OpenAiCompatOptions {
 	baseUrl: string;
 	apiKey?: string;
 	extraHeaders?: Record<string, string>;
+	/**
+	 * The provider row's kind. OpenRouter speaks this protocol and adds two
+	 * things nothing else here can assume: a model listing that hides
+	 * image-only models unless asked, and an Image API beside chat completions.
+	 */
+	kind?: string;
 }
 
 export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAdapter {
@@ -82,6 +90,7 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
 		 */
 		...(req.reasoning ? { reasoning: { effort: req.reasoning } } : {}),
 		...(req.modalities?.length ? { modalities: req.modalities } : {}),
+		...(req.imageConfig && Object.keys(req.imageConfig).length ? { image_config: req.imageConfig } : {}),
 		stream,
 		...(stream ? { stream_options: { include_usage: true } } : {})
 	});
@@ -98,6 +107,27 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
 			throw new ProviderHttpError(res.status, `Provider ${res.status}: ${text.slice(0, 500)}`);
 		}
 		return res;
+	}
+
+	/**
+	 * The models OpenRouter's Image API serves. Best effort: if the list cannot
+	 * be read, every model keeps chat completions, which is how drawing worked
+	 * before the Image API was used at all.
+	 */
+	async function imageApiModels(signal?: AbortSignal): Promise<Set<string>> {
+		try {
+			const res = await fetch(`${opts.baseUrl}/images/models`, { headers: headers(), signal });
+			if (!res.ok) return new Set();
+			const data = (await res.json()) as { data?: unknown };
+			const rows = Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : [];
+			return new Set(
+				rows
+					.map((r) => (r as { id?: unknown; slug?: unknown }).id ?? (r as { slug?: unknown }).slug)
+					.filter((id): id is string => typeof id === 'string')
+			);
+		} catch {
+			return new Set();
+		}
 	}
 
 	return {
@@ -132,13 +162,90 @@ export function createOpenAiCompatAdapter(opts: OpenAiCompatOptions): ProviderAd
 		},
 
 		async listModels(signal) {
-			const res = await fetch(`${opts.baseUrl}/models`, { headers: headers(), signal });
+			// OpenRouter lists text-output models only unless told otherwise, so
+			// Flux, GPT Image and the rest never reached Admin → Models and the
+			// `visual` task could only ever be pointed at a model that also talks.
+			const query = opts.kind === 'openrouter' ? '?output_modalities=text,image' : '';
+			const res = await fetch(`${opts.baseUrl}/models${query}`, { headers: headers(), signal });
 			if (!res.ok) throw new ProviderHttpError(res.status, `Model listing failed: ${res.status}`);
 			const data = await res.json();
 			const rows: unknown[] = Array.isArray(data.data) ? data.data : [];
-			return rows.map((raw) => toRemoteModel(raw as Record<string, unknown>));
-		}
+			const onImageApi = opts.kind === 'openrouter' ? await imageApiModels(signal) : new Set<string>();
+			return rows.map((raw) => toRemoteModel(raw as Record<string, unknown>, onImageApi));
+		},
+
+		...(opts.kind === 'openrouter'
+			? {
+					async generateImages(req: ImageRequest, signal?: AbortSignal): Promise<ImageResult> {
+						const res = await fetch(`${opts.baseUrl}/images`, {
+							method: 'POST',
+							headers: headers(),
+							body: JSON.stringify(imageRequestBody(req)),
+							signal
+						});
+						if (!res.ok) {
+							// The provider's own words, because they say which option it
+							// refused, and the model can drop it and try again.
+							const text = await res.text().catch(() => '');
+							throw new ProviderHttpError(res.status, `Provider ${res.status}: ${text.slice(0, 500)}`);
+						}
+						const data = (await res.json()) as Record<string, unknown>;
+						return {
+							images: imageApiImages(data.data),
+							usage: data.usage ? readUsage(data.usage as Record<string, unknown>) : null
+						};
+					}
+				}
+			: {})
 	};
+}
+
+/** The Image API body: only what was asked for. Exported for tests. */
+export function imageRequestBody(req: ImageRequest): Record<string, unknown> {
+	const set = <T>(key: string, value: T | undefined) => (value === undefined ? {} : { [key]: value });
+	return {
+		model: req.modelKey,
+		prompt: req.prompt,
+		...set('n', req.n),
+		...set('resolution', req.resolution),
+		...set('aspect_ratio', req.aspectRatio),
+		...set('size', req.size),
+		...set('quality', req.quality),
+		...set('output_format', req.outputFormat),
+		...set('background', req.background),
+		...set('output_compression', req.outputCompression),
+		...set('seed', req.seed),
+		...(req.references?.length
+			? { input_references: req.references.map((url) => ({ type: 'image_url', image_url: { url } })) }
+			: {})
+	};
+}
+
+/**
+ * The images off an Image API response: `data[].b64_json`, with `media_type`
+ * where the provider could name it and sniffed from the bytes where it could
+ * not.
+ */
+function imageApiImages(raw: unknown): GeneratedImage[] {
+	if (!Array.isArray(raw)) return [];
+	const out: GeneratedImage[] = [];
+	for (const entry of raw) {
+		const b64 = (entry as { b64_json?: unknown })?.b64_json;
+		if (typeof b64 !== 'string' || !b64) continue;
+		const named = (entry as { media_type?: unknown }).media_type;
+		out.push({ mime: typeof named === 'string' && named ? named : sniffImage(b64), base64: b64 });
+	}
+	return out;
+}
+
+/** The format a base64 image is in, from the first bytes of its encoding. */
+export function sniffImage(base64: string): string {
+	if (base64.startsWith('iVBOR')) return 'image/png';
+	if (base64.startsWith('/9j/')) return 'image/jpeg';
+	if (base64.startsWith('UklGR')) return 'image/webp';
+	if (base64.startsWith('R0lGOD')) return 'image/gif';
+	if (base64.startsWith('PHN2Zy') || base64.startsWith('PD94')) return 'image/svg+xml';
+	return 'image/png';
 }
 
 /**
@@ -224,17 +331,20 @@ export function readUsage(raw: Record<string, unknown>): Usage {
 	// reply after thirteen thousand of thinking is indistinguishable from one
 	// that wrote a very long answer.
 	const reasoning = num(outDetails.reasoning_tokens);
+	// Zero is a real price (a free model, a cached image); a negative one is not.
+	const cost = num(raw.cost);
 	return {
 		promptTokens: num(raw.prompt_tokens) ?? 0,
 		completionTokens: num(raw.completion_tokens) ?? 0,
 		...(cached !== undefined ? { cachedPromptTokens: cached } : {}),
 		...(discount !== undefined ? { cacheDiscountUsd: discount } : {}),
-		...(reasoning !== undefined ? { reasoningTokens: reasoning } : {})
+		...(reasoning !== undefined ? { reasoningTokens: reasoning } : {}),
+		...(cost !== undefined && cost >= 0 ? { costUsd: cost } : {})
 	};
 }
 
 /** Map one entry of GET /models to our registry shape (OpenRouter-style fields optional). */
-function toRemoteModel(m: Record<string, unknown>): RemoteModel {
+function toRemoteModel(m: Record<string, unknown>, onImageApi: Set<string> = new Set()): RemoteModel {
 	const pricing = (m.pricing ?? {}) as Record<string, unknown>;
 	const architecture = (m.architecture ?? {}) as Record<string, unknown>;
 	const supported = (m.supported_parameters ?? []) as unknown[];
@@ -259,6 +369,10 @@ function toRemoteModel(m: Record<string, unknown>): RemoteModel {
 		// The mirror of supportsVision above: what the model can be shown versus
 		// what it can hand back.
 		supportsImageOutput: outputModalities.includes('image'),
+		// Only on positive evidence: a listing with no modalities at all says
+		// nothing, and treating that as image-only would hide a text model.
+		imageOnly: outputModalities.includes('image') && !outputModalities.includes('text'),
+		imageApi: onImageApi.has(String(m.id)),
 		cacheMode: defaultCacheMode(String(m.id))
 	};
 }

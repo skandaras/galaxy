@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db, runMigrations } from '$lib/server/db';
 import { events, models, providers } from '$lib/server/db/schema';
+import { resolveModel, resolveTextModel } from '$lib/server/providers/registry';
 import { pickModel } from './engine';
 
 /**
@@ -87,5 +88,32 @@ describe('pickModel', () => {
 		// No fallback happened, so there is nothing to report — the caller's own
 		// "no model configured" path is what speaks here.
 		expect(substitutions()).toHaveLength(0);
+	});
+
+	it('never hands a text task a model that only draws, and says why', () => {
+		db.insert(models)
+			.values({
+				id: 'm-stamp',
+				providerId: 'p-pick',
+				modelKey: 'mock-stamp',
+				displayName: 'Stamp',
+				supportsTools: false,
+				supportsVision: false,
+				supportsImageOutput: true,
+				imageOnly: true,
+				cacheMode: 'auto',
+				enabled: true
+			})
+			.run();
+		expect(pickModel('m-stamp', 'visual')?.model.modelKey).toBe('mock-stamp');
+		expect(pickModel('m-stamp', 'chat')?.model.modelKey).toBe('mock-one');
+		expect(substitutions().at(-1)?.detail).toMatchObject({ reason: expect.stringContaining('only makes images') });
+		// Nor the backup or the vision model, which resolve a stored id directly.
+		expect(resolveModel('m-stamp')?.model.modelKey).toBe('mock-stamp');
+		expect(resolveTextModel('m-stamp')).toBeNull();
+		expect(resolveTextModel('m-pick')?.model.modelKey).toBe('mock-one');
+		// Nor is it ever the fallback.
+		db.delete(models).where(eq(models.id, 'm-pick')).run();
+		expect(pickModel(null, 'chat')).toBeNull();
 	});
 });

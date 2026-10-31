@@ -24,7 +24,10 @@
 		id: string;
 		displayName: string;
 		providerName: string;
+		imageOnly?: boolean;
 	}
+	/** A model that only draws can serve `visual` and nothing that wants text back. */
+	const offered = (task: string) => models.filter((m) => task === 'visual' || !m.imageOnly);
 	interface PromptVersion {
 		id: string;
 		systemPrompt: string;
@@ -42,7 +45,7 @@
 	async function load() {
 		const [cfgRes, modelRes] = await Promise.all([
 			fetch('/api/admin/task-configs'),
-			fetch('/api/models')
+			fetch('/api/models?images=1')
 		]);
 		configs = await cfgRes.json();
 		models = (await modelRes.json()).models;
@@ -130,7 +133,7 @@
 						primary
 						<select bind:value={cfg.primaryModelId}>
 							<option value={null}>first enabled model</option>
-							{#each models as m (m.id)}
+							{#each offered(cfg.task) as m (m.id)}
 								<option value={m.id}>{m.displayName} · {m.providerName}</option>
 							{/each}
 						</select>
@@ -139,7 +142,7 @@
 						backup
 						<select bind:value={cfg.backupModelId}>
 							<option value={null}>none</option>
-							{#each models as m (m.id)}
+							{#each offered(cfg.task) as m (m.id)}
 								<option value={m.id}>{m.displayName} · {m.providerName}</option>
 							{/each}
 						</select>

@@ -379,6 +379,13 @@
       "when": 1793449877589,
       "tag": "0053_message_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "6",
+      "when": 1793478833278,
+      "tag": "0054_model_image_capabilities",
+      "breakpoints": true
     }
   ]
 }

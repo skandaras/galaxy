@@ -95,6 +95,13 @@ export interface Usage {
 	 * different answers.
 	 */
 	reasoningTokens?: number;
+	/**
+	 * What the provider says the call cost, in USD, when it says (OpenRouter's
+	 * `usage.cost`). The only honest price for an image model, which is billed
+	 * per image or per megapixel rather than by the token rates on its row.
+	 * Optional like the fields above: absent is "not said", not "free".
+	 */
+	costUsd?: number;
 }
 
 export type StreamEvent =
@@ -174,6 +181,39 @@ export interface ChatRequest {
 	 * every other call makes.
 	 */
 	modalities?: string[];
+	/**
+	 * Shape of a drawn image on the chat-completions path, as OpenRouter takes
+	 * it: `aspect_ratio` and `image_size` (1K, 2K, 4K). Sent only when set, for
+	 * the same reason as `modalities`.
+	 */
+	imageConfig?: { aspect_ratio?: string; image_size?: string };
+}
+
+/**
+ * A request to OpenRouter's Image API, which takes what chat completions has no
+ * field for: several reference images, a count, quality, a transparent
+ * background, an output format, a seed. Every option is optional and sent only
+ * when set, because providers clamp or refuse what they do not support.
+ */
+export interface ImageRequest {
+	modelKey: string;
+	prompt: string;
+	/** Images to work from, as data or https URLs. */
+	references?: string[];
+	n?: number;
+	resolution?: string;
+	aspectRatio?: string;
+	size?: string;
+	quality?: 'auto' | 'low' | 'medium' | 'high';
+	outputFormat?: 'png' | 'jpeg' | 'webp' | 'svg';
+	background?: 'auto' | 'transparent' | 'opaque';
+	outputCompression?: number;
+	seed?: number;
+}
+
+export interface ImageResult {
+	images: GeneratedImage[];
+	usage: Usage | null;
 }
 
 /** An image a model produced, decoded from the data URL it arrived as. */
@@ -192,6 +232,10 @@ export interface RemoteModel {
 	completionCostPerMTok: number | null;
 	/** The model draws: it returns images as well as text. */
 	supportsImageOutput: boolean;
+	/** It returns images and never text: see `models.imageOnly`. */
+	imageOnly: boolean;
+	/** Served on OpenRouter's Image API: see `models.imageApi`. */
+	imageApi: boolean;
 	/**
 	 * The model accepts being told how hard to think — it advertises `reasoning`
 	 * among its supported parameters.
@@ -226,6 +270,11 @@ export interface ProviderAdapter {
 	stream(req: ChatRequest, signal?: AbortSignal): AsyncGenerator<StreamEvent>;
 	complete(req: ChatRequest, signal?: AbortSignal): Promise<CompletionResult>;
 	listModels(signal?: AbortSignal): Promise<RemoteModel[]>;
+	/**
+	 * The dedicated Image API, where the endpoint has one. Absent means drawing
+	 * goes through `complete` with the image modality.
+	 */
+	generateImages?(req: ImageRequest, signal?: AbortSignal): Promise<ImageResult>;
 }
 
 export class ProviderHttpError extends Error {

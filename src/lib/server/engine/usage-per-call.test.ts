@@ -185,3 +185,47 @@ describe('reasoning tokens', () => {
 		expect(rows[0].reasoningTokens).toBe(850);
 	});
 });
+
+describe('a price the provider names', () => {
+	it('reaches the usage row and the cap through the loop, not just the parser', async () => {
+		const choice = {
+			model: {
+				modelKey: 'mock-priced',
+				displayName: 'Mock',
+				supportsTools: false,
+				supportsVision: false,
+				// Token rates that would say $0.002; the provider says otherwise.
+				promptCostPerMTok: 1,
+				completionCostPerMTok: 1
+			},
+			provider: {},
+			adapter: {
+				async *stream(): AsyncGenerator<StreamEvent> {
+					yield { type: 'text', delta: 'Answered.' };
+					yield { type: 'usage', usage: { promptTokens: 1_000, completionTokens: 1_000, costUsd: 0.75 } };
+					yield { type: 'done', finishReason: 'stop' };
+				},
+				complete: async () => ({ text: '', usage: null }),
+				listModels: async () => []
+			}
+		} as unknown as ModelChoice;
+		await runAgentLoop({
+			job: createJob({ chatId: 'cost1', userId: 'u1', task: 'chat', persist: false }),
+			task: 'chat',
+			userId: 'u1',
+			chatId: 'cost1',
+			persist: false,
+			primary: choice,
+			backup: null,
+			tools: [],
+			maxIterations: 2,
+			buildMessages: () => [{ role: 'system', content: 'sys' }],
+			onDone: () => {}
+		});
+		const rows = db.select().from(usageLog).all();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].costUsd).toBeCloseTo(0.75);
+		setSetting('budget', { enabled: true, limitUsd: 0.5, period: 'day' });
+		expect(getBudgetStatus().blocked).toBe(true);
+	});
+});

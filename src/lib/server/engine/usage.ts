@@ -11,7 +11,8 @@ export interface Pricing {
 }
 
 /**
- * What one call cost, in USD, or null when the model carries no prices.
+ * What one call cost, in USD, or null when the model carries no prices and the
+ * provider named none.
  *
  * List price minus whatever the gateway says caching saved. That discount is
  * *signed*: negative on the turn that writes the cache, because a write costs
@@ -19,7 +20,15 @@ export interface Pricing {
  * zero rather than trusting the subtraction.
  */
 export function costOf(model: Pricing | null | undefined, usage: Usage | null): number | null {
-	if (!usage || !model) return null;
+	if (!usage) return null;
+	// What the provider charged, where it says, wins over our arithmetic. It is
+	// the only price an image model has (billed per image or megapixel, not by
+	// the token rates on its row), and it already includes any cache discount,
+	// so nothing is taken off it.
+	if (usage.costUsd !== undefined && Number.isFinite(usage.costUsd) && usage.costUsd >= 0) {
+		return usage.costUsd;
+	}
+	if (!model) return null;
 	if (model.promptCostPerMTok == null || model.completionCostPerMTok == null) return null;
 	const list =
 		(usage.promptTokens * model.promptCostPerMTok +

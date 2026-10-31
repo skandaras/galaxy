@@ -12,6 +12,7 @@ import {
 import {
 	listEnabledModels,
 	resolveModel,
+	resolveTextModel,
 	type ModelChoice
 } from '$lib/server/providers/registry';
 import {
@@ -184,9 +185,15 @@ export function systemPromptFor(task: string, supplementTask?: string | null): s
  * and stays quiet.
  */
 export function pickModel(modelId: string | null, task?: string): ModelChoice | null {
+	let drawsOnly = false;
 	if (modelId) {
 		const direct = resolveModel(modelId);
-		if (direct) return direct;
+		// A model that only returns images answers a text task with a picture or
+		// an error. Once OpenRouter's image-only models could be imported, one
+		// selected for chat (or left as a task's model) would have been tried
+		// first on every turn.
+		drawsOnly = Boolean(direct?.model.imageOnly && task !== 'visual');
+		if (direct && !drawsOnly) return direct;
 	}
 	const first = listEnabledModels()[0];
 	const choice = first ? resolveModel(first.id) : null;
@@ -197,7 +204,9 @@ export function pickModel(modelId: string | null, task?: string): ModelChoice | 
 			name: `${modelId} → ${choice.model.modelKey}`,
 			status: 'error',
 			detail: {
-				reason: 'the configured model is missing or disabled; used the first enabled one'
+				reason: drawsOnly
+					? 'the configured model only makes images; used the first enabled one'
+					: 'the configured model is missing or disabled; used the first enabled one'
 			}
 		});
 	}
@@ -260,7 +269,7 @@ export function startChatTurn(opts: TurnOptions): LiveJob {
 	if (!choice) {
 		throw new EngineError('No usable model — add a provider and enable a model in admin');
 	}
-	const backup = cfg?.backupModelId ? resolveModel(cfg.backupModelId) : null;
+	const backup = cfg?.backupModelId ? resolveTextModel(cfg.backupModelId) : null;
 	const systemPrompt = systemPromptFor('chat', chat.agentTask);
 
 	appendMessage(chat.id, {

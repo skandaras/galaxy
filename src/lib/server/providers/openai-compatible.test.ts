@@ -4,7 +4,9 @@ import {
 	createOpenAiCompatAdapter,
 	defaultCacheMode,
 	parseChatCompletionStream,
+	imageRequestBody,
 	readUsage,
+	sniffImage,
 	withCacheBreakpoints
 } from './openai-compatible';
 import type { ProviderMessage, ReasoningDetail, StreamEvent } from './types';
@@ -680,5 +682,119 @@ describe('reasoning details', () => {
 			await adapter().complete({ modelKey: 'm', messages: [{ role: 'user', content: 'hi' }] });
 			expect(JSON.stringify(sent)).not.toContain('reasoning_details');
 		});
+	});
+});
+
+describe('image generation on OpenRouter', () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	function stub(body: unknown, imageModels: unknown = { data: [] }) {
+		const seen: { url: string; body: Record<string, unknown> | null }[] = [];
+		vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+			seen.push({ url, body: init.body ? JSON.parse(String(init.body)) : null });
+			const reply = url.endsWith('/images/models') ? imageModels : body;
+			return new Response(JSON.stringify(reply), { headers: { 'content-type': 'application/json' } });
+		});
+		return seen;
+	}
+
+	it('asks the listing for image models too, and marks the ones that only draw', async () => {
+		const seen = stub(
+			{
+				data: [
+					{ id: 'bfl/flux', architecture: { output_modalities: ['image'] } },
+					{ id: 'google/gemini-image', architecture: { output_modalities: ['image', 'text'] } },
+					{ id: 'openrouter/auto', architecture: { output_modalities: ['text', 'image'] } },
+					{ id: 'plain/talker' }
+				]
+			},
+			{ data: [{ id: 'bfl/flux' }, { id: 'google/gemini-image' }] }
+		);
+		const listed = await createOpenAiCompatAdapter({ baseUrl: 'https://or.test/v1', kind: 'openrouter' }).listModels();
+		expect(seen.map((r) => r.url)).toEqual([
+			'https://or.test/v1/models?output_modalities=text,image',
+			'https://or.test/v1/images/models'
+		]);
+		expect(listed.map((m) => [m.key, m.imageOnly, m.imageApi])).toEqual([
+			['bfl/flux', true, true],
+			['google/gemini-image', false, true],
+			// Draws, but only on chat completions.
+			['openrouter/auto', false, false],
+			// No modality data says nothing, so it is assumed to talk.
+			['plain/talker', false, false]
+		]);
+		await createOpenAiCompatAdapter({ baseUrl: 'https://other.test/v1' }).listModels();
+		expect(seen.at(-1)!.url).toBe('https://other.test/v1/models');
+	});
+
+	it('keeps every model on chat completions when the Image API list cannot be read', async () => {
+		vi.stubGlobal('fetch', async (url: string) =>
+			url.endsWith('/images/models')
+				? new Response('nope', { status: 500 })
+				: new Response(JSON.stringify({ data: [{ id: 'bfl/flux', architecture: { output_modalities: ['image'] } }] }))
+		);
+		const listed = await createOpenAiCompatAdapter({ baseUrl: 'https://or.test/v1', kind: 'openrouter' }).listModels();
+		expect(listed[0].imageApi).toBe(false);
+	});
+
+	it('offers the Image API only for OpenRouter', () => {
+		expect(createOpenAiCompatAdapter({ baseUrl: 'x', kind: 'openrouter' }).generateImages).toBeTypeOf('function');
+		expect(createOpenAiCompatAdapter({ baseUrl: 'x' }).generateImages).toBeUndefined();
+	});
+
+	it('sends references and options in the Image API shape, and reads back images and cost', async () => {
+		const seen = stub({
+			data: [{ b64_json: 'iVBORw0KGgo=', media_type: 'image/png' }, { b64_json: '/9j/4AAQ' }],
+			usage: { prompt_tokens: 10, completion_tokens: 0, cost: 0.08 }
+		});
+		const res = await createOpenAiCompatAdapter({ baseUrl: 'https://or.test/v1', kind: 'openrouter' }).generateImages!({
+			modelKey: 'bfl/flux',
+			prompt: 'a barn',
+			references: ['data:image/png;base64,AAA'],
+			aspectRatio: '16:9',
+			background: 'transparent',
+			outputFormat: 'png',
+			n: 2
+		});
+		expect(seen[0].url).toBe('https://or.test/v1/images');
+		expect(seen[0].body).toEqual({
+			model: 'bfl/flux',
+			prompt: 'a barn',
+			n: 2,
+			aspect_ratio: '16:9',
+			output_format: 'png',
+			background: 'transparent',
+			input_references: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } }]
+		});
+		// The second came back without a media type, so its bytes name it.
+		expect(res.images.map((i) => i.mime)).toEqual(['image/png', 'image/jpeg']);
+		expect(res.usage?.costUsd).toBeCloseTo(0.08);
+	});
+
+	it('sends nothing that was not asked for', () => {
+		expect(imageRequestBody({ modelKey: 'm', prompt: 'p' })).toEqual({ model: 'm', prompt: 'p' });
+	});
+
+	it('names a format from its bytes', () => {
+		expect(sniffImage('UklGRiQAAABXRUJQ')).toBe('image/webp');
+		expect(sniffImage('PHN2ZyB4bWxucz0')).toBe('image/svg+xml');
+	});
+
+	it('passes the shape of an image on chat completions only when given', async () => {
+		const seen = stub({ choices: [{ message: { content: 'hi' } }] });
+		const adapter = createOpenAiCompatAdapter({ baseUrl: 'https://x.test/v1' });
+		await adapter.complete({ modelKey: 'm', messages: [] });
+		expect(seen[0].body?.image_config).toBeUndefined();
+		await adapter.complete({ modelKey: 'm', messages: [], imageConfig: { aspect_ratio: '3:2' } });
+		expect(seen[1].body?.image_config).toEqual({ aspect_ratio: '3:2' });
+	});
+});
+
+describe('the price a provider names', () => {
+	it('is read when finite and not negative, and never invented', () => {
+		expect(readUsage({ prompt_tokens: 1, completion_tokens: 1, cost: 0.002 }).costUsd).toBeCloseTo(0.002);
+		expect(readUsage({ prompt_tokens: 1, completion_tokens: 1, cost: 0 }).costUsd).toBe(0);
+		expect(readUsage({ prompt_tokens: 1, completion_tokens: 1, cost: -1 })).not.toHaveProperty('costUsd');
+		expect(readUsage({ prompt_tokens: 1, completion_tokens: 1 })).not.toHaveProperty('costUsd');
 	});
 });
