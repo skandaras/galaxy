@@ -59,8 +59,9 @@ describe('messageContent', () => {
 	});
 
 	it('sends images as vision parts when the model supports it', () => {
-		const { message } = chatWith({ name: 'shot.png', mime: 'image/png', kind: 'image' });
+		const { message, ref } = chatWith({ name: 'shot.png', mime: 'image/png', kind: 'image' });
 		const out = messageContent(message, true);
+		expect((out as { type: string; text?: string }[])[0].text).toContain(`id="${ref.id}"`);
 		expect(Array.isArray(out)).toBe(true);
 		const parts = out as { type: string }[];
 		expect(parts[0].type).toBe('text');

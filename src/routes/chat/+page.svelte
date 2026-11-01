@@ -1455,28 +1455,15 @@
 					{#if streamText}
 						<Markdown text={streamText} />
 					{/if}
-					<!-- For the whole turn, below whatever has streamed so far. It used to
-					     hide while text streamed and give way to a bare line for a
-					     question; it now carries those states itself (writing, and the
-					     ring that waits on you), so a silence between legs never looks
-					     like a hung run and a question never looks like work. -->
-					<div class="live">
-						<GalaxyOrb
-							presence={presence.state}
-							calls={presence.calls}
-							label={presence.label ?? `${streamModel || '…'} is thinking`}
-							detail={thought}
-							size="clamp(2.6rem, 7vw, 3rem)"
-							dotScale={0.75}
-						/>
-					</div>
 				</div>
 			{/if}
-			{#if ending && !streaming && ending.chatId === currentChat?.id}
+			{#if messages.length || streaming}
 				<div class="live">
 					<GalaxyOrb
-						presence={ending.state}
-						label={ending.state === 'done' ? 'Done' : 'Ran into a problem'}
+						presence={streaming ? presence.state : ending && ending.chatId === currentChat?.id ? ending.state : typing ? 'typing' : 'idle'}
+						calls={streaming ? presence.calls : []}
+						label={streaming ? presence.label ?? `${streamModel || '…'} is working` : ending && ending.chatId === currentChat?.id ? ending.state === 'done' ? 'Done' : 'Ran into a problem' : typing ? 'Listening' : 'Ready'}
+						detail={streaming ? thought : ''}
 						size="clamp(2.6rem, 7vw, 3rem)"
 						dotScale={0.75}
 					/>

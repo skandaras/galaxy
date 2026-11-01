@@ -1520,6 +1520,45 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 	const stored = (await as(ALICE, `/api/chats/${newest.id}`)).messages.find((m) => m.role === 'user');
 	check("a new chat's first message keeps its attachment", stored?.attachments?.length ?? 0, 1);
 
+	await page.waitForFunction(() => !!document.querySelector('.live .orrery.idle'));
+	check('the avatar remains after the reply', await page.locator('.live .orrery').count(), 1);
+	await page.locator('.composer textarea').fill('preview-image-smoke');
+	await page.waitForFunction(() => !!document.querySelector('.live .orrery.typing'));
+	const tallPng = await page.evaluate(() => {
+		const canvas = document.createElement('canvas');
+		canvas.width = 800;
+		canvas.height = 1600;
+		canvas.getContext('2d').fillRect(0, 0, 800, 1600);
+		return canvas.toDataURL('image/png').split(',')[1];
+	});
+	await page.route('**/smoke-tall.png', (route) => route.fulfill({
+		contentType: 'image/png', body: Buffer.from(tallPng, 'base64')
+	}));
+	await page.keyboard.press('Enter');
+	const preview = page.locator('.image-preview').first();
+	await preview.waitFor({ timeout: 20_000 });
+	await preview.locator('.image-open img').evaluate((img) => img.decode());
+	check('a tall image fits within 600px', (await preview.locator('.image-open img').boundingBox()).height <= 600);
+	check('the image has save and copy controls', await preview.locator('.image-actions button').count(), 2);
+	await preview.getByRole('button', { name: 'Expand image: Tall image' }).click();
+	check('clicking the preview opens a modal', await preview.locator('dialog').evaluate((el) => el.open));
+	await preview.getByRole('button', { name: 'Close image' }).click();
+	check('the X closes the image', await preview.locator('dialog').evaluate((el) => el.open), false);
+	await preview.getByRole('button', { name: 'Expand image: Tall image' }).click();
+	await page.mouse.click(1, 1);
+	check('clicking outside closes the image', await preview.locator('dialog').evaluate((el) => el.open), false);
+	const download = page.waitForEvent('download');
+	await preview.getByRole('button', { name: 'Save image', exact: true }).click();
+	check('save downloads an image', (await download).suggestedFilename(), 'image.png');
+	await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+	await preview.getByRole('button', { name: 'Copy image', exact: true }).click();
+	await page.waitForFunction(() => document.querySelector('.image-actions [role=status]')?.textContent === 'Copied');
+	check('copy puts image bytes on the clipboard', await page.evaluate(async () => {
+		const items = await navigator.clipboard.read();
+		return items.some((item) => item.types.includes('image/png'));
+	}));
+	await idle();
+
 	const sheet = page.locator('.sheet[role=dialog]');
 	const reply = (marker) =>
 		page.locator('.msg.assistant', { hasText: marker }).last().waitFor({ timeout: 20_000 }).then(

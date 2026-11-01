@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { imagePreviews } from '$lib/image-previews';
 	import { marked } from 'marked';
 	import DOMPurify from 'dompurify';
 	import MermaidBlock from './MermaidBlock.svelte';
@@ -47,7 +48,7 @@
 	};
 </script>
 
-<div class="md">
+<div class="md" use:imagePreviews>
 	{#each segments as seg, i (i)}
 		{#if seg.kind === 'mermaid'}
 			<MermaidBlock code={seg.content} />

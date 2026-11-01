@@ -83,7 +83,13 @@ export function messageContent(m: StoredMessage, supportsVision: boolean): Messa
 		return `${text}\n\n[Attached image${images.length > 1 ? 's' : ''}: ${names}. The selected model cannot view images. Call view_image with the id and what you need to know, and a vision model will answer for you.]`;
 	}
 
-	const parts: MessageContent = [{ type: 'text', text }];
+	// Vision parts carry pixels, but no attachment id. Without this note the
+	// first edit guessed an id and failed before discovering list_attachments.
+	const names = images.map((a) => `${a.name} (id="${a.id}")`).join(', ');
+	const parts: MessageContent = [{
+		type: 'text',
+		text: `${text}\n\n[Attached images: ${names}. Use these exact ids for generate_image references; call list_attachments for other images.]`
+	}];
 	for (const att of images) {
 		const url = attachmentDataUrl(m.chatId, att.id);
 		if (url) parts.push({ type: 'image_url', image_url: { url } });
