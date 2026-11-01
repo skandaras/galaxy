@@ -13,7 +13,8 @@ import {
 	normalizeTheme,
 	sameTheme,
 	themeCss,
-	themeOrigin
+	themeOrigin,
+	themeVars
 } from './theme';
 import { GALAXY_FONT_STACK } from './fonts';
 
@@ -541,8 +542,27 @@ describe('derived colours', () => {
 	it('know a light page from a dark one, for the colour scheme the browser draws', () => {
 		expect(deriveTokens(PRESETS.Paper).light).toBe(true);
 		expect(deriveTokens(PRESETS.Galaxy).light).toBe(false);
-		expect(themeCss(PRESETS.Paper)).toContain(':root{color-scheme:light;}');
-		expect(themeCss(PRESETS.Galaxy)).toContain(':root{color-scheme:dark;}');
+		expect(themeCss(PRESETS.Paper)).toContain('color-scheme:light;');
+		expect(themeCss(PRESETS.Galaxy)).toContain('color-scheme:dark;');
+	});
+
+	it('reach the live preview with everything the stylesheet sets', () => {
+		// The editor previews a draft by applying themeVars inline. It once kept
+		// its own list without the derived tokens, so a Paper preview over Galaxy
+		// put Paper's text on Galaxy's cards.
+		const vars = themeVars(PRESETS.Paper);
+		const d = deriveTokens(PRESETS.Paper);
+		expect(vars).toMatchObject({
+			'--accent-2': d.accent2,
+			'--surface': d.surface,
+			'--surface-glass': d.surfaceGlass,
+			'--accent-wash': d.accentWash,
+			'--edge': d.edge,
+			'--success': d.success,
+			'color-scheme': 'light'
+		});
+		const css = themeCss(PRESETS.Paper);
+		for (const [name, value] of Object.entries(vars)) expect(css).toContain(`${name}:${value};`);
 	});
 
 	it('round-trip through OKLCH closely enough to be the same colour', () => {
@@ -555,6 +575,16 @@ describe('derived colours', () => {
 	it('composite the way a browser lays one colour over another', () => {
 		expect(mixHex('#ffffff', '#000000', 0.5)).toBe('#808080');
 		expect(mixHex('#ff0000', '#0000ff', 1)).toBe('#ff0000');
+	});
+
+	it('keep a readable ground when a theme colour is not hex', () => {
+		// normalizeTheme accepts `white`; mixing used to answer with the accent
+		// itself, so the active row's wash became a solid white row.
+		const named = { ...PRESETS.Void, accent: 'white' };
+		const d = deriveTokens(named);
+		expect(d.accentWash).toBe(named.bgPane);
+		expect(d.edge).toBe(named.border);
+		pass(named.fg, d.accentWash, 'Void fg on the wash with a named accent');
 	});
 
 	it('are emitted, and survive a hostile accent as plain hex', () => {

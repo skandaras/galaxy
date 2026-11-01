@@ -249,47 +249,61 @@ const BASE_CONTROLS = [
 	'@media (prefers-reduced-motion: no-preference){.tabs button{transition:color var(--dur-1) var(--ease-out),border-color var(--dur-2) var(--ease-out);}.chip,.nav-item{transition:color var(--dur-1) var(--ease-out),background-color var(--dur-1) var(--ease-out),border-color var(--dur-1) var(--ease-out);}}'
 ];
 
-export function themeCss(t: Theme): string {
+/**
+ * Every custom property a theme sets on :root, plus its colour scheme, as one
+ * map. themeCss writes the stylesheet from it and the theme editor's live
+ * preview applies it inline, so a token added here reaches both. The preview
+ * kept its own list once, and the derived tokens never made it in: previewing
+ * Paper over Galaxy drew Paper's dark text on Galaxy's dark cards at 1.39:1.
+ */
+export function themeVars(t: Theme): Record<string, string> {
 	const d = deriveTokens(t);
-	return [
-		FONT_FACE_CSS,
-		':root{',
-		`--bg:${t.bg};`,
-		`--bg-pane:${t.bgPane};`,
-		`--fg:${t.fg};`,
-		`--fg-dim:${t.fgDim};`,
-		`--heading:${t.heading};`,
-		`--label:${t.label};`,
-		`--galaxy:${t.galaxyColor};`,
-		`--accent:${t.accent};`,
-		`--border:${t.border};`,
+	return {
+		'--bg': t.bg,
+		'--bg-pane': t.bgPane,
+		'--fg': t.fg,
+		'--fg-dim': t.fgDim,
+		'--heading': t.heading,
+		'--label': t.label,
+		'--galaxy': t.galaxyColor,
+		'--accent': t.accent,
+		'--border': t.border,
 		// Derived rather than configurable: a separator at 1.2:1 is fine, and a
 		// text field whose only boundary is that same colour is invisible. See
 		// controlBorder().
-		`--control-border:${controlBorder(t)};`,
-		`--danger:${t.danger};`,
-		`--font-ui:${fontStack(t.fontUi, 'ui')};`,
-		`--font-mono:${fontStack(t.fontMono, 'mono')};`,
+		'--control-border': controlBorder(t),
+		'--danger': t.danger,
+		'--font-ui': fontStack(t.fontUi, 'ui'),
+		'--font-mono': fontStack(t.fontMono, 'mono'),
+		'--radius': t.radius,
+		'--glow': t.glow,
+		'--glow-size': t.glowStrength,
+		'--accent-2': d.accent2,
+		'--accent-wash': d.accentWash,
+		'--surface': d.surface,
+		'--surface-glass': d.surfaceGlass,
+		'--edge': d.edge,
+		'--success': d.success,
+		// The browser's own controls and scrollbars, which follow this rather
+		// than the theme. app.html still says dark, for the paint before this
+		// style exists (the app renders client-side, and a light canvas there
+		// flashes white under a dark theme); this overrides it once it lands,
+		// so Paper stops drawing dark scrollbars and form controls.
+		'color-scheme': d.light ? 'light' : 'dark'
+	};
+}
+
+export function themeCss(t: Theme): string {
+	const vars = Object.entries(themeVars(t)).map(([name, value]) => `${name}:${value};`);
+	return [
+		FONT_FACE_CSS,
+		':root{',
+		...vars,
 		// Fixed, and deliberately not from the theme: the ASCII backdrop is art
 		// made of characters, and a proportional or oddly-proportioned font
 		// distorts the spiral. Nothing in Settings writes to this.
 		`--font-galaxy:${GALAXY_FONT_STACK};`,
-		`--radius:${t.radius};`,
-		`--glow:${t.glow};`,
-		`--glow-size:${t.glowStrength};`,
-		`--accent-2:${d.accent2};`,
-		`--accent-wash:${d.accentWash};`,
-		`--surface:${d.surface};`,
-		`--surface-glass:${d.surfaceGlass};`,
-		`--edge:${d.edge};`,
-		`--success:${d.success};`,
 		'}',
-		// The browser's own controls and scrollbars, which follow this rather
-		// than the theme. app.html still says dark, for the paint before this
-		// style exists (the app renders client-side, and a light canvas there
-		// flashes white under a dark theme); this rule overrides it once it
-		// lands, so Paper stops drawing dark scrollbars and form controls.
-		`:root{color-scheme:${d.light ? 'light' : 'dark'};}`,
 		`html{font-size:${t.baseFont};}`,
 		// One scale, six steps, instead of the twenty-five ad-hoc sizes this
 		// interface had grown. Every size in the app names a step, so the whole
@@ -667,11 +681,19 @@ function gradientPartner(accent: string, bg: string): string {
 	return accent;
 }
 
-/** `a` laid over `b` at weight `t`, the way a browser composites, in sRGB. */
+/**
+ * `a` laid over `b` at weight `t`, the way a browser composites, in sRGB.
+ *
+ * A colour that is not hex (a theme may carry `white` or `rgb(...)`, which
+ * normalizeTheme accepts) cannot be mixed here, and then the answer is
+ * whichever of the two dominates. It used to be `a` regardless, which made
+ * the active row's wash, 12% accent over the pane, a solid accent: Void with
+ * `accent: 'white'` drew pale text on a white row.
+ */
 export function mixHex(a: string, b: string, t: number): string {
 	const ca = parseHex(a);
 	const cb = parseHex(b);
-	if (!ca || !cb) return a;
+	if (!ca || !cb) return t >= 0.5 ? a : b;
 	return hexOf(ca.map((v, i) => v * t + cb[i] * (1 - t)) as [number, number, number]);
 }
 

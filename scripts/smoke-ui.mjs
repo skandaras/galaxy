@@ -482,6 +482,17 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 	await primary.click();
 	await page.waitForTimeout(400);
 	await page.locator('.preset', { hasText: 'Paper' }).click();
+	// The preview carries the derived surfaces and the colour scheme too. It
+	// once set only the stored colours, so Paper's dark text sat on Galaxy's
+	// dark cards until the theme was saved.
+	check(
+		'previewing Paper draws light cards and light browser controls',
+		await page.evaluate(() => {
+			const root = getComputedStyle(document.documentElement);
+			return [root.colorScheme, root.getPropertyValue('--surface').trim()];
+		}),
+		['light', '#fbfaf7']
+	);
 	await page.locator('.preset', { hasText: 'Galaxy 2' }).click();
 	check('coming back to it brings back the saved edit', await accent.inputValue(), '#00ccff');
 
