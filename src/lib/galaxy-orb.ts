@@ -6,7 +6,7 @@
  * its own rate, and the sphere is what the crowd adds up to rather than
  * something any single dot belongs to.
  *
- * There are two patterns, and they are the difference between the two states:
+ * The patterns are the difference between the states:
  *
  * - `free`, for thinking: each dot on its own randomly tilted great circle. No
  *   two dots share an axis, so the cluster churns in every direction at once
@@ -14,6 +14,11 @@
  * - `axial`, for searching: only circles of latitude and meridians, alternating
  *   dot by dot. The orbits line up into something like an armillary sphere, and
  *   a sweep that regular reads as a search being *conducted*.
+ * - `ring`, for waiting on the person: every dot on one circle facing the
+ *   viewer. The sphere opens like an eye, the one pose that is plainly not
+ *   the model working.
+ * - `planar`, for code tools at work: every dot in one tilted plane, a disc
+ *   seen at an angle, as orderly as the work it marks.
  *
  * An earlier version turned every dot on a circle of latitude about one shared
  * axis, with the rate set by how far from the equator it sat. That is a globe
@@ -97,7 +102,7 @@ export interface OrbDot {
 	dim: number;
 }
 
-export type OrbPattern = 'free' | 'axial';
+export type OrbPattern = 'free' | 'axial' | 'ring' | 'planar';
 
 export interface OrbOptions {
 	/** How many dots the sphere is made of. */
@@ -140,7 +145,19 @@ export function orbDots(opts: OrbOptions = {}): OrbDot[] {
 		let u: Vec;
 		let v: Vec;
 
-		if (pattern === 'axial') {
+		if (pattern === 'ring') {
+			// Facing the viewer, so depth never changes and the ring reads flat.
+			// Held to a narrow band of radii: wider, and it is a disc again.
+			rad = 0.8 + 0.12 * at(S_RADIUS);
+			u = [1, 0, 0];
+			v = [0, 1, 0];
+		} else if (pattern === 'planar') {
+			// One plane for every dot, tipped back about seventy degrees, so the
+			// disc shows its face without collapsing to a line.
+			rad = 0.35 + 0.65 * at(S_RADIUS);
+			u = [1, 0, 0];
+			v = [0, -0.3420, 0.9397];
+		} else if (pattern === 'axial') {
 			// Alternating, so the two families come out even however many dots
 			// there are, and — because the streams are evenly spread — interleave
 			// through the sphere rather than clumping into two halves.
@@ -179,7 +196,7 @@ export function orbDots(opts: OrbOptions = {}): OrbDot[] {
 		// reading as a single object however the planes are tilted. `axial` holds
 		// its rates far closer together — a search should look conducted, and
 		// rings sweeping at wildly different speeds look like weather.
-		const spread = pattern === 'axial' ? 0.16 : 0.44;
+		const spread = pattern === 'ring' ? 0.06 : pattern === 'axial' ? 0.16 : pattern === 'planar' ? 0.3 : 0.44;
 		const period = (0.45 + 0.55 * depth) * (1 - spread / 2 + spread * at(S_RATE));
 
 		dots.push({

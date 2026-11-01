@@ -12,6 +12,7 @@ import {
 	toCatalog,
 	TOOL_TASKS
 } from './registry';
+import { GROUP_KIND, TOOL_KIND } from '$lib/presence';
 
 /**
  * Every tool the platform ships. If a tool is added or renamed this list must
@@ -105,6 +106,15 @@ describe('builtinDescriptors', () => {
 	it('carries a parameter schema for each tool', () => {
 		for (const d of builtinDescriptors()) {
 			expect(d.parameters, d.name).toHaveProperty('type', 'object');
+		}
+	});
+
+	it('gives every tool a satellite colour that matches its group', () => {
+		// The Orrery colours a running call by kind, and the browser only sees
+		// the tool's name. A tool added here without an entry in TOOL_KIND would
+		// fall back to "other" and draw grey.
+		for (const d of builtinDescriptors()) {
+			expect(TOOL_KIND[d.name], d.name).toBe(GROUP_KIND[d.group] ?? 'other');
 		}
 	});
 

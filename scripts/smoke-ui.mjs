@@ -1502,6 +1502,13 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 	await page.locator('.composer textarea').waitFor();
 	await page.getByRole('button', { name: '+ New chat' }).click();
 	const idle = () => page.locator('.composer .btn.send').waitFor({ timeout: 20_000 }).catch(() => {});
+
+	// The empty chat's Orrery: big enough to be the room's centrepiece, and
+	// decoration only, so assistive tech is not told about a sphere.
+	const hero = page.locator('.empty .orrery');
+	await hero.waitFor({ timeout: 5000 }).catch(() => {});
+	check('a new chat opens on the Orrery', ((await hero.boundingBox())?.height ?? 0) >= 100);
+	check('which assistive tech is spared', await hero.getAttribute('aria-hidden'), 'true');
 	const text = (name, body) => ({ name, mimeType: 'text/plain', buffer: Buffer.from(body) });
 
 	await page.locator('.composer input[type=file]').setInputFiles(text('first.txt', 'FIRST-FILE'));
@@ -1526,6 +1533,11 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 	check('the question opens the sheet', await sheet.count(), 1);
 	await page.getByRole('button', { name: 'Minimise the question' }).click();
 	check('minimising takes the sheet down', await sheet.count(), 0);
+	// Parked on the question, the thread's Orrery opens into its ring and says
+	// so. It used to vanish for a question, leaving a bare line of text.
+	const live = page.locator('.live [role=status]');
+	check('the thread says it is waiting on you', await live.getAttribute('aria-label'), 'Waiting on your answer');
+	check('beside an Orrery big enough to read', ((await live.locator('.orb').boundingBox())?.height ?? 0) >= 40);
 	// Corners as well as the middle: a floating bar anchored above the
 	// composer clipped the top of the Stop button and left its centre clear.
 	const uncovered = async (selector) => {
@@ -1735,6 +1747,17 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 		);
 		await phoneShot('alerts');
 		await phone.keyboard.press('Escape');
+	}
+
+	{
+		// The empty chat's Orrery shrinks to a phone instead of pushing the page
+		// sideways.
+		await phone.goto(`${B}/chat`);
+		const hero = phone.locator('.empty .orrery');
+		await hero.waitFor({ timeout: 5000 }).catch(() => {});
+		const box = await hero.boundingBox();
+		check('the phone shows the Orrery whole', !!box && box.x >= 0 && box.x + box.width <= 390);
+		check('without scrolling sideways', await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
 	}
 
 	{
