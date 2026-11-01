@@ -43,6 +43,7 @@ export function imageTools(chatId: string, userId: string): LoopTool[] {
 					'belong in a mermaid or svg fenced block instead. Returns a markdown image link: ' +
 					'include it in your reply exactly as given, or the user never sees what you drew. ' +
 					'Pass reference_attachment_ids to work from images already in the conversation. ' +
+					'Use exact attachment ids supplied with the message; if you do not have them, call list_attachments first. Never guess an id. ' +
 					'Set the other options only when the user asked for them; leave them out otherwise.',
 				parameters: {
 					type: 'object',

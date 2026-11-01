@@ -532,6 +532,14 @@ const server = createServer(async (req, res) => {
 			Array.isArray(content)
 				? content.map((part) => (part?.type === 'text' ? part.text : '')).join(' ')
 				: String(content ?? '');
+		if (last?.role === 'user' && textOf(last.content).includes('preview-image-smoke')) {
+			res.writeHead(200, { 'content-type': 'text/event-stream' });
+			delta(res, { content: '![Tall image](/smoke-tall.png)' });
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
 		const asksFor = (word) =>
 			last?.role === 'user' && textOf(last.content).toLowerCase().includes(word);
 		/**

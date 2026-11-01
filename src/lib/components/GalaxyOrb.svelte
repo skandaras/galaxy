@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
+	import { PresenceQueue, MIN_PRESENCE_MS, type OrbView } from '$lib/presence-queue';
 	import { scale } from 'svelte/transition';
 	import { orbDots, type OrbPattern } from '$lib/galaxy-orb';
 	import type { Presence, ToolKind } from '$lib/presence';
@@ -35,6 +37,23 @@
 		count?: number;
 	} = $props();
 
+	const queue = new PresenceQueue({ state: 'idle', calls: [], label: '' }, Date.now() - MIN_PRESENCE_MS);
+	let shown = $state<OrbView>(queue.current);
+	$effect(() => {
+		const view = { state: presence, calls: [...calls], label, detail };
+		untrack(() => {
+			queue.push(view, Date.now());
+			shown = queue.current;
+		});
+	});
+	$effect(() => {
+		const timer = setInterval(() => {
+			queue.advance(Date.now());
+			shown = queue.current;
+		}, 50);
+		return () => clearInterval(timer);
+	});
+
 	// The states are told apart by how the dots move before anything else: free
 	// tilts every orbit differently and reads as association, axial allows only
 	// circles of latitude and meridians and reads as a sweep being conducted,
@@ -64,9 +83,9 @@
 		done: 6
 	};
 	const pattern = $derived<OrbPattern>(
-		presence === 'tool' && calls.some((c) => c.kind === 'code') ? 'planar' : PATTERN[presence]
+		shown.state === 'tool' && shown.calls.some((c) => c.kind === 'code') ? 'planar' : PATTERN[shown.state]
 	);
-	const swirl = $derived(SWIRL[presence]);
+	const swirl = $derived(SWIRL[shown.state]);
 	// One count for every pattern, so a change of state moves the same dots onto
 	// new orbits rather than swapping one crowd for another.
 	const dots = $derived(orbDots({ count, pattern, turn: pattern === 'axial' ? 0.5 : 0 }));
@@ -119,11 +138,11 @@
 </script>
 
 <span
-	class="orrery {presence}"
+	class="orrery {shown.state}"
 	class:bare
 	style={`--orb-size:${size}; --swirl:${swirl}s; --dot-scale:${dotScale}`}
 	role={bare ? undefined : 'status'}
-	aria-label={bare ? undefined : label}
+	aria-label={bare ? undefined : shown.label}
 	aria-hidden={bare ? 'true' : undefined}
 >
 	<span class="orb" bind:this={orbEl} aria-hidden="true">
@@ -133,7 +152,7 @@
 				style={`--cy:${d.cy}; --rad:${d.rad}; --ux:${d.ux}; --uy:${d.uy}; --uz:${d.uz}; --vx:${d.vx}; --vy:${d.vy}; --vz:${d.vz}; --size:${d.size}; --dim:${d.dim}; --period:${d.period}; --phase:${d.phase}`}
 			></span>
 		{/each}
-		{#each calls as call (call.id)}
+		{#each shown.calls as call (call.id)}
 			<span
 				class="sat {call.kind}"
 				style={`--sat-phase:${satPhase(call.id)}`}
@@ -143,8 +162,8 @@
 	</span>
 	{#if !bare}
 		<span class="words">
-			<span class="label">{label}</span>
-			{#if detail}<span class="detail">{detail}</span>{/if}
+			<span class="label">{shown.label}</span>
+			{#if shown.detail}<span class="detail">{shown.detail}</span>{/if}
 		</span>
 	{/if}
 </span>
