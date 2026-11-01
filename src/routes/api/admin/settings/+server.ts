@@ -8,7 +8,6 @@ import {
 	DEFAULT_CODING,
 	DEFAULT_COMPACTION,
 	DEFAULT_FETCH,
-	DEFAULT_IVORY,
 	DEFAULT_PROFILE,
 	DEFAULT_RESEARCH,
 	DEFAULT_RETENTION,
@@ -17,7 +16,6 @@ import {
 	DEFAULT_UX_AUDIT,
 	DEFAULT_WEB_SEARCH,
 	getSetting,
-	normaliseIvorySettings,
 	normaliseProfileSettings,
 	normaliseResearchSettings,
 	normaliseLanguageSettings,
@@ -39,8 +37,7 @@ const KNOWN_KEYS = [
 	'retention',
 	'fetch',
 	'boards',
-	'language',
-	'ivory'
+	'language'
 ] as const;
 const DEFAULTS: Record<string, unknown> = {
 	websearch: DEFAULT_WEB_SEARCH,
@@ -55,8 +52,7 @@ const DEFAULTS: Record<string, unknown> = {
 	retention: DEFAULT_RETENTION,
 	fetch: DEFAULT_FETCH,
 	boards: DEFAULT_BOARDS,
-	language: DEFAULT_LANGUAGE,
-	ivory: DEFAULT_IVORY
+	language: DEFAULT_LANGUAGE
 };
 
 /**
@@ -74,7 +70,6 @@ const DEFAULTS: Record<string, unknown> = {
  * the loop below is about to consume (on the way in).
  */
 const NORMALISERS: Record<string, (v: Record<string, unknown>) => Record<string, unknown>> = {
-	ivory: (v) => normaliseIvorySettings(v) as unknown as Record<string, unknown>,
 	profile: (v) => normaliseProfileSettings(v) as unknown as Record<string, unknown>,
 	research: (v) => normaliseResearchSettings(v) as unknown as Record<string, unknown>,
 	language: (v) => normaliseLanguageSettings(v) as unknown as Record<string, unknown>,
@@ -99,11 +94,7 @@ function fill(key: string, value: Record<string, unknown>): Record<string, unkno
 // string means "keep the existing secret"; null clears it.
 const SECRET_FIELDS: Record<string, { plain: string; enc: string }[]> = {
 	websearch: [{ plain: 'apiKey', enc: 'apiKeyEnc' }],
-	github: [{ plain: 'token', enc: 'tokenEnc' }],
-	ivory: [
-		{ plain: 'coreApiKey', enc: 'coreApiKeyEnc' },
-		{ plain: 'semanticScholarApiKey', enc: 'semanticScholarApiKeyEnc' }
-	]
+	github: [{ plain: 'token', enc: 'tokenEnc' }]
 };
 
 export const GET: RequestHandler = ({ locals }) => {

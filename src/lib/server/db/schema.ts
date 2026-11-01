@@ -8,6 +8,7 @@ import {
 	uniqueIndex
 } from 'drizzle-orm/sqlite-core';
 import type { MessageTrace } from '$lib/run-timeline';
+import type { SkillPatch } from '$lib/skill-patch';
 
 export const users = sqliteTable('users', {
 	id: text('id').primaryKey(),
@@ -160,11 +161,33 @@ export const messages = sqliteTable(
 		 * written here at all, so its replies cannot carry one by construction.
 		 */
 		feedback: text('feedback', { enum: ['up', 'down'] }),
+		/**
+		 * What the tools behind this reply read, cut down: a page's text, a
+		 * search's results, the document it opened. Replayed to the next turn or
+		 * two so a follow-up has the material the answer rested on, where before
+		 * only the answer itself survived the turn.
+		 *
+		 * Kept out of everything the browser is sent (`getMessages` does not
+		 * select it) and nulled on all but the newest replies, so it is a short
+		 * working memory rather than an archive of every page fetched.
+		 */
+		evidence: text('evidence', { mode: 'json' }).$type<EvidenceItem[] | null>(),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
 	},
 	// Every turn reads a whole chat in seq order, so the sort rides the index.
 	(t) => [index('messages_chat_seq_idx').on(t.chatId, t.seq)]
 );
+
+/** One thing a tool read during a turn, as the next turn is shown it. */
+export interface EvidenceItem {
+	/** The tool that read it. */
+	tool: string;
+	/** Where it came from: a URL, a search query, a document or attachment id. */
+	ref: string;
+	title?: string;
+	/** What the model saw, cut down; empty when only the reference is kept. */
+	excerpt: string;
+}
 
 export interface AttachmentRef {
 	id: string;
@@ -222,6 +245,21 @@ export const models = sqliteTable('models', {
 	supportsImageOutput: integer('supports_image_output', { mode: 'boolean' })
 		.notNull()
 		.default(false),
+	/**
+	 * The model returns images and nothing else (Flux, GPT Image, Sourceful), so
+	 * it can serve `visual` and nothing that expects text back. Set only where
+	 * the listing positively says so; a model with no modality data is assumed
+	 * to talk. A capability, corrected on every sync like the one above.
+	 */
+	imageOnly: integer('image_only', { mode: 'boolean' }).notNull().default(false),
+	/**
+	 * OpenRouter serves this model on its Image API, which takes several
+	 * reference images, a count, quality, background and format. Read from that
+	 * API's own model list on sync. Not every image model is there: the routers
+	 * (`openrouter/auto`) advertise image output and answer only on chat
+	 * completions, so this, not the provider kind, decides the transport.
+	 */
+	imageApi: integer('image_api', { mode: 'boolean' }).notNull().default(false),
 	promptCostPerMTok: real('prompt_cost_per_mtok'),
 	completionCostPerMTok: real('completion_cost_per_mtok'),
 	/**
@@ -292,11 +330,7 @@ export const CORE_TASKS = [
 	'subagent',
 	'board',
 	'alignment',
-	'alignment-synthesis',
-	'ivory-read',
-	'ivory-plan',
-	'ivory-synthesise',
-	'ivory-redteam'
+	'alignment-synthesis'
 ] as const;
 export type CoreTask = (typeof CORE_TASKS)[number];
 
@@ -650,6 +684,25 @@ export const skillCandidates = sqliteTable('skill_candidates', {
 	status: text('status', { enum: ['pending', 'approved', 'rejected'] })
 		.notNull()
 		.default('pending'),
+	/**
+	 * A new skill, or a change to an existing one. A skill used to be fixable
+	 * only by an admin rewriting it, because every name could be proposed once
+	 * and only as a whole new body.
+	 */
+	kind: text('kind', { enum: ['new', 'patch'] })
+		.notNull()
+		.default('new'),
+	/** The skill a patch changes. */
+	targetSkillId: text('target_skill_id'),
+	/** That skill's version when the patch was written, to show drift. */
+	baseVersion: integer('base_version'),
+	/**
+	 * The exact edits. For a patch, `body`, `description`, `triggers` and `tasks`
+	 * above hold the result and the target's current values, so an image from
+	 * before patches existed, which approves any candidate as a whole body,
+	 * still writes a sensible skill rather than an empty one.
+	 */
+	patch: text('patch', { mode: 'json' }).$type<SkillPatch | null>(),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 	decidedAt: integer('decided_at', { mode: 'timestamp_ms' })
 });

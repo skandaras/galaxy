@@ -192,12 +192,16 @@ const BASE_CONTROLS = [
 	// The reading column Chat and Code share. Replies ran the full width of the
 	// pane, around 150 characters to a line on a desktop, which is a lot of
 	// eye travel for prose. One value so the two pages and the composer agree.
-	':root{--radius-lg:calc(var(--radius) * 1.6);--thread-measure:44rem;}',
+	':root{--radius-lg:calc(var(--radius) * 1.6);--radius-sm:calc(var(--radius) * 0.6);--thread-measure:44rem;}',
 	// min-height is --tap, so a button meets 32px with a mouse and the 44px
 	// docs/ACCESSIBILITY.md commits to under a finger, without each page
 	// remembering to ask for it.
 	'.btn{display:inline-flex;align-items:center;justify-content:center;gap:.35rem;box-sizing:border-box;min-height:var(--tap);padding:.35rem .7rem;background:var(--border);color:var(--fg);border:1px solid transparent;border-radius:var(--radius);font-family:inherit;font-size:var(--text-base);line-height:1.2;text-decoration:none;cursor:pointer;}',
-	'.btn.primary{background:var(--accent);color:var(--bg);}',
+	// A fill that runs from the accent to its neighbour on the hue circle. The
+	// whole run is held to AA under --bg text (gradientPartner), so the label
+	// reads wherever it sits; the solid accent stays underneath for anything
+	// without gradient support.
+	'.btn.primary{background:var(--accent);background-image:linear-gradient(135deg,var(--accent),var(--accent-2));color:var(--bg);}',
 	'.btn.ghost{background:transparent;border:1px dashed var(--fg-dim);color:var(--fg-dim);}',
 	'.btn.danger{background:transparent;border-color:var(--danger);color:var(--danger);}',
 	'.btn.wide{width:100%;}',
@@ -205,8 +209,27 @@ const BASE_CONTROLS = [
 	// A chip is a toggle, so its outline is a control boundary and takes the
 	// 3:1 border rather than the separator colour it used to borrow.
 	'.chip{display:inline-flex;align-items:center;gap:.3rem;box-sizing:border-box;min-height:var(--tap);padding:.25rem .7rem;background:transparent;border:1px solid var(--control-border);border-radius:999px;color:var(--fg-dim);font-family:inherit;font-size:var(--text-base);cursor:pointer;}',
-	'.chip.on{border-color:var(--accent);color:var(--accent);}',
-	'.card{border:1px solid var(--border);border-radius:var(--radius-lg);padding:.9rem;margin-bottom:.9rem;}',
+	'.chip.on{border-color:var(--accent);color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent-wash),0 0 calc(var(--glow-size) * .8) -2px var(--glow);}',
+	// The edge is drawn by a pseudo-element masked to a 1px ring, so it can be a
+	// gradient and still follow the corner radius, which border-image cannot.
+	// The solid --border underneath is what shows where masks are unsupported.
+	'.card{position:relative;border:1px solid var(--border);border-radius:var(--radius-lg);padding:.9rem;margin-bottom:.9rem;background:var(--surface);}',
+	'.card::before,.edge::before{content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1px;background:linear-gradient(135deg,var(--edge),transparent 38%,transparent 62%,var(--edge));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0);pointer-events:none;}',
+	'.edge{position:relative;}',
+	// The raised surface for the rail, bars, sheets and popovers. Opaque, with no
+	// backdrop-filter, for two reasons found the hard way. Translucent, a popover
+	// over a white image in a reply composited to about #40414c and dim text fell
+	// to 2.34:1; the AA tests can only hold a colour that is actually drawn. And
+	// a backdrop-filter makes its element the containing block for every fixed
+	// descendant: on the rail it clipped the alerts panel at the rail's edge on a
+	// desktop and hid it inside the top strip on a phone.
+	'.glass{background:var(--surface-glass);}',
+	// A divider that fades out at both ends, so a section break reads as light
+	// across the panel rather than a ruled line.
+	'.rule{height:1px;border:none;margin:.9rem 0;background:linear-gradient(90deg,transparent,var(--edge) 20%,var(--border) 50%,var(--edge) 80%,transparent);}',
+	// The small uppercase label over a group, which seventy-odd rules each spelt
+	// out with their own letter-spacing.
+	'.eyebrow{font-size:var(--text-xs);letter-spacing:.16em;text-transform:uppercase;color:var(--label);}',
 	'.hint{font-size:var(--text-sm);color:var(--fg-dim);line-height:1.5;}',
 	'.notice{font-size:var(--text-base);color:var(--accent);}',
 	'.notice.error{color:var(--danger);}',
@@ -219,36 +242,67 @@ const BASE_CONTROLS = [
 	'.badge{display:inline-block;font-size:var(--text-xs);border:1px solid var(--accent);color:var(--accent);border-radius:3px;padding:0 .25rem;text-transform:uppercase;}',
 	'.tabs{display:flex;flex-wrap:wrap;gap:.3rem;border-bottom:1px solid var(--border);margin-bottom:1rem;}',
 	'.tabs button{background:none;border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--fg-dim);font-family:inherit;font-size:var(--text-md);padding:.5rem .8rem;cursor:pointer;}',
-	'.tabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent);}'
+	'.tabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent);}',
+	// Motion the components share instead of each declaring its own pulse.
+	'@keyframes galaxy-pulse{50%{opacity:.35}}',
+	'@keyframes galaxy-rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}',
+	'@media (prefers-reduced-motion: no-preference){.tabs button{transition:color var(--dur-1) var(--ease-out),border-color var(--dur-2) var(--ease-out);}.chip,.nav-item{transition:color var(--dur-1) var(--ease-out),background-color var(--dur-1) var(--ease-out),border-color var(--dur-1) var(--ease-out);}}'
 ];
 
-export function themeCss(t: Theme): string {
-	return [
-		FONT_FACE_CSS,
-		':root{',
-		`--bg:${t.bg};`,
-		`--bg-pane:${t.bgPane};`,
-		`--fg:${t.fg};`,
-		`--fg-dim:${t.fgDim};`,
-		`--heading:${t.heading};`,
-		`--label:${t.label};`,
-		`--galaxy:${t.galaxyColor};`,
-		`--accent:${t.accent};`,
-		`--border:${t.border};`,
+/**
+ * Every custom property a theme sets on :root, plus its colour scheme, as one
+ * map. themeCss writes the stylesheet from it and the theme editor's live
+ * preview applies it inline, so a token added here reaches both. The preview
+ * kept its own list once, and the derived tokens never made it in: previewing
+ * Paper over Galaxy drew Paper's dark text on Galaxy's dark cards at 1.39:1.
+ */
+export function themeVars(t: Theme): Record<string, string> {
+	const d = deriveTokens(t);
+	return {
+		'--bg': t.bg,
+		'--bg-pane': t.bgPane,
+		'--fg': t.fg,
+		'--fg-dim': t.fgDim,
+		'--heading': t.heading,
+		'--label': t.label,
+		'--galaxy': t.galaxyColor,
+		'--accent': t.accent,
+		'--border': t.border,
 		// Derived rather than configurable: a separator at 1.2:1 is fine, and a
 		// text field whose only boundary is that same colour is invisible. See
 		// controlBorder().
-		`--control-border:${controlBorder(t)};`,
-		`--danger:${t.danger};`,
-		`--font-ui:${fontStack(t.fontUi, 'ui')};`,
-		`--font-mono:${fontStack(t.fontMono, 'mono')};`,
+		'--control-border': controlBorder(t),
+		'--danger': t.danger,
+		'--font-ui': fontStack(t.fontUi, 'ui'),
+		'--font-mono': fontStack(t.fontMono, 'mono'),
+		'--radius': t.radius,
+		'--glow': t.glow,
+		'--glow-size': t.glowStrength,
+		'--accent-2': d.accent2,
+		'--accent-wash': d.accentWash,
+		'--surface': d.surface,
+		'--surface-glass': d.surfaceGlass,
+		'--edge': d.edge,
+		'--success': d.success,
+		// The browser's own controls and scrollbars, which follow this rather
+		// than the theme. app.html still says dark, for the paint before this
+		// style exists (the app renders client-side, and a light canvas there
+		// flashes white under a dark theme); this overrides it once it lands,
+		// so Paper stops drawing dark scrollbars and form controls.
+		'color-scheme': d.light ? 'light' : 'dark'
+	};
+}
+
+export function themeCss(t: Theme): string {
+	const vars = Object.entries(themeVars(t)).map(([name, value]) => `${name}:${value};`);
+	return [
+		FONT_FACE_CSS,
+		':root{',
+		...vars,
 		// Fixed, and deliberately not from the theme: the ASCII backdrop is art
 		// made of characters, and a proportional or oddly-proportioned font
 		// distorts the spiral. Nothing in Settings writes to this.
 		`--font-galaxy:${GALAXY_FONT_STACK};`,
-		`--radius:${t.radius};`,
-		`--glow:${t.glow};`,
-		`--glow-size:${t.glowStrength};`,
 		'}',
 		`html{font-size:${t.baseFont};}`,
 		// One scale, six steps, instead of the twenty-five ad-hoc sizes this
@@ -293,6 +347,18 @@ export function themeCss(t: Theme): string {
 		// JS by attachViewport(). Zero until something says otherwise, so a
 		// browser that cannot report it behaves as though the keyboard is shut.
 		'--kbd:0px;',
+		'}',
+		// Spacing, shadow and motion, named once so components stop inventing
+		// their own. Shadows darken by a fixed amount whatever the theme; on a
+		// light page they are softer because there is less to darken.
+		':root{',
+		'--space-1:.25rem;--space-2:.5rem;--space-3:.75rem;--space-4:1rem;--space-5:1.5rem;--space-6:2rem;',
+		'--shadow-1:0 1px 2px rgb(0 0 0 / .25),0 2px 8px rgb(0 0 0 / .18);',
+		'--shadow-2:0 6px 20px rgb(0 0 0 / .38);',
+		'--shadow-3:0 -8px 28px rgb(0 0 0 / .4);',
+		'--ease-out:cubic-bezier(.2,.8,.2,1);',
+		'--ease-spring:cubic-bezier(.32,1.25,.5,1);',
+		'--dur-1:120ms;--dur-2:200ms;--dur-3:320ms;',
 		'}',
 		// The stacking order, as names. Every one of these was a bare number in a
 		// component before, and the numbers had drifted into three clusters with
@@ -356,6 +422,10 @@ export function themeCss(t: Theme): string {
 		// The glow itself is not motion; the fade to it is. Anyone who has asked
 		// for less motion gets the state change without the animation.
 		'@media (prefers-reduced-motion: no-preference){button{transition:box-shadow .15s ease;}}',
+		// The safety net under every component's own opt-out. Nine animations had
+		// none, so a person who had asked for less motion still got pulses and
+		// slides; this stops all of them at once, and any added later.
+		'@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important;}}',
 		// These two used to be appended by +layout.svelte inside the same style
 		// tag, which made the claim above that this is the only place emitting
 		// global CSS untrue.
@@ -547,6 +617,152 @@ export function controlBorder(t: Theme, target = 3): string {
 		if (contrastRatio(mixed, bg) >= target) return mixed;
 	}
 	return t.fg;
+}
+
+/**
+ * Colours the interface derives from a theme rather than asking for: the second
+ * accent a gradient runs to, the glass a panel is made of, the hairline at an
+ * edge, a success green. Computed here, in hex, rather than with `color-mix()`
+ * or relative colour syntax in the stylesheet, so the AA tests can measure the
+ * very colour that is drawn. A derived colour nobody can test is a contrast
+ * regression waiting for the next preset.
+ */
+export interface DerivedTokens {
+	/** The accent turned about 48° round the hue circle, held to AA under --bg text. */
+	accent2: string;
+	/** Panels and cards: the pane leaned toward the page. */
+	surface: string;
+	/** What a glass panel looks like over the page, for when blur is unavailable. */
+	surfaceGlass: string;
+	/** The accent at a whisper over the pane, for an active row's wash. */
+	accentWash: string;
+	/** A border lit by the accent, where a hairline catches the light. */
+	edge: string;
+	/** Done, saved, passing. Held to AA on the pane. */
+	success: string;
+	/** Whether the page is light, which decides the colour-scheme the browser draws. */
+	light: boolean;
+}
+
+export function deriveTokens(t: Theme): DerivedTokens {
+	const bg = parseHex(t.bg) ?? [5, 6, 15];
+	const light = luminance(bg) > 0.4;
+	const pane = t.bgPane;
+	return {
+		accent2: gradientPartner(t.accent, t.bg),
+		surface: mixHex(pane, t.bg, 0.6),
+		surfaceGlass: mixHex(pane, t.bg, GLASS_ALPHA),
+		accentWash: mixHex(t.accent, pane, 0.12),
+		edge: mixHex(t.accent, t.border, 0.45),
+		success: withContrast(light ? '#1f7a45' : '#5fcf8a', pane, 4.5),
+		light
+	};
+}
+
+/** How much of the pane a raised surface carries over the page colour. */
+const GLASS_ALPHA = 0.78;
+
+/**
+ * The second stop of the primary button's gradient: the accent's neighbour on
+ * the hue circle, held to AA against --bg at every point the browser paints
+ * between the two stops. Checking only the ends missed a saved theme with
+ * accent #0077ff, which passed at both while the sRGB midpoint, #5162f2, sat
+ * at 4.21:1 under the label. The partner is pushed further until the whole run
+ * passes; if nothing does, the button stays flat on the accent, as it was.
+ */
+function gradientPartner(accent: string, bg: string): string {
+	const turned = rotateHue(accent, 48);
+	for (let min = 4.5; min <= 21; min += 0.25) {
+		const end = withContrast(turned, bg, min);
+		let reads = true;
+		for (let i = 0; i <= 20 && reads; i++) reads = contrastRatio(bg, mixHex(end, accent, i / 20)) >= 4.5;
+		if (reads) return end;
+	}
+	return accent;
+}
+
+/**
+ * `a` laid over `b` at weight `t`, the way a browser composites, in sRGB.
+ *
+ * A colour that is not hex (a theme may carry `white` or `rgb(...)`, which
+ * normalizeTheme accepts) cannot be mixed here, and then the answer is
+ * whichever of the two dominates. It used to be `a` regardless, which made
+ * the active row's wash, 12% accent over the pane, a solid accent: Void with
+ * `accent: 'white'` drew pale text on a white row.
+ */
+export function mixHex(a: string, b: string, t: number): string {
+	const ca = parseHex(a);
+	const cb = parseHex(b);
+	if (!ca || !cb) return t >= 0.5 ? a : b;
+	return hexOf(ca.map((v, i) => v * t + cb[i] * (1 - t)) as [number, number, number]);
+}
+
+/** sRGB hex to OKLCH, the space where turning the hue keeps lightness put. */
+export function hexToOklch(hex: string): [number, number, number] | null {
+	const c = parseHex(hex);
+	if (!c) return null;
+	const [r, g, b] = c.map((v) => {
+		const x = v / 255;
+		return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+	});
+	const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+	const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+	const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+	const L = 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s;
+	const A = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
+	const B = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
+	const C = Math.hypot(A, B);
+	const H = ((Math.atan2(B, A) * 180) / Math.PI + 360) % 360;
+	return [L, C, H];
+}
+
+/** OKLCH back to sRGB hex, clipped into gamut. */
+export function oklchToHex([L, C, H]: [number, number, number]): string {
+	const h = (H * Math.PI) / 180;
+	const A = C * Math.cos(h);
+	const B = C * Math.sin(h);
+	const l = Math.pow(L + 0.3963377774 * A + 0.2158037573 * B, 3);
+	const m = Math.pow(L - 0.1055613458 * A - 0.0638541728 * B, 3);
+	const s = Math.pow(L - 0.0894841775 * A - 1.291485548 * B, 3);
+	const rgb = [
+		4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+		-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+		-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s
+	].map((x) => {
+		const v = Math.max(0, Math.min(1, x));
+		return 255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);
+	});
+	return hexOf(rgb as [number, number, number]);
+}
+
+function rotateHue(hex: string, degrees: number): string {
+	const lch = hexToOklch(hex);
+	// A grey has no hue to turn; it stays itself and the gradient is flat.
+	if (!lch || lch[1] < 0.02) return hex;
+	return oklchToHex([lch[0], lch[1], (lch[2] + degrees) % 360]);
+}
+
+/**
+ * The colour, moved in lightness until text in `against` reads on it (or it
+ * reads on `against`) at `min`, by the smallest shift either way. Unchanged if
+ * it already passes.
+ *
+ * Both directions are tried in step. Picking one from the ground's luminance
+ * chose lighter for anything under 0.4, and a mid grey such as #999999 is
+ * under it while white cannot reach 4.5:1 against it: the derived accent came
+ * out white at 2.85:1 where black would have given 7.4.
+ */
+function withContrast(hex: string, against: string, min: number): string {
+	if (contrastRatio(hex, against) >= min) return hex;
+	const lch = hexToOklch(hex);
+	if (!lch || !parseHex(against)) return hex;
+	const at = (l: number) => oklchToHex([Math.max(0, Math.min(1, l)), lch[1], lch[2]]);
+	for (let i = 1; i <= 100; i++) {
+		for (const next of [at(lch[0] - 0.01 * i), at(lch[0] + 0.01 * i)]) {
+			if (contrastRatio(next, against) >= min) return next;
+		}
+	}
+	return contrastRatio('#000000', against) >= contrastRatio('#ffffff', against) ? '#000000' : '#ffffff';
 }
 
 function hexOf([r, g, b]: [number, number, number]): string {

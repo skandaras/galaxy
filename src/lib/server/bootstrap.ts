@@ -9,11 +9,21 @@ import {
 	type ResearchSettings,
 	type WebSearchSettings
 } from '$lib/server/settings';
-import { taskConfigs, CORE_TASKS, skills } from '$lib/server/db/schema';
-import { WRITE_SOURCE_NOTE_SKILL } from '$lib/server/ivory/notes';
-import { and, eq } from 'drizzle-orm';
-import { saveSkill } from '$lib/server/skills';
-import { deleteEmptyChats } from '$lib/server/chats';
+import {
+	taskConfigs,
+	taskPromptVersions,
+	CORE_TASKS,
+	chats,
+	events,
+	mcpServers,
+	settings,
+	skillCandidates,
+	skills,
+	toolSettings
+} from '$lib/server/db/schema';
+import { and, eq, inArray, like, or } from 'drizzle-orm';
+import { deleteSkill, normalizeTasks, saveSkill } from '$lib/server/skills';
+import { deleteChat, deleteEmptyChats } from '$lib/server/chats';
 import { DEFAULT_PROMPTS } from '$lib/server/engine/prompts';
 
 
@@ -137,57 +147,6 @@ There is **no** write path, no live selection context, no design-system variable
 - **Empty result for a node** — the node id is wrong, or the token's scope doesn't cover that file (e.g. a library file needs \`library_content:read\`).
 `;
 
-const WRITE_SOURCE_NOTE_BODY = `## When to use
-
-Writing a note about one source for an Ivory Tower project: one note per paper, book or page, in the project's \`notes/\` folder.
-
-## The file
-
-Name it \`notes/N-<number>-<first author>-<year>.md\`, e.g. \`notes/N-003-hamilton-1964.md\`. Numbers are unique within the project; read \`notes/\` first and take the next one.
-
-\`\`\`markdown
----
-id: N-003
-project: <filled in for you>
-title: "Full title of the source"
-authors: [W. D. Hamilton]
-year: 1964
-doi_or_url: "https://doi.org/10.1016/0022-5193(64)90038-4"
-access: full-text            # or abstract-only, when you did not read the full text
-read_by: <filled in for you>
-task: <filled in for you>
----
-
-# Short title
-
-## Summary
-Three to five sentences in your own words: what the source argues or shows, and how.
-
-## Claims extracted
-
-### N-003.1
-- Claim: One sentence stating what the source claims.
-- Quote: "a short passage copied word for word"
-- Location: section 2, page 7 (or figure 3, or "abstract")
-- Confidence the source supports it: direct
-
-## Relevance to the project
-One or two sentences linking the source to the brief's question.
-
-## Follow-ups
-Optional: cited works worth reading, open questions.
-\`\`\`
-
-## The rules
-
-- **No quote, no claim.** Every claim carries a short quote copied exactly from what you read in this run, and its location. If you cannot quote it, leave the claim out. The quote is checked against what you actually read before the note is written.
-- **Keep quotes short**: a phrase or a sentence, at least three words, enough to find the passage.
-- **access says what you read.** \`full-text\` only if you read the full text. From an abstract alone it is \`abstract-only\`, and the claims can only come from the abstract.
-- **direct or indirect.** \`direct\` when the source says it outright; \`indirect\` when it follows from what the source says but is not stated.
-- **Claims the project needs, not every claim.** Extract what bears on the brief's question, including anything that cuts against the project's idea.
-- **Your words in the summary, the source's words in the quote.** Do not paraphrase inside a quote, and do not add what the source does not say.
-`;
-
 /**
  * Idempotent boot seeding for bundled skills. These are written once (if
  * absent) and from then on owned by the user — editing or deleting them in
@@ -213,22 +172,12 @@ export function seedSkills(): void {
 		tasks: 'chat',
 		body: TYPST_SKILL_BODY
 	});
-	seedSkill(WRITE_SOURCE_NOTE_SKILL, {
-		category: 'ivory-tower',
-		description:
-			'The note format for Ivory Tower source notes: frontmatter, claims with verbatim quotes and locations, and what access means.',
-		triggers: 'ivory tower, source note, reading notes, shelf, ivory-read',
-		// The reader is handed this body directly; no other agent writes notes.
-		tasks: 'ivory-read',
-		body: WRITE_SOURCE_NOTE_BODY
-	});
 	scopeSeededSkills();
 }
 
 const SEEDED_SKILL_TASKS: Record<string, string> = {
 	'figma-reading': 'chat',
-	typst: 'chat',
-	[WRITE_SOURCE_NOTE_SKILL]: 'ivory-read'
+	typst: 'chat'
 };
 const SKILL_SCOPE_KEY = 'skills.seedScopeVersion';
 
@@ -334,6 +283,107 @@ export function migrateChats(): void {
 }
 
 const EMPTY_CHAT_SWEEP_KEY = 'chats.emptySweepVersion';
+
+const IVORY_TASK = /^ivory-/;
+const IVORY_TOOLS = ['paper_search', 'read_paper', 'shelf_read', 'shelf_write', 'set_status', 'propose_tasks'];
+
+/**
+ * What Ivory Tower left in the database and on disk, removed on every boot.
+ *
+ * Migration 0052 did the rows first, but a migration runs once, and this app
+ * can be rolled back to the image before the switch-off and promoted again:
+ * that image re-seeds the four task rows and write-source-note, and anyone can
+ * start an Ivory run while it is live. So this looks for the leftovers rather
+ * than trusting a stamp, and on a clean install every query finds nothing.
+ *
+ * `deleteSkill` removes the skill's folder from the skills repository and
+ * returns early when the row is gone, which is why the migration left that row
+ * to this. `deleteChat` takes a chat's uploads, jobs, events and notifications
+ * with it.
+ */
+export function removeIvoryTower(): void {
+	const removed: string[] = [];
+	const count = (n: number, what: string) => {
+		if (n) removed.push(`${what} (${n})`);
+	};
+
+	count(db.delete(taskConfigs).where(like(taskConfigs.task, 'ivory-%')).run().changes, 'task configs');
+	db.delete(taskPromptVersions).where(like(taskPromptVersions.task, 'ivory-%')).run();
+	count(
+		db.delete(settings).where(inArray(settings.key, ['ivory', 'ivory-run', 'ivory-plan'])).run()
+			.changes,
+		'settings'
+	);
+	db.delete(toolSettings).where(inArray(toolSettings.name, IVORY_TOOLS)).run();
+	if (deleteSkill('write-source-note')) removed.push('the write-source-note skill');
+	db.delete(skillCandidates).where(eq(skillCandidates.name, 'write-source-note')).run();
+
+	const ivoryChats = db
+		.select({ id: chats.id, userId: chats.userId })
+		.from(chats)
+		.where(like(chats.agentTask, 'ivory-%'))
+		.all();
+	for (const c of ivoryChats) deleteChat(c.id, c.userId);
+	count(ivoryChats.length, 'chats');
+	// Events written without a chat (setup, project creation) or for a chat that
+	// was already gone.
+	db.delete(events)
+		.where(or(like(events.task, 'ivory-%'), like(events.name, 'ivory.%')))
+		.run();
+
+	// Task scopes that named an Ivory agent. An empty skill scope means every
+	// task, so a skill or candidate that was only ever for Ivory is switched off
+	// or dropped rather than left to widen to all of them.
+	for (const row of db.select().from(skills).all()) {
+		const kept = withoutIvory(row.tasks);
+		if (kept === row.tasks) continue;
+		db.update(skills)
+			.set(kept ? { tasks: kept } : { tasks: kept, enabled: false })
+			.where(eq(skills.id, row.id))
+			.run();
+	}
+	const orphaned: string[] = [];
+	for (const row of db.select().from(skillCandidates).all()) {
+		const kept = withoutIvory(row.tasks);
+		if (kept === row.tasks) continue;
+		if (kept) {
+			db.update(skillCandidates).set({ tasks: kept }).where(eq(skillCandidates.id, row.id)).run();
+		} else {
+			orphaned.push(row.id);
+		}
+	}
+	if (orphaned.length) db.delete(skillCandidates).where(inArray(skillCandidates.id, orphaned)).run();
+	// A tool or MCP server restricted to a list is the other way round: an empty
+	// list allows nothing, but Admin draws one with no surviving task as "no
+	// restriction". Switching it off says what it actually does.
+	for (const row of db.select().from(toolSettings).all()) {
+		const kept = row.tasks?.filter((t) => !IVORY_TASK.test(t));
+		if (!row.tasks || kept!.length === row.tasks.length) continue;
+		db.update(toolSettings)
+			.set(kept!.length ? { tasks: kept } : { tasks: null, enabled: false })
+			.where(eq(toolSettings.name, row.name))
+			.run();
+	}
+	for (const row of db.select().from(mcpServers).all()) {
+		const kept = row.tasks?.filter((t) => !IVORY_TASK.test(t));
+		if (!row.tasks || kept!.length === row.tasks.length) continue;
+		db.update(mcpServers)
+			.set(kept!.length ? { tasks: kept } : { tasks: null, enabled: false })
+			.where(eq(mcpServers.id, row.id))
+			.run();
+	}
+
+	if (removed.length) console.log(`Removed what Ivory Tower left: ${removed.join(', ')}.`);
+}
+
+/** A comma-separated task scope with the Ivory agents taken out. */
+function withoutIvory(tasks: string): string {
+	const kept = normalizeTasks(tasks)
+		.split(', ')
+		.filter((t) => t && !IVORY_TASK.test(t))
+		.join(', ');
+	return kept === normalizeTasks(tasks) ? tasks : kept;
+}
 
 export function migrateSettings(): void {
 	const search = migrateWebSearchSettings(

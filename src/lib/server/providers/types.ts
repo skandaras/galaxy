@@ -15,11 +15,43 @@ export interface ToolCall {
 	arguments: string;
 }
 
+/**
+ * One block of a model's structured reasoning, as OpenRouter returns it in
+ * `reasoning_details`: plain text, a summary, or an encrypted blob, any of them
+ * with a signature. Opaque to us. The only thing done with one is to hand it
+ * back, unmodified and in order, on the next request of the same tool chain.
+ * Unknown fields are carried for the same reason.
+ */
+export interface ReasoningDetail {
+	type: string;
+	index?: number;
+	id?: string | null;
+	format?: string | null;
+	text?: string;
+	summary?: string;
+	data?: string;
+	signature?: string | null;
+	[key: string]: unknown;
+}
+
 export interface ProviderMessage {
 	role: 'system' | 'user' | 'assistant' | 'tool';
 	content: MessageContent;
 	tool_call_id?: string;
 	tool_calls?: ToolCall[];
+	/**
+	 * The reasoning that produced this assistant message's tool calls, and the
+	 * model row that produced it.
+	 *
+	 * Anthropic's thinking with tools and Gemini's thought signatures both
+	 * expect the reasoning back on the tool-call message when the chain
+	 * continues; without it the model loses its train of thought between steps,
+	 * and some endpoints refuse the request. The model id travels with the
+	 * blocks because a signature is only good at the endpoint that issued it:
+	 * failover strips anything tagged with another row (see `forModel` in
+	 * loop.ts). Never persisted, never sent to the browser.
+	 */
+	reasoningDetails?: { modelId: string; items: ReasoningDetail[] };
 }
 
 export interface ToolDef {
@@ -63,6 +95,13 @@ export interface Usage {
 	 * different answers.
 	 */
 	reasoningTokens?: number;
+	/**
+	 * What the provider says the call cost, in USD, when it says (OpenRouter's
+	 * `usage.cost`). The only honest price for an image model, which is billed
+	 * per image or per megapixel rather than by the token rates on its row.
+	 * Optional like the fields above: absent is "not said", not "free".
+	 */
+	costUsd?: number;
 }
 
 export type StreamEvent =
@@ -89,6 +128,11 @@ export type StreamEvent =
 	 * bytes arrived.
 	 */
 	| { type: 'progress' }
+	/**
+	 * The structured reasoning of this completion, assembled from its stream
+	 * fragments, emitted once and before `tool_calls`. Only when there was some.
+	 */
+	| { type: 'reasoning_details'; details: ReasoningDetail[] }
 	| { type: 'tool_calls'; calls: ToolCall[] }
 	| { type: 'usage'; usage: Usage }
 	| { type: 'done'; finishReason: string | null };
@@ -137,6 +181,53 @@ export interface ChatRequest {
 	 * every other call makes.
 	 */
 	modalities?: string[];
+	/**
+	 * Shape of a drawn image on the chat-completions path, as OpenRouter takes
+	 * it: `aspect_ratio` and `image_size` (1K, 2K, 4K). Sent only when set, for
+	 * the same reason as `modalities`.
+	 */
+	imageConfig?: { aspect_ratio?: string; image_size?: string };
+	/**
+	 * OpenRouter's provider routing, to hold the serving endpoint fixed while
+	 * something else is compared. Sent as given and only when given; nothing in
+	 * production sets it, only the evaluation runner.
+	 */
+	provider?: ProviderRouting;
+}
+
+/** The subset of OpenRouter's `provider` object a comparison needs. */
+export interface ProviderRouting {
+	order?: string[];
+	only?: string[];
+	allow_fallbacks?: boolean;
+	require_parameters?: boolean;
+}
+
+/**
+ * A request to OpenRouter's Image API, which takes what chat completions has no
+ * field for: several reference images, a count, quality, a transparent
+ * background, an output format, a seed. Every option is optional and sent only
+ * when set, because providers clamp or refuse what they do not support.
+ */
+export interface ImageRequest {
+	modelKey: string;
+	prompt: string;
+	/** Images to work from, as data or https URLs. */
+	references?: string[];
+	n?: number;
+	resolution?: string;
+	aspectRatio?: string;
+	size?: string;
+	quality?: 'auto' | 'low' | 'medium' | 'high';
+	outputFormat?: 'png' | 'jpeg' | 'webp' | 'svg';
+	background?: 'auto' | 'transparent' | 'opaque';
+	outputCompression?: number;
+	seed?: number;
+}
+
+export interface ImageResult {
+	images: GeneratedImage[];
+	usage: Usage | null;
 }
 
 /** An image a model produced, decoded from the data URL it arrived as. */
@@ -155,6 +246,10 @@ export interface RemoteModel {
 	completionCostPerMTok: number | null;
 	/** The model draws: it returns images as well as text. */
 	supportsImageOutput: boolean;
+	/** It returns images and never text: see `models.imageOnly`. */
+	imageOnly: boolean;
+	/** Served on OpenRouter's Image API: see `models.imageApi`. */
+	imageApi: boolean;
 	/**
 	 * The model accepts being told how hard to think — it advertises `reasoning`
 	 * among its supported parameters.
@@ -189,6 +284,11 @@ export interface ProviderAdapter {
 	stream(req: ChatRequest, signal?: AbortSignal): AsyncGenerator<StreamEvent>;
 	complete(req: ChatRequest, signal?: AbortSignal): Promise<CompletionResult>;
 	listModels(signal?: AbortSignal): Promise<RemoteModel[]>;
+	/**
+	 * The dedicated Image API, where the endpoint has one. Absent means drawing
+	 * goes through `complete` with the image modality.
+	 */
+	generateImages?(req: ImageRequest, signal?: AbortSignal): Promise<ImageResult>;
 }
 
 export class ProviderHttpError extends Error {

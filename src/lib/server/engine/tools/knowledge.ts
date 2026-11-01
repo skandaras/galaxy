@@ -1,17 +1,19 @@
 import type { LoopTool } from '../loop';
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { skillCandidates, skills } from '$lib/server/db/schema';
+import { skillCandidates } from '$lib/server/db/schema';
 import {
 	getSkill,
 	normalizeSkillName,
 	normalizeTasks,
+	proposeSkillPatch,
 	readSkillFile,
 	skillDir,
 	skillFiles,
-	skillIndexText
+	skillIndexText,
+	skillNameSeen
 } from '$lib/server/skills';
+import { readEdits } from '$lib/skill-patch';
 import { repoSkills, safeJoin } from '../coding/workspace';
 import {
 	docPath,
@@ -36,7 +38,16 @@ import { profileTools } from './profile';
  * what skills and Library knowledge exist. Bodies load on demand through the
  * knowledge tools (progressive disclosure — the index stays cheap).
  */
-export function bootstrapContext(userId: string, task?: string): string {
+export function bootstrapContext(
+	userId: string,
+	task?: string,
+	/**
+	 * Leave out the Library index and the boards digest, tools still offered.
+	 * Only the evaluation runner asks for it, to measure whether a lighter
+	 * prompt answers everyday questions better; nothing in production does.
+	 */
+	opts: { lean?: boolean } = {}
+): string {
 	const profile = task ? profileBlock(userId, task) : '';
 	return [
 		// First, because it changes least. A write to the Library or a board
@@ -48,12 +59,16 @@ export function bootstrapContext(userId: string, task?: string): string {
 		// Only this person's skills and shared ones, and only those meant for
 		// this task: a coding prompt has no use for the Figma skill's line.
 		skillIndexText(userId, task),
-		'',
-		'[Library index: a line per folder, naming what sits at the top of it and nothing nested inside that. These are the docs you can see: your own plus anything shared. A "(N beneath)" is a whole subtree collapsed to one number: open it with library_tree. This is a catalogue, not their contents: search inside them with library_search, read one with library_read, save durable knowledge with library_write, filed inside an existing document wherever it belongs under one, which costs this block nothing]',
-		libraryDigest(userId),
-		'',
-		'[Task boards: yours plus any shared with you. Read them with board_read, one card in full with card_read]',
-		boardsDigest(userId)
+		...(opts.lean
+			? []
+			: [
+					'',
+					'[Library index: a line per folder, naming what sits at the top of it and nothing nested inside that. These are the docs you can see: your own plus anything shared. A "(N beneath)" is a whole subtree collapsed to one number: open it with library_tree. This is a catalogue, not their contents: search inside them with library_search, read one with library_read, save durable knowledge with library_write, filed inside an existing document wherever it belongs under one, which costs this block nothing]',
+					libraryDigest(userId),
+					'',
+					'[Task boards: yours plus any shared with you. Read them with board_read, one card in full with card_read]',
+					boardsDigest(userId)
+				])
 	].join('\n');
 }
 
@@ -86,21 +101,27 @@ export function knowledgeTools(
 	} = {}
 ): LoopTool[] {
 	/** The folder and body of a skill this person may load, repository first. */
-	const resolveSkill = (name: string): { dir: string; body: string } | null => {
+	const resolveSkill = (name: string): { dir: string; body: string; fromRepo: boolean } | null => {
 		if (opts.repo) {
 			const found = repoSkills(opts.repo).find((s) => s.name === name);
 			if (found) {
 				const dir = safeJoin(opts.repo, found.dirRel);
 				const raw = readSkillFile(dir, 'SKILL.md', toolResultMaxChars());
-				return { dir, body: raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '') };
+				return { dir, body: raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, ''), fromRepo: true };
 			}
 		}
 		const stored = getSkill(name, userId);
 		if (!stored || !stored.meta.enabled) return null;
-		return { dir: skillDir(stored.meta), body: stored.body };
+		return { dir: skillDir(stored.meta), body: stored.body, fromRepo: false };
 	};
 	// One proposal a turn: a second in the same turn is a list, not a noticed pattern.
 	let proposed = false;
+	/**
+	 * The skills loaded this turn, and whether each came from the repository. A
+	 * change may only be proposed to one of these: the agent has to have read
+	 * the text its edits quote.
+	 */
+	const loaded = new Map<string, { fromRepo: boolean }>();
 
 	const tools: LoopTool[] = [
 		{
@@ -120,6 +141,7 @@ export function knowledgeTools(
 			execute: async (a) => {
 				const skill = resolveSkill(String(a.name ?? ''));
 				if (!skill) throw new Error(`No such skill: ${a.name}`);
+				loaded.set(String(a.name ?? ''), { fromRepo: skill.fromRepo });
 				const files = skillFiles(skill.dir);
 				return files.length
 					? `${skill.body}\n\n[Files in this skill, for skill_read: ${files.join(', ')}]`
@@ -190,16 +212,15 @@ export function knowledgeTools(
 				const name = normalizeSkillName(String(a.name ?? ''));
 				const body = String(a.body ?? '').trim();
 				if (!name || !body) throw new Error('name and body are required');
-				// Every name ever proposed, whatever became of it: a rejection is a
-				// decision, and the learning job reads the same table for the same reason.
-				const taken =
-					db.select({ id: skills.id }).from(skills).where(eq(skills.name, name)).get() ??
-					db
-						.select({ id: skillCandidates.id })
-						.from(skillCandidates)
-						.where(eq(skillCandidates.name, name))
-						.get();
-				if (taken) throw new Error(`A skill called ${name} already exists or was already proposed`);
+				// Every name this person has, or has ever proposed: a rejection is a
+				// decision. Only theirs, though; a name taken by someone else's
+				// personal skill is not theirs to know about, and approval saves
+				// under a free name instead (see decideCandidate).
+				if (skillNameSeen(userId, name)) {
+					throw new Error(
+						`You already have a skill called ${name}, or proposed one. If it needs changing, load it with skill_load and propose the change with propose_skill_update.`
+					);
+				}
 				db.insert(skillCandidates)
 					.values({
 						id: randomUUID(),
@@ -305,11 +326,19 @@ export function knowledgeTools(
 				}
 			},
 			describe: (a) => String(a.title ?? ''),
-			execute: async (a) => {
+			// The reference alone. Who may see a document can change, and a re-read
+			// goes back through the visibility check in SQL, where an excerpt kept
+			// here would carry on outliving an unshare.
+			evidence: (_a, _output, meta) =>
+				typeof meta.docId === 'string'
+					? { ref: meta.docId, title: String(meta.title ?? ''), excerpt: '' }
+					: null,
+			execute: async (a, report) => {
 				const ref = String(a.title ?? '');
 				const meta = findDocByTitle(ref, userId);
 				const doc = meta ? getDoc(meta.id, userId) : getDoc(ref, userId);
 				if (!doc) throw new Error(`No Library doc matching "${ref}"`);
+				report?.({ docId: doc.meta.id, title: doc.meta.title });
 				// Where it sits, so an agent reading a nested document knows what it
 				// belongs to without walking back up by hand.
 				const path = docPath(doc.meta.id, userId);
@@ -378,5 +407,80 @@ export function knowledgeTools(
 	if (opts.task) {
 		tools.push(...profileTools(userId, { task: opts.task, chatId: opts.chatId, hidden: opts.hidden }));
 	}
-	return opts.hidden ? tools.filter((t) => t.def.name !== 'propose_skill') : tools;
+	tools.push({
+		def: {
+			name: 'propose_skill_update',
+			description:
+				'Propose a change to a skill you loaded with skill_load this turn: exact edits, each ' +
+				'replacing one passage of its instructions with new text. Use it when following the ' +
+				'skill went wrong, or found a step it is missing, or the person corrected how it is ' +
+				'done, in a way that will hold next time. Copy each old passage exactly from what ' +
+				'skill_load returned, with enough of it to name one place. It goes to whoever decides ' +
+				'that skill and changes nothing until they approve it. Shares the one proposal a turn ' +
+				'with propose_skill.',
+			parameters: {
+				type: 'object',
+				properties: {
+					name: { type: 'string', description: 'The skill, as skill_load named it' },
+					edits: {
+						type: 'array',
+						description: 'In order. Each old_string must appear exactly once in the skill.',
+						items: {
+							type: 'object',
+							properties: {
+								old_string: { type: 'string' },
+								new_string: { type: 'string' }
+							},
+							required: ['old_string', 'new_string']
+						}
+					},
+					rationale: {
+						type: 'string',
+						description: 'What in this conversation shows the skill needs this'
+					},
+					description: { type: 'string', description: 'A new one-line description, if it needs one' },
+					triggers: { type: 'string', description: 'New comma-separated triggers, if they need changing' }
+				},
+				required: ['name', 'edits', 'rationale']
+			}
+		},
+		describe: (a) => String(a.name ?? ''),
+		execute: async (a) => {
+			if (proposed) throw new Error('One skill proposal a turn. Mention any other in your reply.');
+			const name = String(a.name ?? '').trim();
+			const seen = loaded.get(name);
+			if (!seen) throw new Error(`Load ${name || 'the skill'} with skill_load first, and quote your edits from it.`);
+			if (seen.fromRepo) {
+				throw new Error(
+					`${name} is this repository's own skill. Edit .agents/skills/${name}/SKILL.md as part of the change instead.`
+				);
+			}
+			const edits = readEdits(a.edits);
+			if ('problem' in edits) throw new Error(edits.problem);
+			const stored = getSkill(name, userId);
+			if (!stored) throw new Error(`No such skill: ${name}`);
+			proposeSkillPatch({
+				userId,
+				skill: stored,
+				patch: {
+					edits,
+					...(typeof a.description === 'string' && a.description.trim()
+						? { description: a.description.trim().slice(0, 300) }
+						: {}),
+					...(typeof a.triggers === 'string' && a.triggers.trim()
+						? { triggers: a.triggers.trim().slice(0, 300) }
+						: {})
+				},
+				rationale: String(a.rationale ?? '')
+			});
+			proposed = true;
+			return stored.meta.ownerId === userId
+				? `Proposed a change to ${name}. It waits for the person's approval on their Profile page; say so in your reply.`
+				: `Proposed a change to ${name}. It is a shared skill, so an admin decides it in Admin; say so in your reply.`;
+		}
+	});
+	// A hidden chat is never written to the database, and a proposal is a record of it.
+	return opts.hidden
+		? tools.filter((t) => t.def.name !== 'propose_skill' && t.def.name !== 'propose_skill_update')
+		: tools;
 }

@@ -8,3 +8,5 @@ data
 .env.*
 PLAN.md
 README.md
+archive
+eval-out

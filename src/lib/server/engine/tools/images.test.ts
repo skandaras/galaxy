@@ -18,7 +18,10 @@ const PIXEL =
 
 let scripted: { text?: string; images?: { mime: string; base64: string }[] } = {};
 let requests: Record<string, unknown>[] = [];
+let imageApiRequests: Record<string, unknown>[] = [];
 let modelRow: Record<string, unknown> | null = null;
+/** Whether the scripted adapter offers OpenRouter's Image API. */
+let imageApi = false;
 
 vi.mock('../engine', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('../engine')>();
@@ -54,14 +57,25 @@ vi.mock('$lib/server/providers/registry', async (importOriginal) => {
 									finishReason: 'stop',
 									...(scripted.images ? { images: scripted.images } : {})
 								};
-							}
+							},
+							...(imageApi
+								? {
+										generateImages: async (req: Record<string, unknown>) => {
+											imageApiRequests.push(req);
+											return {
+												images: scripted.images ?? [],
+												usage: { promptTokens: 0, completionTokens: 0, costUsd: 0.04 }
+											};
+										}
+									}
+								: {})
 						}
 					}
 				: null
 	};
 });
 
-const { imageTools } = await import('./images');
+const { imageTools, readImageOptions } = await import('./images');
 
 const USER = 'user-ada';
 const byName = (tools: LoopTool[], name: string) => tools.find((t) => t.def.name === name)!;
@@ -73,6 +87,8 @@ beforeAll(() => {
 beforeEach(() => {
 	for (const t of [attachments, messages, chats, usageLog]) db.delete(t).run();
 	requests = [];
+	imageApiRequests = [];
+	imageApi = false;
 	scripted = { images: [{ mime: 'image/png', base64: PIXEL }] };
 	modelRow = {
 		id: 'model-visual',
@@ -188,6 +204,102 @@ describe('generate_image', () => {
 		await expect(
 			byName(t, 'generate_image').execute({ prompt: 'a barn', reference_attachment_id: 'nope' })
 		).rejects.toThrow(/No attachment with id nope/);
+	});
+
+	it('works from several references, in the order given', async () => {
+		const { chatId, tools: t } = tools();
+		await byName(t, 'generate_image').execute({ prompt: 'a barn' });
+		await byName(t, 'generate_image').execute({ prompt: 'a field' });
+		const [barn, field] = listAttachments(chatId);
+		await byName(t, 'generate_image').execute({
+			prompt: 'the barn standing in the field',
+			reference_attachment_ids: [barn.id, field.id]
+		});
+		const content = (requests[2].messages as { role: string; content: unknown }[]).find(
+			(m) => m.role === 'user'
+		)?.content as { type: string }[];
+		expect(content.map((c) => c.type)).toEqual(['text', 'image_url', 'image_url']);
+	});
+
+	it('asks a model that only draws for the image alone, and passes the shape it was given', async () => {
+		modelRow = { ...modelRow, imageOnly: true };
+		const { tools: t } = tools();
+		await byName(t, 'generate_image').execute({ prompt: 'a banner', aspect_ratio: '16:9', resolution: '2K' });
+		expect(requests[0].modalities).toEqual(['image']);
+		expect(requests[0].imageConfig).toEqual({ aspect_ratio: '16:9', image_size: '2K' });
+	});
+
+	it('refuses, by name, an option chat completions cannot carry, before any call', async () => {
+		const { tools: t } = tools();
+		await expect(
+			byName(t, 'generate_image').execute({ prompt: 'a logo', quality: 'high', n: 2 })
+		).rejects.toThrow(/cannot set quality, n/);
+		expect(requests).toHaveLength(0);
+	});
+
+	describe('through the Image API', () => {
+		it('is used only for a model the Image API serves, whatever the provider offers', async () => {
+			// openrouter/auto and its kind draw, but answer only on chat completions.
+			imageApi = true;
+			const { tools: t } = tools();
+			await byName(t, 'generate_image').execute({ prompt: 'a barn' });
+			expect(imageApiRequests).toHaveLength(0);
+			expect(requests).toHaveLength(1);
+		});
+
+		it('sends the references and every option asked for, with the owner\'s direction ahead of the prompt', async () => {
+			imageApi = true;
+			modelRow = { ...modelRow, imageApi: true };
+			const { chatId, tools: t } = tools();
+			await byName(t, 'generate_image').execute({ prompt: 'a barn' });
+			const [barn] = listAttachments(chatId);
+			await byName(t, 'generate_image').execute({
+				prompt: 'the barn as a sticker',
+				reference_attachment_ids: [barn.id],
+				background: 'transparent',
+				quality: 'high',
+				n: 2,
+				seed: 7
+			});
+			const sent = imageApiRequests[1];
+			expect(sent.prompt).toBe('you draw\n\nthe barn as a sticker');
+			expect(sent).toMatchObject({ background: 'transparent', outputFormat: 'png', quality: 'high', n: 2, seed: 7 });
+			expect((sent.references as string[])[0]).toMatch(/^data:image\/png;base64,/);
+			expect(requests).toHaveLength(0);
+		});
+
+		it('logs the price the provider named', async () => {
+			imageApi = true;
+			modelRow = { ...modelRow, imageApi: true };
+			const { tools: t } = tools();
+			await byName(t, 'generate_image').execute({ prompt: 'a barn' });
+			const row = db.select().from(usageLog).all().at(-1)!;
+			expect(row.costUsd).toBeCloseTo(0.04);
+		});
+	});
+});
+
+describe('readImageOptions', () => {
+	it('returns only what was asked for', () => {
+		expect(readImageOptions({ prompt: 'x' })).toEqual({ options: {} });
+		expect(readImageOptions({ aspect_ratio: 'auto', n: 1 })).toEqual({ options: { aspectRatio: 'auto' } });
+		expect(readImageOptions({ aspect_ratio: '19.5:9' })).toEqual({ options: { aspectRatio: '19.5:9' } });
+	});
+
+	it('gives a transparent background a format that can hold one', () => {
+		expect(readImageOptions({ background: 'transparent' })).toEqual({
+			options: { background: 'transparent', outputFormat: 'png' }
+		});
+		expect(readImageOptions({ background: 'transparent', output_format: 'jpeg' })).toEqual({
+			problem: 'A transparent background needs png or webp output.'
+		});
+	});
+
+	it('says what is wrong with a value it cannot use', () => {
+		expect(readImageOptions({ aspect_ratio: 'wide' })).toHaveProperty('problem');
+		expect(readImageOptions({ quality: 'ultra' })).toHaveProperty('problem');
+		expect(readImageOptions({ n: 9 })).toHaveProperty('problem');
+		expect(readImageOptions({ seed: -1 })).toHaveProperty('problem');
 	});
 });
 

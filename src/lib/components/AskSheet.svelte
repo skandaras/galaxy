@@ -126,7 +126,7 @@
 </script>
 
 {#if !minimised}
-	<div class="sheet" role="dialog" aria-modal="false" aria-label="The agent has a question">
+	<div class="sheet glass" role="dialog" aria-modal="false" aria-label="The agent has a question">
 		<div class="inner">
 			<div class="head">
 				<p class="who">The agent is asking</p>
@@ -236,9 +236,8 @@
 		   it must not cover the way out of the page. */
 		inset: auto 0 var(--above-bar) 0;
 		z-index: var(--z-sheet);
-		background: var(--bg-pane);
 		border-top: 1px solid var(--accent);
-		box-shadow: 0 -8px 24px rgb(0 0 0 / 0.35);
+		box-shadow: var(--shadow-3);
 		animation: rise 0.18s ease-out;
 	}
 	@keyframes rise {

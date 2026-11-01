@@ -3,7 +3,12 @@ import type { ProviderMessage, ToolDef } from '$lib/server/providers/types';
 import { attachmentDataUrl, listAttachments, type AttachmentSummary } from '$lib/server/chats';
 import { getBudgetStatus } from '../budget';
 import { getTaskConfig } from '../engine';
-import { listEnabledModels, reasoningFor, resolveModel } from '$lib/server/providers/registry';
+import {
+	listEnabledModels,
+	reasoningFor,
+	resolveModel,
+	resolveTextModel
+} from '$lib/server/providers/registry';
 import { logUsage } from '../usage';
 import { taskPath } from '$lib/admin-sections';
 
@@ -180,7 +185,7 @@ function pickImage(chatId: string, rawId: unknown): AttachmentSummary {
 function visionModel() {
 	const configured = getTaskConfig('vision')?.primaryModelId;
 	if (configured) {
-		const choice = resolveModel(configured);
+		const choice = resolveTextModel(configured);
 		if (choice && !choice.model.supportsVision) {
 			throw new Error(
 				`${choice.model.displayName} cannot read images. Point ${taskPath('vision')} at a model badged “V” in Admin → Models.`

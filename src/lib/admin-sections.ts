@@ -43,11 +43,6 @@ export const ADMIN_SECTIONS = [
 		tasks: ['profile-learn', 'profile-parse', 'skill-optimiser']
 	},
 	{ label: 'Boards', group: 'Features', tasks: ['board'] },
-	{
-		label: 'Ivory Tower',
-		group: 'Features',
-		tasks: ['ivory-read', 'ivory-plan', 'ivory-synthesise', 'ivory-redteam']
-	},
 	{ label: 'Alignment', group: 'Features', tasks: ['alignment', 'alignment-synthesis'] },
 	{ label: 'UX audit', group: 'Features', tasks: ['ux-audit'] },
 	{ label: 'Spend', group: 'Operations', tasks: [] },
@@ -80,7 +75,6 @@ export function taskPath(task: string): string {
 /** The places messages most often send people, named once. */
 export const ADMIN_PATHS = {
 	github: adminPath('Coding', 'GitHub'),
-	shelf: adminPath('Ivory Tower', 'Shelf'),
 	push: adminPath('Deployment', 'Push'),
 	budget: adminPath('Spend', 'Budget cap'),
 	webSearch: adminPath('Research', 'Web search'),

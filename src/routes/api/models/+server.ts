@@ -11,7 +11,9 @@ export const GET: RequestHandler = ({ locals, url }) => {
 	const task = url.searchParams.get('task') ?? 'chat';
 	const cfg = db.select().from(taskConfigs).where(eq(taskConfigs.task, task)).get();
 	return json({
-		models: listEnabledModels(),
+		// Image-only models only for a picker that can use one: Admin's task list,
+		// which offers them to `visual` alone.
+		models: listEnabledModels({ includeImageOnly: url.searchParams.get('images') === '1' }),
 		defaultModelId: cfg?.primaryModelId ?? null
 	});
 };

@@ -539,7 +539,7 @@
 		margin-top: 0.35rem;
 	}
 	.dot.ok {
-		background: #6fd08c;
+		background: var(--success);
 	}
 	.dot.error {
 		background: var(--danger);

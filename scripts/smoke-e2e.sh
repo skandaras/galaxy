@@ -80,6 +80,20 @@ check "chat stream carries the results it found" "$STREAM" '"results":[{"title":
 check_absent "the stream carries no snippets" "$STREAM" 'Snippet about'
 check "chat stream completes" "$STREAM" '"type":"done"'
 
+# Structured reasoning goes back on the next request of a tool chain, exactly as
+# it came. The mock answers 400 when the follow-up's blocks are missing or
+# altered, so the reply only arrives if they made the round trip intact; and
+# none of it may reach the browser, the stored reply, or the next turn.
+RDCHAT=$(api -X POST $B/api/chats -d '{}' | jqn .id)
+RDJOB=$(api -X POST $B/api/chats/$RDCHAT/messages -d '{"content":"REASONING-DETAILS"}' | jqn .jobId)
+RDSTREAM=$(curl -sN --max-time 30 $B/api/jobs/$RDJOB/stream)
+check "reasoning details make the round trip intact" "$RDSTREAM" 'REASONING-DETAILS-OK'
+check_absent "the signature never reaches the stream" "$RDSTREAM" 'sig-RD-7'
+check_absent "nor the encrypted block" "$RDSTREAM" 'ENC-RD-PART'
+check_absent "nor the stored chat" "$(api $B/api/chats/$RDCHAT)" 'sig-RD-7'
+RDJOB2=$(api -X POST $B/api/chats/$RDCHAT/messages -d '{"content":"REASONING-DETAILS-AGAIN"}' | jqn .jobId)
+check "and the next turn replays none of it" "$(curl -sN --max-time 30 $B/api/jobs/$RDJOB2/stream)" 'RD-NOT-REPLAYED'
+
 # A blocked provider must surface a visible error, never a silent empty list.
 api -X PUT $B/api/admin/settings -d "{\"key\":\"websearch\",\"value\":{\"provider\":\"searxng\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/searxng-blocked\",\"fallbackProvider\":\"none\"}}" > /dev/null
 BLOCKED=$(api -X POST $B/api/admin/settings/test-search)
@@ -217,6 +231,12 @@ UJOB=$(api -X POST $B/api/chats/$UCHAT/messages -d "{\"content\":\"READ-THIS $PA
 USTREAM=$(curl -sN --max-time 40 $B/api/jobs/$UJOB/stream)
 check "chat can read a url" "$USTREAM" '"name":"fetch_url","status":"ok"'
 check "chat reads it without web search on" "$USTREAM" 'Contains FACT-42: true'
+# What the page said reaches the next turn, fenced as material, so a follow-up
+# about it is answered from the page rather than from the reply's summary; and
+# it never rides the chat the browser loads.
+EJOB=$(api -X POST $B/api/chats/$UCHAT/messages -d '{"content":"echo-evidence","webSearch":false}' | jqn .jobId)
+check "the next turn is shown what the page said" "$(curl -sN --max-time 40 $B/api/jobs/$EJOB/stream)" 'EVIDENCECHECK present=true fact=true'
+check_absent "and the browser is never sent it" "$(api $B/api/chats/$UCHAT)" 'born in collapsing clouds'
 
 # The GitHub rewrite (repo URL → README, blob URL → raw file) is asserted in
 # fetch-url.test.ts against a stubbed fetch. It is deliberately not exercised
@@ -469,6 +489,19 @@ check "the image renders inline rather than downloading" "$IHDR" 'content-dispos
 check "the image is served with sniffing off" "$IHDR" 'x-content-type-options: nosniff'
 # od rather than xxd: xxd ships with vim, which a CI runner need not have.
 check "the bytes are a real PNG" "$(curl -s $B$IMG_URL | od -An -tx1 -N4 | tr -d ' ')" '89504e47'
+
+# A model that only draws: imported as such, kept out of the composer's list,
+# offered to the visual task, and asked for the image alone with the shape the
+# agent chose. The mock refuses anything else, so a picture means all of it held.
+STAMP_ID=$(api $B/api/admin/models | node -pe "JSON.parse(require('fs').readFileSync(0)).find(m=>m.modelKey.includes('stamp')).id")
+check "an image-only model is imported as such" "$(api $B/api/admin/models | node -pe "JSON.stringify(JSON.parse(require('fs').readFileSync(0)).find(m=>m.modelKey.includes('stamp')).imageOnly)")" 'true'
+api -X PATCH $B/api/admin/models/$STAMP_ID -d '{"enabled":true}' > /dev/null
+check_absent "the composer is never offered it" "$(api $B/api/models)" 'mock/stamp-1'
+check "the task pickers are" "$(api "$B/api/models?images=1")" 'mock/stamp-1'
+api -X PUT $B/api/admin/task-configs -d "{\"task\":\"visual\",\"primaryModelId\":\"$STAMP_ID\"}" > /dev/null
+SJOB=$(api -X POST $B/api/chats/$ICHAT/messages -d '{"content":"Please draw a wide banner"}' | jqn .jobId)
+check "an image-only model draws the shape asked for" "$(curl -sN --max-time 60 $B/api/jobs/$SJOB/stream)" '"name":"generate_image","status":"ok"'
+api -X PUT $B/api/admin/task-configs -d "{\"task\":\"visual\",\"primaryModelId\":\"$PAINT_ID\"}" > /dev/null
 
 # ---------------------------------------------------------------------------
 # Reading an image, which is the other direction and a longer chain: a chat
@@ -775,6 +808,35 @@ check "bob cannot decide alice's skill candidate" \
 check "alice approves her skill" "$(as alice -X POST $M/api/skills/candidates/$ALICE_CAND -d '{"approve":true}')" '"status":"approved"'
 check "and it is hers" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: alice' $M/api/skills/alpha-learn-checklist)" "200"
 check "and not bob's" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Remote-User: bob' $M/api/skills/alpha-learn-checklist)" "404"
+
+# A skill can be changed, not only added: the agent loads it, proposes exact
+# edits, and the change waits for the person whose skill it is, as a diff.
+PC=$(as alice -X POST $M/api/chats -d '{}' | jqn .id)
+PJ=$(as alice -X POST $M/api/chats/$PC/messages -d '{"content":"PATCH-SKILL","webSearch":false}' | jqn .jobId)
+check "an agent proposes a change to a skill it loaded" \
+  "$(curl -sN --max-time 40 -H 'Remote-User: alice' $M/api/jobs/$PJ/stream)" '"name":"propose_skill_update","status":"ok"'
+ALICE_PATCH=$(as alice $M/api/profile/learning)
+check "the change waits for alice, drawn as a diff" "$ALICE_PATCH" '"kind":"add","text":"3. Check the PATCH-APPLIED health page"'
+PATCH_ID=$(echo "$ALICE_PATCH" | node -pe 'JSON.parse(require("fs").readFileSync(0)).candidates.find((c) => c.kind === "patch" && c.status === "pending").id')
+check "bob cannot decide it" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' -H 'content-type: application/json' \
+     -d '{"approve":true}' $M/api/skills/candidates/$PATCH_ID)" "404"
+check "alice applies it" "$(as alice -X POST $M/api/skills/candidates/$PATCH_ID -d '{"approve":true}')" '"status":"approved"'
+check "and the skill carries the change" "$(as alice $M/api/skills/alpha-learn-checklist)" 'PATCH-APPLIED'
+check "one version on" "$(as alice $M/api/skills/alpha-learn-checklist)" '"version":2'
+
+# The optimiser reads the shared skills' bodies and proposes exact edits an
+# admin applies; approving keeps the skill's tasks rather than widening it.
+asadmin -X POST $M/api/skills -d '{"name":"opt-skill","category":"ops","description":"d","tasks":"chat","body":"Step one: OPT-ORIGINAL."}' > /dev/null
+asadmin -X POST $M/api/admin/skills/optimise > /dev/null
+OPT_VIEW=$(asadmin $M/api/admin/learning)
+check "the optimiser was shown the skill's body" "$OPT_VIEW" 'saw-body=true'
+check "and proposed a change, not a rewrite" "$OPT_VIEW" '"kind":"patch"'
+OPT_ID=$(echo "$OPT_VIEW" | node -pe 'JSON.parse(require("fs").readFileSync(0)).candidates.find((c) => c.kind === "patch" && c.name === "opt-skill").id')
+asadmin -X PATCH $M/api/admin/skills/candidates/$OPT_ID -d '{"action":"approve"}' > /dev/null
+OPT_SKILL=$(asadmin $M/api/skills/opt-skill)
+check "the admin applies it" "$OPT_SKILL" 'OPT-PATCHED'
+check "and the skill keeps its tasks" "$OPT_SKILL" '"tasks":"chat"'
 
 # The admin view carries counts and times, never a line of anyone's profile.
 ADMIN_VIEW=$(asadmin $M/api/admin/learning)

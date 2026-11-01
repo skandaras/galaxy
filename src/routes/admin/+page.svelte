@@ -54,9 +54,6 @@
 		{:else if active === 'Boards'}
 			<Boards />
 			<Tasks only={tasks} />
-		{:else if active === 'Ivory Tower'}
-			<Settings cards={['ivory']} />
-			<Tasks only={tasks} />
 		{:else if active === 'Alignment'}
 			<Tasks only={tasks} />
 		{:else if active === 'UX audit'}

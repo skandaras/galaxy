@@ -68,15 +68,49 @@ const PAINTER_MODEL = {
 	architecture: { input_modalities: ['text', 'image'], output_modalities: ['text', 'image'] }
 };
 
+// A model that only draws, the way Flux or GPT Image list: image out, no text.
+// It accepts a request for the image alone and refuses one that also asks for
+// text, which is what such endpoints do, so a call shaped for a talking model
+// fails here the way it would for real.
+const STAMP_MODEL = {
+	id: 'mock/stamp-1',
+	name: 'Stamp 1 (mock, image only)',
+	context_length: 8192,
+	pricing: { prompt: '0', completion: '0' },
+	supported_parameters: [],
+	architecture: { input_modalities: ['text', 'image'], output_modalities: ['image'] }
+};
+
 /** A 1×1 PNG: the smallest thing that is genuinely an image file. */
 const PIXEL_PNG =
 	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 const isReasoning = (modelKey) => String(modelKey ?? '').includes('ponder');
 const isPainter = (modelKey) => String(modelKey ?? '').includes('painter');
+const isStamp = (modelKey) => String(modelKey ?? '').includes('stamp');
 
 function sseChunk(res, obj) {
 	res.write(`data: ${JSON.stringify(obj)}\n\n`);
+}
+
+// The reasoning blocks REASONING-DETAILS streams in fragments, and what they
+// must add up to when they come back.
+const RD_TEXT = { type: 'reasoning.text', index: 0, format: 'anthropic-claude-v1' };
+const RD_ENC = { type: 'reasoning.encrypted', index: 1, id: 'rd_1', format: 'openai-responses-v1' };
+const RD_EXPECTED = [
+	{ ...RD_TEXT, text: 'Weighing the library', signature: 'sig-RD-7' },
+	{ ...RD_ENC, data: 'ENC-RD-PART1ENC-RD-PART2' }
+];
+
+/** JSON with sorted keys, so a comparison is about content and not key order. */
+function canonical(value) {
+	const sort = (v) =>
+		Array.isArray(v)
+			? v.map(sort)
+			: v && typeof v === 'object'
+				? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sort(v[k])]))
+				: v;
+	return JSON.stringify(sort(value));
 }
 
 function delta(res, d, finish = null) {
@@ -290,15 +324,15 @@ async function scriptedReply(userText, maxTokens = 0) {
 				]
 			});
 		} else if (userText.includes('SKILL-OPTIMISE')) {
+			// A change quoted from the body it was shown, and a name in another
+			// spelling so normalisation is exercised. saw-body says whether the
+			// optimiser was handed bodies at all, which it used not to be.
 			content = JSON.stringify({
-				skill_candidates: [
+				changes: [
 					{
-						name: 'demo-skill',
-						category: 'general',
-						description: 'Demonstrates the skill system (clarified)',
-						triggers: 'demo, example',
-						body: '## When to use\n\nImproved by the optimiser.',
-						rationale: 'Description was vague'
+						skill: 'Opt Skill',
+						edits: [{ old: 'OPT-ORIGINAL', new: 'OPT-PATCHED' }],
+						rationale: `saw-body=${userText.includes('OPT-ORIGINAL')}`
 					}
 				]
 			});
@@ -311,7 +345,7 @@ const server = createServer(async (req, res) => {
 
 	if (req.method === 'GET' && url.pathname === '/v1/models') {
 		res.writeHead(200, { 'content-type': 'application/json' });
-		res.end(JSON.stringify({ data: [MODEL, REASONING_MODEL, BLIND_MODEL, PAINTER_MODEL] }));
+		res.end(JSON.stringify({ data: [MODEL, REASONING_MODEL, BLIND_MODEL, PAINTER_MODEL, STAMP_MODEL] }));
 		return;
 	}
 
@@ -537,6 +571,31 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
+		// Structured reasoning has to come back, unmodified, on the next request
+		// of the tool chain it belongs to; a real endpoint can refuse the request
+		// without it. So once the chain started by REASONING-DETAILS is in the
+		// messages, anything but the exact blocks sent is a 400, which the loop
+		// does not retry, and the turn fails where the smoke can see it.
+		const rdChain = (parsed.messages ?? []).find(
+			(m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.id === 'call_rd')
+		);
+		const sentBack = rdChain && canonical(rdChain.reasoning_details ?? null);
+		if (rdChain && sentBack !== canonical(RD_EXPECTED)) {
+			res.writeHead(400, { 'content-type': 'application/json' });
+			res.end(JSON.stringify({ error: { message: 'reasoning_details missing or altered' } }));
+			return;
+		}
+		// And on the next turn nothing of it may be replayed: a stored reply
+		// carries no reasoning.
+		if (
+			String(last?.content ?? '').trim() === 'REASONING-DETAILS-AGAIN' &&
+			(parsed.messages ?? []).some((m) => m.reasoning_details)
+		) {
+			res.writeHead(400, { 'content-type': 'application/json' });
+			res.end(JSON.stringify({ error: { message: 'reasoning_details replayed across turns' } }));
+			return;
+		}
+
 		// Non-streaming path (complete()): the learning job, skill optimiser,
 		// compaction summaries, etc.
 		if (!parsed.stream) {
@@ -566,6 +625,39 @@ const server = createServer(async (req, res) => {
 							}
 						],
 						usage: { prompt_tokens: 900, completion_tokens: 12 }
+					})
+				);
+				return;
+			}
+			if (isStamp(parsed.model)) {
+				// The image alone, and the shape the prompt asked for when it asked
+				// for a wide one: both have to arrive for there to be a picture.
+				const prompt = textOf(parsed.messages?.find((m) => m.role === 'user')?.content);
+				const problems = [
+					JSON.stringify(parsed.modalities) === '["image"]' ? null : `modalities ${JSON.stringify(parsed.modalities)}`,
+					!prompt.includes('wide') || parsed.image_config?.aspect_ratio === '16:9' ? null : 'no 16:9 image_config'
+				].filter(Boolean);
+				if (problems.length) {
+					res.writeHead(400, { 'content-type': 'application/json' });
+					res.end(JSON.stringify({ error: { message: `stamp refused: ${problems.join(', ')}` } }));
+					return;
+				}
+				res.writeHead(200, { 'content-type': 'application/json' });
+				res.end(
+					JSON.stringify({
+						id: 'mock',
+						choices: [
+							{
+								index: 0,
+								message: {
+									role: 'assistant',
+									content: '',
+									images: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${PIXEL_PNG}` } }]
+								},
+								finish_reason: 'stop'
+							}
+						],
+						usage: { prompt_tokens: 20, completion_tokens: 0, cost: 0.03 }
 					})
 				);
 				return;
@@ -638,6 +730,37 @@ const server = createServer(async (req, res) => {
 			'content-type': 'text/event-stream',
 			'cache-control': 'no-cache'
 		});
+
+		if (String(last?.content ?? '').trim() === 'REASONING-DETAILS') {
+			delta(res, { reasoning: 'Weighing ', reasoning_details: [{ ...RD_TEXT, text: 'Weighing ' }] });
+			delta(res, { reasoning: 'the library', reasoning_details: [{ ...RD_TEXT, text: 'the library' }] });
+			delta(res, { reasoning_details: [{ type: 'reasoning.text', index: 0, signature: 'sig-RD-7' }] });
+			delta(res, { reasoning_details: [{ ...RD_ENC, data: 'ENC-RD-PART1' }] });
+			delta(res, { reasoning_details: [{ type: 'reasoning.encrypted', index: 1, data: 'ENC-RD-PART2' }] });
+			delta(res, {
+				tool_calls: [
+					{ index: 0, id: 'call_rd', function: { name: 'library_search', arguments: '{"query":"nebula"}' } }
+				]
+			});
+			delta(res, {}, 'tool_calls');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+		if (rdChain && last?.role === 'tool') {
+			delta(res, { content: 'REASONING-DETAILS-OK' });
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+		if (String(last?.content ?? '').trim() === 'REASONING-DETAILS-AGAIN') {
+			delta(res, { content: 'RD-NOT-REPLAYED' });
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
 
 		// A prompt one of the suites scripts by marker. Framing, planning and
 		// consolidation arrive here now that they are bounded by silence rather
@@ -906,6 +1029,21 @@ const server = createServer(async (req, res) => {
 		// Reports whether the system prompt carried a note about the previous
 		// attempt — the thing that stops a follow-up blindly re-running a turn
 		// that already failed.
+		// What the last turn's tools read, as the next turn is shown it: whether
+		// the fenced evidence arrived at all, and whether it carries the fact the
+		// page held, which the reply that read it never quoted in full.
+		if (String(last?.content ?? '').includes('echo-evidence')) {
+			const all = parsed.messages.map((x) => String(x.content ?? '')).join('\n');
+			const fenced = all.includes('--- BEGIN EVIDENCE ---');
+			delta(res, {
+				content: `EVIDENCECHECK present=${fenced} fact=${fenced && all.includes('born in collapsing clouds')}`
+			});
+			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
 		if (String(last?.content ?? '').includes('echo-prior')) {
 			// Scanned across every message, not just the system prompt: the note is
 			// carried as a tail note now so it cannot invalidate the cacheable
@@ -942,6 +1080,52 @@ const server = createServer(async (req, res) => {
 				content: `SYSCHECK skills=${system.includes('[Available skills')} library=${system.includes('[Library')} demo=${system.includes('demo-skill')} doc=${system.includes('Deploy Notes')} alpha=${system.includes('ALPHA-LEARN')} beta=${system.includes('BETA-LEARN')} voice=${system.includes('[How to write')} profile=${system.includes('[Profile:')} pmark=${system.includes('PROFILE-ALPHA')}`
 			});
 			delta(res, {}, 'stop');
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
+		// Changing a skill: load it, propose an edit quoting what came back, then
+		// say so. Driven by the person's message rather than the last one, which
+		// is a tool result by the second and third legs.
+		const lastUser = [...(parsed.messages ?? [])].reverse().find((m) => m.role === 'user');
+		if (String(lastUser?.content ?? '').trim() === 'PATCH-SKILL') {
+			const called = (name) =>
+				parsed.messages.some((m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.function?.name === name));
+			if (!called('skill_load')) {
+				delta(res, {
+					tool_calls: [
+						{ index: 0, id: 'call_ps1', function: { name: 'skill_load', arguments: '{"name":"alpha-learn-checklist"}' } }
+					]
+				});
+				delta(res, {}, 'tool_calls');
+			} else if (!called('propose_skill_update')) {
+				delta(res, {
+					tool_calls: [
+						{
+							index: 0,
+							id: 'call_ps2',
+							function: {
+								name: 'propose_skill_update',
+								arguments: JSON.stringify({
+									name: 'alpha-learn-checklist',
+									edits: [
+										{
+											old_string: '2. Promote dev to prod',
+											new_string: '2. Promote dev to prod\n3. Check the PATCH-APPLIED health page'
+										}
+									],
+									rationale: 'They always check health after promoting'
+								})
+							}
+						}
+					]
+				});
+				delta(res, {}, 'tool_calls');
+			} else {
+				delta(res, { content: `PATCH-PROPOSED ${String(last?.content ?? '').slice(0, 80)}` });
+				delta(res, {}, 'stop');
+			}
 			res.write('data: [DONE]\n\n');
 			res.end();
 			return;
@@ -1119,7 +1303,11 @@ const server = createServer(async (req, res) => {
 						id: 'call_img',
 						function: {
 							name: 'generate_image',
-							arguments: JSON.stringify({ prompt: 'a spiral galaxy', name: 'galaxy' })
+							arguments: JSON.stringify(
+								asksFor('wide')
+									? { prompt: 'a wide banner of a spiral galaxy', name: 'banner', aspect_ratio: '16:9' }
+									: { prompt: 'a spiral galaxy', name: 'galaxy' }
+							)
 						}
 					}
 				]

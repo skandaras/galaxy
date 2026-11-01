@@ -24,25 +24,16 @@
 		id: string;
 		displayName: string;
 		providerName: string;
+		imageOnly?: boolean;
 	}
+	/** A model that only draws can serve `visual` and nothing that wants text back. */
+	const offered = (task: string) => models.filter((m) => task === 'visual' || !m.imageOnly);
 	interface PromptVersion {
 		id: string;
 		systemPrompt: string;
 		author: string;
 		createdAt: number;
 	}
-
-	/**
-	 * Model advice for the tasks where the choice of model is part of the
-	 * method, not only a matter of cost.
-	 */
-	const TASK_NOTES: Record<string, string> = {
-		'ivory-read': 'A small model is enough: it reads and quotes.',
-		'ivory-plan': 'A large model: it decides what the project does next.',
-		'ivory-synthesise': 'A mid-size model: it turns notes into claims.',
-		'ivory-redteam':
-			'Pick a model from a different family than ivory-synthesise’s. A claim reviewed by its own model family is refused.'
-	};
 
 	let configs = $state<TaskConfig[]>([]);
 	let models = $state<ModelOption[]>([]);
@@ -54,7 +45,7 @@
 	async function load() {
 		const [cfgRes, modelRes] = await Promise.all([
 			fetch('/api/admin/task-configs'),
-			fetch('/api/models')
+			fetch('/api/models?images=1')
 		]);
 		configs = await cfgRes.json();
 		models = (await modelRes.json()).models;
@@ -137,13 +128,12 @@
 					{cfg.task}
 					{#if cfg.overridden}<span class="badge">edited</span>{/if}
 				</h3>
-				{#if TASK_NOTES[cfg.task]}<p class="task-note">{TASK_NOTES[cfg.task]}</p>{/if}
 				<div class="model-row">
 					<label>
 						primary
 						<select bind:value={cfg.primaryModelId}>
 							<option value={null}>first enabled model</option>
-							{#each models as m (m.id)}
+							{#each offered(cfg.task) as m (m.id)}
 								<option value={m.id}>{m.displayName} · {m.providerName}</option>
 							{/each}
 						</select>
@@ -152,7 +142,7 @@
 						backup
 						<select bind:value={cfg.backupModelId}>
 							<option value={null}>none</option>
-							{#each models as m (m.id)}
+							{#each offered(cfg.task) as m (m.id)}
 								<option value={m.id}>{m.displayName} · {m.providerName}</option>
 							{/each}
 						</select>
@@ -194,11 +184,6 @@
 </section>
 
 <style>
-	.task-note {
-		margin: 0 0 0.4rem;
-		font-size: var(--text-sm);
-		color: var(--fg-dim);
-	}
 	.card {
 		margin-bottom: 0.9rem;
 	}

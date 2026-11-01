@@ -8,3 +8,4 @@ data/
 vite.config.ts.timestamp-*
 test-results/
 twa/
+eval-out/

@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { reasoningNotes } from '$lib/reasoning-note';
 import type { NotedEntry, RunStep, RunToolCall, SearchResultRow } from '$lib/run-timeline';
+import type { EvidenceItem } from '$lib/server/db/schema';
 import { reasoningFor, type ModelChoice } from '$lib/server/providers/registry';
 import type {
 	ChatRequest,
 	ProviderAdapter,
 	ProviderMessage,
+	ProviderRouting,
+	ReasoningDetail,
 	ReasoningEffort,
 	StreamEvent,
 	ToolCall,
@@ -85,6 +88,19 @@ export interface LoopTool {
 	 * cannot see where one round-trip ends and the next begins. This is that seam.
 	 */
 	beginStep?: () => void;
+	/**
+	 * What of this call's result the next turn should be shown, or null.
+	 *
+	 * Handed the capped output the model actually read and whatever the call
+	 * passed to `report`. Only asked on success, never for a `privateArgs` tool
+	 * (a person's profile is not material to carry around), and a hook that
+	 * throws costs the evidence, not the call. See engine/evidence.ts.
+	 */
+	evidence?: (
+		args: Record<string, unknown>,
+		output: string,
+		meta: Record<string, unknown>
+	) => Omit<EvidenceItem, 'tool'> | null;
 }
 
 /**
@@ -134,6 +150,11 @@ export interface TurnSummary {
 	 * continues this array instead. See driveCodingTurn.
 	 */
 	transcript: ProviderMessage[];
+	/**
+	 * What the tools read, in call order, for the caller to keep with the reply.
+	 * Never in the trace, which the browser is sent.
+	 */
+	evidence: EvidenceItem[];
 }
 
 export interface LoopOptions {
@@ -179,6 +200,8 @@ export interface LoopOptions {
 	 * that call is about.
 	 */
 	reasoning?: ReasoningEffort;
+	/** OpenRouter routing to send on every call; only the evaluation runner sets it. */
+	provider?: ProviderRouting;
 	/**
 	 * Re-checked every few steps on a long run. `assertBudget` only guards the
 	 * start of a turn, which is not enough once turns can run for dozens of
@@ -241,6 +264,33 @@ export function turnBudgetNote(maxIterations: number, hasSearch = false, legs = 
 				]
 			: ['If the work will not fit, answer with what you have and say plainly what you could not check.'])
 	].join('\n');
+}
+
+/**
+ * Put the turn budget note on the system message, once. Shared with the
+ * evaluation runner's request dump, which has to show what the model is
+ * actually sent, and this is the last thing added before it is.
+ */
+export function withBudgetNote(
+	messages: ProviderMessage[],
+	maxIterations: number,
+	tools: LoopTool[],
+	legs?: number
+): void {
+	const note = turnBudgetNote(
+		maxIterations,
+		tools.some((t) => t.def.name === 'web_search'),
+		legs
+	);
+	// A continued leg arrives with the note already on its system message, and
+	// appending it again would also change the prefix the provider has cached.
+	if (
+		messages[0]?.role === 'system' &&
+		typeof messages[0].content === 'string' &&
+		!messages[0].content.endsWith(note)
+	) {
+		messages[0] = { ...messages[0], content: messages[0].content + note };
+	}
 }
 
 /** Pushed into the transcript near the cap, so it lands rather than stops. */
@@ -392,6 +442,11 @@ export async function runAgentLoop(opts: LoopOptions): Promise<void> {
 		: [opts.primary, opts.primary];
 	let lastError: unknown = null;
 
+	// Shared across attempts. A retry reruns the same tool instances, which
+	// answer a repeat from their per-turn memo and hand on nothing for a replay,
+	// so evidence collected per attempt left a turn that read a page and then
+	// failed over with nothing to show for it.
+	const read: EvidenceItem[] = [];
 	for (let attempt = 0; attempt < attempts.length; attempt++) {
 		const choice = attempts[attempt];
 		if (job.controller.signal.aborted) {
@@ -422,7 +477,7 @@ export async function runAgentLoop(opts: LoopOptions): Promise<void> {
 			}
 		}
 		try {
-			await executeWithModel(opts, choice);
+			await executeWithModel(opts, choice, read);
 			return;
 		} catch (err) {
 			lastError = err;
@@ -546,19 +601,43 @@ export function elideOldToolOutput(messages: ProviderMessage[], budget: number):
 	for (const m of messages) total += carriedChars(m);
 	if (total <= budget) return 0;
 
+	// The results after the newest assistant message are the ones the model is
+	// about to read for the first time. Dropping those would send it a request
+	// carrying calls whose answers it never saw, so they are never candidates.
+	const unread = messages.findLastIndex((m) => m.role === 'assistant');
+	const readable = (i: number) => unread === -1 || i < unread;
+
 	let dropped = 0;
-	for (const m of messages) {
+	for (const [i, m] of messages.entries()) {
 		if (total <= budget) break;
-		if (m.role === 'assistant' && m.tool_calls?.length) {
+		// The arguments under a signed reasoning block stay as they were on this
+		// pass: Gemini's thought signatures cover the call they came with, and a
+		// rewritten call under an intact signature is a request it is entitled
+		// to refuse.
+		if (m.role === 'assistant' && m.tool_calls?.length && !m.reasoningDetails) {
 			const before = carriedChars(m);
 			m.tool_calls = m.tool_calls.map((c) => ({ ...c, arguments: shrinkArguments(c.arguments) }));
 			total -= before - carriedChars(m);
 			continue;
 		}
-		if (m.role !== 'tool' || m.content === ELIDED) continue;
+		if (m.role !== 'tool' || m.content === ELIDED || !readable(i)) continue;
 		total -= m.content.length - ELIDED.length;
 		m.content = ELIDED;
 		dropped++;
+	}
+	// Still over, and what is left is signed. The oldest exchanges give up their
+	// reasoning first, and with it the reason their calls could not shrink: a
+	// step that loses its thinking is a smaller loss than a chain that has to
+	// stall or a request that never fits.
+	for (const [i, m] of messages.entries()) {
+		if (total <= budget) break;
+		if (m.role !== 'assistant' || !m.reasoningDetails || !readable(i)) continue;
+		const before = carriedChars(m);
+		delete m.reasoningDetails;
+		if (m.tool_calls) {
+			m.tool_calls = m.tool_calls.map((c) => ({ ...c, arguments: shrinkArguments(c.arguments) }));
+		}
+		total -= before - carriedChars(m);
 	}
 	return dropped;
 }
@@ -569,9 +648,32 @@ const ARG_KEEP_CHARS = 200;
 function carriedChars(m: ProviderMessage): number {
 	if (m.role === 'tool') return m.content.length;
 	if (m.role === 'assistant' && m.tool_calls) {
-		return m.tool_calls.reduce((n, c) => n + c.arguments.length, 0);
+		// Reasoning rides the same message and is re-sent with it, so it counts;
+		// an encrypted block can outweigh the call it explains.
+		const reasoning = m.reasoningDetails ? JSON.stringify(m.reasoningDetails.items).length : 0;
+		return m.tool_calls.reduce((n, c) => n + c.arguments.length, reasoning);
 	}
 	return 0;
+}
+
+/**
+ * The messages as `modelId` may be sent them: reasoning blocks another model
+ * row produced are taken off.
+ *
+ * Only reachable through a continued coding leg, whose transcript is carried
+ * from the leg before and may have been written by the backup. A chat attempt
+ * rebuilds its messages from stored history, which never holds reasoning. The
+ * stripped messages are copies, because that transcript is shared between the
+ * attempts of one leg and the primary's retry must still see its own blocks.
+ *
+ * Exported for tests.
+ */
+export function forModel(messages: ProviderMessage[], modelId: string): ProviderMessage[] {
+	return messages.map((m) => {
+		if (!m.reasoningDetails || m.reasoningDetails.modelId === modelId) return m;
+		const { reasoningDetails: _other, ...rest } = m;
+		return rest;
+	});
 }
 
 /** Exported for tests. Always returns a JSON object, which is what a provider replays. */
@@ -590,31 +692,21 @@ export function shrinkArguments(raw: string): string {
 	return JSON.stringify(kept);
 }
 
-async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise<void> {
+async function executeWithModel(
+	opts: LoopOptions,
+	choice: ModelChoice,
+	read: EvidenceItem[]
+): Promise<void> {
 	const { job, persist } = opts;
 	pushChunk(job, { type: 'meta', model: choice.model.displayName });
 
 	const toolDefs: ToolDef[] = choice.model.supportsTools ? opts.tools.map((t) => t.def) : [];
 	const toolByName = new Map(opts.tools.map((t) => [t.def.name, t]));
-	const messages = opts.buildMessages();
+	const messages = forModel(opts.buildMessages(), choice.model.id);
 	// Appended here rather than by each caller: the loop owns the budget, so it
 	// is the only thing that can describe it accurately. Only worth saying when
 	// there are tools to batch.
-	const budgetNote = turnBudgetNote(
-		opts.maxIterations,
-		opts.tools.some((t) => t.def.name === 'web_search'),
-		opts.leg?.of
-	);
-	// A continued leg arrives with the note already on its system message, and
-	// appending it again would also change the prefix the provider has cached.
-	if (
-		toolDefs.length &&
-		messages[0]?.role === 'system' &&
-		typeof messages[0].content === 'string' &&
-		!messages[0].content.endsWith(budgetNote)
-	) {
-		messages[0] = { ...messages[0], content: messages[0].content + budgetNote };
-	}
+	if (toolDefs.length) withBudgetNote(messages, opts.maxIterations, opts.tools, opts.leg?.of);
 	const finalLeg = !opts.leg || opts.leg.index >= opts.leg.of;
 
 	/**
@@ -685,6 +777,7 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		callUsage = null;
 		let iterationText = '';
 		let toolCalls: ToolCall[] = [];
+		let details: ReasoningDetail[] = [];
 		// Per-iteration rather than per-run: each model call reasons afresh, and
 		// carrying the previous leg's thought over showed a note about a search
 		// that had already come back.
@@ -707,7 +800,8 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 						// it is entitled to reject the whole request — and lets an
 						// admin's `reasoningMode` on the model row override what the
 						// task asked for, in either direction.
-						reasoning: reasoningFor(choice, opts.reasoning)
+						reasoning: reasoningFor(choice, opts.reasoning),
+						...(opts.provider ? { provider: opts.provider } : {})
 					},
 				// The user pressing stop drops the provider connection immediately;
 				// the idle watchdog inside handles a connection that goes quiet.
@@ -725,6 +819,8 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 					// was reported as the model being slow; the model was working
 					// and the interface would not say so.
 					noteReasoning(ev.delta);
+				} else if (ev.type === 'reasoning_details') {
+					details = ev.details;
 				} else if (ev.type === 'tool_calls') {
 					toolCalls = ev.calls;
 				} else if (ev.type === 'usage') {
@@ -833,7 +929,14 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		// the answer and must stay put.
 		pushChunk(job, { type: 'step', id: stepId, label, status: 'running', consumedText, note });
 
-		messages.push({ role: 'assistant', content: iterationText, tool_calls: toolCalls });
+		messages.push({
+			role: 'assistant',
+			content: iterationText,
+			tool_calls: toolCalls,
+			// Kept for the next round trip of this chain and nowhere else: no chunk,
+			// event or trace sees it, and nothing persists the transcript.
+			...(details.length ? { reasoningDetails: { modelId: choice.model.id, items: details } } : {})
+		});
 		// Round-trip boundary. A tool that limits what one round-trip may do —
 		// rather than what one turn may do — learns here that a new one has begun.
 		for (const tool of opts.tools) tool.beginStep?.();
@@ -865,7 +968,8 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 			// Pushed in call order rather than completion order: a tool message has
 			// to line up with the assistant message's tool_calls.
 			for (const [i, { call, record }] of prepared.entries()) {
-				const { output, ok, display } = results[i];
+				const { output, ok, display, evidence } = results[i];
+				if (evidence) read.push(evidence);
 				record.status = ok ? 'ok' : 'error';
 				// Onto the record, so the box survives a reload: the live chunk is gone
 				// the moment the job is, and the trace is all a finished reply keeps.
@@ -926,7 +1030,8 @@ async function executeWithModel(opts: LoopOptions, choice: ModelChoice): Promise
 		toolCalls: toolCallRecords,
 		trace,
 		fallbackReply: usedFallback,
-		transcript: messages
+		transcript: messages,
+		evidence: read
 	};
 	if (stopReason === 'budget') {
 		pushChunk(job, {
@@ -1054,7 +1159,7 @@ async function executeToolCall(
 	call: ToolCall,
 	tool: LoopTool | undefined,
 	stepId: string
-): Promise<{ output: string; ok: boolean; display?: ToolDisplay }> {
+): Promise<{ output: string; ok: boolean; display?: ToolDisplay; evidence?: EvidenceItem }> {
 	const { job, persist } = opts;
 	const { args, problem } = parseToolArgs(call.arguments);
 	const summary = tool?.describe?.(args);
@@ -1153,7 +1258,8 @@ async function executeToolCall(
 			{ persist }
 		);
 		emit('ok', summary, display?.results, display?.noted);
-		return { output: capResult(call.name, result), ok: true, display };
+		const output = capResult(call.name, result);
+		return { output, ok: true, display, evidence: evidenceOf(tool, call.name, args, output, meta) };
 	} catch (err) {
 		emitEvent(
 			{
@@ -1176,6 +1282,22 @@ async function executeToolCall(
 		);
 		emit('error', String(err));
 		return { output: JSON.stringify({ error: String(err) }), ok: false };
+	}
+}
+
+function evidenceOf(
+	tool: LoopTool,
+	name: string,
+	args: Record<string, unknown>,
+	output: string,
+	meta: Record<string, unknown>
+): EvidenceItem | undefined {
+	if (!tool.evidence || tool.privateArgs) return undefined;
+	try {
+		const found = tool.evidence(args, output, meta);
+		return found ? { tool: name, ...found } : undefined;
+	} catch {
+		return undefined;
 	}
 }
 
@@ -1222,12 +1344,16 @@ function addUsage(a: Usage | null, b: Usage): Usage {
 	// zero however long the model deliberated — the column exists to tell "wrote a
 	// lot" from "thought a lot", and for the loop's rows it could not.
 	const reasoning = sumReported(a?.reasoningTokens, b.reasoningTokens);
+	// The same omission waiting to happen to cost: a field left off this list
+	// never reaches the usage row the call writes.
+	const cost = sumReported(a?.costUsd, b.costUsd);
 	return {
 		promptTokens: (a?.promptTokens ?? 0) + b.promptTokens,
 		completionTokens: (a?.completionTokens ?? 0) + b.completionTokens,
 		...(cached !== undefined ? { cachedPromptTokens: cached } : {}),
 		...(discount !== undefined ? { cacheDiscountUsd: discount } : {}),
-		...(reasoning !== undefined ? { reasoningTokens: reasoning } : {})
+		...(reasoning !== undefined ? { reasoningTokens: reasoning } : {}),
+		...(cost !== undefined ? { costUsd: cost } : {})
 	};
 }
 

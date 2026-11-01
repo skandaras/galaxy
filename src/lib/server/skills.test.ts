@@ -5,8 +5,13 @@ import { dataDir, db, runMigrations } from '$lib/server/db';
 import { randomUUID } from 'node:crypto';
 import { skillCandidates, skills } from '$lib/server/db/schema';
 import {
+	candidatePreview,
 	decideCandidate,
+	deleteSkill,
+	freeSkillName,
 	getSkill,
+	proposeSkillPatch,
+	SkillPatchConflict,
 	listCandidates,
 	listSkills,
 	normalizeSkillName,
@@ -224,5 +229,143 @@ describe('a decided skill candidate', () => {
 		decideCandidate(propose('tidy-inbox'), true);
 		expect(getSkill('tidy-inbox', ALICE)).not.toBeNull();
 		expect(getSkill('tidy-inbox', BOB)).toBeNull();
+	});
+
+	it('never overwrites a skill that took its name in the meantime, shared or someone else\'s', () => {
+		saveSkill({
+			name: 'tidy-inbox',
+			category: 'general',
+			description: 'Bob\'s',
+			triggers: '',
+			author: 'user',
+			body: 'BOB-BODY',
+			ownerId: BOB
+		});
+		const id = propose('tidy-inbox');
+		expect(candidatePreview(listCandidates().find((c) => c.id === id)!)).toEqual({
+			kind: 'new',
+			savesAs: 'tidy-inbox-2'
+		});
+		expect(decideCandidate(id, true, { userId: ALICE })?.name).toBe('tidy-inbox-2');
+		expect(getSkill('tidy-inbox')?.body).toBe('BOB-BODY');
+		expect(getSkill('tidy-inbox')?.meta.version).toBe(1);
+		expect(getSkill('tidy-inbox-2', ALICE)?.meta.ownerId).toBe(ALICE);
+	});
+
+	it('tells its proposer about a clash only with a skill they can see', () => {
+		saveSkill({ name: 'tidy-inbox', category: 'general', description: 'd', triggers: '', author: 'user', body: 'b', ownerId: BOB });
+		const id = propose('tidy-inbox');
+		const cand = listCandidates().find((c) => c.id === id)!;
+		// Admin sees it; Alice would otherwise learn that Bob has a skill of that name.
+		expect(candidatePreview(cand)).toEqual({ kind: 'new', savesAs: 'tidy-inbox-2' });
+		expect(candidatePreview(cand, ALICE)).toBeNull();
+	});
+
+	it('picks a free name in the form it will be stored in', () => {
+		const prefix = `${'a'.repeat(59)}-`;
+		const make = (name: string) =>
+			saveSkill({ name, category: 'general', description: 'd', triggers: '', author: 'user', body: 'b' });
+		make(`${prefix}tail`);
+		make(`${'a'.repeat(59)}-2`);
+		// Cut to 60, the base ends in a hyphen; `…--2` would be stored as the
+		// existing `…-2`.
+		const free = freeSkillName(`${prefix}tail`);
+		// Free as stored: normalising it changes nothing, and nothing holds it.
+		expect(normalizeSkillName(free)).toBe(free);
+		expect(getSkill(free)).toBeNull();
+		expect(free.length).toBeLessThanOrEqual(64);
+	});
+});
+
+describe('a change to a skill', () => {
+	const ALICE = 'u-patch-alice';
+	const BOB = 'u-patch-bob';
+	const BODY = '## Steps\n1. Build\n2. Promote dev to prod';
+	const edit = { old: '2. Promote dev to prod', new: '2. Run the smoke suite\n3. Promote dev to prod' };
+
+	beforeAll(() => runMigrations());
+	beforeEach(() => {
+		db.delete(skillCandidates).run();
+		db.delete(skills).run();
+	});
+
+	const make = (ownerId: string | null) =>
+		saveSkill({
+			name: 'release',
+			category: 'ops',
+			description: 'How to release',
+			triggers: 'deploy',
+			author: 'user',
+			tasks: 'coding',
+			body: BODY,
+			enabled: true,
+			ownerId
+		});
+	const propose = (userId: string | null) =>
+		proposeSkillPatch({ userId, skill: getSkill('release')!, patch: { edits: [edit] }, rationale: 'r' });
+
+	it('applies to the skill as it is now, keeping its owner and tasks, and bumps the version', () => {
+		make(ALICE);
+		const cand = propose(ALICE);
+		const preview = candidatePreview(cand);
+		expect(preview).toMatchObject({ kind: 'patch', applies: true, drifted: false });
+		decideCandidate(cand.id, true, { userId: ALICE });
+		const after = getSkill('release')!;
+		expect(after.body).toContain('Run the smoke suite');
+		expect(after.meta).toMatchObject({ version: 2, ownerId: ALICE, tasks: 'coding', enabled: true });
+	});
+
+	it('shows a replaced description or triggers beside the diff', () => {
+		make(ALICE);
+		const cand = proposeSkillPatch({
+			userId: ALICE,
+			skill: getSkill('release')!,
+			patch: { edits: [edit], triggers: 'deploy, release, ship' },
+			rationale: 'r'
+		});
+		expect(candidatePreview(cand)).toMatchObject({
+			applies: true,
+			fields: { triggers: { from: 'deploy', to: 'deploy, release, ship' } }
+		});
+		expect(candidatePreview(cand)).not.toHaveProperty('fields.description');
+	});
+
+	it('still applies when the skill moved on elsewhere, and says it drifted', () => {
+		make(ALICE);
+		const cand = propose(ALICE);
+		saveSkill({ name: 'release', category: 'ops', description: 'How to release', triggers: 'deploy', author: 'user', body: `${BODY}\n4. Tell the team` });
+		expect(candidatePreview(cand)).toMatchObject({ applies: true, drifted: true });
+		decideCandidate(cand.id, true, { userId: ALICE });
+		expect(getSkill('release')!.body).toContain('Tell the team');
+		expect(getSkill('release')!.body).toContain('Run the smoke suite');
+	});
+
+	it('stays pending, and says why, when the skill moved so the change no longer lands', () => {
+		make(ALICE);
+		const cand = propose(ALICE);
+		saveSkill({ name: 'release', category: 'ops', description: 'd', triggers: '', author: 'user', body: '## Steps\n1. Ship it' });
+		expect(candidatePreview(cand)).toMatchObject({ applies: false });
+		expect(() => decideCandidate(cand.id, true, { userId: ALICE })).toThrow(SkillPatchConflict);
+		expect(listCandidates().find((c) => c.id === cand.id)?.status).toBe('pending');
+	});
+
+	it('is closed when its skill is deleted', () => {
+		make(ALICE);
+		const cand = propose(ALICE);
+		deleteSkill('release');
+		expect(listCandidates().find((c) => c.id === cand.id)?.status).toBe('rejected');
+	});
+
+	it('to a shared skill is an admin\'s to decide, and a stranger never finds one', () => {
+		make(null);
+		const shared = propose(ALICE);
+		expect(decideCandidate(shared.id, true, { userId: ALICE })).toBeNull();
+		expect(decideCandidate(shared.id, true)?.status).toBe('approved');
+
+		db.delete(skills).run();
+		make(ALICE);
+		const own = propose(ALICE);
+		expect(decideCandidate(own.id, true, { userId: BOB })).toBeNull();
+		expect(listCandidates().find((c) => c.id === own.id)?.status).toBe('pending');
 	});
 });

@@ -159,7 +159,7 @@ describe('a private entry', () => {
 
 describe('a task with no scope', () => {
 	it('gets nothing at all', () => {
-		for (const task of ['visual', 'profile-learn', 'subagent', 'board', 'ivory-read', 'ux-audit']) {
+		for (const task of ['visual', 'profile-learn', 'subagent', 'board', 'ux-audit']) {
 			const seen = everything(ALICE, task);
 			for (const marker of [...ALICE_MARKERS, TOOL]) expect(seen).not.toContain(marker);
 		}
@@ -280,6 +280,24 @@ describe('the learning job', () => {
 		const [prompt] = learnPrompts;
 		expect(prompt).toContain(TOOL);
 		for (const marker of [HEALTH, BOB_SECRET, 'Bobpartner', PRINCIPLE]) expect(prompt).not.toContain(marker);
+	});
+
+	it('names this person\'s skills and shared ones, never someone else\'s personal skill', async () => {
+		const { saveSkill } = await import('$lib/server/skills');
+		const skill = (name: string, ownerId: string | null) =>
+			saveSkill({ name, category: 'general', description: 'd', triggers: '', author: 'user', body: 'b', ownerId });
+		skill('wombatbob-skill', BOB);
+		skill('wombatalice-skill', ALICE);
+		skill('wombatshared-skill', null);
+		const chat = createChat({ userId: ALICE });
+		appendMessage(chat.id, { role: 'user', content: 'I have started cycling on Fridays.' });
+		const { runLearning } = await import('$lib/server/engine/profile-learn');
+		learnPrompts.length = 0;
+		await runLearning('manual', ALICE);
+		const [prompt] = learnPrompts;
+		expect(prompt).toContain('wombatalice-skill');
+		expect(prompt).toContain('wombatshared-skill');
+		expect(prompt).not.toContain('wombatbob-skill');
 	});
 });
 

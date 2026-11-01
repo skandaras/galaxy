@@ -361,6 +361,15 @@ export function disconnect(id: string): void {
 	void pooled.client.close().catch(() => {});
 }
 
+/**
+ * Close every pooled client. The server never needs this, since its pool lives
+ * as long as it does; a one-off process such as the evaluation CLI does, or the
+ * idle timers and stdio children keep it running after its work is done.
+ */
+export function disconnectAll(): void {
+	for (const id of [...pool.keys()]) disconnect(id);
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
 		const timer = setTimeout(() => reject(new Error(message)), ms);

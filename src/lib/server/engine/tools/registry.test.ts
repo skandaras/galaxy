@@ -23,6 +23,7 @@ const EXPECTED = [
 	'skill_load',
 	'skill_read',
 	'propose_skill',
+	'propose_skill_update',
 	'library_search',
 	'library_tree',
 	'library_read',
@@ -35,13 +36,6 @@ const EXPECTED = [
 	// web
 	'web_search',
 	'fetch_url',
-	// research, Ivory Tower only
-	'paper_search',
-	'shelf_read',
-	'shelf_write',
-	'read_paper',
-	'set_status',
-	'propose_tasks',
 	// boards
 	'board_read',
 	'card_read',

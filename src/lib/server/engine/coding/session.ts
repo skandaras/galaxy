@@ -10,7 +10,7 @@ import {
 	updateChat,
 	updateMessage
 } from '$lib/server/chats';
-import { resolveModel } from '$lib/server/providers/registry';
+import { resolveTextModel } from '$lib/server/providers/registry';
 import type { ProviderMessage } from '$lib/server/providers/types';
 import { assertBudget, getBudgetStatus } from '../budget';
 import { EngineError, getTaskConfig, pickModel, systemPromptFor } from '../engine';
@@ -250,7 +250,7 @@ export function startCodingTurn(opts: {
 			`${choice.model.displayName} does not support tool calling. Pick a tool-capable model for coding`
 		);
 	}
-	const backup = cfg?.backupModelId ? resolveModel(cfg.backupModelId) : null;
+	const backup = cfg?.backupModelId ? resolveTextModel(cfg.backupModelId) : null;
 
 	appendMessage(chat.id, {
 		role: 'user',

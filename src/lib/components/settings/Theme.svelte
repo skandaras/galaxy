@@ -8,6 +8,7 @@
 		freeName,
 		sameTheme,
 		themeOrigin,
+		themeVars,
 		type Theme
 	} from '$lib/theme';
 	import { fontStack, optionsFor, type FontRole } from '$lib/fonts';
@@ -111,30 +112,15 @@
 	 * draft applied to every page for the rest of the session, and a reload was
 	 * the only way back to the theme actually saved.
 	 *
-	 * Written as one map rather than sixteen calls so the set and the unset
-	 * cannot drift: a property added to one list and forgotten in the other is
-	 * exactly the bug this is fixing, one property at a time.
+	 * One map, from themeVars, so the set and the unset cannot drift, and so
+	 * the preview carries every token the saved stylesheet does. It kept its
+	 * own list once, which never gained the derived surfaces: previewing Paper
+	 * over Galaxy drew Paper's dark text on Galaxy's dark cards.
 	 */
 	$effect(() => {
 		if (!draft) return;
 		const root = document.documentElement;
-		const vars: Record<string, string> = {
-			'--bg': draft.bg,
-			'--bg-pane': draft.bgPane,
-			'--fg': draft.fg,
-			'--fg-dim': draft.fgDim,
-			'--heading': draft.heading,
-			'--label': draft.label,
-			'--galaxy': draft.galaxyColor,
-			'--accent': draft.accent,
-			'--border': draft.border,
-			'--danger': draft.danger,
-			'--font-ui': fontStack(draft.fontUi, 'ui'),
-			'--font-mono': fontStack(draft.fontMono, 'mono'),
-			'--radius': draft.radius,
-			'--glow': draft.glow,
-			'--glow-size': draft.glowStrength
-		};
+		const vars = themeVars(draft);
 		for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
 		// Restored rather than cleared: the layout's viewport effect owns nothing
 		// here, but a future one might, and putting back what was there is the

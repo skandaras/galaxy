@@ -1,7 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { and, asc, desc, eq, inArray, isNotNull, isNull, like, notExists, sql } from 'drizzle-orm';
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	getTableColumns,
+	gte,
+	inArray,
+	isNotNull,
+	isNull,
+	like,
+	notExists,
+	notInArray,
+	sql
+} from 'drizzle-orm';
 import { db, dataDir } from '$lib/server/db';
 import {
 	chats,
@@ -12,7 +26,8 @@ import {
 	notifications,
 	usageLog,
 	settings,
-	type AttachmentRef
+	type AttachmentRef,
+	type EvidenceItem
 } from '$lib/server/db/schema';
 import type { MessageTrace } from '$lib/run-timeline';
 
@@ -66,6 +81,8 @@ interface HiddenChat {
 	meta: ChatMeta;
 	messages: StoredMessage[];
 	attachments: Map<string, HiddenAttachment>;
+	/** What the tools read, by message id: the hidden half of `messages.evidence`. */
+	evidence: Map<string, EvidenceItem[]>;
 }
 
 // Hidden chats never touch the DB or disk: they live here, are visible only
@@ -177,7 +194,7 @@ export function createChat(opts: {
 		updatedAt: now
 	};
 	if (meta.hidden) {
-		hiddenChats.set(meta.id, { meta, messages: [], attachments: new Map() });
+		hiddenChats.set(meta.id, { meta, messages: [], attachments: new Map(), evidence: new Map() });
 	} else {
 		db.insert(chats)
 			.values({
@@ -235,11 +252,21 @@ export function findUserQuote(userId: string, chatId: string, quote: string): st
 	return rows.find((r) => comparable(r.content).includes(wanted))?.id ?? null;
 }
 
+/**
+ * Every column but the evidence. This is what both GET routes hand the
+ * browser, and a fetched page's text has no business riding along on every
+ * reload of a chat.
+ */
+const { evidence: _evidence, ...SHOWN_COLUMNS } = getTableColumns(messages);
+
+/** How many of the newest replies keep their evidence; older ones are nulled. */
+export const EVIDENCE_KEPT_REPLIES = 2;
+
 export function getMessages(chatId: string): StoredMessage[] {
 	const hidden = hiddenChats.get(chatId);
 	if (hidden) return [...hidden.messages];
 	return db
-		.select()
+		.select(SHOWN_COLUMNS)
 		.from(messages)
 		.where(eq(messages.chatId, chatId))
 		.orderBy(asc(messages.seq))
@@ -302,6 +329,8 @@ export function appendMessage(
 		attachments?: AttachmentRef[];
 		modelKey?: string;
 		trace?: MessageTrace | null;
+		/** What the tools behind this reply read. Never part of the returned message. */
+		evidence?: EvidenceItem[] | null;
 	}
 ): StoredMessage {
 	const now = Date.now();
@@ -324,13 +353,79 @@ export function appendMessage(
 	if (hidden) {
 		hidden.messages.push(stored);
 		hidden.meta.updatedAt = now;
+		if (msg.evidence?.length) hidden.evidence.set(stored.id, msg.evidence);
+		if (msg.role === 'assistant') {
+			const keep = new Set(newestReplies(hidden.messages));
+			for (const id of hidden.evidence.keys()) if (!keep.has(id)) hidden.evidence.delete(id);
+		}
 	} else {
 		db.insert(messages)
-			.values({ ...stored, createdAt: new Date(now) })
+			.values({ ...stored, evidence: msg.evidence?.length ? msg.evidence : null, createdAt: new Date(now) })
 			.run();
 		db.update(chats).set({ updatedAt: new Date(now) }).where(eq(chats.id, chatId)).run();
+		// Messages are never pruned, so this is what keeps fetched-page text on
+		// disk to a couple of replies' worth rather than one per page ever read.
+		if (msg.role === 'assistant') {
+			const keep = db
+				.select({ id: messages.id })
+				.from(messages)
+				.where(and(eq(messages.chatId, chatId), eq(messages.role, 'assistant')))
+				.orderBy(desc(messages.seq))
+				.limit(EVIDENCE_KEPT_REPLIES)
+				.all()
+				.map((r) => r.id);
+			db.update(messages)
+				.set({ evidence: null })
+				.where(
+					and(eq(messages.chatId, chatId), isNotNull(messages.evidence), notInArray(messages.id, keep))
+				)
+				.run();
+		}
 	}
 	return stored;
+}
+
+function newestReplies(list: StoredMessage[]): string[] {
+	return list
+		.filter((m) => m.role === 'assistant')
+		.slice(-EVIDENCE_KEPT_REPLIES)
+		.map((m) => m.id);
+}
+
+/**
+ * The evidence on this chat's newest replies, one entry per reply, newest
+ * first, leaving out anything compaction has already folded away.
+ *
+ * A reply that read nothing keeps its place as an empty entry. Dropping it made
+ * the reply before look like the last one, and the note then told the model
+ * that its latest answer rested on sources it had not used.
+ *
+ * Takes the chat's meta rather than an id so the caller must already hold an
+ * owned chat: this reads no ownership of its own.
+ */
+export function recentEvidence(chat: ChatMeta): EvidenceItem[][] {
+	const hidden = hiddenChats.get(chat.id);
+	if (hidden) {
+		return hidden.messages
+			.filter((m) => m.role === 'assistant' && m.seq >= chat.compactedUpTo)
+			.slice(-EVIDENCE_KEPT_REPLIES)
+			.reverse()
+			.map((m) => hidden.evidence.get(m.id) ?? []);
+	}
+	return db
+		.select({ evidence: messages.evidence })
+		.from(messages)
+		.where(
+			and(
+				eq(messages.chatId, chat.id),
+				eq(messages.role, 'assistant'),
+				gte(messages.seq, chat.compactedUpTo)
+			)
+		)
+		.orderBy(desc(messages.seq))
+		.limit(EVIDENCE_KEPT_REPLIES)
+		.all()
+		.map((r) => r.evidence ?? []);
 }
 
 /**
@@ -425,9 +520,9 @@ function purgeChatTrail(tx: Tx, chatId: string): void {
 	tx.delete(jobs).where(eq(jobs.chatId, chatId)).run();
 	tx.delete(events).where(eq(events.chatId, chatId)).run();
 	tx.update(usageLog).set({ chatId: null }).where(eq(usageLog.chatId, chatId)).run();
-	// State kept per chat as settings rows: a coding session's carried state, an
-	// Ivory run's scope, a plan waiting on approval. A chat id is a UUID, so this
-	// cannot reach a user's settings or the global ones.
+	// State kept per chat as settings rows, such as a coding session's carried
+	// state. A chat id is a UUID, so this cannot reach a user's settings or the
+	// global ones.
 	tx.delete(settings).where(eq(settings.scope, chatId)).run();
 }
 
@@ -492,8 +587,16 @@ export function setHidden(chatId: string, userId: string, hidden: boolean): Hide
 				text: att.extractedText ?? ''
 			});
 		}
+		const kept = new Map<string, EvidenceItem[]>();
+		for (const r of db
+			.select({ id: messages.id, evidence: messages.evidence })
+			.from(messages)
+			.where(and(eq(messages.chatId, chatId), isNotNull(messages.evidence)))
+			.all()) {
+			if (r.evidence?.length) kept.set(r.id, r.evidence);
+		}
 		const newMeta: ChatMeta = { ...meta, hidden: true, updatedAt: Date.now() };
-		hiddenChats.set(chatId, { meta: newMeta, messages: msgs, attachments: files });
+		hiddenChats.set(chatId, { meta: newMeta, messages: msgs, attachments: files, evidence: kept });
 		eraseChatRows(chatId);
 		rmSync(uploadsDir(chatId), { recursive: true, force: true });
 		return { meta: newMeta, dropped };
@@ -517,7 +620,7 @@ export function setHidden(chatId: string, userId: string, hidden: boolean): Hide
 		.run();
 	for (const m of record.messages) {
 		db.insert(messages)
-			.values({ ...m, createdAt: new Date(m.createdAt) })
+			.values({ ...m, evidence: record.evidence.get(m.id) ?? null, createdAt: new Date(m.createdAt) })
 			.run();
 	}
 	for (const [attId, file] of record.attachments) {
@@ -664,6 +767,24 @@ export interface AttachmentSummary {
 	mime: string;
 	kind: 'image' | 'document';
 	textChars: number;
+}
+
+/**
+ * The attachments whose opening the next request inlines: the ones on messages
+ * compaction has not folded away. buildContext inlines a document only from
+ * the active history, so once its message is folded a read of its first pages
+ * is new material again.
+ *
+ * Keyed by chat id alone, like listAttachments: the caller is a tool bound to
+ * a chat whose ownership was settled when the turn began.
+ */
+export function inlinedAttachmentIds(chatId: string): Set<string> {
+	const hidden = hiddenChats.get(chatId);
+	const from = hidden
+		? hidden.meta.compactedUpTo
+		: (db.select({ from: chats.compactedUpTo }).from(chats).where(eq(chats.id, chatId)).get()?.from ?? 0);
+	const active = getMessages(chatId).filter((m) => m.seq >= from);
+	return new Set(active.flatMap((m) => (m.attachments ?? []).map((a) => a.id)));
 }
 
 /** Every attachment on a chat, for the list_attachments tool. */

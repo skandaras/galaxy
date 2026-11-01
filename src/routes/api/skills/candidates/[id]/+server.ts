@@ -1,7 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
-import { decideCandidate } from '$lib/server/skills';
+import { decideCandidate, SkillPatchConflict } from '$lib/server/skills';
 import { emitEvent } from '$lib/server/engine/events';
 
 /**
@@ -13,7 +13,15 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	const user = requireUser(locals);
 	const body = await request.json().catch(() => ({}));
 	if (typeof body.approve !== 'boolean') error(400, 'approve must be a boolean');
-	const result = decideCandidate(params.id, body.approve, { userId: user.id });
+	let result;
+	try {
+		result = decideCandidate(params.id, body.approve, { userId: user.id });
+	} catch (err) {
+		// The skill moved on so the change no longer lands; it stays waiting, and
+		// the message says which edit stopped fitting.
+		if (err instanceof SkillPatchConflict) error(409, err.message);
+		throw err;
+	}
 	if (!result) error(404, 'Candidate not found or already decided');
 	emitEvent({
 		userId: user.id,

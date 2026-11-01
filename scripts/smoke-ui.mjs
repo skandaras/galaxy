@@ -280,7 +280,7 @@ const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
 
 // 1. Every page renders, and renders quietly. A page that throws during
 //    hydration still answers 200, so the bash smoke calls it healthy.
-for (const path of ['/chat', '/code', '/boards', '/library', '/profile', '/profile/survey', '/profile/import', '/ivory', '/ivory/new', '/settings', '/observatory', '/alignment']) {
+for (const path of ['/chat', '/code', '/boards', '/library', '/profile', '/profile/survey', '/profile/import', '/settings', '/observatory', '/alignment']) {
 	problems = [];
 	// Not networkidle: the app holds SSE streams open (notifications, the
 	// Observatory feed), so the network is never idle and every goto would sit
@@ -356,27 +356,28 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/profile', '/profi
 	await page.setViewportSize({ width: 1400, height: 900 });
 }
 
-// 1a. The Shelf with no GitHub token says so, instead of hanging on "Reading".
-//     This instance has no token, which is the state a fresh install is in.
+// 1a. Ivory Tower is switched off; an old link lands on chat rather than a 404.
 await page.goto(`${B}/ivory`);
-check(
-	'/ivory explains that no GitHub token is configured',
-	await page
-		.getByText('no GitHub token is configured')
-		.waitFor({ timeout: 5000 })
-		.then(() => true, () => false),
-	true
-);
-// The new-project form says the same instead of offering a form that cannot save.
-await page.goto(`${B}/ivory/new`);
-check(
-	'/ivory/new explains that no GitHub token is configured',
-	await page
-		.getByText('No GitHub token is configured, so there is nowhere to create a project')
-		.waitFor({ timeout: 5000 })
-		.then(() => true, () => false),
-	true
-);
+await page.waitForURL(/\/chat/, { timeout: 5000 }).catch(() => {});
+check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
+
+// 1a'. The browser's own controls follow the theme. app.html pins them to dark
+//      for the paint before the theme arrives, and Paper used to keep that.
+{
+	const schemeOnceThemed = async () => {
+		await page.waitForFunction(() => document.getElementById('galaxy-theme'));
+		return page.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+	};
+	const saved = await as(ALICE, '/api/settings/theme');
+	check('a dark theme asks for dark browser controls', await schemeOnceThemed(), 'dark');
+	await as(ALICE, '/api/settings/theme', {
+		method: 'PUT',
+		body: JSON.stringify({ theme: saved.presets.Paper })
+	});
+	await page.reload();
+	check('Paper asks for light ones', await schemeOnceThemed(), 'light');
+	await as(ALICE, '/api/settings/theme', { method: 'PUT', body: JSON.stringify({ theme: saved.theme }) });
+}
 
 // 1b. Every settings tab has a pane, and shows only its own.
 //
@@ -481,6 +482,17 @@ check(
 	await primary.click();
 	await page.waitForTimeout(400);
 	await page.locator('.preset', { hasText: 'Paper' }).click();
+	// The preview carries the derived surfaces and the colour scheme too. It
+	// once set only the stored colours, so Paper's dark text sat on Galaxy's
+	// dark cards until the theme was saved.
+	check(
+		'previewing Paper draws light cards and light browser controls',
+		await page.evaluate(() => {
+			const root = getComputedStyle(document.documentElement);
+			return [root.colorScheme, root.getPropertyValue('--surface').trim()];
+		}),
+		['light', '#fbfaf7']
+	);
 	await page.locator('.preset', { hasText: 'Galaxy 2' }).click();
 	check('coming back to it brings back the saved edit', await accent.inputValue(), '#00ccff');
 
@@ -525,6 +537,16 @@ check(
 	const pane = await page.locator('aside.pane').boundingBox();
 	check('the alerts panel is wider than the pane', panel.width > pane.width);
 	check('and is not clipped by it', panel.x + panel.width > pane.x + pane.width);
+	// Bounding boxes ignore clipping, which is how a panel cut off at the rail's
+	// edge passed the two checks above when the rail had a backdrop filter.
+	// Hit testing does not.
+	check(
+		'and is drawn past the rail, not clipped at its edge',
+		await page.evaluate(
+			({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.panel'),
+			{ x: panel.x + panel.width - 12, y: panel.y + panel.height / 2 }
+		)
+	);
 
 	const titles = await page.locator('.panel .title').allTextContents();
 	check('it lists what needs looking at', titles.length > 0);
@@ -1019,7 +1041,7 @@ check(
 	// The page renders client-side, so read the list only once it is drawn.
 	await admin.locator('.admin-nav .item').first().waitFor();
 	const sections = await admin.locator('.admin-nav .item').allTextContents();
-	check('admin has a section per feature', sections.length, 16);
+	check('admin has a section per feature', sections.length, 15);
 	check('admin lists its sections in three groups', await admin.locator('.admin-nav .group').count(), 3);
 	for (const label of sections) {
 		adminProblems.length = 0;
@@ -1175,6 +1197,24 @@ check(
 		(await learning()).candidates.find((c) => c.name === 'alpha-learn-checklist')?.status,
 		'approved'
 	);
+
+	// And changed afterwards: an agent proposes an edit to it, and the Waiting
+	// card draws the edit as a diff the owner applies from the page.
+	const patchChat = await as(ALICE, '/api/chats', { method: 'POST', body: '{}' });
+	await as(ALICE, `/api/chats/${patchChat.id}/messages`, {
+		method: 'POST',
+		body: JSON.stringify({ content: 'PATCH-SKILL', webSearch: false })
+	});
+	const patchWaiting = async () =>
+		(await learning()).candidates.find((c) => c.kind === 'patch' && c.status === 'pending');
+	for (let i = 0; i < 60 && !(await patchWaiting()); i++) await page.waitForTimeout(250);
+	await page.goto(`${B}/profile`);
+	const change = waiting.locator('.proposal[data-skill-candidate="patch"]');
+	await change.waitFor();
+	check('a skill change shows the line it adds', (await change.locator('.diff .add').innerText()).includes('3. Check the PATCH-APPLIED health page'), true);
+	await change.getByRole('button', { name: 'Apply change' }).click();
+	await change.waitFor({ state: 'detached' });
+	check('applying it changes the skill', (await as(ALICE, '/api/skills/alpha-learn-checklist')).body.includes('PATCH-APPLIED'), true);
 
 	// Something to turn down: the mock proposes from "beta-topic" as well.
 	const again = await as(ALICE, '/api/chats', { method: 'POST', body: '{}' });
@@ -1602,7 +1642,7 @@ check(
 	// the abort as a console error, which looks exactly like a broken page.
 	await phone.waitForTimeout(500);
 
-	for (const path of ['/chat', '/code', '/boards', '/library', '/ivory', '/settings']) {
+	for (const path of ['/chat', '/code', '/boards', '/library', '/settings']) {
 		phoneProblems = [];
 		await phone.goto(B + path);
 		// The same wait as the desktop loop, which is the whole payoff of leaving
@@ -1686,8 +1726,38 @@ check(
 		const panel = await phone.locator('.panel').boundingBox();
 		check('the alerts panel clears the tab bar', panel.y + panel.height <= bar.y + 1);
 		check('and clears the top strip', panel.y >= strip.height);
+		check(
+			'and is drawn, not clipped into the strip',
+			await phone.evaluate(
+				({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.panel'),
+				{ x: panel.x + panel.width / 2, y: panel.y + panel.height / 2 }
+			)
+		);
 		await phoneShot('alerts');
 		await phone.keyboard.press('Escape');
+	}
+
+	{
+		// A board card takes the whole screen on a phone. The page pane was once
+		// a stacking context all the time (a view-transition-name left on it),
+		// which put the card under the top strip whatever its z-index, Close
+		// button included.
+		await phone.goto(`${B}/boards`);
+		const card = phone.locator('article.board-card .card-face').first();
+		await card.waitFor();
+		await card.tap();
+		const close = phone.locator('aside.detail button[title="Close"]');
+		await close.waitFor();
+		const box = await close.boundingBox();
+		check(
+			'an open card draws over the top strip',
+			await phone.evaluate(
+				({ x, y }) => !!document.elementFromPoint(x, y)?.closest('aside.detail'),
+				{ x: box.x + box.width / 2, y: box.y + box.height / 2 }
+			)
+		);
+		await phoneShot('card-detail');
+		await close.tap();
 	}
 
 	{
@@ -2015,7 +2085,6 @@ check(
 		// docked feed is display:none at this width, so this is the way there.
 		check('More holds everything the bar could not', items, [
 			'◐ Profile',
-			'▲ Ivory Tower',
 			'◉ Alignment',
 			'⚙ Settings',
 			'◎ Activity'

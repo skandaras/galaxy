@@ -44,7 +44,7 @@
 	}}
 />
 
-<nav class="tabbar" aria-label="Main">
+<nav class="tabbar glass" aria-label="Main">
 	{#each buckets.tabs as tab (tab.href)}
 		<a
 			class="tab"
@@ -74,7 +74,7 @@
 
 {#if moreOpen}
 	<div class="more-scrim" role="presentation" onclick={() => (moreOpen = false)}></div>
-	<div class="more-sheet" role="menu" aria-label="More sections">
+	<div class="more-sheet glass" role="menu" aria-label="More sections">
 		{#each buckets.more as link (link.href)}
 			<a
 				class="more-item"
@@ -115,8 +115,10 @@
 			   composers, which used to. */
 			padding-bottom: env(safe-area-inset-bottom, 0px);
 			box-sizing: border-box;
-			background: var(--bg-pane);
+			/* Glass (the shared class) with a hairline that catches the accent in
+			   the middle and fades at the sides. */
 			border-top: 1px solid var(--border);
+			border-image: linear-gradient(90deg, var(--border), var(--edge), var(--border)) 1;
 			/* Same layer as the top strip and later in source order, which is what
 			   keeps the bar above anything docked up there. */
 			z-index: var(--z-chrome);
@@ -147,6 +149,14 @@
 		.glyph {
 			font-size: var(--text-lg);
 			line-height: 1;
+			/* The active tab's glyph sits in a soft pill, which marks it by shape
+			   as well as by colour. */
+			padding: 0.15rem 0.75rem;
+			border-radius: 999px;
+		}
+		.tab.on .glyph {
+			background: var(--accent-wash);
+			box-shadow: 0 0 calc(var(--glow-size) * 1.2) -4px var(--glow);
 		}
 		.label {
 			font-size: var(--text-xs);
@@ -170,9 +180,21 @@
 			position: fixed;
 			inset: auto 0 var(--above-bar) 0;
 			z-index: var(--z-popover);
-			background: var(--bg-pane);
-			border-top: 1px solid var(--border);
-			box-shadow: 0 -8px 24px rgb(0 0 0 / 0.35);
+			border-top: 1px solid var(--edge);
+			border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+			box-shadow: var(--shadow-3);
+			padding-top: 0.6rem;
+			animation: galaxy-rise var(--dur-2) var(--ease-out);
+		}
+		/* A grab bar, so the panel reads as a sheet that came up from the bar. */
+		.more-sheet::before {
+			content: '';
+			align-self: center;
+			width: 2.5rem;
+			height: 4px;
+			border-radius: 999px;
+			background: var(--border);
+			margin-bottom: 0.4rem;
 		}
 		.more-item {
 			display: flex;
@@ -185,7 +207,7 @@
 			text-decoration: none;
 		}
 		.more-item + .more-item {
-			border-top: 1px solid var(--border);
+			border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 		}
 		.more-item.on {
 			color: var(--accent);

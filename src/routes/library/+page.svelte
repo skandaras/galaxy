@@ -1502,7 +1502,7 @@
 		overflow: hidden;
 		white-space: nowrap;
 		text-overflow: ellipsis;
-		box-shadow: 0 2px 10px rgb(0 0 0 / 0.35);
+		box-shadow: var(--shadow-1);
 	}
 
 	.editor {

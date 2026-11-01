@@ -2878,11 +2878,6 @@ export async function safeFetch(
 export interface PageFetchDeps {
 	/** Injected in tests so no suite depends on the network. */
 	fetchImpl?: typeof fetch;
-	/**
-	 * Characters of text kept. Research wants a page's gist and keeps
-	 * PAGE_TEXT_CHARS; Ivory's reader wants a whole paper.
-	 */
-	clipChars?: number;
 }
 
 /** The prose alone, for callers that do not care where the page points. */
@@ -2933,10 +2928,7 @@ export async function fetchPageContent(
 	// attachments and a lot of primary material is only published this way.
 	if (bare === 'application/pdf') {
 		const { extractPdf } = await import('$lib/server/attachments');
-		return {
-			text: clipPage(await extractPdf(await readCappedBytes(res, MAX_PAGE_BYTES)), deps.clipChars),
-			links: []
-		};
+		return { text: clipPage(await extractPdf(await readCappedBytes(res, MAX_PAGE_BYTES))), links: [] };
 	}
 	if (bare && !READABLE_TYPE.test(bare)) {
 		throw new PageFetchError('unreadable-type', `Not readable as text: ${bare}`);
@@ -2954,7 +2946,7 @@ export async function fetchPageContent(
 	// comparison operators.
 	const html = bare ? /html|xml/.test(bare) : /^\s*(<!doctype html|<html|<)/i.test(body);
 	return {
-		text: clipPage(html ? htmlToReadableText(body) : body.trim(), deps.clipChars),
+		text: clipPage(html ? htmlToReadableText(body) : body.trim()),
 		// `res.url` rather than the requested one: a redirect moves what a
 		// relative href resolves against, and resolving against the old address
 		// is how a followed link 404s.

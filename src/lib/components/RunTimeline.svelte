@@ -224,7 +224,7 @@
 	/* A step with nothing under it yet is the live one: pulse it rather than
 	   leaving a static line that looks finished. */
 	.s-running .label {
-		animation: pulse 1.4s ease-in-out infinite;
+		animation: galaxy-pulse 1.4s ease-in-out infinite;
 	}
 	.tools {
 		list-style: none;
@@ -268,7 +268,7 @@
 		flex-shrink: 0;
 	}
 	.t-running .t-name {
-		animation: pulse 1.2s ease-in-out infinite;
+		animation: galaxy-pulse 1.2s ease-in-out infinite;
 	}
 	.t-error .t-name,
 	.t-error .t-detail,
@@ -342,11 +342,6 @@
 		border-left: 2px solid var(--border);
 		padding: 0.1rem 0 0.1rem 0.5rem;
 		margin: 0.15rem 0;
-	}
-	@keyframes pulse {
-		50% {
-			opacity: 0.35;
-		}
 	}
 	.noted {
 		display: flex;

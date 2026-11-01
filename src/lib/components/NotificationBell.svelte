@@ -155,7 +155,7 @@
 			onclick={() => (open = false)}
 			onkeydown={(e) => e.key === 'Escape' && (open = false)}
 		></div>
-		<div class="panel" style={`left:${at.left}px; bottom:${at.bottom}px; width:${at.width}px`}>
+		<div class="panel glass" style={`left:${at.left}px; bottom:${at.bottom}px; width:${at.width}px`}>
 			<header>
 				<span>Notifications</span>
 				<button class="clear" disabled={unread === 0} onclick={clearAll}>
@@ -238,17 +238,16 @@
 		position: fixed;
 		max-height: min(28rem, 70vh);
 		overflow-y: auto;
-		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		box-shadow: 0 6px 20px rgb(0 0 0 / 0.4);
+		border: 1px solid var(--edge);
+		border-radius: var(--radius-lg);
+		box-shadow: var(--shadow-2);
 		z-index: var(--z-popover);
 	}
 	/* The list scrolls under it, so the action stays reachable at fifty alerts. */
 	header {
 		position: sticky;
 		top: 0;
-		background: var(--bg-pane);
+		background: var(--surface-glass);
 		display: flex;
 		align-items: center;
 		justify-content: space-between;

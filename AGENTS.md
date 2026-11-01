@@ -2,7 +2,7 @@
 
 Galaxy is a self-hosted, model-agnostic AI workspace: SvelteKit 2 + Svelte 5 on Node 22,
 Drizzle + better-sqlite3, deployed as one Docker image. `PLAN.md` holds the architecture and
-the feature map; `docs/` holds install, accessibility, MCP, mobile and Feed.
+the feature map; `docs/` holds install, accessibility, MCP, mobile, Feed and the chat evaluation harness.
 
 It maintains itself. The coding agent running in this app is what edits this repository, so
 these are the conventions it is expected to already know.
@@ -39,7 +39,7 @@ because some functions have one.
 
 - `src/lib/server/engine/` — the agent loop (`loop.ts`), the task entry points (`engine.ts` chat, `coding/session.ts`, `research.ts`), background agents, and `tools/`.
 - `src/lib/server/` — domain modules: `chats`, `boards`, `library`, `profile`, `alignment`, `skills`, `settings`, `auth`, `api`.
-- `src/routes/api/**/+server.ts` — 120 endpoints, thin. Logic belongs in the domain module.
+- `src/routes/api/**/+server.ts` — 113 endpoints, thin. Logic belongs in the domain module.
 - `src/lib/components/`, `src/routes/**/+page.svelte` — the UI.
 
 Prefer extending an existing module to adding one. Two files worth knowing before you write
@@ -49,7 +49,7 @@ factories — a new tool appears in Admin without being registered twice).
 
 ## Rules that are not style
 
-**Every route guards.** All 120 call `requireUser`, `requireAdmin`, `requireCoder` or
+**Every route guards.** All 113 call `requireUser`, `requireAdmin`, `requireCoder` or
 `requireAlignment` from `$lib/server/api`. A new route with no guard is a bug, not an
 omission.
 

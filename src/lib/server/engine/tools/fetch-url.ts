@@ -2,6 +2,7 @@ import type { ToolDef } from '$lib/server/providers/types';
 import type { FetchSettings } from '$lib/server/settings';
 import { githubToken } from '../coding/workspace';
 import { assertPublicHttpUrl, htmlToText, READABLE_TYPE, readCappedBytes, safeFetch } from '../research';
+import { fencedContent } from '../evidence';
 import { BROWSER_UA } from './web-search';
 import type { LoopTool } from '../loop';
 
@@ -57,6 +58,19 @@ export function fetchUrlTool(cfg: FetchSettings, deps: FetchToolDeps = {}): Loop
 	return {
 		def: fetchUrlToolDef,
 		describe: (args) => String(args.url ?? ''),
+		// Only a page actually read: a repeat this turn, a refused type, an HTTP
+		// error and a spent allowance all report without `chars`.
+		// The address asked for rather than the one fetched, where a GitHub link
+		// was resolved: reopening the resolved API address would skip the
+		// resolution, and with it the token and the raw-content header, so a
+		// private repository answers 404 and a public one answers JSON.
+		evidence: (_args, output, meta) =>
+			typeof meta.url === 'string' && typeof meta.chars === 'number' && !meta.cached
+				? {
+						ref: typeof meta.resolvedFrom === 'string' ? meta.resolvedFrom : meta.url,
+						excerpt: fencedContent(output, '--- BEGIN CONTENT ---', '--- END CONTENT ---')
+					}
+				: null,
 		execute: async (args, report) => {
 			const raw = String(args.url ?? '').trim();
 			if (!raw) throw new Error('url is required');

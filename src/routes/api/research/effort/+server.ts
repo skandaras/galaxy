@@ -5,7 +5,7 @@ import { RESEARCH_EFFORTS, type ResearchEffort } from '$lib/research-effort';
 import { roundBudget, type RoundBudget } from '$lib/server/engine/research';
 import { researchSettings } from '$lib/server/settings';
 import { getTaskConfig } from '$lib/server/engine/engine';
-import { listEnabledModels, resolveModel } from '$lib/server/providers/registry';
+import { listEnabledModels, resolveTextModel } from '$lib/server/providers/registry';
 
 /**
  * What each effort level would actually buy, given the current admin ceiling.
@@ -37,7 +37,7 @@ export const GET: RequestHandler = ({ locals }) => {
  */
 function researchModelName(): string | null {
 	const configured = getTaskConfig('deep-research')?.primaryModelId;
-	const direct = configured ? resolveModel(configured) : null;
+	const direct = configured ? resolveTextModel(configured) : null;
 	if (direct) return direct.model.displayName;
 	return listEnabledModels()[0]?.displayName ?? null;
 }

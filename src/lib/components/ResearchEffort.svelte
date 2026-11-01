@@ -148,7 +148,7 @@
 		     handler this used to carry could never fire. -->
 		<div class="scrim" role="presentation" onclick={() => (open = false)}></div>
 		<div
-			class="panel"
+			class="panel glass"
 			role="dialog"
 			aria-label="Research effort"
 			style={`left:${at.left}px; bottom:${at.bottom}px; width:${at.width}px`}
@@ -213,10 +213,9 @@
 		position: fixed;
 		z-index: var(--z-popover);
 		box-sizing: border-box;
-		background: var(--bg-pane);
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		box-shadow: 0 6px 20px rgb(0 0 0 / 0.4);
+		border: 1px solid var(--edge);
+		border-radius: var(--radius-lg);
+		box-shadow: var(--shadow-2);
 		padding: 0.7rem 0.8rem 0.8rem;
 	}
 	.title {
@@ -264,7 +263,7 @@
 		.panel {
 			left: 0 !important;
 			width: 100% !important;
-			border-radius: 8px 8px 0 0;
+			border-radius: var(--radius-lg) var(--radius-lg) 0 0;
 		}
 	}
 </style>
