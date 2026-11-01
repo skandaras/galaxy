@@ -32,12 +32,12 @@
 		isTimelineChunk,
 		itemsFromTrace,
 		notedIn,
-		liveActivity,
 		unfinishedNote,
 		type MessageTrace,
 		type TimelineItem
 	} from '$lib/run-timeline';
 	import { refreshesOverview, type AgentRow, type SessionOverview } from '$lib/session-panel';
+	import { ENDING_MS, TYPING_MS, presenceOf } from '$lib/presence';
 
 	interface ChatMeta {
 		id: string;
@@ -217,11 +217,32 @@
 	/** Steps, stages and notices for the run in flight, in the order they arrived. */
 	let timeline = $state<TimelineItem[]>([]);
 	/**
-	 * What the run is doing right now, for the indicator beside it. Both search
+	 * What the run is doing right now, for the Orrery beside it. Both search
 	 * tools reach this page — library_search is always in the coding toolset and
 	 * web_search is there whenever the toggle above is on.
 	 */
-	const activity = $derived(liveActivity(timeline));
+	const presence = $derived(
+		presenceOf({ timeline, question: !!question, legText: streamText.slice(streamMark) })
+	);
+	/** The Orrery's last pose after a run ends, tied to the session it ended in. */
+	let ending = $state<{ state: 'done' | 'error'; chatId: string | undefined } | null>(null);
+	let endingTimer: ReturnType<typeof setTimeout> | undefined;
+	function endTurn(state: 'done' | 'error') {
+		clearTimeout(endingTimer);
+		ending = { state, chatId: current?.chatId };
+		endingTimer = setTimeout(() => (ending = null), ENDING_MS[state]);
+	}
+	/** Listening: the empty session's Orrery brightens while the composer is being typed in. */
+	let typing = $state(false);
+	$effect(() => {
+		if (!input) {
+			typing = false;
+			return;
+		}
+		typing = true;
+		const t = setTimeout(() => (typing = false), TYPING_MS);
+		return () => clearTimeout(t);
+	});
 	/**
 	 * How the last run ended, when that was not "it finished". Held in page
 	 * state rather than on the message: it describes the run, and it is gone on
@@ -284,6 +305,7 @@
 		viewGeneration++;
 		cancelOverview();
 		closeStream();
+		clearTimeout(endingTimer);
 	});
 
 	/**
@@ -511,6 +533,8 @@
 		errorBanner = null;
 		recoveries = carriedRecoveries;
 		activeJobId = jobId;
+		clearTimeout(endingTimer);
+		ending = null;
 		stopping = false;
 		streaming = true;
 		streamText = '';
@@ -592,11 +616,13 @@
 				lastStopReason = chunk.stopReason ?? null;
 				const chatId = current?.chatId;
 				finalize();
+				endTurn('done');
 				if (chatId) void reconcile(chatId);
 			}
 			else if (chunk.type === 'error') {
 				errorBanner = chunk.message;
 				finalize(false);
+				endTurn('error');
 				// A run that failed may still have committed, or run the checks.
 				void refreshOverview();
 			}
@@ -1262,10 +1288,13 @@
 
 			<div class="thread" bind:this={threadEl}>
 				{#if !messages.length && !streaming}
-					<div class="empty">
-						{current.mode === 'plan'
-							? 'Describe what you want built — the agent will explore the repo and propose a plan.'
-							: 'Describe what you want done — the agent will implement, commit and push.'}
+					<div class="empty hero">
+						<GalaxyOrb presence={typing ? 'typing' : 'idle'} size="clamp(7rem, 22vw, 9rem)" dotScale={0.34} count={96} bare />
+						<p>
+							{current.mode === 'plan'
+								? 'Describe what you want built — the agent will explore the repo and propose a plan.'
+								: 'Describe what you want done — the agent will implement, commit and push.'}
+						</p>
 					</div>
 				{/if}
 				{#each messages as msg (msg.id)}
@@ -1300,21 +1329,31 @@
 						{#if streamText}
 							<Markdown text={streamText} />
 						{/if}
-						{#if !question && (!streamText || activity.mode === 'searching')}
-							<!-- Shown whenever nothing else is moving, not only before the
-							     first step. The old gate dropped this the moment a timeline
-							     existed, so every silence after the first — and a reasoning
-							     model goes quiet again between every leg — looked exactly
-							     like a hung run. Parked on a question is the one silence
-							     that is not the model working, and the rail says so. -->
-							<div class="live">
-								<GalaxyOrb
-									mode={activity.mode}
-									label={activity.label ?? `${streamModel || '…'} is working`}
-								/>
-								{#if thought}<span class="thought">{thought}</span>{/if}
-							</div>
-						{/if}
+						<!-- For the whole run, below whatever has streamed so far. It used
+						     to hide while text streamed and for a question; it now carries
+						     those states itself (writing, and the ring that waits on you),
+						     so a silence between legs never looks like a hung run and a
+						     question never looks like work. -->
+						<div class="live">
+							<GalaxyOrb
+								presence={presence.state}
+								calls={presence.calls}
+								label={presence.label ?? `${streamModel || '…'} is working`}
+								detail={thought}
+								size="clamp(2.6rem, 7vw, 3rem)"
+								dotScale={0.75}
+							/>
+						</div>
+					</div>
+				{/if}
+				{#if ending && !streaming && ending.chatId === current.chatId}
+					<div class="live">
+						<GalaxyOrb
+							presence={ending.state}
+							label={ending.state === 'done' ? 'Done' : 'Ran into a problem'}
+							size="clamp(2.6rem, 7vw, 3rem)"
+							dotScale={0.75}
+						/>
 					</div>
 				{/if}
 				{#if unfinishedNote(lastStopReason) && !streaming}
@@ -1741,6 +1780,18 @@
 	.empty.center {
 		margin: auto;
 	}
+	.empty.hero {
+		margin: auto;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 1.4rem;
+		text-align: center;
+	}
+	.empty.hero p {
+		margin: 0;
+		max-width: 46ch;
+	}
 	/* Held inside the column it sits in. The 50rem cap this had was wider than a
 	   phone, so a long unbroken path in a reply could still push the thread
 	   sideways; Chat breaks it for the same reason. */
@@ -1777,22 +1828,9 @@
 	   copies for the same reason. See the same rules there. */
 	.live {
 		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 0.45rem;
-		margin-top: 0.35rem;
-	}
-	/* The model's own words about what it is doing. Dim, small and italic so it
-	   reads as a status line rather than as the beginning of the reply — it is
-	   not kept, and mistaking it for the answer would be worse than not showing
-	   it. Held to a readable measure so a long thought does not stretch the
-	   pane. */
-	.thought {
-		max-width: 62ch;
-		color: var(--fg-dim);
-		font-size: var(--text-sm);
-		font-style: italic;
-		line-height: 1.45;
+		align-items: center;
+		margin-top: 0.5rem;
+		min-width: 0;
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.dot {

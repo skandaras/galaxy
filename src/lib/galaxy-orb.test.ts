@@ -34,7 +34,7 @@ describe('orbDots', () => {
 	it('gives each orbit an orthonormal basis', () => {
 		// The keyframes treat u and v as perpendicular unit vectors. If they stop
 		// being either, the circle becomes an ellipse the depth cue then lies about.
-		for (const pattern of ['free', 'axial'] as const) {
+		for (const pattern of ['free', 'axial', 'ring', 'planar'] as const) {
 			for (const d of orbDots({ count: 60, pattern })) {
 				expect(Math.hypot(d.ux, d.uy, d.uz)).toBeCloseTo(1, 3);
 				expect(Math.hypot(d.vx, d.vy, d.vz)).toBeCloseTo(1, 3);
@@ -47,11 +47,11 @@ describe('orbDots', () => {
 		// This is what keeps a crowd of independently tilted orbits reading as one
 		// sphere. A dot whose distance varied would bulge out of the silhouette at
 		// one end of its circle and pass through the core at the other.
-		for (const pattern of ['free', 'axial'] as const) {
+		for (const pattern of ['free', 'axial', 'ring', 'planar'] as const) {
 			for (const d of orbDots({ count: 40, pattern })) {
 				const radii = TURNS.map((t) => Math.hypot(...posAt(d, t)));
 				for (const r of radii) expect(r).toBeCloseTo(radii[0], 3);
-				expect(radii[0]).toBeGreaterThan(0.5);
+				expect(radii[0]).toBeGreaterThan(pattern === 'planar' ? 0.3 : 0.5);
 				expect(radii[0]).toBeLessThanOrEqual(1);
 			}
 		}
@@ -65,7 +65,7 @@ describe('orbDots', () => {
 	});
 
 	it('never leaves a dot with no circle to travel', () => {
-		for (const pattern of ['free', 'axial'] as const) {
+		for (const pattern of ['free', 'axial', 'ring', 'planar'] as const) {
 			for (const d of orbDots({ count: 80, pattern })) {
 				expect(d.rad).toBeGreaterThan(0.15);
 			}
@@ -134,6 +134,41 @@ describe('orbDots', () => {
 				return Math.max(...ps) - Math.min(...ps);
 			};
 			expect(range('axial')).toBeLessThan(range('free'));
+		});
+	});
+
+	describe('ring', () => {
+		it('opens into one flat circle facing the viewer', () => {
+			// Waiting on the person is the one pose that must not look like work:
+			// no depth, no churn, every dot on the same band.
+			const dots = orbDots({ count: 40, pattern: 'ring' });
+			for (const d of dots) {
+				expect(d.uz).toBe(0);
+				expect(d.vz).toBe(0);
+				expect(d.cy).toBe(0);
+				expect(d.rad).toBeGreaterThanOrEqual(0.8);
+				expect(d.rad).toBeLessThanOrEqual(0.92);
+			}
+		});
+
+		it('spreads its dots round the circle rather than bunching them', () => {
+			const quarters = [0, 0, 0, 0];
+			for (const d of orbDots({ count: 40, pattern: 'ring' })) quarters[Math.min(3, Math.floor(d.phase * 4))]++;
+			for (const n of quarters) expect(n).toBeGreaterThan(5);
+		});
+	});
+
+	describe('planar', () => {
+		it('puts every orbit in one plane, tipped toward the viewer', () => {
+			const normals = orbDots({ count: 40, pattern: 'planar' }).map(normalOf);
+			for (const n of normals) {
+				expect(n[0]).toBeCloseTo(normals[0][0], 3);
+				expect(n[1]).toBeCloseTo(normals[0][1], 3);
+				expect(n[2]).toBeCloseTo(normals[0][2], 3);
+			}
+			// Neither edge-on (a line) nor face-on (indistinguishable from the ring).
+			expect(Math.abs(normals[0][2])).toBeGreaterThan(0.2);
+			expect(Math.abs(normals[0][2])).toBeLessThan(0.6);
 		});
 	});
 

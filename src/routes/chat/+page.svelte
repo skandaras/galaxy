@@ -32,11 +32,11 @@
 		applyStreamText,
 		itemsFromTrace,
 		notedIn,
-		liveActivity,
 		unfinishedNote,
 		type MessageTrace,
 		type TimelineItem
 	} from '$lib/run-timeline';
+	import { ENDING_MS, TYPING_MS, presenceOf } from '$lib/presence';
 
 	interface ChatMeta {
 		id: string;
@@ -190,11 +190,35 @@
 	 */
 	let lastStopReason = $state<string | null>(null);
 	/**
-	 * What the run is doing right now, for the indicator beside it. Derived from
+	 * What the run is doing right now, for the Orrery beside it. Derived from
 	 * the timeline rather than tracked separately, so a client that reconnects
 	 * mid-search reads the same answer as one that watched the whole run.
 	 */
-	const activity = $derived(liveActivity(timeline));
+	const presence = $derived(
+		presenceOf({ timeline, question: !!question, legText: streamText.slice(streamMark) })
+	);
+	/**
+	 * The Orrery's last pose after a turn ends: a settle, or the error. Tied to
+	 * the chat it ended in, so switching chats does not carry it along.
+	 */
+	let ending = $state<{ state: 'done' | 'error'; chatId: string | undefined } | null>(null);
+	let endingTimer: ReturnType<typeof setTimeout> | undefined;
+	function endTurn(state: 'done' | 'error') {
+		clearTimeout(endingTimer);
+		ending = { state, chatId: currentChat?.id };
+		endingTimer = setTimeout(() => (ending = null), ENDING_MS[state]);
+	}
+	/** Listening: the empty chat's Orrery brightens while the composer is being typed in. */
+	let typing = $state(false);
+	$effect(() => {
+		if (!input) {
+			typing = false;
+			return;
+		}
+		typing = true;
+		const t = setTimeout(() => (typing = false), TYPING_MS);
+		return () => clearTimeout(t);
+	});
 	let stages = $state<{ name: string; detail?: string }[]>([]);
 	/**
 	 * A research run at full effort emits a stage per round plus the fixed ones,
@@ -294,6 +318,7 @@
 	onDestroy(() => {
 		viewGeneration++;
 		closeStream();
+		clearTimeout(endingTimer);
 	});
 
 	/**
@@ -583,6 +608,8 @@
 		errorBanner = null;
 		recoveries = carriedRecoveries;
 		activeJobId = jobId;
+		clearTimeout(endingTimer);
+		ending = null;
 		stopping = false;
 		streaming = true;
 		streamText = '';
@@ -664,6 +691,7 @@
 					];
 				}
 				finalizeStream();
+				endTurn('done');
 				if (chat) void reconcile(chat.id);
 				if (chat && wasFirstTurn && !chat.titleCustom) void pickUpAutoTitle(chat.id);
 			}
@@ -674,6 +702,7 @@
 				// flag must not survive to leave Research mode after some later run.
 				researchRunning = false;
 				finalizeStream(false);
+				endTurn('error');
 			}
 		};
 		source.onerror = () => {
@@ -1338,6 +1367,7 @@
 		<div class="thread" bind:this={threadEl}>
 			{#if !currentChat && !messages.length}
 				<div class="empty">
+					<GalaxyOrb presence={typing ? 'typing' : 'idle'} size="clamp(7rem, 22vw, 9rem)" dotScale={0.34} count={96} bare />
 					<p>Ask anything to start a new chat.</p>
 				</div>
 			{/if}
@@ -1425,21 +1455,31 @@
 					{#if streamText}
 						<Markdown text={streamText} />
 					{/if}
-					{#if question}
-						<span class="thinking">waiting on your answer</span>
-					{:else if !streamText || activity.mode === 'searching'}
-						<!-- Shown whenever nothing else is moving, not only before the
-						     first step. A reasoning model goes quiet again between every
-						     leg, and hiding this the moment a timeline existed left that
-						     silence looking identical to a hung run. -->
-						<div class="live">
-							<GalaxyOrb
-								mode={activity.mode}
-								label={activity.label ?? `${streamModel || '…'} is thinking`}
-							/>
-							{#if thought}<span class="thought">{thought}</span>{/if}
-						</div>
-					{/if}
+					<!-- For the whole turn, below whatever has streamed so far. It used to
+					     hide while text streamed and give way to a bare line for a
+					     question; it now carries those states itself (writing, and the
+					     ring that waits on you), so a silence between legs never looks
+					     like a hung run and a question never looks like work. -->
+					<div class="live">
+						<GalaxyOrb
+							presence={presence.state}
+							calls={presence.calls}
+							label={presence.label ?? `${streamModel || '…'} is thinking`}
+							detail={thought}
+							size="clamp(2.6rem, 7vw, 3rem)"
+							dotScale={0.75}
+						/>
+					</div>
+				</div>
+			{/if}
+			{#if ending && !streaming && ending.chatId === currentChat?.id}
+				<div class="live">
+					<GalaxyOrb
+						presence={ending.state}
+						label={ending.state === 'done' ? 'Done' : 'Ran into a problem'}
+						size="clamp(2.6rem, 7vw, 3rem)"
+						dotScale={0.75}
+					/>
 				</div>
 			{/if}
 			{#if unfinishedNote(lastStopReason) && !streaming}
@@ -1755,6 +1795,10 @@
 	}
 	.empty {
 		margin: auto;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 1.4rem;
 		text-align: center;
 		color: var(--fg-dim);
 		font-size: var(--text-md);
@@ -1907,29 +1951,11 @@
 	.stage-sep {
 		opacity: 0.5;
 	}
-	.thinking {
-		color: var(--fg-dim);
-		font-size: var(--text-md);
-		animation: galaxy-pulse 1.4s ease-in-out infinite;
-	}
 	.live {
 		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 0.45rem;
-		margin-top: 0.35rem;
-	}
-	/* The model's own words about what it is doing. Dim, small and italic so it
-	   reads as a status line rather than as the beginning of the reply — it is
-	   not kept, and mistaking it for the answer would be worse than not
-	   showing it. Held to a readable measure so a long thought does not stretch
-	   the pane. */
-	.thought {
-		max-width: 62ch;
-		color: var(--fg-dim);
-		font-size: var(--text-sm);
-		font-style: italic;
-		line-height: 1.45;
+		align-items: center;
+		margin-top: 0.5rem;
+		min-width: 0;
 	}
 	/* Stays put after the turn ends. Chat had no signal at all for a turn that
 	   ran out of steps — it just stopped. */
