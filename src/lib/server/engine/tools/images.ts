@@ -44,7 +44,8 @@ export function imageTools(chatId: string, userId: string): LoopTool[] {
 					'include it in your reply exactly as given, or the user never sees what you drew. ' +
 					'Pass reference_attachment_ids to work from images already in the conversation. ' +
 					'Use exact attachment ids supplied with the message; if you do not have them, call list_attachments first. Never guess an id. ' +
-					'Set the other options only when the user asked for them; leave them out otherwise.',
+					'For a local edit, describe only the requested change and keep the canvas, framing and other proportions unchanged. ' +
+					'Do not change aspect_ratio to enlarge an object. Set the other options only when the user asked for them; leave them out otherwise.',
 				parameters: {
 					type: 'object',
 					properties: {
@@ -90,14 +91,23 @@ export function imageTools(chatId: string, userId: string): LoopTool[] {
 			},
 			describe: (a) => String(a.prompt ?? '').slice(0, 80),
 			execute: async (a, report) => {
-				const prompt = String(a.prompt ?? '').trim();
-				if (!prompt) throw new Error('prompt is required');
+				const requested = String(a.prompt ?? '').trim();
+				if (!requested) throw new Error('prompt is required');
 				const read = readImageOptions(a);
 				if ('problem' in read) throw new Error(read.problem);
 				const options = read.options;
 
 				const choice = imageModel();
 				const references = referenceUrls(chatId, a);
+				const prompt = references.length ? [
+					'Edit the supplied reference image(s); the first reference is the base image. ' +
+					'Preserve identity, composition, camera framing and all details not requested to change. ' +
+					'Change the requested element locally; do not stretch or distort the whole image or unrelated proportions to make an element larger.',
+					options.aspectRatio && options.aspectRatio !== 'auto'
+						? `Use the requested canvas aspect ratio ${options.aspectRatio}.`
+						: 'Keep the base image canvas aspect ratio unless the requested edit explicitly changes it.',
+					`Requested edit: ${requested}`
+				].join('\n\n') : requested;
 
 				let res: { images: GeneratedImage[]; usage: Usage | null; text?: string };
 				try {
@@ -139,7 +149,7 @@ export function imageTools(chatId: string, userId: string): LoopTool[] {
 					);
 				}
 
-				const base = fileBase(a.name, prompt);
+				const base = fileBase(a.name, requested);
 				const links = images.map((img, i) => {
 					const data = Buffer.from(img.base64, 'base64');
 					const ref = addAttachment(chatId, {
@@ -242,14 +252,25 @@ function referenceUrls(chatId: string, args: Record<string, unknown>): string[] 
 		: typeof args.reference_attachment_id === 'string'
 			? [args.reference_attachment_id]
 			: [];
-	const ids = [...new Set(listed.map((x) => String(x ?? '').trim()).filter(Boolean))];
+	const ids = [...new Set(listed.map((x) => {
+		const ref = String(x ?? '').trim();
+		// Replies show attachment links, so an agent may send the link instead
+		// of the id. Resolve its path locally; never fetch an arbitrary URL.
+		let path = ref;
+		try { path = new URL(ref).pathname; } catch { /* A bare id or relative path. */ }
+		const prefix = `/api/chats/${chatId}/attachments/`;
+		return path.startsWith(prefix) && !path.slice(prefix.length).includes('/')
+			? path.slice(prefix.length) : ref;
+	}).filter(Boolean))];
 	if (ids.length > MAX_REFERENCES) {
 		throw new Error(`At most ${MAX_REFERENCES} reference images; ${ids.length} were given.`);
 	}
 	const attached = listAttachments(chatId);
 	return ids.map((id) => {
 		const match = attached.find((x) => x.id === id);
-		if (!match) throw new Error(`No attachment with id ${id}. Call list_attachments first.`);
+		if (!match) throw new Error(`No attachment with id ${id} on this conversation. ` +
+			'Call list_attachments and pass an exact image id or its attachment link. ' +
+			'Do not substitute a different version or assume stored images need reattaching.');
 		if (match.kind !== 'image') throw new Error(`${match.name} is not an image.`);
 		const url = attachmentDataUrl(chatId, id);
 		if (!url) throw new Error(`Could not read ${match.name}.`);

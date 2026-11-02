@@ -6,6 +6,7 @@ import {
 	getChat,
 	getMessages,
 	listAttachments,
+	inlinedAttachmentIds,
 	recentEvidence,
 	updateChat,
 	type ChatMeta
@@ -356,10 +357,11 @@ export function prepareChatTurn(opts: {
 	// unable to write PDFs rather than offering a tool that always throws.
 	if (typstReady()) tools.push(...documentTools(chat.id));
 
-	// Only where the model cannot see the picture itself. One that can already
-	// has it in context, and offering it a tool to describe what it is looking at
-	// is an invitation to pay for the same image twice.
-	if (!choice.model.supportsVision) tools.push(...visionTools(chat.id, opts.userId));
+	// Vision support does not mean every stored image is in context. Older
+	// generated versions and compacted uploads still need an inspection path.
+	const inlineIds = inlinedAttachmentIds(chat.id);
+	const storedImages = listAttachments(chat.id).some((a) => a.kind === 'image' && !inlineIds.has(a.id));
+	if (!choice.model.supportsVision || storedImages) tools.push(...visionTools(chat.id, opts.userId));
 
 	/**
 	 * Naming happens inside this turn when the chat is still unnamed: the agent

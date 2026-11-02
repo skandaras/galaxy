@@ -46,8 +46,8 @@ export const viewImageToolDef: ToolDef = {
 	name: 'view_image',
 	description:
 		'Ask a vision model what is in an image attached to this conversation, and get its answer ' +
-		'back as text. You cannot see images yourself, so this is how you read a screenshot, a photo, ' +
-		'a chart or a scanned page. Ask for what you actually need ("what does the error say?", ' +
+		'back as text. Use this for stored images not shown in your current context, or when you cannot read images yourself. ' +
+		'Do not call it for pixels already visible in context. Ask for what you actually need ("what does the error say?", ' +
 		'"transcribe the table", "what is wrong with this layout?") rather than for a description: ' +
 		'a specific question gets a specific answer, and you can call it again for more. One image ' +
 		'per call; several calls in one turn run together.',

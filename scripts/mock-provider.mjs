@@ -560,10 +560,10 @@ const server = createServer(async (req, res) => {
 		const wantsTool = offered('web_search') && everAsksFor('search');
 		// Same shape as the search trigger above, for the drawing path: the agent
 		// calls generate_image, which calls the painter model behind it.
-		const wantsImage = offered('generate_image') && asksFor('draw');
+		const wantsImage = offered('generate_image') && (asksFor('draw') || asksFor('edit-previous-image'));
 		// And the reading path: a model with no vision is offered view_image, and
 		// only then can it be asked to look at anything.
-		const wantsView = offered('view_image') && asksFor('look');
+		const wantsView = offered('view_image') && (asksFor('look') || asksFor('inspect-stored-image'));
 
 		// A provider that is simply down. Checked before either path picks its
 		// response headers — a 503 after the SSE headers are already out is an
@@ -616,7 +616,7 @@ const server = createServer(async (req, res) => {
 			const shown = Array.isArray(last?.content)
 				? last.content.find((part) => part?.type === 'image_url')
 				: null;
-			if (shown) {
+			if (shown && !(parsed.modalities ?? []).includes('image')) {
 				const isData = String(shown.image_url?.url ?? '').startsWith('data:image/');
 				res.writeHead(200, { 'content-type': 'application/json' });
 				res.end(
@@ -671,6 +671,15 @@ const server = createServer(async (req, res) => {
 				return;
 			}
 			if (isPainter(parsed.model) && (parsed.modalities ?? []).includes('image')) {
+				if (parsed.messages.some((m) => textOf(m.content).includes('local-edit-smoke'))) {
+					const parts = parsed.messages.find((m) => m.role === 'user')?.content;
+					if (!Array.isArray(parts) || !parts.some((p) => p.type === 'image_url' && p.image_url?.url === `data:image/png;base64,${PIXEL_PNG}`) ||
+						!textOf(parts).includes('do not stretch or distort') || parsed.image_config?.aspect_ratio) {
+						res.writeHead(400, { 'content-type': 'application/json' });
+						res.end(JSON.stringify({ error: { message: 'edit lost its original pixels or preservation constraints' } }));
+						return;
+					}
+				}
 				res.writeHead(200, { 'content-type': 'application/json' });
 				res.end(
 					JSON.stringify({
@@ -1304,6 +1313,18 @@ const server = createServer(async (req, res) => {
 			delta(res, { tool_calls: [{ index: 0, function: { arguments: 'axy news"}' } }] });
 			delta(res, {}, 'tool_calls');
 		} else if (wantsImage) {
+			let earlier;
+			if (asksFor('edit-previous-image')) {
+				const context = parsed.messages.find((m) => textOf(m.content).includes('[Earlier generated images:'));
+				const labels = Array.isArray(context?.content) ? context.content.filter((p) => p.type === 'text') : [];
+				earlier = labels.map((p) => { try { return JSON.parse(p.text); } catch { return null; } }).find((p) => p?.id);
+				if (!earlier || !context.content.some((p) => p.type === 'image_url')) {
+					delta(res, { content: 'NO-PREVIOUS-IMAGE-CONTEXT' }, 'stop');
+					res.write('data: [DONE]\n\n');
+					res.end();
+					return;
+				}
+			}
 			delta(res, {
 				tool_calls: [
 					{
@@ -1312,7 +1333,8 @@ const server = createServer(async (req, res) => {
 						function: {
 							name: 'generate_image',
 							arguments: JSON.stringify(
-								asksFor('wide')
+								earlier ? { prompt: 'local-edit-smoke: increase only the hat slightly', reference_attachment_ids: [earlier.id] }
+								: asksFor('wide')
 									? { prompt: 'a wide banner of a spiral galaxy', name: 'banner', aspect_ratio: '16:9' }
 									: { prompt: 'a spiral galaxy', name: 'galaxy' }
 							)
@@ -1329,7 +1351,9 @@ const server = createServer(async (req, res) => {
 						id: 'call_view',
 						function: {
 							name: 'view_image',
-							arguments: JSON.stringify({ question: 'what does it say?' })
+							arguments: JSON.stringify({ question: 'what does it say?', ...(asksFor('inspect-stored-image') ? {
+								id: textOf(parsed.messages.find((m) => textOf(m.content).includes('[Earlier generated images:'))?.content).match(/"id":"([^"]+)"/)?.[1]
+							} : {}) })
 						}
 					}
 				]

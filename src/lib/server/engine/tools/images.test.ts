@@ -199,6 +199,46 @@ describe('generate_image', () => {
 		expect(content.map((c) => c.type)).toEqual(['text', 'image_url']);
 	});
 
+	it('edits an earlier generated version by its reply link in a fresh tool instance', async () => {
+		const { chatId, tools: t } = tools();
+		await byName(t, 'generate_image').execute({ prompt: 'original portrait' });
+		const [original] = listAttachments(chatId);
+		scripted = { images: [{ mime: 'image/png', base64: Buffer.from('different version').toString('base64') }] };
+		await byName(t, 'generate_image').execute({ prompt: 'another portrait' });
+		await byName(imageTools(chatId, USER), 'generate_image').execute({
+			prompt: 'increase the hat slightly',
+			reference_attachment_ids: [`/api/chats/${chatId}/attachments/${original.id}`]
+		});
+		const content = (requests[2].messages as { role: string; content: unknown }[]).find(
+			(m) => m.role === 'user')!.content as { type: string; text?: string; image_url?: { url: string } }[];
+		expect(content[1].image_url?.url).toBe(`data:image/png;base64,${PIXEL}`);
+		expect(content[0].text).toContain('do not stretch or distort');
+		expect(content[0].text).toContain('Keep the base image canvas aspect ratio');
+		expect(content[0].text).toContain('increase the hat slightly');
+		expect(requests[2].imageConfig).toBeUndefined();
+	});
+
+	it('keeps an explicitly requested canvas change on an edit', async () => {
+		const { chatId, tools: t } = tools();
+		await byName(t, 'generate_image').execute({ prompt: 'a portrait' });
+		const [original] = listAttachments(chatId);
+		await byName(t, 'generate_image').execute({ prompt: 'extend the background',
+			reference_attachment_id: original.id, aspect_ratio: '16:9' });
+		expect(requests[1].imageConfig).toEqual({ aspect_ratio: '16:9' });
+		expect(JSON.stringify(requests[1].messages)).toContain('Use the requested canvas aspect ratio 16:9');
+	});
+
+	it('never resolves a link to an image from another conversation', async () => {
+		const { chatId, tools: t } = tools();
+		await byName(t, 'generate_image').execute({ prompt: 'a portrait' });
+		const [original] = listAttachments(chatId);
+		const other = tools();
+		await expect(byName(other.tools, 'generate_image').execute({ prompt: 'change the smile',
+			reference_attachment_ids: [`/api/chats/${chatId}/attachments/${original.id}`]
+		})).rejects.toThrow(/No attachment/);
+		expect(requests).toHaveLength(1);
+	});
+
 	it('rejects a reference that is not on this conversation', async () => {
 		const { tools: t } = tools();
 		await expect(
@@ -262,7 +302,9 @@ describe('generate_image', () => {
 				seed: 7
 			});
 			const sent = imageApiRequests[1];
-			expect(sent.prompt).toBe('you draw\n\nthe barn as a sticker');
+			expect(sent.prompt).toContain('you draw\n\nEdit the supplied reference');
+			expect(sent.prompt).toContain('Requested edit: the barn as a sticker');
+			expect(sent.prompt).toContain('do not stretch or distort');
 			expect(sent).toMatchObject({ background: 'transparent', outputFormat: 'png', quality: 'high', n: 2, seed: 7 });
 			expect((sent.references as string[])[0]).toMatch(/^data:image\/png;base64,/);
 			expect(requests).toHaveLength(0);

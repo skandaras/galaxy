@@ -803,6 +803,7 @@ export function listAttachments(chatId: string): AttachmentSummary[] {
 		.select()
 		.from(attachments)
 		.where(eq(attachments.chatId, chatId))
+		.orderBy(asc(attachments.createdAt))
 		.all()
 		.map((r) => ({
 			id: r.id,
