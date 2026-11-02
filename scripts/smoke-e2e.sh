@@ -490,6 +490,22 @@ check "the image is served with sniffing off" "$IHDR" 'x-content-type-options: n
 # od rather than xxd: xxd ships with vim, which a CI runner need not have.
 check "the bytes are a real PNG" "$(curl -s $B$IMG_URL | od -An -tx1 -N4 | tr -d ' ')" '89504e47'
 
+# A fresh turn must receive the generated version as pixels and pass the
+# original reference into an edit, without a manual re-upload.
+for edit in 'edit-previous-image' 'revert edit-previous-image'; do
+  EDIT_JOB=$(api -X POST $B/api/chats/$ICHAT/messages -d "{\"content\":\"$edit\"}" | jqn .jobId)
+  EDIT_STREAM=$(curl -sN --max-time 60 $B/api/jobs/$EDIT_JOB/stream)
+  check "a later turn can $edit" "$EDIT_STREAM" '"name":"generate_image","status":"ok"'
+done
+check "the original image is still readable after edits" "$(curl -sI $B$IMG_URL)" 'content-type: image/png'
+
+# A vision-capable chat model still needs a way to inspect stored versions
+# that were never attached to an input message.
+INSPECT_JOB=$(api -X POST $B/api/chats/$ICHAT/messages -d '{"content":"inspect-stored-image"}' | jqn .jobId)
+INSPECT_STREAM=$(curl -sN --max-time 60 $B/api/jobs/$INSPECT_JOB/stream)
+check "a vision model can inspect a stored generated version" "$INSPECT_STREAM" '"name":"view_image","status":"ok"'
+check "inspection reads the stored pixels" "$INSPECT_STREAM" 'data-url:true'
+
 # A model that only draws: imported as such, kept out of the composer's list,
 # offered to the visual task, and asked for the image alone with the shape the
 # agent chose. The mock refuses anything else, so a picture means all of it held.

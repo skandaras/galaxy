@@ -139,6 +139,44 @@ describe('buildContext', () => {
 		});
 	};
 
+	for (const hidden of [true, false]) {
+		it(`keeps generated versions usable after a later turn and compaction (hidden=${hidden})`, async () => {
+			if (!hidden) {
+				const { runMigrations } = await import('$lib/server/db');
+				runMigrations();
+			}
+			const chat = createChat({ userId: 'u1', hidden });
+			const refs = [];
+			for (let i = 0; i < 4; i++) {
+				const ref = addAttachment(chat.id, { name: 'portrait.png', mime: 'image/png',
+					data: Buffer.from(`version-${i}`), kind: 'image' });
+				refs.push(ref);
+				appendMessage(chat.id, { role: 'assistant',
+					content: `![portrait](/api/chats/${chat.id}/attachments/${ref.id})` });
+			}
+			const other = createChat({ userId: 'u1', hidden });
+			const privateRef = addAttachment(other.id, { name: 'other.png', mime: 'image/png',
+				data: Buffer.from('other-chat'), kind: 'image' });
+			appendMessage(chat.id, { role: 'user', content: 'Revert to the earlier version and change only the smile.' });
+			const opts = { systemPrompt: 'BASE', chat: { ...chat, compactedUpTo: 4, compactSummary: 'Drew four portraits.' },
+				history: getMessages(chat.id), supportsVision: true };
+			const out = buildContext(opts);
+			expect(out.at(-1)?.content).toBe('Revert to the earlier version and change only the smile.');
+			const context = out.find((m) => JSON.stringify(m.content).includes('Earlier generated images'))!;
+			expect(context.role).toBe('user');
+			for (const ref of refs) expect(JSON.stringify(context.content)).toContain(ref.id);
+			expect(JSON.stringify(context.content)).not.toContain(privateRef.id);
+			const parts = context.content as { type: string; image_url?: { url: string } }[];
+			expect(parts.filter((p) => p.type === 'image_url').map((p) => p.image_url?.url)).toEqual(
+				[1, 2, 3].map((i) => `data:image/png;base64,${Buffer.from(`version-${i}`).toString('base64')}`)
+			);
+			const blind = buildContext({ ...opts, supportsVision: false });
+			const blindContext = blind.find((m) => String(m.content).includes('Earlier generated images'))!;
+			expect(blindContext.content).toContain('view_image');
+			expect(blindContext.content).not.toContain('base64');
+		});
+	}
+
 	it('leads with the system prompt and follows with the history', () => {
 		const out = build();
 		expect(out[0]).toEqual({ role: 'system', content: 'BASE PROMPT' });
