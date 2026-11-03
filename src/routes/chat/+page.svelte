@@ -431,6 +431,9 @@
 		if (streaming) finalizeStream(false);
 		resetComposerIntent();
 		currentChat = null;
+		// The last conversation's remembered model must not become the default
+		// for the next one. Choices made after this reset still survive sending.
+		applyChatModel(null);
 		messages = [];
 		pendingHidden = hidden;
 		activeKey = NEW_KEY;

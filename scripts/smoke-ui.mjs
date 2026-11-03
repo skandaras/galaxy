@@ -1387,6 +1387,36 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 	if (fail.length) await shot('survey');
 }
 
+// Opening history must not change the model used for a new conversation.
+{
+	const created = await as(ALICE, '/api/chats', { method: 'POST', body: '{}' });
+	const catalogue = await as(ALICE, '/api/models');
+	const defaultId = catalogue.defaultModelId ?? catalogue.models[0].id;
+	const rememberedId = 'history-model';
+	await page.route('**/api/models', async (route) => {
+		await route.fulfill({ json: {
+			...catalogue,
+			models: [...catalogue.models, { ...catalogue.models[0], id: rememberedId, displayName: 'History model' }]
+		} });
+	});
+	await page.route(`**/api/chats/${created.id}`, async (route) => {
+		const response = await route.fetch();
+		const data = await response.json();
+		await route.fulfill({ json: { ...data, chat: { ...data.chat, modelId: rememberedId } } });
+	});
+	for (const hidden of [false, true]) {
+		await page.goto(`${B}/chat?chat=${created.id}`);
+		const picker = page.getByRole('combobox', { name: 'Model', exact: true });
+		await page.waitForFunction((id) => document.querySelector('.model-select')?.value === id, rememberedId);
+		check('opening history restores its model', await picker.inputValue(), rememberedId);
+		await page.getByRole('button', { name: hidden ? '+ Hidden' : '+ New chat', exact: true }).click();
+		check(`${hidden ? 'hidden' : 'normal'} new chat restores the default model`, await picker.inputValue(), defaultId);
+	}
+	await page.unroute('**/api/models');
+	await page.unroute(`**/api/chats/${created.id}`);
+	await as(ALICE, `/api/chats/${created.id}`, { method: 'DELETE' });
+}
+
 // N+1. "+ New chat" must not create anything until a message is sent.
 {
 	problems = [];
