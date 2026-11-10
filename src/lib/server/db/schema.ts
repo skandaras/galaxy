@@ -1015,10 +1015,11 @@ export const cardLog = sqliteTable(
 
 /**
  * What raised a notification. The kind drives the icon and, more importantly,
- * whether it is worth waking a phone for — only `question` parks real work.
+ * whether it is worth waking a phone for — only `question` and `permission` park real work.
  */
 export const NOTIFICATION_KINDS = [
 	'question',
+	'permission',
 	'card-assigned',
 	'board-shared',
 	'card-done',

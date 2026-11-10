@@ -108,6 +108,14 @@ export type JobChunk =
 	// re-open a question that has already been dealt with.
 	| { type: 'question'; id: string; prompt: string; options: string[] }
 	| { type: 'answer'; id: string; text: string }
+	// Same replay rule for a tool the run wants to call and needs a yes for:
+	// `permission_done` closes the request it names, however it ended.
+	| { type: 'permission'; id: string; tool: string; server?: string; summary: string }
+	| {
+			type: 'permission_done';
+			id: string;
+			decision: 'once' | 'session' | 'always' | 'deny';
+	  }
 	// `stopped` says the user pressed stop; `stopReason` says why the run ended
 	// at all, which is the only way the browser can tell a finished answer from
 	// one that ran out of steps and needs picking up.
@@ -129,12 +137,17 @@ export interface LiveJob {
 	/** When this job last produced anything. See RUNNING_JOB_MAX_MS. */
 	lastChunkAt?: number;
 	/**
-	 * Waiting on a person rather than working. Set by `ask_user` while a
-	 * question is open, and the reason the staleness watchdog below leaves this
-	 * job alone: a run parked on a question is silent precisely because it is
-	 * behaving correctly.
+	 * How many prompts (an `ask_user` question, a tool permission) this job is
+	 * waiting on a person for. Above zero is the reason the staleness watchdog
+	 * below leaves the job alone: a run parked on a prompt is silent precisely
+	 * because it is behaving correctly.
+	 *
+	 * A count rather than a flag because prompts can overlap, a worker's
+	 * permission request landing while the parent is parked too, and a flag was
+	 * cleared by whichever finished first, putting the watchdog back on a job
+	 * that was still waiting.
 	 */
-	parked?: boolean;
+	parked?: number;
 	subscribers: Set<(chunk: JobChunk) => void>;
 	persist: boolean;
 	createdAt: number;
@@ -383,7 +396,7 @@ export function findRunningJobForChat(chatId: string, now = Date.now()): LiveJob
 
 /** Running, but past the watchdog — see RUNNING_JOB_MAX_MS. */
 function isStale(job: LiveJob, now: number): boolean {
-	return !job.parked && now - (job.lastChunkAt ?? job.createdAt) > RUNNING_JOB_MAX_MS;
+	return !(job.parked && job.parked > 0) && now - (job.lastChunkAt ?? job.createdAt) > RUNNING_JOB_MAX_MS;
 }
 
 /**

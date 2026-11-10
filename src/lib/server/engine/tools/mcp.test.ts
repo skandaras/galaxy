@@ -200,6 +200,20 @@ describe('against a real MCP server', () => {
 		);
 	});
 
+	it('marks every tool for permission, keyed on the catalogue row', async () => {
+		const server = addFixtureServer();
+		await syncServer(server.id);
+		const tools = mcpLoopTools('chat');
+		expect(tools.length).toBeGreaterThan(0);
+		const forecast = tools.find((t) => t.def.name === 'weather__get_forecast')!;
+		expect(forecast.permission).toEqual({
+			key: `${server.id}:get_forecast`,
+			label: 'weather__get_forecast',
+			server: server.name
+		});
+		expect(tools.every((t) => t.permission?.key)).toBe(true);
+	});
+
 	it('turns a tool-reported error into a throw the agent loop can relay', async () => {
 		const server = addFixtureServer();
 		await syncServer(server.id);

@@ -1,5 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { runMigrations } from '$lib/server/db';
+import { eq } from 'drizzle-orm';
+import { db, runMigrations } from '$lib/server/db';
+import { notifications } from '$lib/server/db/schema';
 import { addAttachment, createChat } from '$lib/server/chats';
 import {
 	answerQuestion,
@@ -122,7 +124,7 @@ describe('when nobody answers', () => {
 
 		expect(await settledYet(pending)).toBe('pending');
 		expect(openQuestionCount()).toBe(1);
-		expect(job.parked).toBe(true);
+		expect(job.parked).toBe(1);
 	});
 
 	it('carries on with the answer whenever it finally arrives', async () => {
@@ -137,7 +139,7 @@ describe('when nobody answers', () => {
 		expect(answerQuestion(asked.id, 'u1', 'The joint one')).toBe(true);
 		await expect(pending).resolves.toBe('The joint one');
 		// Working again, so the watchdog applies again.
-		expect(job.parked).toBe(false);
+		expect(job.parked).toBe(0);
 	});
 
 	it('settles when the run is stopped, so the loop can wind down', async () => {
@@ -265,7 +267,36 @@ describe('answering with files, or not at all', () => {
 
 		expect(answerQuestion(asked.id, 'u1', SKIPPED_ANSWER, '(skipped)')).toBe(true);
 		await expect(pending).resolves.toBe(SKIPPED_ANSWER);
-		expect(job.parked).toBe(false);
+		expect(job.parked).toBe(0);
 		expect(chunks.find((c) => c.type === 'answer')).toMatchObject({ text: '(skipped)' });
+	});
+});
+
+/**
+ * The row's `link` holds the chat id, and a hidden chat's id is stored nowhere.
+ * ask_user wrote it anyway, so the question survived in the notifications table
+ * after the chat it came from was supposed to have left no trace.
+ */
+describe('hidden chats', () => {
+	const rowsFor = (userId: string) =>
+		db.select().from(notifications).where(eq(notifications.userId, userId)).all();
+
+	it('writes no notifications row for a question', async () => {
+		const { chunks, tool } = harness('hidden-asker');
+		void tool.execute({ question: 'Which account?' });
+		const asked = questionIn(chunks);
+
+		expect(rowsFor('hidden-asker')).toHaveLength(0);
+		answerQuestion(asked.id, 'hidden-asker', 'x');
+	});
+
+	it('still writes one for a chat that is kept', async () => {
+		const job = createJob({ chatId: 'kept-chat', userId: 'kept-asker', task: 'chat', persist: true });
+		opened.push(job);
+		void askUserTool(job).execute({ question: 'Which account?' });
+
+		const rows = rowsFor('kept-asker');
+		expect(rows).toHaveLength(1);
+		expect(rows[0].link).toContain('kept-chat');
 	});
 });
