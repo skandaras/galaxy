@@ -71,7 +71,9 @@ const EXPECTED = [
 	'update_plan',
 	'open_pull_request',
 	// coding, a sub-agent rather than a tool of its own
-	'dispatch_explore'
+	'dispatch_explore',
+	// coding, orchestrate mode only: hands a change to a worker tier
+	'dispatch_task'
 ];
 
 beforeAll(() => {
