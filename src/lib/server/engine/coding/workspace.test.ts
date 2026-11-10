@@ -47,7 +47,13 @@ describe('safeJoin', () => {
 describe('gitAuthArgs', () => {
 	it('builds an extraheader flag for github.com only', () => {
 		const args = gitAuthArgs('https://github.com/a/b.git', 'tok');
-		expect(args).toContain('http.extraheader=AUTHORIZATION: basic ');
+		expect(args).toContain('http.https://github.com/.extraheader=AUTHORIZATION: basic ');
+		// Unscoped, the header follows the push to whatever host .git/config
+		// rewrites the remote to, and that file is the agent's to write.
+		expect(args).not.toContain(' http.extraheader=');
+		expect(args).not.toContain("'http.extraheader=");
+		// A hook runs with the header in its environment.
+		expect(args).toContain('core.hooksPath=/dev/null');
 		expect(args).toContain(Buffer.from('x-access-token:tok').toString('base64'));
 		expect(gitAuthArgs('https://gitlab.com/a/b.git', 'tok')).toBe('');
 		expect(gitAuthArgs('/local/repo.git', 'tok')).toBe('');

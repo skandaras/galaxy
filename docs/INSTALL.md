@@ -215,10 +215,18 @@ unless you override the proxy environment.
 Check `DATA_VOLUME` matches reality: `docker volume ls | grep galaxy` — the
 compose project prefixes volume names (e.g. `galaxy_galaxy-dev-data`).
 
+**d) Docker Engine 26 or newer.** A runner is given its session's workspace
+and no other part of the data volume, which takes a volume subpath mount
+(Docker API 1.45). The app reads `GET /version` through the socket proxy
+before the first runner and refuses to start one on an older daemon, because
+that daemon would mount the whole volume, database and key file included.
+
 ### Troubleshooting
 
 | Error | Cause |
 |---|---|
+| `Coding runners need Docker Engine 26 or newer` | The daemon cannot mount part of a volume; upgrade Docker (§5d) |
+| `Could not read the Docker version` | Socket proxy denying `GET /version`; it is allowed by default, so check for `VERSION: 0` |
 | `Runner create failed (4xx)` | Socket proxy denying `/containers/create`, or `RUNNER_IMAGE` not present locally |
 | `Runner start failed (404)` | `galaxy_runners` network doesn't exist, or `ALLOW_START` unset on the proxy |
 | Dead runners accumulating (`docker ps -a`) | `ALLOW_DELETE` unset — cleanup is failing silently |

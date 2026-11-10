@@ -82,6 +82,7 @@ describe('DockerExecutor against a stubbed daemon', () => {
 		const fetchStub = async (url: string | URL, init?: RequestInit): Promise<Response> => {
 			const path = String(url).replace('http://docker', '');
 			calls.push({ path, body: init?.body as string, hadSignal: !!init?.signal });
+			if (path.endsWith('/version')) return new Response(JSON.stringify({ ApiVersion: '1.47' }), { status: 200 });
 
 			if (path === '/containers/create') {
 				const key = opts.refuseHostConfigKey;
@@ -180,6 +181,7 @@ describe('DockerExecutor against a stubbed daemon', () => {
 		const { calls } = await runWith({ logs: frame(1, 'ok') });
 		const paths = calls.map((c) => c.path);
 		expect(paths).toEqual([
+			'/version',
 			'/containers/create',
 			'/containers/abc/start',
 			'/containers/abc/wait',
@@ -196,7 +198,7 @@ describe('DockerExecutor against a stubbed daemon', () => {
 
 	it('caps the container resources it asks for', async () => {
 		const { calls } = await runWith({ logs: frame(1, 'ok') });
-		const body = JSON.parse(calls[0].body!);
+		const body = JSON.parse(calls.find((c) => c.path === '/containers/create')!.body!);
 		expect(body.HostConfig.Memory).toBe(1024 * 1024 * 1024);
 		expect(body.HostConfig.PidsLimit).toBe(256);
 		// Neither of these existed: one runner could take every core, and the
@@ -217,6 +219,7 @@ describe('the global runner limit', () => {
 		const original = globalThis.fetch;
 		globalThis.fetch = (async (url: string | URL) => {
 			const path = String(url);
+			if (path.endsWith('/version')) return new Response(JSON.stringify({ ApiVersion: '1.47' }), { status: 200 });
 			if (path.endsWith('/containers/create')) {
 				inFlight++;
 				peak = Math.max(peak, inFlight);
@@ -271,6 +274,7 @@ describe('a resource hint the host will not take', () => {
 		if (opts.cpus !== undefined) process.env.RUNNER_CPUS = opts.cpus;
 		globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
 			const path = String(url);
+			if (path.endsWith('/version')) return new Response(JSON.stringify({ ApiVersion: '1.47' }), { status: 200 });
 			if (path.endsWith('/containers/create')) {
 				calls.push(String(init?.body));
 				if (opts.refuse && opts.refuse in JSON.parse(String(init?.body)).HostConfig) {
@@ -327,6 +331,74 @@ describe('a resource hint the host will not take', () => {
 		const { bodies } = await createBodies({ refuse: 'NanoCpus' });
 		expect(bodies[1].Memory).toBe(1024 * 1024 * 1024);
 		expect(bodies[1].PidsLimit).toBe(256);
-		expect(bodies[1].Binds).toEqual(['vol:/data']);
+		expect(bodies[1].Mounts).toEqual(bodies[0].Mounts);
+		expect(bodies[1]).not.toHaveProperty('Binds');
+	});
+});
+
+/**
+ * What a runner can see.
+ *
+ * The whole data volume used to be bound at /data, so the sandbox the agent's
+ * bash ran in held the database and the key that decrypts every stored secret.
+ */
+describe('the runner mount', () => {
+	async function attempt(apiVersion: string | null) {
+		const creates: { HostConfig: Record<string, unknown>; WorkingDir: string }[] = [];
+		const original = globalThis.fetch;
+		globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+			const path = String(url);
+			if (path.endsWith('/version')) {
+				return apiVersion
+					? new Response(JSON.stringify({ ApiVersion: apiVersion }), { status: 200 })
+					: new Response('forbidden', { status: 403 });
+			}
+			if (path.endsWith('/containers/create')) {
+				creates.push(JSON.parse(String(init?.body)));
+				return new Response(JSON.stringify({ Id: 'abc' }), { status: 201 });
+			}
+			if (path.endsWith('/wait')) {
+				return new Response(JSON.stringify({ StatusCode: 0 }), { status: 200 });
+			}
+			if (path.includes('/logs')) return new Response(new Uint8Array(0), { status: 200 });
+			return new Response(null, { status: 204 });
+		}) as typeof globalThis.fetch;
+		try {
+			const exec = new DockerExecutor('http://docker', 'runner:latest', 'vol', null);
+			const outcome = await exec
+				.exec('echo hi', { cwdRel: 'workspaces/ab12', timeoutMs: 1_000 })
+				.then(() => null, (err: Error) => err);
+			return { creates, outcome };
+		} finally {
+			globalThis.fetch = original;
+		}
+	}
+
+	it('mounts the working directory and nothing above it', async () => {
+		const { creates } = await attempt('1.45');
+		expect(creates[0].HostConfig.Mounts).toEqual([
+			{
+				Type: 'volume',
+				Source: 'vol',
+				Target: '/data/workspaces/ab12',
+				VolumeOptions: { Subpath: 'workspaces/ab12' }
+			}
+		]);
+		expect(creates[0].HostConfig).not.toHaveProperty('Binds');
+		expect(creates[0].WorkingDir).toBe('/data/workspaces/ab12');
+	});
+
+	it('refuses a daemon too old to mount part of a volume', async () => {
+		// Such a daemon ignores the subpath and mounts the whole volume, so the
+		// container must never be created at all.
+		const { creates, outcome } = await attempt('1.43');
+		expect(creates).toHaveLength(0);
+		expect(outcome?.message).toMatch(/Docker Engine 26/);
+	});
+
+	it('refuses when it cannot tell which daemon it is talking to', async () => {
+		const { creates, outcome } = await attempt(null);
+		expect(creates).toHaveLength(0);
+		expect(outcome?.message).toMatch(/GET \/version/);
 	});
 });
