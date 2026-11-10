@@ -1,13 +1,15 @@
-import { and, desc, eq, gt } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray } from 'drizzle-orm';
 import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db';
 import { models, usageLog } from '$lib/server/db/schema';
-import type { SessionOverview } from '$lib/session-panel';
+import type { OverviewModel, SessionOverview } from '$lib/session-panel';
+import { listEnabledModels, resolveModel, resolveTextModel } from '$lib/server/providers/registry';
+import { getTaskConfig } from '../engine';
 import { listServerTools, serversFor } from '../tools/mcp';
 import { loadToolSettings, toolAllowed } from '../tools/registry';
 import { resolveExecutorKind } from './executor';
 import { githubRepoSlug } from './pull-request';
-import type { CodeSession } from './session';
+import { getOrchestrateModels, type CodeSession } from './session';
 import { loadState } from './state';
 
 /**
@@ -32,6 +34,8 @@ export function sessionOverview(session: CodeSession, userId: string): SessionOv
 			baseBranch: session.baseBranch,
 			workBranch: session.workBranch
 		},
+		mode: session.mode,
+		...(session.mode === 'orchestrate' ? { orchestrate: orchestrateModels(session) } : {}),
 		context: lastContext(session.chatId, userId),
 		connectors: connectors(),
 		goal: state?.goal ?? null,
@@ -54,7 +58,10 @@ export function sessionOverview(session: CodeSession, userId: string): SessionOv
  * How full the context was at the latest coding call that reported usage.
  *
  * Compaction is logged under the chat task and an explore sub-agent's calls
- * carry no chat id, so the task filter leaves the main agent's own calls. A
+ * carry no chat id, so the task filter leaves the main agent's own calls. An
+ * orchestrate session's main agent logs as coding-orchestrator; the tier
+ * tasks are left out because a worker's window belongs to a different model
+ * and would read as the overseer's context filling up. A
  * provider that sent no usage logs zero tokens, which would read as an empty
  * window, so those rows are skipped too.
  */
@@ -71,7 +78,7 @@ function lastContext(chatId: string, userId: string): SessionOverview['context']
 			and(
 				eq(usageLog.chatId, chatId),
 				eq(usageLog.userId, userId),
-				eq(usageLog.task, 'coding'),
+				inArray(usageLog.task, ['coding', 'coding-orchestrator']),
 				eq(usageLog.status, 'ok'),
 				gt(usageLog.promptTokens, 0)
 			)
@@ -85,6 +92,31 @@ function lastContext(chatId: string, userId: string): SessionOverview['context']
 		contextWindow: windowFor(row.modelKey),
 		modelKey: row.modelKey,
 		at: row.ts.getTime()
+	};
+}
+
+/**
+ * The models an orchestrate session runs on once overrides and Admin defaults
+ * are applied, resolved the way a dispatch resolves them so the panel does not
+ * name a model the run will not use.
+ */
+function orchestrateModels(session: CodeSession): NonNullable<SessionOverview['orchestrate']> {
+	const chosen = getOrchestrateModels(session.chatId);
+	// pickModel would do, but it records a failover event whenever it falls back,
+	// and the page asks for this after every settled step.
+	const effective = (task: string, override?: string): OverviewModel | null => {
+		const model =
+			(override ? resolveTextModel(override) : null)?.model ??
+			resolveModel(getTaskConfig(task)?.primaryModelId ?? '')?.model ??
+			listEnabledModels().find((m) => m.supportsTools);
+		// The panel's select has to tell a model the person picked from the same
+		// model arriving as the default, or it shows a choice nobody made.
+		return model ? { modelId: model.id, name: model.displayName, override: !!override } : null;
+	};
+	return {
+		orchestratorModel: effective('coding-orchestrator')?.name ?? null,
+		tier1: effective('coding-tier1', chosen.tier1),
+		tier2: effective('coding-tier2', chosen.tier2)
 	};
 }
 

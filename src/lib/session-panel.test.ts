@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+	agentName,
 	CONTEXT_HIGH_PERCENT,
 	contextShare,
 	formatElapsed,
+	mainAgentName,
 	mergeOutputs,
 	planProgress,
 	prNumber,
@@ -101,5 +103,45 @@ describe('refreshesOverview', () => {
 		expect(refreshesOverview({ type: 'notice', status: 'ok' })).toBe(false);
 		expect(refreshesOverview({ type: 'stage', status: 'error' })).toBe(false);
 		expect(refreshesOverview({ type: 'tool', name: 'git_push' })).toBe(false);
+	});
+});
+
+describe('agent names', () => {
+	it('labels worker tiers with a space and passes other kinds through', () => {
+		expect(agentName('tier1')).toBe('tier 1');
+		expect(agentName('tier2')).toBe('tier 2');
+		expect(agentName('explore')).toBe('explore');
+	});
+
+	it('calls the main agent the orchestrator only in orchestrate mode', () => {
+		expect(mainAgentName('orchestrate')).toBe('orchestrator');
+		expect(mainAgentName('implement')).toBe('coding');
+		expect(mainAgentName('plan')).toBe('coding');
+		expect(mainAgentName(undefined)).toBe('coding');
+	});
+});
+
+describe('worker writes', () => {
+	it('counts tier-prefixed write tools and ignores prefixed reads', () => {
+		const timeline: TimelineItem[] = [
+			{
+				kind: 'step',
+				id: 's1',
+				label: 'Delegating',
+				status: 'ok',
+				tools: [
+					{ name: 'tier 1 · write_file', status: 'ok', detail: 'src/a.ts' },
+					{ name: 'tier 2 · edit_file', status: 'ok', detail: 'src/b.ts' },
+					{ name: 'tier 2 · edit_file', status: 'error', detail: 'src/c.ts' },
+					{ name: 'tier 2 · read_file', status: 'ok', detail: 'src/d.ts' }
+				]
+			}
+		];
+		expect(mergeOutputs([], timeline)).toEqual(['src/a.ts', 'src/b.ts']);
+	});
+
+	it('refreshes the overview when a dispatched task settles', () => {
+		expect(refreshesOverview({ type: 'tool', name: 'dispatch_task', status: 'ok' })).toBe(true);
+		expect(refreshesOverview({ type: 'tool', name: 'dispatch_task', status: 'running' })).toBe(false);
 	});
 });

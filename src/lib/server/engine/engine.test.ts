@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { db, runMigrations } from '$lib/server/db';
 import { CORE_TASKS, taskConfigs } from '$lib/server/db/schema';
@@ -11,7 +12,15 @@ import {
 	normaliseLanguageSettings,
 	setSetting
 } from '$lib/server/settings';
-import { languageBlock, LAYOUT_TASKS, PROSE_TASKS, systemPromptFor } from './engine';
+import {
+	DEFAULT_TASK_DESCRIPTIONS,
+	languageBlock,
+	LAYOUT_TASKS,
+	normaliseTaskOptions,
+	PROSE_TASKS,
+	systemPromptFor,
+	taskDescription
+} from './engine';
 
 /**
  * Which agents the Language text governs, and which it deliberately does not.
@@ -171,5 +180,47 @@ describe('moving off the old house style', () => {
 	it('writes nothing for an install that never had the old row', () => {
 		migrateStyleToLanguage();
 		expect(getSetting('language', null)).toBeNull();
+	});
+});
+
+describe('tier descriptions', () => {
+	const T1 = 'coding-tier1';
+
+	it('track the shipped default until the owner writes one', () => {
+		expect(taskDescription(T1)).toBe(DEFAULT_TASK_DESCRIPTIONS[T1]);
+		db.update(taskConfigs).set({ options: { description: 'Only the hard ones.' } }).where(eq(taskConfigs.task, T1)).run();
+		expect(taskDescription(T1)).toBe('Only the hard ones.');
+	});
+
+	it('fall back to the default when the stored description is blank', () => {
+		db.update(taskConfigs).set({ options: { description: '   ' } }).where(eq(taskConfigs.task, T1)).run();
+		expect(taskDescription(T1)).toBe(DEFAULT_TASK_DESCRIPTIONS[T1]);
+	});
+
+	it('are empty for a task that has none', () => {
+		expect(taskDescription('chat')).toBe('');
+	});
+});
+
+describe('normaliseTaskOptions', () => {
+	const T2 = 'coding-tier2';
+
+	it('drops a description equal to the default, so the tier keeps following the code', () => {
+		expect(normaliseTaskOptions(T2, { description: `  ${DEFAULT_TASK_DESCRIPTIONS[T2]}\n` })).toBeNull();
+	});
+
+	it('trims, caps at 600 characters, and keeps what is left', () => {
+		const out = normaliseTaskOptions(T2, { description: `  ${'x'.repeat(900)}  ` }) as { description: string };
+		expect(out.description).toHaveLength(600);
+	});
+
+	it('drops an empty description and passes other keys through', () => {
+		expect(normaliseTaskOptions(T2, { description: '  ' })).toBeNull();
+		expect(normaliseTaskOptions(T2, { description: '', keep: 1 })).toEqual({ keep: 1 });
+	});
+
+	it('leaves a task without descriptions alone', () => {
+		expect(normaliseTaskOptions('chat', { description: ' kept ', a: 1 })).toEqual({ description: ' kept ', a: 1 });
+		expect(normaliseTaskOptions('chat', null)).toBeNull();
 	});
 });

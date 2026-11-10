@@ -4,7 +4,13 @@ import { join } from 'node:path';
 import { dataDir, runMigrations } from '$lib/server/db';
 import { getExecutor } from './executor';
 import { clearState, loadState } from './state';
-import { codingTools, readOnlyCodingTools, renderLines, type CodingToolContext } from './tools';
+import {
+	codingTools,
+	readOnlyCodingTools,
+	renderLines,
+	workerTools,
+	type CodingToolContext
+} from './tools';
 
 const WS = 'workspaces/tools-test';
 const abs = (...parts: string[]) => join(dataDir, WS, ...parts);
@@ -269,5 +275,37 @@ describe('update_plan', () => {
 	it('is not offered without a session to attach it to', () => {
 		const { chatId: _drop, ...noChat } = ctx;
 		expect(codingTools(noChat).map((t) => t.def.name)).not.toContain('update_plan');
+	});
+});
+
+describe('tool sets by role', () => {
+	const names = (tools: { def: { name: string } }[]) => tools.map((t) => t.def.name);
+
+	it('keeps implement mode exactly as it was, in order', () => {
+		expect(names(codingTools(ctx)).slice(names(readOnlyCodingTools(ctx)).length)).toEqual([
+			'write_file',
+			'edit_file',
+			'bash',
+			'git_commit',
+			'update_plan',
+			'open_pull_request',
+			'git_push'
+		]);
+	});
+
+	it('gives the orchestrator the git tools and nothing that writes code', () => {
+		const got = names(codingTools({ ...ctx, mode: 'orchestrate' }));
+		for (const n of ['write_file', 'edit_file', 'bash']) expect(got).not.toContain(n);
+		for (const n of ['git_commit', 'git_push', 'open_pull_request', 'update_plan']) {
+			expect(got).toContain(n);
+		}
+	});
+
+	it('gives a worker the writing tools and nothing that ships', () => {
+		const got = names(workerTools(ctx));
+		for (const n of ['write_file', 'edit_file', 'bash']) expect(got).toContain(n);
+		for (const n of ['git_commit', 'git_push', 'open_pull_request', 'update_plan']) {
+			expect(got).not.toContain(n);
+		}
 	});
 });

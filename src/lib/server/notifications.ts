@@ -45,6 +45,15 @@ export interface NotifyOptions {
 	 * only an agent parked on a question.
 	 */
 	urgent?: boolean;
+	/**
+	 * False skips the row. The bus event and the push still go out.
+	 *
+	 * A hidden chat's prompt has to reach the person, but `link` carries the chat
+	 * id and a row outlives the run, so the one place that id must never be
+	 * written is this table. The row was the only thing the person did not need:
+	 * the open tab and the phone are told either way.
+	 */
+	record?: boolean;
 }
 
 /**
@@ -68,8 +77,10 @@ export function notify(opts: NotifyOptions): Notification {
 		createdAt: new Date(),
 		readAt: null
 	};
-	db.insert(notifications).values(row).run();
-	prune(opts.userId);
+	if (opts.record !== false) {
+		db.insert(notifications).values(row).run();
+		prune(opts.userId);
+	}
 	bus.emit('notification', row);
 
 	// Push is best-effort and out of band: a dead endpoint or an unreachable
@@ -175,12 +186,13 @@ export function resolveEntity(entityId: string, userId?: string): number {
 /**
  * Kinds that arriving does not settle, because something is still owed.
  *
- * A question is the whole of this list: an agent parked waiting on an answer
- * is still parked after you have glanced at the chat, and dropping the badge
- * there would quietly retire the one alert that means work is blocked. Those
- * clear when the question is answered — see resolveEntity in ask-user.ts.
+ * A question and a tool permission are the whole of this list: an agent parked
+ * waiting on an answer is still parked after you have glanced at the chat, and
+ * dropping the badge there would quietly retire the one alert that means work is
+ * blocked. Those clear when the prompt is settled — see resolveEntity in
+ * engine/park.ts.
  */
-const NEEDS_ACTION: NotificationKind[] = ['question'];
+const NEEDS_ACTION: NotificationKind[] = ['question', 'permission'];
 
 /**
  * Clear whatever was pointing someone at a place they have now opened.

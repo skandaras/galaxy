@@ -69,7 +69,8 @@ export const TOOL_KIND: Record<string, ToolKind> = {
 	git_push: 'code',
 	update_plan: 'code',
 	open_pull_request: 'code',
-	dispatch_explore: 'code'
+	dispatch_explore: 'code',
+	dispatch_task: 'code'
 };
 
 /** How each registry group shows, for the test that keeps TOOL_KIND in step with the registry. */

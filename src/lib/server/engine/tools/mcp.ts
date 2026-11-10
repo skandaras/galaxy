@@ -471,6 +471,9 @@ export function mcpLoopTools(task: string): LoopTool[] {
 					description: tool.description || `${tool.remoteName} (via ${server.name})`,
 					parameters: tool.parameters ?? { type: 'object', properties: {} }
 				},
+				// The qualified name is cut at 64 characters and can collide, so the
+				// grant is keyed on the row id, which cannot.
+				permission: { key: tool.id, label: tool.name, server: server.name },
 				describe: (args) => {
 					const first = Object.values(args)[0];
 					return typeof first === 'string' ? first.slice(0, 80) : '';

@@ -1,8 +1,7 @@
-import { randomUUID } from 'node:crypto';
 import type { LoopTool } from './loop';
 import type { ToolDef } from '$lib/server/providers/types';
-import { pushChunk, type LiveJob } from './jobs';
-import { notify, resolveEntity } from '$lib/server/notifications';
+import type { LiveJob } from './jobs';
+import { openPromptCount, parkOnPrompt, settlePrompt } from './park';
 import { listAttachments } from '$lib/server/chats';
 import { withDocumentText } from './context';
 
@@ -28,14 +27,6 @@ import { withDocumentText } from './context';
 
 /** Options are a convenience for the person answering, not a constraint. */
 const MAX_OPTIONS = 6;
-
-interface Pending {
-	jobId: string;
-	userId: string;
-	settle: (answer: string, note?: string) => void;
-}
-
-const pending = new Map<string, Pending>();
 
 export const askUserToolDef: ToolDef = {
 	name: 'ask_user',
@@ -75,51 +66,18 @@ export function askUserTool(job: LiveJob): LoopTool {
 }
 
 function waitForAnswer(job: LiveJob, prompt: string, options: string[]): Promise<string> {
-	const id = randomUUID();
-	return new Promise<string>((resolve) => {
-		let done = false;
-		const finish = (answer: string, note?: string) => {
-			if (done) return;
-			done = true;
-			pending.delete(id);
-			// The run is doing work again, so the watchdog applies again.
-			job.parked = false;
-			job.controller.signal.removeEventListener('abort', onAbort);
-			// Always close the question on the stream, however it ended, so a
-			// reconnecting client doesn't reopen a sheet nobody can answer.
-			pushChunk(job, { type: 'answer', id, text: note ?? answer });
-			// And clear the bell, however it ended — a badge still demanding an
-			// answer to a question that has been dealt with teaches people to
-			// ignore it.
-			resolveEntity(id, job.userId);
-			resolve(answer);
-		};
-
-		// A stopped run must not leave the loop parked on a promise; the loop
-		// winds down at its next check once this returns. With no timeout, this
-		// is the only way out other than answering.
-		const onAbort = () => finish('The run was stopped before this was answered.', '(run stopped)');
-		job.controller.signal.addEventListener('abort', onAbort, { once: true });
-
-		pending.set(id, { jobId: job.id, userId: job.userId, settle: (answer, note) => finish(answer, note) });
-		// Set before the chunk, so a job read the instant the question lands is
-		// already exempt from the staleness watchdog. A parked job produces no
-		// chunks by definition, which is exactly what the watchdog looks for.
-		job.parked = true;
-		pushChunk(job, { type: 'question', id, prompt, options });
-
-		// The only notification urgent enough to wake a phone: the run is parked
-		// until this is answered, and it will wait indefinitely. Anyone not
-		// looking at this exact chat has no other way to find out.
-		notify({
-			userId: job.userId,
-			kind: 'question',
+	return parkOnPrompt<string>({
+		kind: 'question',
+		job,
+		userId: job.userId,
+		open: (id) => ({ type: 'question', id, prompt, options }),
+		close: (id, answer, note) => ({ type: 'answer', id, text: note ?? answer }),
+		onStop: { value: 'The run was stopped before this was answered.', note: '(run stopped)' },
+		notice: {
 			title: 'An agent needs an answer',
 			body: prompt,
-			link: `/chat?chat=${job.chatId}`,
-			entityId: id,
-			urgent: true
-		});
+			link: `/chat?chat=${job.chatId}`
+		}
 	});
 }
 
@@ -169,14 +127,10 @@ export function answerQuestion(
 	answer: string,
 	note?: string
 ): boolean {
-	const entry = pending.get(questionId);
-	// Same shape as an unknown question, so ids can't be probed for existence.
-	if (!entry || entry.userId !== userId) return false;
-	entry.settle(answer, note);
-	return true;
+	return settlePrompt('question', questionId, userId, answer, note);
 }
 
 /** Test seam: questions still waiting, for assertions about cleanup. */
 export function openQuestionCount(): number {
-	return pending.size;
+	return openPromptCount('question');
 }

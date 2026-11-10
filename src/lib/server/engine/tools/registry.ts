@@ -4,6 +4,7 @@ import { toolSettings } from '$lib/server/db/schema';
 import type { LoopTool } from '../loop';
 import { codingTools } from '../coding/tools';
 import { exploreToolDef } from '../coding/explore';
+import { delegateToolDef } from '../coding/delegate';
 import { askUserToolDef } from '../ask-user';
 import { attachmentTools } from './attachments';
 import { boardTools } from './boards';
@@ -159,6 +160,12 @@ export function builtinDescriptors(): ToolDescriptor[] {
 		'coding',
 		['coding'],
 		'runs a read-only sub-agent on its own model and step budget'
+	);
+	add(
+		[{ def: delegateToolDef, execute: async () => '' }],
+		'coding',
+		['coding'],
+		'orchestrate mode only; the live description adds the tier guidance, which a description override replaces'
 	);
 
 	return out;

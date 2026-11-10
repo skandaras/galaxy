@@ -19,6 +19,12 @@
 	} from '$lib/stream-recovery';
 	import AskSheet from '$lib/components/AskSheet.svelte';
 	import AskBar from '$lib/components/AskBar.svelte';
+	import PermissionSheet from '$lib/components/PermissionSheet.svelte';
+	import {
+		applyPermissionChunk,
+		type OpenPermission,
+		type PermissionDecision
+	} from '$lib/permission-prompt';
 	import GalaxyOrb from '$lib/components/GalaxyOrb.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import RunTimeline from '$lib/components/RunTimeline.svelte';
@@ -39,6 +45,7 @@
 	import { refreshesOverview, type AgentRow, type SessionOverview } from '$lib/session-panel';
 	import { ENDING_MS, TYPING_MS, presenceOf } from '$lib/presence';
 
+	type CodeMode = 'plan' | 'implement' | 'orchestrate';
 	interface ChatMeta {
 		id: string;
 		title: string;
@@ -56,7 +63,7 @@
 		repoName: string;
 		baseBranch: string;
 		workBranch: string;
-		mode: 'plan' | 'implement';
+		mode: CodeMode;
 	}
 	interface Msg {
 		id: string;
@@ -104,7 +111,7 @@
 	let createBusy = $state(false);
 	let repoChoice = $state('');
 	let manualUrl = $state('');
-	let newMode = $state<'plan' | 'implement'>('plan');
+	let newMode = $state<CodeMode>('plan');
 
 	const NEW_KEY = draftKey('code', null);
 	let activeKey = $state(NEW_KEY);
@@ -203,6 +210,8 @@
 	let activeJobId = $state<string | null>(null);
 	/** Open question from ask_user; cleared by the server's `answer` chunk. */
 	let question = $state<{ id: string; prompt: string; options: string[] } | null>(null);
+	/** The tool-permission request the run is parked on; cleared by `permission_done`. */
+	let permission = $state<OpenPermission | null>(null);
 	/** The question sheet tucked into a bar in the composer, see AskBar. */
 	let askMinimised = $state(false);
 	let stopping = $state(false);
@@ -222,7 +231,11 @@
 	 * web_search is there whenever the toggle above is on.
 	 */
 	const presence = $derived(
-		presenceOf({ timeline, question: !!question, legText: streamText.slice(streamMark) })
+		presenceOf({
+			timeline,
+			question: !!question || !!permission,
+			legText: streamText.slice(streamMark)
+		})
 	);
 	/** The Orrery's last pose after a run ends, tied to the session it ended in. */
 	let ending = $state<{ state: 'done' | 'error'; chatId: string | undefined } | null>(null);
@@ -548,6 +561,7 @@
 		runStartedAt = startedAt ?? Date.now();
 		lastStopReason = null;
 		question = null;
+		permission = null;
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
 			// A frame that will not parse is not worth a thrown handler: these
@@ -612,6 +626,8 @@
 				askMinimised = false;
 			} else if (chunk.type === 'answer') {
 				if (question?.id === chunk.id) question = null;
+			} else if (chunk.type === 'permission' || chunk.type === 'permission_done') {
+				permission = applyPermissionChunk(permission, chunk);
 			} else if (chunk.type === 'done') {
 				lastStopReason = chunk.stopReason ?? null;
 				const chatId = current?.chatId;
@@ -774,6 +790,7 @@
 		activeJobId = null;
 		stopping = false;
 		question = null;
+		permission = null;
 		streamText = '';
 		streamMark = 0;
 		thought = '';
@@ -786,6 +803,29 @@
 	/** Resolves the waiting tool call; the sheet closes on the server's reply. */
 	async function answerQuestion(answer: string, attachmentIds: string[]): Promise<boolean> {
 		return postAnswer({ answer, attachmentIds });
+	}
+
+	/**
+	 * Answer the permission request. The sheet closes on the `permission_done`
+	 * chunk the server pushes back, not here, so the screen shows what the run
+	 * actually received.
+	 */
+	async function decidePermission(decision: PermissionDecision): Promise<boolean> {
+		if (!activeJobId || !permission) return false;
+		const res = await fetch(`/api/jobs/${activeJobId}/permission`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ requestId: permission.id, decision })
+		}).catch(() => null);
+		if (res?.ok) return true;
+		// Same as postAnswer: a 404 is the run being gone, so no chunk will ever
+		// close this and the sheet would sit there unanswerable.
+		if (res?.status === 404) {
+			permission = null;
+			errorBanner = 'That run has ended, so its permission request can no longer be answered.';
+			return true;
+		}
+		return false;
 	}
 
 	/** Close the question unanswered; the server tells the agent to carry on without it. */
@@ -818,7 +858,7 @@
 	}
 
 	/**
-	 * Move the session between plan and implement.
+	 * Move the session between plan, implement and orchestrate.
 	 *
 	 * The response is checked because mode is *engine permission state*, not a
 	 * label: it decides whether the agent gets write tools. Flipping the badge on
@@ -826,7 +866,7 @@
 	 * nothing to reveal it — and approvePlan below then sent "the plan is
 	 * approved, implement it now" to a session still holding read-only tools.
 	 */
-	async function changeMode(mode: 'plan' | 'implement'): Promise<boolean> {
+	async function changeMode(mode: CodeMode): Promise<boolean> {
 		if (!current) return false;
 		const res = await fetch(`/api/code/sessions/${current.chatId}`, {
 			method: 'PATCH',
@@ -839,14 +879,17 @@
 		}
 		errorBanner = null;
 		current = { ...current, mode };
+		// The panel's Models block exists only for orchestrate, and the overview
+		// carries it only once the server has the new mode.
+		void refreshOverview();
 		return true;
 	}
 
-	async function approvePlan() {
-		if (await changeMode('implement')) await send('The plan is approved — implement it now.');
+	async function approvePlan(mode: 'implement' | 'orchestrate' = 'implement') {
+		if (await changeMode(mode)) await send('The plan is approved — implement it now.');
 	}
 
-	const setMode = (mode: 'plan' | 'implement') => changeMode(mode);
+	const setMode = (mode: CodeMode) => changeMode(mode);
 
 	/** Stop the run that refused this send, so the session is usable again. */
 	async function stopBlockingRun() {
@@ -1075,6 +1118,7 @@
 	 * loop (see stepLabel), so there is nothing extra to generate here.
 	 */
 	const mainActivity = $derived.by(() => {
+		if (permission) return 'Waiting on your permission';
 		if (question) return 'Waiting on your answer';
 		const step = timeline.findLast((i) => i.kind === 'step');
 		if (step?.kind === 'step') {
@@ -1202,7 +1246,19 @@
 					>
 						Straight to implement
 					</button>
+					<button
+						class="chip"
+						class:on={newMode === 'orchestrate'}
+						onclick={() => (newMode = 'orchestrate')}
+					>
+						Orchestrate
+					</button>
 				</div>
+				{#if newMode === 'orchestrate'}
+					<p class="dim">
+						An overseer delegates each task to a cheaper worker and checks the work before moving on.
+					</p>
+				{/if}
 				<button class="btn primary" disabled={createBusy} onclick={createSession}>
 					{createBusy ? 'Cloning…' : 'Create session'}
 				</button>
@@ -1217,8 +1273,13 @@
 						>{current.title || current.repoName}</span
 					>
 					<span class="mode-badge {current.mode}">{current.mode}</span>
-					{#if current.mode === 'implement'}
+					{#if current.mode !== 'plan'}
 						<button class="chip" onclick={() => setMode('plan')}>Back to plan</button>
+					{/if}
+					{#if current.mode === 'implement'}
+						<button class="chip" onclick={() => setMode('orchestrate')}>Orchestrate</button>
+					{:else if current.mode === 'orchestrate'}
+						<button class="chip" onclick={() => setMode('implement')}>Implement directly</button>
 					{/if}
 					<button class="chip" onclick={loadDiff}>{diff === null ? 'View diff' : 'Hide diff'}</button>
 					{#if prUrl}
@@ -1228,7 +1289,15 @@
 							{prBusy ? 'Opening…' : 'Open pull request'}
 						</button>
 					{/if}
-					<ModelSelect {models} bind:value={selectedModelId} kind="tool-capable" />
+					{#if current.mode === 'orchestrate'}
+						<!-- The server ignores the per-message model here, so a picker would
+						     promise a choice that is not honoured. -->
+						<span class="dim overseer">
+							Overseer: {overview?.orchestrate?.orchestratorModel ?? 'the Orchestrator model'}, set in {ADMIN_PATHS.orchestrator}
+						</span>
+					{:else}
+						<ModelSelect {models} bind:value={selectedModelId} kind="tool-capable" />
+					{/if}
 					<button
 						class="chip"
 						class:on={columnFits ? panelShown : sheetOpen}
@@ -1293,7 +1362,9 @@
 						<p>
 							{current.mode === 'plan'
 								? 'Describe what you want built — the agent will explore the repo and propose a plan.'
-								: 'Describe what you want done — the agent will implement, commit and push.'}
+								: current.mode === 'orchestrate'
+									? 'Describe what you want done — the overseer will hand tasks to workers, check each result, then commit and push.'
+									: 'Describe what you want done — the agent will implement, commit and push.'}
 						</p>
 					</div>
 				{/if}
@@ -1351,7 +1422,8 @@
 				{/if}
 				{#if current.mode === 'plan' && lastAssistantExists && !streaming}
 					<div class="plan-actions">
-						<button class="btn primary" onclick={approvePlan}>Approve plan &amp; implement</button>
+						<button class="btn primary" onclick={() => approvePlan()}>Approve plan &amp; implement</button>
+						<button class="btn" onclick={() => approvePlan('orchestrate')}>Approve and orchestrate</button>
 						<span class="dim">or reply below to tweak the plan</span>
 					</div>
 				{/if}
@@ -1409,19 +1481,32 @@
 				{streaming}
 				{runStartedAt}
 				activity={mainActivity}
-				parked={!!question}
+				parked={!!question || !!permission}
 				agents={subAgents}
 				onopenfile={(path) => void openFileInDiff(path)}
 				sheet={!columnFits}
 				open={sheetOpen}
 				onclose={closeSheet}
 				width={panelWidth}
+				chatId={current.chatId}
+				mode={current.mode}
+				{models}
+				ontiers={() => void refreshOverview()}
 			/>
 		{/if}
 	{/if}
 </div>
 
-{#if question && current}
+{#if permission && current}
+	{#key permission.id}
+		<PermissionSheet
+			tool={permission.tool}
+			server={permission.server}
+			summary={permission.summary}
+			ondecide={decidePermission}
+		/>
+	{/key}
+{:else if question && current}
 	{#key question.id}
 		<AskSheet
 			prompt={question.prompt}
@@ -1576,6 +1661,7 @@
 	.mode-pick {
 		display: flex;
 		gap: 0.4rem;
+		flex-wrap: wrap;
 	}
 	.dim {
 		color: var(--fg-dim);
@@ -1637,7 +1723,8 @@
 		border: 1px solid var(--accent);
 		color: var(--accent);
 	}
-	.mode-badge.implement {
+	.mode-badge.implement,
+	.mode-badge.orchestrate {
 		background: var(--accent);
 		color: var(--bg);
 	}
@@ -1842,6 +1929,7 @@
 		color: var(--fg);
 	}
 	.plan-actions {
+		flex-wrap: wrap;
 		display: flex;
 		align-items: center;
 		gap: 0.7rem;

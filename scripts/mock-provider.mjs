@@ -907,6 +907,78 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 
+		// Orchestrate mode: an overseer that can only delegate, and the workers it
+		// delegates to. Told apart by the opening words of their system prompts
+		// (the worker one is the start of both tier prompts), and sequenced by the
+		// tool results so far like the agent below.
+		const orchestrating = system.includes('ORCHESTRATE mode');
+		const working = system.includes('You are a worker in a coding session');
+		if (orchestrating || working) {
+			const toolResults = parsed.messages.filter((m) => m.role === 'tool').length;
+			const call = (name, args) => {
+				delta(res, {
+					tool_calls: [
+						{ index: 0, id: `call_${toolResults}`, function: { name, arguments: JSON.stringify(args) } }
+					]
+				});
+				delta(res, {}, 'tool_calls');
+			};
+			const say = (content) => {
+				delta(res, { content });
+				delta(res, {}, 'stop');
+			};
+			const lastTool = parsed.messages.filter((m) => m.role === 'tool').at(-1);
+			if (working) {
+				if (toolResults === 0) {
+					call('write_file', {
+						path: 'README.md',
+						content: '# origin\n\nThis line was orchestrated by a worker.\n'
+					});
+				} else if (toolResults === 1) call('bash', { command: 'grep -q orchestrated README.md' });
+				else say('Added the line to README.md and the check passes.');
+			} else {
+				const asked = parsed.messages.filter((m) => m.role === 'user').at(-1);
+				// A check that already passes: the dispatch is refused before any
+				// worker runs, and the overseer quotes the refusal.
+				if (textOf(asked?.content).includes('vacuous')) {
+					if (toolResults === 0) {
+						call('dispatch_task', {
+							tier: 2,
+							task: 'Make sure README.md ends with a newline.',
+							files: ['README.md'],
+							check: 'true'
+						});
+					} else say(`The dispatch was refused: ${String(lastTool?.content ?? '').slice(0, 240)}`);
+				} else if (toolResults === 0) {
+					call('update_plan', {
+						goal: 'Mark the README as orchestrated',
+						items: [
+							{ text: 'Add the line through a worker', status: 'doing' },
+							{ text: 'Commit and push', status: 'todo' }
+						]
+					});
+				} else if (toolResults === 1) {
+					call('dispatch_task', {
+						tier: 2,
+						task: 'Add a line containing the word orchestrated to README.md, below the heading.',
+						files: ['README.md'],
+						check: 'grep -q orchestrated README.md'
+					});
+				} else if (toolResults === 2) call('git_commit', { message: 'Mark the README as orchestrated' });
+				else if (toolResults === 3) call('git_push', {});
+				else say('Done: a worker added the line, the check passed, and it is committed and pushed.');
+			}
+			sseChunk(res, {
+				id: 'mock',
+				object: 'chat.completion.chunk',
+				choices: [],
+				usage: { prompt_tokens: 30, completion_tokens: 10 }
+			});
+			res.write('data: [DONE]\n\n');
+			res.end();
+			return;
+		}
+
 		// Scripted coding agent: sequence driven by how many tool results have
 		// accumulated in this turn.
 		if (system.includes('PLAN mode') || system.includes('IMPLEMENT mode')) {

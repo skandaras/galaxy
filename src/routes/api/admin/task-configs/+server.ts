@@ -11,7 +11,12 @@ import {
 	type CoreTask
 } from '$lib/server/db/schema';
 import { emitEvent } from '$lib/server/engine/events';
-import { taskPrompt } from '$lib/server/engine/engine';
+import {
+	DEFAULT_TASK_DESCRIPTIONS,
+	normaliseTaskOptions,
+	taskDescription,
+	taskPrompt
+} from '$lib/server/engine/engine';
 import { DEFAULT_PROMPTS } from '$lib/server/engine/prompts';
 
 /**
@@ -34,7 +39,14 @@ export const GET: RequestHandler = ({ locals }) => {
 				...row,
 				systemPrompt: taskPrompt(row.task),
 				defaultPrompt: DEFAULT_PROMPTS[row.task] ?? '',
-				overridden: row.promptOverride !== null
+				overridden: row.promptOverride !== null,
+				// Only the worker tiers have one; the rest of the tasks omit both.
+				...(row.task in DEFAULT_TASK_DESCRIPTIONS
+					? {
+							description: taskDescription(row.task),
+							defaultDescription: DEFAULT_TASK_DESCRIPTIONS[row.task]
+						}
+					: {})
 			}))
 	);
 };
@@ -69,7 +81,7 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 	}
 	if ('primaryModelId' in body) patch.primaryModelId = body.primaryModelId || null;
 	if ('backupModelId' in body) patch.backupModelId = body.backupModelId || null;
-	if ('options' in body) patch.options = body.options ?? null;
+	if ('options' in body) patch.options = normaliseTaskOptions(task, body.options) as typeof patch.options;
 
 	if (Object.keys(patch).length) {
 		db.update(taskConfigs).set(patch).where(eq(taskConfigs.task, task)).run();

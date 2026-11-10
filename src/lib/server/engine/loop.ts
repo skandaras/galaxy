@@ -18,6 +18,7 @@ import type {
 import { isRetryable, StreamTimeoutError } from '$lib/server/providers/types';
 import { emitEvent } from './events';
 import { logUsage } from './usage';
+import { requestPermission, type ToolPermission } from './permissions';
 import { completeJob, failJob, isCancellation, pushChunk, type LiveJob } from './jobs';
 import {
 	streamIdleTimeoutMs,
@@ -67,6 +68,12 @@ export interface LoopTool {
 	 * The model and the person's own timeline see everything as usual.
 	 */
 	privateArgs?: boolean;
+	/**
+	 * Ask the person before each call, unless they have already said yes to this
+	 * tool for the chat or for good. Unset means the tool just runs; the gate is
+	 * opt-in so built-ins keep behaving as they did.
+	 */
+	permission?: ToolPermission;
 	/**
 	 * Safe to run at the same time as other calls in the same batch.
 	 *
@@ -159,6 +166,15 @@ export interface TurnSummary {
 
 export interface LoopOptions {
 	job: LiveJob;
+	/**
+	 * The job a prompt is raised on, when that is not this run's own.
+	 *
+	 * A nested worker runs on a throwaway child job nobody is attached to, so a
+	 * permission request parked there would wait for a click that has no sheet to
+	 * come from. The worker passes its parent's job, the one the browser follows.
+	 * Defaults to `job`.
+	 */
+	promptJob?: LiveJob;
 	task: string;
 	userId: string;
 	chatId: string;
@@ -1238,6 +1254,29 @@ async function executeToolCall(
 	let meta: Record<string, unknown> = {};
 	let display: ToolDisplay | undefined;
 	try {
+		if (tool.permission) {
+			// Inside the try so a decline takes the same road as any tool failure:
+			// an error event, an error chunk and an `{error}` result for the model.
+			//
+			// The prompt chunk and the bell carry describe()'s summary and nothing
+			// more, and nothing new reaches a stored event: a `privateArgs` tool
+			// keeps the content-free describe() it already had.
+			const promptJob = opts.promptJob ?? job;
+			const verdict = await requestPermission({
+				job: promptJob,
+				userId: promptJob.userId,
+				chatId: promptJob.chatId,
+				persist: promptJob.persist,
+				permission: tool.permission,
+				summary: summary ?? '',
+				signal: job.controller.signal
+			});
+			if (verdict === 'deny') {
+				throw new Error(
+					`The person declined to let ${tool.permission.label} run. Do not retry it; carry on without it or ask what they would prefer.`
+				);
+			}
+		}
 		const result = await tool.execute(args, (m) => {
 			// `display` is the browser's; everything else is the Observatory's.
 			const { display: shown, ...rest } = m;

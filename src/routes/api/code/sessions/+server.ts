@@ -1,6 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireCoder } from '$lib/server/api';
+import { CODE_MODES, type CodeMode } from '$lib/server/db/schema';
 import { createSession } from '$lib/server/engine/coding/session';
 import { emitEvent } from '$lib/server/engine/events';
 
@@ -13,7 +14,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		typeof body.repoName === 'string' && body.repoName.trim()
 			? body.repoName.trim()
 			: repoUrl.replace(/\.git$/, '').split('/').slice(-2).join('/');
-	const mode = body.mode === 'implement' ? 'implement' : 'plan';
+	const mode: CodeMode = CODE_MODES.includes(body.mode) ? body.mode : 'plan';
 
 	try {
 		const session = await createSession({ userId: user.id, repoUrl, repoName, mode });

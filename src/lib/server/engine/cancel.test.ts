@@ -181,7 +181,7 @@ describe('findRunningJobForChat', () => {
 		// ask timeout would only have moved the deadline to this watchdog.
 		const job = jobFor('watchdog-parked');
 		pushChunk(job, { type: 'question', id: 'q1', prompt: 'Which account?', options: [] });
-		job.parked = true;
+		job.parked = 1;
 		const muchLater = Date.now() + 12 * 60 * 60 * 1000;
 		expect(findRunningJobForChat('watchdog-parked', muchLater)?.id).toBe(job.id);
 		expect(job.status).toBe('running');
@@ -189,9 +189,9 @@ describe('findRunningJobForChat', () => {
 
 	it('applies the watchdog again once the question is answered', () => {
 		const job = jobFor('watchdog-unparked');
-		job.parked = true;
+		job.parked = 1;
 		// Answering clears the flag and pushes the closing chunk.
-		job.parked = false;
+		job.parked = 0;
 		pushChunk(job, { type: 'answer', id: 'q1', text: 'The joint one' });
 		job.lastChunkAt = Date.now() - RUNNING_JOB_MAX_MS - 1;
 		expect(findRunningJobForChat('watchdog-unparked')).toBeNull();
@@ -242,7 +242,7 @@ describe('runningChatIds', () => {
 
 	it('keeps reporting a run parked on a question', () => {
 		const job = jobFor('mark-parked', 'u-parked');
-		job.parked = true;
+		job.parked = 1;
 		const later = Date.now() + RUNNING_JOB_MAX_MS + 1;
 		expect(runningChatIds('u-parked', later).has('mark-parked')).toBe(true);
 	});

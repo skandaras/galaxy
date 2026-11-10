@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ADMIN_PATHS } from '$lib/admin-sections';
+	import { ADMIN_PATHS, taskLabel } from '$lib/admin-sections';
 
 	interface Props {
 		/** The tasks this admin section edits; see $lib/admin-sections. */
@@ -19,7 +19,13 @@
 		overridden: boolean;
 		primaryModelId: string | null;
 		backupModelId: string | null;
+		options?: Record<string, unknown> | null;
+		/** Only the worker tiers have one: what the orchestrator reads to pick a tier. */
+		description?: string;
+		defaultDescription?: string;
 	}
+	/** Tasks whose model, when unset, becomes the first enabled one for every tier alike. */
+	const FALLBACK_HINT = new Set(['coding-orchestrator', 'coding-tier1', 'coding-tier2']);
 	interface ModelOption {
 		id: string;
 		displayName: string;
@@ -58,7 +64,13 @@
 		const res = await fetch('/api/admin/task-configs', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify(cfg)
+			// options is replaced whole on the server, so the description goes in
+			// beside whatever other keys the row already carries.
+			body: JSON.stringify(
+				cfg.defaultDescription === undefined
+					? cfg
+					: { ...cfg, options: { ...cfg.options, description: cfg.description } }
+			)
 		}).catch(() => null);
 		// Without this a refused prompt still showed "Saved ✓" and the edited badge.
 		if (!res?.ok) {
@@ -69,6 +81,9 @@
 		// The route clears the override when the text matches the default, so the
 		// badge has to be recomputed here rather than left as it was.
 		cfg.overridden = cfg.systemPrompt !== cfg.defaultPrompt;
+		if (cfg.defaultDescription !== undefined) {
+			cfg.options = { ...cfg.options, description: cfg.description };
+		}
 		savedTask = cfg.task;
 		setTimeout(() => (savedTask = null), 1500);
 	}
@@ -90,6 +105,19 @@
 		)
 			return;
 		cfg.systemPrompt = cfg.defaultPrompt;
+		await save(cfg);
+	}
+
+	async function resetDescription(cfg: TaskConfig) {
+		if (
+			!(await ask({
+				title: `Reset the ${taskLabel(cfg.task)} description to the shipped wording?`,
+				body: 'The text you wrote is replaced and is not kept in a history.',
+				confirm: 'Reset description'
+			}))
+		)
+			return;
+		cfg.description = cfg.defaultDescription;
 		await save(cfg);
 	}
 
@@ -125,7 +153,7 @@
 		<article class="card">
 			<header>
 				<h3>
-					{cfg.task}
+					{taskLabel(cfg.task)}
 					{#if cfg.overridden}<span class="badge">edited</span>{/if}
 				</h3>
 				<div class="model-row">
@@ -149,7 +177,27 @@
 					</label>
 				</div>
 			</header>
-			<textarea rows="4" bind:value={cfg.systemPrompt}></textarea>
+			{#if FALLBACK_HINT.has(cfg.task)}
+				<p class="hint">
+					A model left unset falls back to the first enabled model, which removes the cost difference
+					between the tiers.
+				</p>
+			{/if}
+			<textarea rows="4" bind:value={cfg.systemPrompt} aria-label={`${taskLabel(cfg.task)} prompt`}
+			></textarea>
+			{#if cfg.defaultDescription !== undefined}
+				<label class="desc">
+					Send it
+					<textarea rows="3" bind:value={cfg.description}></textarea>
+					<span class="hint">
+						The orchestrator reads this text when it chooses a tier for a task. Say what suits this
+						worker and what does not.
+					</span>
+				</label>
+				{#if cfg.description !== cfg.defaultDescription}
+					<button class="btn" onclick={() => resetDescription(cfg)}>Reset description to default</button>
+				{/if}
+			{/if}
 			<footer>
 				<button class="btn primary" onclick={() => save(cfg)}>
 					{savedTask === cfg.task ? 'Saved ✓' : 'Save'}
@@ -222,6 +270,12 @@
 		font-size: var(--text-base);
 		padding: 0.25rem 0.4rem;
 		max-width: 14rem;
+	}
+	.desc {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 0;
+		margin-top: 0.4rem;
 	}
 	.preamble {
 		font-size: var(--text-sm);

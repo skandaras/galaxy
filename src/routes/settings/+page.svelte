@@ -2,12 +2,13 @@
 	import Theme from '$lib/components/settings/Theme.svelte';
 	import Boards from '$lib/components/settings/Boards.svelte';
 	import Notifications from '$lib/components/settings/Notifications.svelte';
+	import ToolPermissions from '$lib/components/settings/ToolPermissions.svelte';
 	import Alignment from '$lib/components/settings/Alignment.svelte';
 	import { page } from '$app/state';
 	import { tabFromUrl } from '$lib/url-tab';
 	import Tabs from '$lib/components/Tabs.svelte';
 
-	const tabs = ['Theme', 'Boards', 'Notifications', 'Alignment'] as const;
+	const tabs = ['Theme', 'Boards', 'Notifications', 'Permissions', 'Alignment'] as const;
 	// In the URL rather than in $state, so Back steps through tabs, a tab can
 	// be linked to, and the phone's More sheet can point at one.
 	const active = $derived(tabFromUrl(page.url.searchParams, tabs));
@@ -23,6 +24,8 @@
 			<Boards />
 		{:else if active === 'Notifications'}
 			<Notifications />
+		{:else if active === 'Permissions'}
+			<ToolPermissions />
 		{:else}
 			<Alignment />
 		{/if}

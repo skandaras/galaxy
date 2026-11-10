@@ -127,6 +127,28 @@ export const codingMaxSteps = () => num('CODING_MAX_STEPS', 50);
 export const exploreMaxSteps = () => num('EXPLORE_MAX_STEPS', 12);
 
 /**
+ * Model round-trips a tier 1 worker gets for one task attempt.
+ *
+ * Bounded per attempt rather than per task: the ladder retries with the check
+ * output in hand, which finds a cause faster than one long attempt that keeps
+ * editing around a failure it has not read.
+ */
+export const tier1MaxSteps = () => num('TIER1_MAX_STEPS', 25);
+
+/** Tier 2 tasks are fully specified, so an attempt that needs more than this has been mis-sized. */
+export const tier2MaxSteps = () => num('TIER2_MAX_STEPS', 15);
+
+/**
+ * Longest a task check may run.
+ *
+ * Shorter than the bash tool's 120s because a check is meant to be one test
+ * file or one grep, and the orchestrator waits on it with nothing else to do;
+ * a check that needs longer is really the final full run, which takes its own
+ * dispatch and the same limit.
+ */
+export const taskCheckTimeoutMs = () => num('TASK_CHECK_TIMEOUT_MS', 90_000);
+
+/**
  * Model round-trips one chat turn may take. Six was hardcoded, which is two
  * pages read and an answer — a question needing four sources ran out with
  * nothing to show. Raising it helps, but the real economy is that a round-trip

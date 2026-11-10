@@ -19,6 +19,12 @@
 	import { swipeToClose } from '$lib/list-sheet.svelte';
 	import AskSheet from '$lib/components/AskSheet.svelte';
 	import AskBar from '$lib/components/AskBar.svelte';
+	import PermissionSheet from '$lib/components/PermissionSheet.svelte';
+	import {
+		applyPermissionChunk,
+		type OpenPermission,
+		type PermissionDecision
+	} from '$lib/permission-prompt';
 	import GalaxyOrb from '$lib/components/GalaxyOrb.svelte';
 	import PaneResizer from '$lib/components/PaneResizer.svelte';
 	import ResearchEffort from '$lib/components/ResearchEffort.svelte';
@@ -165,6 +171,8 @@
 	 * the question it names rather than the sheet reopening on every reattach.
 	 */
 	let question = $state<{ id: string; prompt: string; options: string[] } | null>(null);
+	/** The tool-permission request the run is parked on; cleared by `permission_done`. */
+	let permission = $state<OpenPermission | null>(null);
 	/** The question sheet tucked into a bar in the composer, see AskBar. */
 	let askMinimised = $state(false);
 	let stopping = $state(false);
@@ -195,7 +203,11 @@
 	 * mid-search reads the same answer as one that watched the whole run.
 	 */
 	const presence = $derived(
-		presenceOf({ timeline, question: !!question, legText: streamText.slice(streamMark) })
+		presenceOf({
+			timeline,
+			question: !!question || !!permission,
+			legText: streamText.slice(streamMark)
+		})
 	);
 	/**
 	 * The Orrery's last pose after a turn ends: a settle, or the error. Tied to
@@ -624,6 +636,7 @@
 		stages = [];
 		notices = [];
 		question = null;
+		permission = null;
 		source = new EventSource(`/api/jobs/${jobId}/stream`);
 		source.onmessage = (ev) => {
 			// A frame that will not parse is not worth a thrown handler: these
@@ -673,6 +686,8 @@
 				askMinimised = false;
 			} else if (chunk.type === 'answer') {
 				if (question?.id === chunk.id) question = null;
+			} else if (chunk.type === 'permission' || chunk.type === 'permission_done') {
+				permission = applyPermissionChunk(permission, chunk);
 			}
 			else if (chunk.type === 'done') {
 				// Read before finalizeStream appends the reply: zero assistant
@@ -909,6 +924,7 @@
 		activeJobId = null;
 		stopping = false;
 		question = null;
+		permission = null;
 		streamText = '';
 		streamMark = 0;
 		thought = '';
@@ -925,6 +941,29 @@
 	 */
 	async function answerQuestion(answer: string, attachmentIds: string[]): Promise<boolean> {
 		return postAnswer({ answer, attachmentIds });
+	}
+
+	/**
+	 * Answer the permission request. The sheet closes on the `permission_done`
+	 * chunk the server pushes back, not here, so the screen shows what the run
+	 * actually received.
+	 */
+	async function decidePermission(decision: PermissionDecision): Promise<boolean> {
+		if (!activeJobId || !permission) return false;
+		const res = await fetch(`/api/jobs/${activeJobId}/permission`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ requestId: permission.id, decision })
+		}).catch(() => null);
+		if (res?.ok) return true;
+		// Same as postAnswer: a 404 is the run being gone, so no chunk will ever
+		// close this and the sheet would sit there unanswerable.
+		if (res?.status === 404) {
+			permission = null;
+			errorBanner = 'That run has ended, so its permission request can no longer be answered.';
+			return true;
+		}
+		return false;
 	}
 
 	/** Close the question unanswered; the server tells the agent to carry on without it. */
@@ -1544,7 +1583,16 @@
 	</section>
 </div>
 
-{#if question && currentChat}
+{#if permission && currentChat}
+	{#key permission.id}
+		<PermissionSheet
+			tool={permission.tool}
+			server={permission.server}
+			summary={permission.summary}
+			ondecide={decidePermission}
+		/>
+	{/key}
+{:else if question && currentChat}
 	{#key question.id}
 		<AskSheet
 			prompt={question.prompt}

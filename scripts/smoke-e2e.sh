@@ -463,6 +463,43 @@ check "coding can read a url" "$UCSTREAM" '"name":"fetch_url","status":"ok"'
 check "coding reads it without web search on" "$UCSTREAM" 'Contains FACT-42: true'
 
 # ---------------------------------------------------------------------------
+# Orchestrate mode. The overseer has no tool that writes code: a tier 2 worker
+# makes the edit, a shell check decides it is accepted, and only then does the
+# overseer commit and push. All three roles run on the one mock model here.
+# ---------------------------------------------------------------------------
+for t in coding-orchestrator coding-tier1 coding-tier2; do
+  api -X PUT $B/api/admin/task-configs -d "{\"task\":\"$t\",\"primaryModelId\":\"$MODEL_ID\"}" > /dev/null
+done
+OSESS=$(api -X POST $B/api/code/sessions -d "{\"repoUrl\":\"$ORIGIN.git\",\"repoName\":\"local/origin\",\"mode\":\"orchestrate\"}")
+OSID=$(echo "$OSESS" | jqn .chatId)
+OBRANCH=$(echo "$OSESS" | jqn .workBranch)
+check "an orchestrate session is created in that mode" "$(echo "$OSESS" | jqn .mode)" "orchestrate"
+OCJOB=$(api -X POST $B/api/code/sessions/$OSID/messages -d '{"content":"Mark the README as orchestrated"}' | jqn .jobId)
+OCSTREAM=$(curl -sN --max-time 120 $B/api/jobs/$OCJOB/stream)
+check "orchestrate pushed a commit to origin" "$(git -C $ORIGIN.git show "$OBRANCH:README.md")" "orchestrated"
+check "the stream shows the worker's edit under its tier" "$OCSTREAM" '"name":"tier 2 · write_file"'
+check "and announces the tier 2 worker" "$OCSTREAM" '"kind":"tier2"'
+check_absent "the orchestrator itself never wrote a file" "$OCSTREAM" '"name":"write_file"'
+OUSAGE=$(api $B/api/admin/usage)
+check "spend lists the orchestrator" "$OUSAGE" '"coding-orchestrator"'
+check "and the tier 2 worker" "$OUSAGE" '"coding-tier2"'
+OOVERVIEW=$(api $B/api/code/sessions/$OSID/overview)
+check "the overview reports the mode" "$(echo "$OOVERVIEW" | jqn .mode)" "orchestrate"
+check "the overview lists the worker's file as changed" "$(echo "$OOVERVIEW" | jqn .filesChanged)" "README.md"
+check "the overview names the worker models" "$(echo "$OOVERVIEW" | jqn '.orchestrate.tier2 != null')" "true"
+
+# A check that already passes cannot show the task was done, so the dispatch is
+# refused before a worker is paid for and the overseer says why.
+VJOB=$(api -X POST $B/api/code/sessions/$OSID/messages -d '{"content":"Try a vacuous task"}' | jqn .jobId)
+VSTREAM=$(curl -sN --max-time 60 $B/api/jobs/$VJOB/stream)
+check "a check that already passes is refused" "$(api $B/api/code/sessions/$OSID | jqn '.messages.at(-1).content')" "passes before any work"
+check_absent "and no worker ran for it" "$VSTREAM" '"name":"tier 2 · write_file"'
+
+# The worker models are validated before anything is stored.
+BADTIER=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H 'content-type: application/json' $B/api/code/sessions/$OSID -d '{"tierModels":{"tier1":"no-such-model"}}')
+check "an unknown tier model is a 400" "$BADTIER" "400"
+
+# ---------------------------------------------------------------------------
 # Generated assets. The chat agent calls generate_image, which calls the model
 # the `visual` task points at, and the picture reaches the thread only if the
 # whole chain holds: the request carries the image modality, the reply's data

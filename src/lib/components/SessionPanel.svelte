@@ -12,9 +12,11 @@
 	import { swipeToClose } from '$lib/list-sheet.svelte';
 	import type { TimelineItem } from '$lib/run-timeline';
 	import {
+		agentName,
 		contextShare,
 		formatAgo,
 		formatElapsed,
+		mainAgentName,
 		mergeOutputs,
 		planProgress,
 		prNumber,
@@ -22,6 +24,11 @@
 		type SessionOverview
 	} from '$lib/session-panel';
 
+	interface TierModelOption {
+		id: string;
+		displayName: string;
+		providerName: string;
+	}
 	interface Props {
 		overview: SessionOverview | null;
 		/** The latest fetch failed. A previous overview, if any, stays on screen. */
@@ -44,6 +51,13 @@
 		onclose: () => void;
 		/** The column's width in px, from the page's drag handle. */
 		width: number;
+		chatId: string;
+		/** The page's mode, which moves before the next overview arrives. */
+		mode: 'plan' | 'implement' | 'orchestrate';
+		/** Tool-capable models a tier can be pointed at. */
+		models: TierModelOption[];
+		/** A tier's model changed: the overview is stale until it is re-read. */
+		ontiers: () => void;
 	}
 	let {
 		overview,
@@ -59,7 +73,11 @@
 		sheet,
 		open,
 		onclose,
-		width
+		width,
+		chatId,
+		mode,
+		models,
+		ontiers
 	}: Props = $props();
 
 	/**
@@ -87,6 +105,49 @@
 	const shownAgents = $derived(liveAgents.slice(0, MAX_AGENT_ROWS));
 	const hiddenAgents = $derived(liveAgents.length - shownAgents.length);
 	const agentCount = $derived(streaming ? 1 + liveAgents.length : 0);
+
+	type Tier = 'tier1' | 'tier2';
+	const TIERS: { id: Tier; label: string }[] = [
+		{ id: 'tier1', label: 'Tier 1' },
+		{ id: 'tier2', label: 'Tier 2' }
+	];
+	/** A pick made here, until the overview catches up with it. */
+	let picked = $state<Partial<Record<Tier, string>>>({});
+	let tierSaving = $state<Tier | null>(null);
+	let tierSaved = $state<Tier | null>(null);
+	let tierError = $state<{ tier: Tier; message: string } | null>(null);
+	// Picks belong to a session; the panel outlives a switch between them.
+	$effect(() => {
+		if (!chatId) return;
+		picked = {};
+		tierSaved = null;
+		tierError = null;
+	});
+
+	async function setTier(tier: Tier, value: string) {
+		const before = picked[tier];
+		picked[tier] = value;
+		tierSaving = tier;
+		tierSaved = null;
+		tierError = null;
+		const res = await fetch(`/api/code/sessions/${chatId}`, {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ tierModels: { [tier]: value || null } })
+		}).catch(() => null);
+		tierSaving = null;
+		if (!res?.ok) {
+			picked[tier] = before;
+			const detail = res ? await res.json().catch(() => null) : null;
+			tierError = {
+				tier,
+				message: detail?.message ?? 'Could not change the model. The session keeps the previous one.'
+			};
+			return;
+		}
+		tierSaved = tier;
+		ontiers();
+	}
 
 	const context = $derived(overview?.context ?? null);
 	const share = $derived(context ? contextShare(context.usedTokens, context.contextWindow) : null);
@@ -164,7 +225,7 @@
 			{:else}
 				<div class="agent-row">
 					<span class="dot" class:parked></span>
-					<span class="agent-name">coding</span>
+					<span class="agent-name">{mainAgentName(mode)}</span>
 					{#if runStartedAt !== null}<span class="age num">{formatElapsed(runStartedAt, now)}</span>{/if}
 				</div>
 				<p class="agent-doing" title={activity}>{activity}</p>
@@ -172,7 +233,7 @@
 					<div class="agent-row sub">
 						<span class="branch-mark">└</span>
 						<span class="dot"></span>
-						<span class="agent-name" title={agent.label}>{agent.kind}</span>
+						<span class="agent-name" title={agent.label}>{agentName(agent.kind)}</span>
 						<span class="age num">{formatElapsed(agent.startedAt, now)}</span>
 					</div>
 					<p class="agent-doing sub" title={agent.detail || agent.label}>
@@ -194,6 +255,44 @@
 			backgroundBody,
 			null
 		)}
+
+		{#snippet modelsBody()}
+			{#if overview.orchestrate}
+				<p>
+					<span class="dim">Overseer</span>
+					{overview.orchestrate.orchestratorModel ?? 'first enabled model'}
+				</p>
+				<p class="hint">Set in Admin → Coding → Orchestrator.</p>
+				{#each TIERS as tier (tier.id)}
+					{@const effective = overview.orchestrate[tier.id]}
+					<label class="tier-pick">
+						<span class="dim">{tier.label}</span>
+						<select
+							value={picked[tier.id] ?? (effective?.override ? effective.modelId : '')}
+							disabled={tierSaving === tier.id}
+							onchange={(e) => void setTier(tier.id, e.currentTarget.value)}
+						>
+							<option value=""
+								>Admin default{effective && !effective.override && picked[tier.id] === undefined
+									? ` (${effective.name})`
+									: ''}</option
+							>
+							{#each models as m (m.id)}
+								<option value={m.id}>{m.displayName} · {m.providerName}</option>
+							{/each}
+						</select>
+					</label>
+					{#if tierError?.tier === tier.id}
+						<p class="notice error" role="alert">{tierError.message}</p>
+					{:else if tierSaved === tier.id}
+						<p class="hint" role="status">Saved. Applies to the next task.</p>
+					{/if}
+				{/each}
+			{/if}
+		{/snippet}
+		{#if mode === 'orchestrate' && overview.orchestrate}
+			{@render section('models', 'Models', '', modelsBody, null)}
+		{/if}
 
 		{#snippet environmentBody()}
 			<dl>
@@ -669,6 +768,25 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	.tier-pick {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin: 0.3rem 0 0;
+	}
+	.tier-pick select {
+		flex: 1;
+		min-width: 0;
+		background: var(--bg-pane);
+		border: 1px solid var(--control-border);
+		border-radius: var(--radius);
+		color: var(--fg);
+		font: inherit;
+		padding: 0.3rem 0.4rem;
+	}
+	.dim {
+		color: var(--fg-dim);
 	}
 	.stage + .stage {
 		margin-top: 0.4rem;

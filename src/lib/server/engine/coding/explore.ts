@@ -1,13 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { getBudgetStatus } from '../budget';
-import { getTaskConfig, pickModel, systemPromptFor } from '../engine';
+import { systemPromptFor } from '../engine';
 import { emitEvent } from '../events';
-import { createJob, pushChunk, subscribeJob, type LiveJob } from '../jobs';
+import type { LiveJob } from '../jobs';
 import { exploreMaxSteps } from '../limits';
-import { runAgentLoop, type LoopTool } from '../loop';
+import type { LoopTool } from '../loop';
 import type { ToolDef } from '$lib/server/providers/types';
+import { createAnnouncer, resolveAgentModel, runNestedAgent } from './nested';
 import { readOnlyCodingTools, type CodingToolContext } from './tools';
-import { taskPath } from '$lib/admin-sections';
 
 /**
  * A sub-agent that reads the repository and answers one question.
@@ -38,14 +37,6 @@ import { taskPath } from '$lib/admin-sections';
 
 /** Longest answer handed back to the parent. Past this it is not a summary. */
 const MAX_ANSWER_CHARS = 2_000;
-/**
- * Longest label or activity line on an `agent` chunk.
- *
- * Cut at the source rather than in the pane's CSS: the question is written by a
- * model and a tool's `describe` can return an arbitrary grep pattern, and this
- * is re-sent on every update.
- */
-const MAX_LABEL_CHARS = 140;
 
 export interface ExploreContext extends CodingToolContext {
 	/** The run that asked, so the sub-agent's work shows in its timeline. */
@@ -100,113 +91,35 @@ export function exploreTool(ctx: ExploreContext): LoopTool {
 }
 
 async function explore(ctx: ExploreContext, question: string, hint: string): Promise<string> {
-	if (getBudgetStatus().blocked) {
-		throw new Error('The spend cap has been reached — answer with what you already know.');
-	}
-	const cfg = getTaskConfig('subagent');
-	const choice = pickModel(cfg?.primaryModelId ?? null, 'subagent');
-	if (!choice) throw new Error('No model configured for sub-agents');
-	if (!choice.model.supportsTools) {
-		throw new Error(`${choice.model.displayName} cannot call tools — pick another in ${taskPath('subagent')}`);
-	}
-
-	// A chat id of its own so the sub-agent never appears to be the run holding
-	// the parent's chat: findRunningJobForChat scans live jobs by chat id, and a
-	// child sharing one would be reported as the blocker. Unique per dispatch,
-	// because several can now be in flight at once.
+	const { choice } = resolveAgentModel('subagent');
 	const agentId = randomUUID();
-	const job = createJob({
-		chatId: `${ctx.chatId}#explore-${agentId.slice(0, 8)}`,
-		userId: ctx.userId,
-		task: 'subagent',
-		persist: false
-	});
 	const startedAt = Date.now();
-	/**
-	 * Announce this sub-agent on the parent's stream, and keep it current.
-	 *
-	 * Its tool calls are already forwarded below, but as flattened rows with no
-	 * identity, no start and no end — which is enough for the transcript and not
-	 * enough to answer "what is running right now, and for how long". Same id
-	 * every time, so a reconnecting client converges instead of collecting one
-	 * row per update.
-	 */
-	const announce = (status: 'running' | 'ok' | 'error', detail?: string) =>
-		pushChunk(ctx.parentJob, {
-			type: 'agent',
-			id: agentId,
-			kind: 'explore',
-			// Capped here rather than in CSS: the question is model-authored and
-			// unbounded, and this rides the wire on every update.
-			label: question.slice(0, MAX_LABEL_CHARS),
-			status,
-			...(detail ? { detail: detail.slice(0, MAX_LABEL_CHARS) } : {}),
-			startedAt
-		});
-	announce('running');
-	// Subscribed before the loop starts, and for two reasons: failJob only rings
-	// the notification bell when nothing is watching, and a child's failure is
-	// the parent's tool error, not something to wake a phone for.
-	const off = subscribeJob(job, (chunk) => {
-		// Only the tool calls are forwarded, and as the parent's own chunks, so
-		// the timeline shows what the sub-agent actually did rather than a pause.
-		//
-		// The child's stepId goes: it names a step in the child's timeline that
-		// the parent has never heard of, and an unrecognised one opens a blank
-		// orphan step (see applyChunk). Without it these hang under the parent's
-		// current step, which is the one holding the dispatch_explore call —
-		// exactly where they belong.
-		//
-		// Through pushChunk rather than straight to the subscribers, so they are
-		// recorded for replay on reconnect and keep the parent's lastChunkAt
-		// fresh — a parent silent for the whole dispatch is what the abandoned-run
-		// watchdog is looking for.
-		if (chunk.type === 'tool') {
-			const { stepId: _childStep, ...rest } = chunk;
-			pushChunk(ctx.parentJob, { ...rest, name: `explore · ${chunk.name}` });
-			// And the same call as this sub-agent's current activity, so the pane
-			// has one line to show without parsing the flattened rows back out.
-			if (chunk.status === 'running') {
-				announce('running', chunk.detail ? `${chunk.name} ${chunk.detail}` : chunk.name);
-			}
-		}
-	});
-	// The parent stopping must stop this too, or a cancelled run keeps spending.
-	const onAbort = () => job.controller.abort();
-	ctx.parentJob.controller.signal.addEventListener('abort', onAbort, { once: true });
+	const announce = createAnnouncer(ctx.parentJob, { id: agentId, label: question, startedAt });
+	announce('running', 'explore');
 
-	let answer = '';
-	let steps = 0;
+	let result;
 	try {
-		await runAgentLoop({
-			job,
+		result = await runNestedAgent({
+			parent: { job: ctx.parentJob, userId: ctx.userId },
 			task: 'subagent',
-			userId: ctx.userId,
-			// Never the parent's chat: nothing here should be attributed to that
-			// conversation, and persist is off so none of it is written anyway.
-			chatId: job.chatId,
-			persist: false,
-			primary: choice,
+			rowPrefix: 'explore',
+			choice,
 			backup: null,
 			tools: readOnlyCodingTools(ctx),
 			maxIterations: exploreMaxSteps(),
-			budgetBlocked: () => getBudgetStatus().blocked,
-			// The parent's tool call is what "finishes" here; the job is a vehicle.
-			autoComplete: false,
-			buildMessages: () => [
-				{ role: 'system', content: systemPrompt(systemPromptFor('subagent'), ctx) },
-				{ role: 'user', content: hint ? `${question}\n\nStart by looking at: ${hint}` : question }
-			],
-			onDone: (text, _usage, _choice, summary) => {
-				answer = text.trim();
-				steps = summary.steps;
-			}
+			system: systemPrompt(systemPromptFor('subagent'), ctx),
+			user: hint ? `${question}\n\nStart by looking at: ${hint}` : question,
+			// And the same call as this sub-agent's current activity, so the pane
+			// has one line to show without parsing the flattened rows back out.
+			onActivity: (detail) => announce('running', 'explore', detail)
 		});
-	} finally {
-		off();
-		ctx.parentJob.controller.signal.removeEventListener('abort', onAbort);
-		announce(answer ? 'ok' : 'error', answer ? undefined : 'nothing to report');
+	} catch (err) {
+		// Closed on a throw too, or the pane shows an explorer that never finishes.
+		announce('error', 'explore', 'nothing to report');
+		throw err;
 	}
+	const { answer, steps, failure } = result;
+	announce(answer ? 'ok' : 'error', 'explore', answer ? undefined : 'nothing to report');
 
 	emitEvent({
 		userId: ctx.userId,
@@ -216,17 +129,11 @@ async function explore(ctx: ExploreContext, question: string, hint: string): Pro
 		name: 'subagent.explore',
 		status: answer ? 'ok' : 'error',
 		durationMs: Date.now() - startedAt,
-		detail: { question, steps, answerChars: answer.length, model: choice.model.modelKey }
+		detail: { question, steps, answerChars: answer.length, model: result.model }
 	});
 
 	if (!answer) {
-		// runAgentLoop reports a failed model call by failing its own job rather
-		// than throwing, so without this a provider outage came back as "found
-		// nothing" — an answer the parent would reasonably act on.
-		const failure = job.chunks.findLast((c) => c.type === 'error');
-		if (failure && failure.type === 'error') {
-			throw new Error(`The sub-agent could not run: ${failure.message}`);
-		}
+		if (failure) throw new Error(`The sub-agent could not run: ${failure}`);
 		return 'The sub-agent found nothing to report. Look yourself if it matters.';
 	}
 	// Truncated rather than refused: a long answer is still worth having, and

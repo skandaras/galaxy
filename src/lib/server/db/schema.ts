@@ -330,7 +330,10 @@ export const CORE_TASKS = [
 	'subagent',
 	'board',
 	'alignment',
-	'alignment-synthesis'
+	'alignment-synthesis',
+	'coding-orchestrator',
+	'coding-tier1',
+	'coding-tier2'
 ] as const;
 export type CoreTask = (typeof CORE_TASKS)[number];
 
@@ -377,6 +380,10 @@ export const taskPromptVersions = sqliteTable(
 
 // One coding session per code-mode chat: a cloned workspace on the shared
 // data volume plus the branch the agent works on.
+/** Text column with no CHECK, so adding a mode needs no migration. */
+export const CODE_MODES = ['plan', 'implement', 'orchestrate'] as const;
+export type CodeMode = (typeof CODE_MODES)[number];
+
 export const codeSessions = sqliteTable('code_sessions', {
 	chatId: text('chat_id').primaryKey(),
 	userId: text('user_id').notNull(),
@@ -386,7 +393,7 @@ export const codeSessions = sqliteTable('code_sessions', {
 	workBranch: text('work_branch').notNull(),
 	/** Workspace path relative to DATA_DIR (shared with runner containers). */
 	workspaceRel: text('workspace_rel').notNull(),
-	mode: text('mode', { enum: ['plan', 'implement'] }).notNull().default('plan'),
+	mode: text('mode', { enum: CODE_MODES }).notNull().default('plan'),
 	/**
 	 * The pull request opened for this branch, by the button or the agent's
 	 * tool. Not stored before, so switching sessions and back put "Open pull
@@ -1015,10 +1022,11 @@ export const cardLog = sqliteTable(
 
 /**
  * What raised a notification. The kind drives the icon and, more importantly,
- * whether it is worth waking a phone for — only `question` parks real work.
+ * whether it is worth waking a phone for — only `question` and `permission` park real work.
  */
 export const NOTIFICATION_KINDS = [
 	'question',
+	'permission',
 	'card-assigned',
 	'board-shared',
 	'card-done',
