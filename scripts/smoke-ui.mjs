@@ -391,7 +391,7 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 	await page.goto(`${B}/settings`);
 	await page.locator('.tabs button').first().waitFor();
 	const tabs = await page.locator('.tabs button').allTextContents();
-	check('settings offers every pane a tab', tabs, ['Theme', 'Boards', 'Notifications', 'Alignment']);
+	check('settings offers every pane a tab', tabs, ['Theme', 'Boards', 'Notifications', 'Permissions', 'Alignment']);
 
 	for (const tab of tabs) {
 		problems = [];

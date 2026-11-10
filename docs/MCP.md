@@ -144,6 +144,29 @@ Worth knowing, because it is a real step down from the official server:
   `npx`: there's no build toolchain at runtime, it needs the native `sharp`
   module, and nothing persists the npm cache, so cold starts re-download.
 
+## Permission prompts
+
+Before the agent runs a tool that needs a yes, the run parks and a sheet opens
+in chat and on the Code page. It shows the tool, the server it belongs to if
+any, and a plain-text summary of the arguments. There is no text field: what you
+approve is the call shown. Escape does not dismiss it and no button is the
+default, so Enter does nothing until you pick one.
+
+| Choice | Effect |
+|---|---|
+| Allow once | This call only. |
+| Allow for this session | Until the chat ends. |
+| Always allow this tool | Kept until you revoke it. |
+| Deny | The call does not run. |
+
+A denial is reported to the agent as the tool's result, so it can explain or
+carry on another way. A question from `ask_user` can be open at the same time;
+the permission sheet shows first.
+
+Always-allows are listed under **Settings → Permissions**, each with a Revoke
+button. Session grants are not listed there. A hidden chat never writes to the
+database, so its session grants are held in memory only and go with the process.
+
 ## Limitations
 
 - **No OAuth.** Static credentials only.

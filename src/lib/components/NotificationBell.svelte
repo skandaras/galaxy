@@ -5,7 +5,7 @@
 
 	interface Notification {
 		id: string;
-		kind: 'question' | 'card-assigned' | 'board-shared' | 'card-done' | 'turn-failed';
+		kind: 'question' | 'permission' | 'card-assigned' | 'board-shared' | 'card-done' | 'turn-failed';
 		title: string;
 		body: string;
 		link: string;
@@ -16,6 +16,7 @@
 
 	const ICON: Record<Notification['kind'], string> = {
 		question: '✋',
+		permission: '🔒',
 		'card-assigned': '◉',
 		'board-shared': '⊞',
 		'card-done': '✓',
