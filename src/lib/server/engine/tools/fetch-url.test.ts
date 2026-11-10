@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '$lib/server/db';
-import { DEFAULT_FETCH } from '$lib/server/settings';
+import { DEFAULT_FETCH, deleteSetting, setSetting } from '$lib/server/settings';
+import { encryptSecret } from '$lib/server/crypto';
 import { fetchUrlTool, normaliseUrl, rankRepoDocs, resolveGithub } from './fetch-url';
 
 /** A stand-in response; only what the tool actually reads is provided. */
@@ -362,5 +363,34 @@ describe('what a read hands on to the next turn', () => {
 			chars: 8
 		});
 		expect(found?.ref).toBe('https://github.com/o/r');
+	});
+});
+
+describe('the GitHub token', () => {
+	async function authSent(githubAuth: boolean | undefined): Promise<(string | null)[]> {
+		const sent: (string | null)[] = [];
+		const impl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+			sent.push(new Headers(init?.headers).get('authorization'));
+			return reply('# readme', { contentType: 'text/plain' });
+		}) as unknown as typeof fetch;
+		setSetting('github', { tokenEnc: encryptSecret('ghp_secret') });
+		try {
+			const t = fetchUrlTool(DEFAULT_FETCH, { fetchImpl: impl, githubAuth });
+			await t.execute({ url: 'https://github.com/o/private-repo/blob/main/secrets.md' });
+		} finally {
+			deleteSetting('github');
+		}
+		return sent;
+	}
+
+	it('goes with a GitHub link for someone who may code', async () => {
+		expect(await authSent(true)).toEqual(['Bearer ghp_secret']);
+	});
+
+	it('is withheld from someone who may not', async () => {
+		// Chat used to send it for everyone, which read private repositories for
+		// people the coding grant exists to keep out of them.
+		expect(await authSent(false)).toEqual([null]);
+		expect(await authSent(undefined)).toEqual([null]);
 	});
 });

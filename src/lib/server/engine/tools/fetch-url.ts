@@ -39,6 +39,13 @@ const MAX_BYTES = 2_000_000;
 export interface FetchToolDeps {
 	/** Injected in tests so no suite ever depends on the network. */
 	fetchImpl?: typeof fetch;
+	/**
+	 * Send the stored GitHub token with GitHub links. Only for someone who
+	 * holds the coding grant: the token reads every private repository it can
+	 * reach, and chat sent it for anyone, so a person refused coding could
+	 * still read those repositories a file at a time by pasting links.
+	 */
+	githubAuth?: boolean;
 }
 
 /**
@@ -96,7 +103,7 @@ export function fetchUrlTool(cfg: FetchSettings, deps: FetchToolDeps = {}): Loop
 			used++;
 			// Read once: githubToken() is a settings lookup plus a decrypt, and the
 			// token only ever goes to GitHub's own hosts.
-			const token = resolved?.authorize ? githubToken() : null;
+			const token = resolved?.authorize && deps.githubAuth ? githubToken() : null;
 			// safeFetch re-asserts the SSRF guard on every redirect hop; the
 			// pre-flight checks above only cover the address we start from.
 			const get = (url: string, accept?: string) =>

@@ -32,6 +32,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	if (!endpoint || typeof p256dh !== 'string' || typeof auth !== 'string') {
 		error(400, 'Expected a PushSubscription with endpoint and keys');
 	}
+	// The server POSTs to this address whenever it has something urgent to say,
+	// so it is a request anyone signed in can aim. Every push service is https;
+	// over plain http it could be aimed at the Docker socket proxy, where a POST
+	// with no body is enough to stop a container.
+	if (!URL.canParse(endpoint) || new URL(endpoint).protocol !== 'https:') {
+		error(400, 'A push endpoint must be an https address');
+	}
 
 	const sub = saveSubscription(
 		user.id,
