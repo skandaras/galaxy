@@ -200,9 +200,22 @@ class LocalExecutor implements CommandExecutor {
 }
 
 /**
+ * The first Docker API version that mounts part of a volume (Engine 26).
+ * An older daemon drops the field it does not know and mounts the whole
+ * volume at the target, which is the exposure the subpath exists to remove.
+ */
+const SUBPATH_API_VERSION = [1, 45] as const;
+
+/**
  * Runs each command in a fresh sibling container via the (restricted) Docker
- * API exposed by docker-socket-proxy. The shared data volume is mounted at
- * /data so workspaces line up with the app's DATA_DIR-relative paths.
+ * API exposed by docker-socket-proxy. Only the command's working directory is
+ * mounted, at the path it has in the app, so workspace paths line up with the
+ * app's DATA_DIR-relative ones.
+ *
+ * This used to bind the whole data volume at /data. The agent's bash then ran
+ * one `cd` away from galaxy.db and galaxy.key: every chat, every journal and
+ * the key that decrypts the GitHub token and the provider keys, readable and
+ * writable by any command a model chose to run or a page talked it into.
  */
 export class DockerExecutor implements CommandExecutor {
 	readonly kind = 'docker' as const;
@@ -231,12 +244,41 @@ export class DockerExecutor implements CommandExecutor {
 		return withRunnerSlot(() => this.run(command, opts));
 	}
 
+	private subpathChecked = false;
+
+	/**
+	 * Refuse a daemon that cannot mount part of a volume.
+	 *
+	 * Asked once and remembered only when the answer is yes, so a proxy that
+	 * was briefly unreachable is asked again rather than trusted or condemned.
+	 */
+	private async requireSubpathMounts(): Promise<void> {
+		if (this.subpathChecked) return;
+		const res = await this.api('/version');
+		if (!res.ok) {
+			throw new Error(
+				`Could not read the Docker version (${res.status}). The socket proxy must allow GET /version, ` +
+					'which is how the runner confirms it can mount a workspace without the rest of the data volume.'
+			);
+		}
+		const { ApiVersion } = (await res.json()) as { ApiVersion?: string };
+		const [major, minor] = String(ApiVersion ?? '').split('.').map(Number);
+		const [needMajor, needMinor] = SUBPATH_API_VERSION;
+		if (!(major > needMajor || (major === needMajor && minor >= needMinor))) {
+			throw new Error(
+				`Coding runners need Docker Engine 26 or newer (API ${needMajor}.${needMinor}); this daemon speaks API ${ApiVersion ?? 'unknown'}. ` +
+					'An older daemon would mount the whole data volume into the runner, so the runner is refused instead.'
+			);
+		}
+		this.subpathChecked = true;
+	}
+
 	/**
 	 * The container spec.
 	 *
 	 * `tuned` carries the two fields that are only ever hints — a CPU ceiling and
 	 * log rotation. Everything else is the isolation itself and is never optional:
-	 * the bind, the network, the memory cap, the process cap.
+	 * the mount, the network, the memory cap, the process cap.
 	 */
 	private createBody(command: string, cwdRel: string, tuned: boolean): string {
 		const cpus = runnerCpus();
@@ -246,7 +288,14 @@ export class DockerExecutor implements CommandExecutor {
 			WorkingDir: `/data/${cwdRel}`,
 			Env: ['GIT_TERMINAL_PROMPT=0'],
 			HostConfig: {
-				Binds: [`${this.volume}:/data`],
+				Mounts: [
+					{
+						Type: 'volume',
+						Source: this.volume,
+						Target: `/data/${cwdRel}`,
+						VolumeOptions: { Subpath: cwdRel }
+					}
+				],
 				...(this.network ? { NetworkMode: this.network } : {}),
 				Memory: 1024 * 1024 * 1024,
 				PidsLimit: 256,
@@ -274,6 +323,7 @@ export class DockerExecutor implements CommandExecutor {
 		opts: { cwdRel: string; timeoutMs?: number }
 	): Promise<ExecResult> {
 		const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+		await this.requireSubpathMounts();
 		let create = await this.api('/containers/create', {
 			method: 'POST',
 			body: this.createBody(command, opts.cwdRel, true)

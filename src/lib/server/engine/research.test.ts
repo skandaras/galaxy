@@ -169,9 +169,46 @@ describe('assertPublicHttpUrl', () => {
 			expect(() => assertPublicHttpUrl(bad), bad).toThrow(/Blocked/);
 		}
 	});
+	it('blocks a name that only resolves inside a network', () => {
+		// The compose network's own service names. The first answers with every
+		// container's environment to anyone who can reach it.
+		for (const bad of [
+			'http://docker-socket-proxy:2375/containers/json',
+			'http://searxng:8080/search?q=x',
+			'http://galaxy-prod:3000/healthz',
+			'http://app.localhost/x',
+			'http://router.home.arpa/x'
+		]) {
+			expect(() => assertPublicHttpUrl(bad), bad).toThrow(/Blocked/);
+		}
+	});
+	it('blocks private IPv6 and the other ways of writing a private address', () => {
+		// URL keeps the brackets on an IPv6 literal, which the old prefix checks
+		// never accounted for, so none of the IPv6 ones was ever refused.
+		for (const bad of [
+			'http://[::1]/x',
+			'http://[fd12:3456::1]/x',
+			'http://[fe80::1]/x',
+			'http://[::ffff:127.0.0.1]/x',
+			'http://[::ffff:10.0.0.5]/x',
+			'http://2130706433/x',
+			'http://0x7f.1/x',
+			'http://100.64.0.1/x',
+			'http://0.0.0.0/x'
+		]) {
+			expect(() => assertPublicHttpUrl(bad), bad).toThrow(/Blocked/);
+		}
+	});
 	it('allows normal public urls', () => {
 		expect(() => assertPublicHttpUrl('https://example.com/page')).not.toThrow();
 		expect(() => assertPublicHttpUrl('http://93.184.216.34/x')).not.toThrow();
+		expect(() => assertPublicHttpUrl('http://[2606:4700:4700::1111]/x')).not.toThrow();
+	});
+	it('does not mistake a name for an IPv6 prefix', () => {
+		// Refused for years as private hosts, on the strength of two letters.
+		for (const fine of ['https://fda.gov/x', 'https://www.fcc.gov/x', 'https://fd.nl/', 'https://fe80s.example/']) {
+			expect(() => assertPublicHttpUrl(fine), fine).not.toThrow();
+		}
 	});
 });
 
@@ -1846,6 +1883,54 @@ describe('safeFetch', () => {
 		await expect(
 			safeFetch('https://example.com/a', {}, async () => redirect('https://example.com/a'))
 		).rejects.toThrow(/Too many redirects/);
+	});
+
+	it('refuses a public name that resolves to a private address', async () => {
+		let fetched = 0;
+		await expect(
+			safeFetch(
+				'https://innocent.example.com/a',
+				{},
+				async () => (fetched++, ok200()),
+				async () => ['93.184.216.34', '10.0.0.5']
+			)
+		).rejects.toThrow(/resolves to 10\.0\.0\.5/);
+		expect(fetched).toBe(0);
+	});
+
+	it('checks what each redirect hop resolves to, not only the first', async () => {
+		let hop = 0;
+		await expect(
+			safeFetch(
+				'https://example.com/a',
+				{},
+				async () => (hop++ === 0 ? redirect('https://rebound.example.net/') : ok200()),
+				async (host) => (host === 'rebound.example.net' ? ['127.0.0.1'] : ['93.184.216.34'])
+			)
+		).rejects.toThrow(/Blocked/);
+	});
+
+	it('leaves a name that does not resolve to the fetch', async () => {
+		const res = await safeFetch('https://example.com/a', {}, async () => ok200(), async () => {
+			throw new Error('ENOTFOUND');
+		});
+		expect(res.status).toBe(200);
+	});
+
+	it('keeps a credential on the origin it was meant for', async () => {
+		const seen: { url: string; auth: string | null }[] = [];
+		let hop = 0;
+		await safeFetch(
+			'https://api.github.com/repos/a/b/readme',
+			{ headers: { authorization: 'Bearer tok', accept: 'text/plain' } },
+			async (url, init) => {
+				seen.push({ url: String(url), auth: new Headers(init?.headers).get('authorization') });
+				if (hop++ === 0) return redirect('/repos/a/b/readme?ref=main');
+				if (hop === 2) return redirect('https://elsewhere.example.com/x');
+				return ok200();
+			}
+		);
+		expect(seen.map((s) => s.auth)).toEqual(['Bearer tok', 'Bearer tok', null]);
 	});
 });
 

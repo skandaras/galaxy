@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { users } from '$lib/server/db/schema';
+import { env } from '$env/dynamic/private';
 import type { AuthHeaders, SessionUser } from '$lib/server/auth';
 
 // Throttle last-seen writes so every request isn't a DB write.
@@ -52,6 +53,17 @@ export function provisionUser(
 	}
 
 	return toSessionUser({ ...existing, isAdmin, canCode: grantCode || existing.canCode });
+}
+
+/**
+ * Whether this person holds the coding grant, for code that has an id and no
+ * request: a turn started by a board or the scheduler. Dev mode grants it to
+ * everyone, as `provisionUser` does there.
+ */
+export function userCanCode(userId: string): boolean {
+	if ((env.AUTH_MODE || 'authelia') === 'dev') return true;
+	const row = db.select({ canCode: users.canCode }).from(users).where(eq(users.id, userId)).get();
+	return row?.canCode ?? false;
 }
 
 function toSessionUser(row: {

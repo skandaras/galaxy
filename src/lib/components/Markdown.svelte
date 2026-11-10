@@ -6,7 +6,7 @@
 	import CodeBlock from './CodeBlock.svelte';
 	import SvgBlock from './SvgBlock.svelte';
 	import { segmentMarkdown } from '$lib/markdown-segments';
-	import { releaseApiLinks } from '$lib/markdown-links';
+	import { releaseApiLinks, tameExternalContent } from '$lib/markdown-links';
 
 	let { text }: { text: string } = $props();
 
@@ -20,7 +20,9 @@
 		// After sanitising, not before: releaseApiLinks reads the anchors
 		// DOMPurify actually kept, rather than whatever the model wrote.
 		releaseApiLinks(
-			DOMPurify.sanitize(marked.parse(md, { async: false, gfm: true, breaks: true }) as string)
+			tameExternalContent(
+				DOMPurify.sanitize(marked.parse(md, { async: false, gfm: true, breaks: true }) as string)
+			)
 		);
 
 	/**

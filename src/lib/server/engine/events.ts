@@ -24,6 +24,13 @@ export interface GalaxyEvent {
 	status: 'ok' | 'error' | 'running';
 	durationMs?: number;
 	detail?: Record<string, unknown>;
+	/**
+	 * Set on an event that was not stored, which is one from a hidden chat.
+	 * The live feed shows these to the person whose chat it is and to nobody
+	 * else: an admin's feed carries everyone's events, and it carried these
+	 * too, tool arguments and search queries included.
+	 */
+	unrecorded?: true;
 }
 
 const bus = new EventEmitter();
@@ -37,7 +44,12 @@ export function emitEvent(
 	e: Omit<GalaxyEvent, 'id' | 'ts'>,
 	opts: { persist?: boolean } = {}
 ): GalaxyEvent {
-	const full: GalaxyEvent = { id: randomUUID(), ts: Date.now(), ...e };
+	const full: GalaxyEvent = {
+		id: randomUUID(),
+		ts: Date.now(),
+		...e,
+		...(opts.persist === false ? { unrecorded: true as const } : {})
+	};
 	if (opts.persist !== false) {
 		db.insert(events)
 			.values({
@@ -56,6 +68,12 @@ export function emitEvent(
 	}
 	bus.emit('event', full);
 	return full;
+}
+
+/** Whether `viewer` may be shown this event on the live feed. */
+export function eventVisibleTo(e: GalaxyEvent, viewer: { id: string; isAdmin: boolean }): boolean {
+	if (e.userId === viewer.id) return true;
+	return viewer.isAdmin && !e.unrecorded;
 }
 
 export function subscribeEvents(cb: (e: GalaxyEvent) => void): () => void {

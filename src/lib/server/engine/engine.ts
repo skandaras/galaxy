@@ -28,6 +28,7 @@ import {
 } from '$lib/server/settings';
 import type { ProviderRouting, ReasoningEffort } from '$lib/server/providers/types';
 import { typstReady } from '$lib/server/pdf';
+import { userCanCode } from '$lib/server/users';
 import { assertBudget, getBudgetStatus } from './budget';
 import { buildContext } from './context';
 import { DEFAULT_PROMPTS } from './prompts';
@@ -343,7 +344,9 @@ export function prepareChatTurn(opts: {
 		// *looking things up*; this is for reading an address the user has already
 		// handed over, and turning search off should not make the model guess at a
 		// link it was given. Admin → Tools switches it off outright.
-		fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH)),
+		fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH), {
+			githubAuth: userCanCode(opts.userId)
+		}),
 		runHistoryTool(chat.id),
 		// Scoped to this user's boards and anything shared with them.
 		...boardTools(opts.userId),

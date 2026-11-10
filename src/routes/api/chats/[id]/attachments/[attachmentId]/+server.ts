@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { requireUser } from '$lib/server/api';
+import { contentDisposition, requireUser } from '$lib/server/api';
 import { attachmentBytes, getChat } from '$lib/server/chats';
 
 /** Rendered in an <img>; anything else is handed over as a download. */
@@ -37,7 +37,7 @@ export const GET: RequestHandler = ({ locals, params }) => {
 	const inline = file.kind === 'image' && INLINE_MIMES.has(file.mime);
 	const headers: Record<string, string> = {
 		'content-type': file.mime,
-		'content-disposition': `${inline ? 'inline' : 'attachment'}; filename="${file.name.replace(/"/g, '')}"`,
+		'content-disposition': contentDisposition(inline ? 'inline' : 'attachment', file.name),
 		// Without this a mistyped content-type is a free pass to sniff the bytes
 		// into something scriptable.
 		'x-content-type-options': 'nosniff',

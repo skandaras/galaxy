@@ -51,14 +51,23 @@ export function authenticatedUrl(repoUrl: string, token: string | undefined): st
 }
 
 /**
- * Per-invocation git auth: `-c http.extraheader=…` for github.com remotes.
+ * Per-invocation git auth: an Authorization header for github.com remotes.
  * The token is never written to .git/config or any file in the workspace,
  * so the agent's read_file / `git remote -v` cannot recover it.
+ *
+ * The header is scoped to github.com and hooks are off for the command that
+ * carries it, because the repository's own config and hooks are the agent's
+ * to write. A bare `http.extraheader` went to whatever host the push ended up
+ * at, so a `pushurl` or `insteadOf` in .git/config sent the token to that
+ * host, and a pre-push hook could read it from GIT_CONFIG_PARAMETERS.
  */
 export function gitAuthArgs(repoUrl: string, token = githubToken()): string {
 	if (!token || !/^https:\/\/github\.com\//.test(repoUrl)) return '';
 	const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
-	return `-c ${shellQuote(`http.extraheader=AUTHORIZATION: basic ${basic}`)}`;
+	return [
+		`-c ${shellQuote(`http.https://github.com/.extraheader=AUTHORIZATION: basic ${basic}`)}`,
+		'-c core.hooksPath=/dev/null'
+	].join(' ');
 }
 
 /** Remove any credential that may appear in command output before storing/streaming. */
@@ -190,13 +199,17 @@ export async function createWorkspace(repoUrl: string): Promise<CreatedWorkspace
 	const executor = getExecutor();
 	const id = randomUUID().slice(0, 8);
 	const workspaceRel = `${WORKSPACES_REL}/${id}`;
-	mkdirSync(join(dataDir, WORKSPACES_REL), { recursive: true });
+	// Made here, not by the clone: a runner is given its working directory and
+	// nothing else, so the directory has to exist before one can be started in
+	// it. Cloning from the parent would have meant mounting every session's
+	// workspace into this one's runner.
+	mkdirSync(join(dataDir, workspaceRel), { recursive: true });
 
 	// Clean URL + per-invocation auth header: the token never lands on disk.
 	const clone = await run(
 		executor,
-		WORKSPACES_REL,
-		`mkdir -p ${id} && git ${gitAuthArgs(repoUrl)} clone ${shellQuote(repoUrl)} ${id}`,
+		workspaceRel,
+		`git ${gitAuthArgs(repoUrl)} clone ${shellQuote(repoUrl)} .`,
 		300_000
 	);
 	if (clone.code !== 0) {

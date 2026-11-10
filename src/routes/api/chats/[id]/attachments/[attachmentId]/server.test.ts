@@ -62,6 +62,18 @@ describe('GET an attachment', () => {
 		expect(res.headers.get('content-disposition')).toContain('attachment');
 	});
 
+	it('serves a file whose name is not Latin-1', async () => {
+		// A header value is Latin-1 and one line. These names used to throw while
+		// the response was being built, so the file answered 500 for good.
+		for (const name of ['文档.pdf', 'sunset 🌅.png', 'two\nlines.png', 'say "hi".png']) {
+			const ref = attach(name, 'image/png', 'x');
+			const res = callGet(ref.id);
+			expect(res.status, name).toBe(200);
+			const header = res.headers.get('content-disposition')!;
+			expect(header, name).toContain(`filename*=UTF-8''${encodeURIComponent(name)}`);
+		}
+	});
+
 	it('never lets the type be sniffed into something else', async () => {
 		const ref = attach('galaxy.png', 'image/png', 'x');
 		expect(callGet(ref.id).headers.get('x-content-type-options')).toBe('nosniff');

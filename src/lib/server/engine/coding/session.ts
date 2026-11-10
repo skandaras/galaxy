@@ -320,7 +320,8 @@ export function startCodingTurn(opts: {
 				...attachmentTools(chat.id),
 				// Reading a linked spec, an upstream README or an API doc is safe in
 				// plan mode as well as implement — it changes nothing in the repo.
-				fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH)),
+				// A coding session only exists for someone who holds the grant.
+				fetchUrlTool(getSetting<FetchSettings>('fetch', DEFAULT_FETCH), { githubAuth: true }),
 				runHistoryTool(chat.id),
 				// A coding task often is a card; reading the board is how the agent
 				// finds out what it was actually asked for.

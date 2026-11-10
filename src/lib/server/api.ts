@@ -67,6 +67,21 @@ export function requireAlignment(locals: App.Locals): SessionUser {
 	return user;
 }
 
+/**
+ * A Content-Disposition value for a file somebody named.
+ *
+ * A header value is Latin-1 and one line, and the name used to be dropped in
+ * with only its quotes removed. An upload called 文档.pdf or a generated image
+ * with an emoji in its title therefore threw while the response was being
+ * built, and the file answered 500 for as long as it existed. The plain
+ * `filename` is what an old client reads; `filename*` carries the real name.
+ */
+export function contentDisposition(kind: 'inline' | 'attachment', name: string): string {
+	const plain = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '') || 'download';
+	const encoded = encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+	return `${kind}; filename="${plain}"; filename*=UTF-8''${encoded}`;
+}
+
 const HEARTBEAT_MS = 25_000;
 
 export interface SseChannel {

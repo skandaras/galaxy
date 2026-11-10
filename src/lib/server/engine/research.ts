@@ -1,3 +1,5 @@
+import { BlockList, isIP } from 'node:net';
+import { lookup } from 'node:dns/promises';
 import { reasoningFor } from '$lib/server/providers/registry';
 import { env } from '$env/dynamic/private';
 import type { AttachmentRef } from '$lib/server/db/schema';
@@ -2662,44 +2664,115 @@ function mergeConflicts(prev: string[], next: string[]): string[] {
 }
 
 /**
+ * Addresses a fetched page must never be served from: loopback, private,
+ * link-local, carrier-grade NAT, and the reserved and multicast ranges.
+ * `BlockList` checks an IPv4-mapped IPv6 address against the IPv4 rules, so
+ * `::ffff:127.0.0.1` is caught by the first line.
+ */
+const PRIVATE_ADDRESSES = new BlockList();
+for (const [net, bits] of [
+	['0.0.0.0', 8],
+	['10.0.0.0', 8],
+	['100.64.0.0', 10],
+	['127.0.0.0', 8],
+	['169.254.0.0', 16],
+	['172.16.0.0', 12],
+	['192.0.0.0', 24],
+	['192.168.0.0', 16],
+	['198.18.0.0', 15],
+	['224.0.0.0', 3]
+] as const) {
+	PRIVATE_ADDRESSES.addSubnet(net, bits, 'ipv4');
+}
+for (const [net, bits] of [
+	['::', 127],
+	['fc00::', 7],
+	['fe80::', 10],
+	['ff00::', 8]
+] as const) {
+	PRIVATE_ADDRESSES.addSubnet(net, bits, 'ipv6');
+}
+
+export function isPrivateAddress(ip: string): boolean {
+	const family = isIP(ip);
+	if (!family) return false;
+	return PRIVATE_ADDRESSES.check(ip, family === 6 ? 'ipv6' : 'ipv4');
+}
+
+const privateFetchAllowed = () => env.ALLOW_PRIVATE_RESEARCH_FETCH === '1';
+
+/**
  * Server-side fetch of attacker-influenced URLs (search results) must not
- * reach internal services. Blocks loopback/private/link-local hosts and IP
- * literals; ALLOW_PRIVATE_RESEARCH_FETCH=1 disables the guard for tests.
- * (DNS-rebinding is out of scope for this layer — see PLAN backlog.)
+ * reach internal services. Blocks loopback/private/link-local addresses and
+ * names that only resolve inside a network; ALLOW_PRIVATE_RESEARCH_FETCH=1
+ * disables the guard for tests.
+ *
+ * A name with no dot is refused outright. Nothing public has one, and on the
+ * compose network `docker-socket-proxy` and `searxng` are exactly such names:
+ * the old check, which looked for a handful of suffixes, let
+ * `http://docker-socket-proxy:2375/containers/json` through, and that answers
+ * with every container's environment.
+ *
+ * The IPv6 checks used to be `startsWith('fc')`, `'fd'` and `'fe80'` against
+ * the bare hostname. URL keeps the brackets on an IPv6 literal, so they never
+ * matched one, while fda.gov, fcc.gov and every other name beginning with
+ * those letters was refused as a private host.
+ *
+ * This reads the address as written. What a name resolves to is checked in
+ * `safeFetch`, hop by hop.
  */
 export function assertPublicHttpUrl(rawUrl: string): void {
-	if (env.ALLOW_PRIVATE_RESEARCH_FETCH === '1') return;
+	if (privateFetchAllowed()) return;
 	const url = new URL(rawUrl);
 	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
 		throw new Error(`Blocked non-http URL: ${url.protocol}`);
 	}
-	const h = url.hostname.toLowerCase();
+	const h = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+	if (isIP(h)) {
+		if (isPrivateAddress(h)) throw new Error(`Blocked private address: ${h}`);
+		return;
+	}
 	if (
-		h === 'localhost' ||
+		!h.includes('.') ||
+		h.endsWith('.localhost') ||
 		h.endsWith('.local') ||
 		h.endsWith('.internal') ||
 		h.endsWith('.lan') ||
-		h === '::1' ||
-		h.startsWith('fc') ||
-		h.startsWith('fd') ||
-		h.startsWith('fe80')
+		h.endsWith('.home.arpa')
 	) {
 		throw new Error(`Blocked private host: ${h}`);
 	}
-	const v4 = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-	if (v4) {
-		const [a, b] = [Number(v4[1]), Number(v4[2])];
-		if (
-			a === 0 ||
-			a === 10 ||
-			a === 127 ||
-			(a === 192 && b === 168) ||
-			(a === 172 && b >= 16 && b < 32) ||
-			(a === 169 && b === 254)
-		) {
-			throw new Error(`Blocked private address: ${h}`);
-		}
+}
+
+export type HostResolver = (host: string) => Promise<string[]>;
+
+const dnsResolve: HostResolver = async (host) =>
+	(await lookup(host, { all: true })).map((a) => a.address);
+
+/**
+ * Refuse a public-looking name that resolves to a private address.
+ *
+ * `assertPublicHttpUrl` only reads the name, so `anything.nip.io`, or a record
+ * someone points at 10.0.0.5, passed it and was fetched from inside the
+ * network. A name that does not resolve is left to the fetch, which reports
+ * that better than this could.
+ *
+ * The lookup here and the one the connection makes are separate, so a server
+ * that answers the two differently still gets through. Closing that needs the
+ * connection pinned to the checked address, which takes a custom dispatcher.
+ */
+async function assertPublicResolution(rawUrl: string, resolve: HostResolver): Promise<void> {
+	if (privateFetchAllowed()) return;
+	const host = new URL(rawUrl).hostname.replace(/^\[|\]$/g, '');
+	if (isIP(host)) return;
+	let addresses: string[];
+	try {
+		addresses = await resolve(host);
+	} catch {
+		return;
 	}
+	const bad = addresses.find(isPrivateAddress);
+	if (bad) throw new Error(`Blocked private address: ${host} resolves to ${bad}`);
 }
 
 /** Fetch a page and reduce it to readable text (no external parser deps). */
@@ -2861,18 +2934,35 @@ const MAX_REDIRECTS = 5;
 export async function safeFetch(
 	url: string,
 	init: RequestInit & { signal?: AbortSignal },
-	fetchImpl: typeof fetch = fetch
+	fetchImpl: typeof fetch = fetch,
+	// An injected fetch never leaves the process, so there is nothing for a
+	// lookup to protect and no network in a test for it to use.
+	resolve: HostResolver | null = fetchImpl === fetch ? dnsResolve : null
 ): Promise<Response> {
 	let target = url;
+	let headers = init.headers;
 	for (let hop = 0; ; hop++) {
 		assertPublicHttpUrl(target);
-		const res = await fetchImpl(target, { ...init, redirect: 'manual' });
+		if (resolve) await assertPublicResolution(target, resolve);
+		const res = await fetchImpl(target, { ...init, headers, redirect: 'manual' });
 		const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
 		if (!location) return res;
 		if (hop >= MAX_REDIRECTS) throw new Error(`Too many redirects (${MAX_REDIRECTS})`);
 		// Relative Locations are legal and common.
-		target = new URL(location, target).href;
+		const next = new URL(location, target);
+		// `redirect: 'follow'` drops credentials when a redirect leaves the
+		// origin. Following by hand has to do the same, or the GitHub token
+		// `fetch_url` sends goes to wherever a response points.
+		if (next.origin !== new URL(target).origin) headers = withoutAuthorization(headers);
+		target = next.href;
 	}
+}
+
+function withoutAuthorization(headers: RequestInit['headers']): RequestInit['headers'] {
+	if (!headers) return headers;
+	const copy = new Headers(headers);
+	copy.delete('authorization');
+	return copy;
 }
 
 export interface PageFetchDeps {
