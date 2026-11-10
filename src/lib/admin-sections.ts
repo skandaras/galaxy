@@ -90,6 +90,7 @@ export function taskPath(task: string): string {
 /** The places messages most often send people, named once. */
 export const ADMIN_PATHS = {
 	github: adminPath('Coding', 'GitHub'),
+	orchestrator: adminPath('Coding', 'Orchestrator'),
 	push: adminPath('Deployment', 'Push'),
 	budget: adminPath('Spend', 'Budget cap'),
 	webSearch: adminPath('Research', 'Web search'),

@@ -197,8 +197,8 @@ describe('sessionOverview in an orchestrate session', () => {
 		expect(overview.mode).toBe('orchestrate');
 		expect(overview.orchestrate).toEqual({
 			orchestratorModel: 'ov-orch',
-			tier1: { modelId: 'ov-t1-default', name: 'ov-t1-default' },
-			tier2: { modelId: 'ov-t2-chosen', name: 'ov-t2-chosen' }
+			tier1: { modelId: 'ov-t1-default', name: 'ov-t1-default', override: false },
+			tier2: { modelId: 'ov-t2-chosen', name: 'ov-t2-chosen', override: true }
 		});
 	});
 

@@ -109,7 +109,9 @@ function orchestrateModels(session: CodeSession): NonNullable<SessionOverview['o
 			(override ? resolveTextModel(override) : null)?.model ??
 			resolveModel(getTaskConfig(task)?.primaryModelId ?? '')?.model ??
 			listEnabledModels().find((m) => m.supportsTools);
-		return model ? { modelId: model.id, name: model.displayName } : null;
+		// The panel's select has to tell a model the person picked from the same
+		// model arriving as the default, or it shows a choice nobody made.
+		return model ? { modelId: model.id, name: model.displayName, override: !!override } : null;
 	};
 	return {
 		orchestratorModel: effective('coding-orchestrator')?.name ?? null,

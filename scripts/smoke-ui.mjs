@@ -334,6 +334,36 @@ for (const path of ['/chat', '/code', '/boards', '/library', '/profile', '/profi
 	check('Details shows the desktop panel again', await panel.isVisible());
 	await shot('code-panel');
 
+	// The third mode: offered where a session is made, and an orchestrate
+	// session names its overseer instead of offering a picker the server would
+	// ignore, with the worker tiers chosen in the panel.
+	await page.goto(`${B}/code`);
+	await page.getByRole('button', { name: '+ New session' }).first().click();
+	await page.locator('.mode-pick').waitFor();
+	check(
+		'the new-session form offers three modes',
+		(await page.locator('.mode-pick .chip').allTextContents()).map((t) => t.trim()),
+		['Plan first', 'Straight to implement', 'Orchestrate']
+	);
+	const orch = await as(ALICE, '/api/code/sessions', {
+		method: 'POST',
+		body: JSON.stringify({ repoUrl: bareOrigin, repoName: 'local/orchestrated', mode: 'orchestrate' })
+	});
+	await page.goto(`${B}/code?chat=${orch.chatId}`);
+	await panel.getByText('Environment').waitFor();
+	check('an orchestrate session shows its mode badge', (await page.locator('.mode-badge.orchestrate').innerText()).toLowerCase(), 'orchestrate');
+	check('and names the overseer instead of a model picker', await page.locator('.session-head .overseer').count(), 1);
+	check('with no model select in the header', await page.locator('.session-head .model-select').count(), 0);
+	check('and the panel offers a select per worker tier', await panel.locator('.tier-pick select').count(), 2);
+	check(
+		'each tier can fall back to the Admin default',
+		// The option goes on to name the model the default currently is.
+		(await panel.locator('.tier-pick select').first().locator('option').first().innerText()).slice(0, 13),
+		'Admin default'
+	);
+	check('Back to plan is offered from orchestrate', await page.getByRole('button', { name: 'Back to plan' }).count(), 1);
+	await shot('code-orchestrate');
+
 	await page.setViewportSize({ width: 390, height: 844 });
 	await page.goto(codeUrl);
 	const sheet = page.locator('#session-panel.sheet');
@@ -1052,6 +1082,16 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 		check(`admin ${label} shows something`, (body?.height ?? 0) > 80);
 		check(`admin ${label} renders quietly`, adminProblems, []);
 	}
+	// The orchestrate mode's three tasks, under names that read as roles, and
+	// the worker tiers' routing text the orchestrator chooses from.
+	await admin.goto(`${B}/admin?tab=Coding`);
+	await admin.locator('.admin .body h1', { hasText: 'Coding' }).waitFor();
+	await admin.locator('.card h3', { hasText: 'Tier 1 worker' }).waitFor();
+	const cardTitles = (await admin.locator('.card h3').allTextContents()).map((t) => t.replace(/\s+/g, ' ').trim());
+	for (const title of ['Orchestrator', 'Tier 1 worker', 'Tier 2 worker']) {
+		check(`Admin → Coding has the ${title} card`, cardTitles.some((t) => t.startsWith(title)));
+	}
+	check('and a routing description field on each tier', await admin.locator('label.desc textarea').count(), 2);
 	await admin.goto(`${B}/admin?tab=settings`);
 	await admin.locator('.admin .body h1').waitFor();
 	check(

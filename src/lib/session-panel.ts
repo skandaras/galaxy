@@ -75,6 +75,8 @@ export interface SessionOverview {
 export interface OverviewModel {
 	modelId: string;
 	name: string;
+	/** Chosen for this session, as opposed to inherited from Admin. */
+	override?: boolean;
 }
 
 /** A sub-agent the run has out, as the stream reports it. */
@@ -128,6 +130,24 @@ export function contextShare(
 const WRITE_TOOLS = new Set(['write_file', 'edit_file']);
 
 /**
+ * A worker's tool calls reach the stream as `tier 2 · edit_file`, so a name
+ * match against the bare tool would miss every file an orchestrate run wrote.
+ */
+const stripAgentPrefix = (name: string) => name.replace(/^[^·]+ · /, '');
+
+/** The row label for a sub-agent kind the stream reports. */
+export function agentName(kind: string): string {
+	if (kind === 'tier1') return 'tier 1';
+	if (kind === 'tier2') return 'tier 2';
+	return kind;
+}
+
+/** What the first agent row is called: in orchestrate it only delegates and checks. */
+export function mainAgentName(mode: 'plan' | 'implement' | 'orchestrate' | undefined): string {
+	return mode === 'orchestrate' ? 'orchestrator' : 'coding';
+}
+
+/**
  * Files the agent has written, stored ones first, then any the run in flight
  * has written since. Only successful calls count: a failed tool's detail is
  * its error message, not a path.
@@ -136,7 +156,7 @@ export function mergeOutputs(stored: string[], timeline: TimelineItem[]): string
 	const live = timeline.flatMap((item) =>
 		item.kind === 'step'
 			? item.tools
-					.filter((t) => WRITE_TOOLS.has(t.name) && t.status === 'ok' && t.detail)
+					.filter((t) => WRITE_TOOLS.has(stripAgentPrefix(t.name)) && t.status === 'ok' && t.detail)
 					.map((t) => t.detail as string)
 			: []
 	);
@@ -153,7 +173,14 @@ export function planProgress(items: OverviewPlanItem[]): string {
 }
 
 /** Tools whose finishing changes something the panel shows. */
-const OVERVIEW_TOOLS = new Set(['update_plan', 'git_commit', 'git_push', 'open_pull_request']);
+const OVERVIEW_TOOLS = new Set([
+	'update_plan',
+	'git_commit',
+	'git_push',
+	'open_pull_request',
+	// A settled task has written files and may have reverted them.
+	'dispatch_task'
+]);
 
 /**
  * Whether a stream chunk means the overview is out of date. A settled step is
