@@ -10,7 +10,8 @@ import {
 	updateChat,
 	updateMessage
 } from '$lib/server/chats';
-import { resolveTextModel } from '$lib/server/providers/registry';
+import { resolveTextModel, type ModelChoice } from '$lib/server/providers/registry';
+import { taskPath } from '$lib/admin-sections';
 import type { ProviderMessage } from '$lib/server/providers/types';
 import { assertBudget, getBudgetStatus } from '../budget';
 import { EngineError, getTaskConfig, pickModel, systemPromptFor } from '../engine';
@@ -20,6 +21,8 @@ import {
 	DEFAULT_FETCH,
 	webSearchSettings,
 	getSetting,
+	setSetting,
+	deleteSetting,
 	type CodingSettings,
 	type FetchSettings
 } from '$lib/server/settings';
@@ -32,6 +35,7 @@ import {
 	runAgentLoop,
 	type LoopTool,
 	type StopReason,
+	type ToolCallRecord,
 	type TurnSummary
 } from '../loop';
 import { previousRunNote, runHistoryTool } from '../run-history';
@@ -46,6 +50,7 @@ import { mcpLoopTools } from '../tools/mcp';
 import { applyToolPolicy } from '../tools/registry';
 import { visionTools } from '../tools/vision';
 import { getExecutor } from './executor';
+import { DelegationLedger, delegateTool } from './delegate';
 import { exploreTool } from './explore';
 import {
 	captureState,
@@ -126,6 +131,130 @@ export function setSessionMode(session: CodeSession, mode: CodeMode): void {
 		if (lastReply) setApprovedPlan(session.chatId, lastReply.content);
 	}
 	db.update(codeSessions).set({ mode }).where(eq(codeSessions.chatId, session.chatId)).run();
+}
+
+/**
+ * Which model a turn runs on, and the task name its usage rows carry.
+ *
+ * Orchestrate takes the overseer's model from the `coding-orchestrator` task
+ * alone. The page's picker used to reach every coding turn, and here it would
+ * put a model the owner never chose in charge of what gets committed and
+ * pushed, with the cost showing under a role it was not budgeted for.
+ *
+ * Exported for tests.
+ */
+export function turnModel(
+	mode: CodeMode,
+	modelId?: string
+): { choice: ModelChoice; backup: ModelChoice | null; loopTask: 'coding' | 'coding-orchestrator' } {
+	const orchestrate = mode === 'orchestrate';
+	const loopTask = orchestrate ? 'coding-orchestrator' : 'coding';
+	const cfg = getTaskConfig(loopTask);
+	const choice = pickModel(
+		(orchestrate ? undefined : modelId) ?? cfg?.primaryModelId ?? null,
+		loopTask
+	);
+	if (!choice) throw new EngineError('No usable model: configure one in admin');
+	if (!choice.model.supportsTools) {
+		throw new EngineError(
+			orchestrate
+				? `${choice.model.displayName} does not support tool calling. Pick a tool-capable model in ${taskPath('coding-orchestrator')}`
+				: `${choice.model.displayName} does not support tool calling. Pick a tool-capable model for coding`
+		);
+	}
+	const backup = cfg?.backupModelId ? resolveTextModel(cfg.backupModelId) : null;
+	return { choice, backup, loopTask };
+}
+
+export interface OrchestrateModels {
+	tier1?: string;
+	tier2?: string;
+}
+
+const ORCHESTRATE_MODELS = 'orchestrate-models';
+
+/**
+ * The per-session worker models, minus any that no longer work.
+ *
+ * Checked on read rather than on write: a model can be disabled or lose its
+ * provider after the person picked it, and a dispatch that failed on a stale
+ * id would fail every time. Dropping it lets the Admin default apply.
+ */
+export function getOrchestrateModels(chatId: string): OrchestrateModels {
+	const stored = getSetting<OrchestrateModels | null>(ORCHESTRATE_MODELS, null, chatId);
+	const out: OrchestrateModels = {};
+	for (const tier of ['tier1', 'tier2'] as const) {
+		const id = stored?.[tier];
+		if (typeof id === 'string' && usableWorkerModel(id)) out[tier] = id;
+	}
+	return out;
+}
+
+/** An empty value clears that tier; an empty result removes the row. */
+export function setOrchestrateModels(
+	chatId: string,
+	models: { tier1?: string | null; tier2?: string | null }
+): void {
+	const next: OrchestrateModels = { ...getSetting<OrchestrateModels | null>(ORCHESTRATE_MODELS, null, chatId) };
+	for (const tier of ['tier1', 'tier2'] as const) {
+		if (!(tier in models)) continue;
+		if (models[tier]) next[tier] = models[tier] as string;
+		else delete next[tier];
+	}
+	if (next.tier1 || next.tier2) setSetting(ORCHESTRATE_MODELS, next, chatId);
+	else deleteSetting(ORCHESTRATE_MODELS, chatId);
+}
+
+/** Whether a model id names an enabled model that can call tools. */
+export function usableWorkerModel(id: string): boolean {
+	const choice = resolveTextModel(id);
+	return !!choice && choice.model.supportsTools;
+}
+
+/**
+ * The tools that depend on the session's mode: the repository tools, the
+ * read-only sub-agent, and in orchestrate mode the only one that changes code.
+ *
+ * Exported for tests.
+ */
+export function codeAgentTools(o: {
+	session: CodeSession;
+	job: LiveJob;
+	userId: string;
+	chatId: string;
+	ledger: DelegationLedger;
+	models?: OrchestrateModels;
+}): LoopTool[] {
+	const { session } = o;
+	const ctx = {
+		workspaceRel: session.workspaceRel,
+		mode: session.mode,
+		repoUrl: session.repoUrl,
+		baseBranch: session.baseBranch,
+		workBranch: session.workBranch
+	};
+	return [
+		...codingTools({ ...ctx, chatId: o.chatId }),
+		// Reading the repository at arm's length: the sub-agent's own file
+		// reads never enter this context, only its answer.
+		exploreTool({ ...ctx, parentJob: o.job, userId: o.userId, chatId: o.chatId }),
+		// Read each leg by the caller, so a tier changed from the page between
+		// legs applies to the next dispatch.
+		...(session.mode === 'orchestrate'
+			? [delegateTool({ ...ctx, parentJob: o.job, userId: o.userId, chatId: o.chatId, ledger: o.ledger, models: o.models })]
+			: [])
+	];
+}
+
+/**
+ * Tool-call records for files workers wrote, shaped like the orchestrator's
+ * own edits so `captureState` and `checkpoint` need no second code path.
+ */
+export function withWorkerWrites(toolCalls: ToolCallRecord[], paths: string[]): ToolCallRecord[] {
+	return [
+		...toolCalls,
+		...paths.map((summary): ToolCallRecord => ({ name: 'edit_file', summary, status: 'ok' }))
+	];
 }
 
 export function destroySession(session: CodeSession): void {
@@ -243,15 +372,7 @@ export function startCodingTurn(opts: {
 	if (!chat) throw new EngineError('Session chat not found');
 	assertBudget(opts.userId, 'coding');
 
-	const cfg = getTaskConfig('coding');
-	const choice = pickModel(opts.modelId ?? cfg?.primaryModelId ?? null, 'coding');
-	if (!choice) throw new EngineError('No usable model: configure one in admin');
-	if (!choice.model.supportsTools) {
-		throw new EngineError(
-			`${choice.model.displayName} does not support tool calling. Pick a tool-capable model for coding`
-		);
-	}
-	const backup = cfg?.backupModelId ? resolveTextModel(cfg.backupModelId) : null;
+	const { choice, backup, loopTask } = turnModel(session.mode, opts.modelId);
 
 	appendMessage(chat.id, {
 		role: 'user',
@@ -269,7 +390,10 @@ export function startCodingTurn(opts: {
 	updateChat(chat.id, { modelId: choice.model.id });
 	const job = createJob({ chatId: chat.id, userId: opts.userId, task: 'coding', persist: true });
 
-	const systemPrompt = buildCodingSystemPrompt(systemPromptFor('coding'), session);
+	// One ledger for the whole turn: tools are rebuilt per leg, and the paths a
+	// worker wrote in leg 1 are still owed to the state capture after it.
+	const ledger = new DelegationLedger();
+	const systemPrompt = buildCodingSystemPrompt(systemPromptFor(loopTask), session);
 	// Read once, before the first leg: it describes the run *before* this one,
 	// and must not start describing this turn's own legs partway through.
 	const priorRun = previousRunNote(chat.id);
@@ -292,25 +416,13 @@ export function startCodingTurn(opts: {
 	const buildTools = (): LoopTool[] =>
 		applyToolPolicy(
 			[
-				...codingTools({
-					chatId: chat.id,
-					workspaceRel: session.workspaceRel,
-					mode: session.mode,
-					repoUrl: session.repoUrl,
-					baseBranch: session.baseBranch,
-					workBranch: session.workBranch
-				}),
-				// Reading the repository at arm's length: the sub-agent's own file
-				// reads never enter this context, only its answer.
-				exploreTool({
-					workspaceRel: session.workspaceRel,
-					mode: session.mode,
-					repoUrl: session.repoUrl,
-					baseBranch: session.baseBranch,
-					workBranch: session.workBranch,
-					parentJob: job,
+				...codeAgentTools({
+					session,
+					job,
 					userId: opts.userId,
-					chatId: chat.id
+					chatId: chat.id,
+					ledger,
+					models: getOrchestrateModels(chat.id)
 				}),
 				...knowledgeTools(opts.userId, {
 					repo: session.workspaceRel,
@@ -346,7 +458,7 @@ export function startCodingTurn(opts: {
 		const tools = buildTools();
 		await runAgentLoop({
 			job,
-			task: 'coding',
+			task: loopTask,
 			userId: opts.userId,
 			chatId: chat.id,
 			persist: true,
@@ -416,7 +528,7 @@ export function startCodingTurn(opts: {
 		return { summary, messageId };
 	};
 
-	void driveCodingTurn({ job, chat: chat.id, session, userId: opts.userId, runLeg }).catch((err) => {
+	void driveCodingTurn({ job, chat: chat.id, session, userId: opts.userId, runLeg, ledger }).catch((err) => {
 		if (job.status === 'running') failJob(job, String(err));
 	});
 	return job;
@@ -442,6 +554,7 @@ async function driveCodingTurn(opts: {
 	session: CodeSession;
 	userId: string;
 	runLeg: RunLeg;
+	ledger: DelegationLedger;
 }): Promise<void> {
 	const { job, session } = opts;
 	const coding = getSetting<CodingSettings>('coding', DEFAULT_CODING);
@@ -459,6 +572,13 @@ async function driveCodingTurn(opts: {
 		// No summary means the loop failed and already failed the job.
 		if (!summary) return;
 		lastStopReason = summary.stopReason;
+		// A copy with the workers' writes added, used for state and the checkpoint
+		// message only. `trace` is a separate array that the saved reply already
+		// holds, so the person never sees a top-level edit that no one made there.
+		const ledgerPaths = opts.ledger.drain();
+		const seen: TurnSummary = ledgerPaths.length
+			? { ...summary, toolCalls: withWorkerWrites(summary.toolCalls, ledgerPaths) }
+			: summary;
 
 		// Started here and deliberately not awaited: the git snapshot below is
 		// several subprocess round-trips, which is free time for a cheap model.
@@ -490,7 +610,7 @@ async function driveCodingTurn(opts: {
 			chatId: opts.chat,
 			workspaceRel: session.workspaceRel,
 			baseBranch: session.baseBranch,
-			toolCalls: summary.toolCalls
+			toolCalls: seen.toolCalls
 		});
 
 		const dirty = await isDirty(session.workspaceRel);
@@ -502,7 +622,7 @@ async function driveCodingTurn(opts: {
 			// git snapshot above to finish in. Past the deadline the commit falls
 			// back to the changed-file list rather than holding the run open.
 			const note = await withDeadline(legSummary, CHECKPOINT_SUMMARY_WAIT_MS);
-			const committed = await checkpoint(job, session, summary, note);
+			const committed = await checkpoint(job, session, seen, note);
 			checkpointed = committed;
 			if (committed) {
 				// Refresh so the next turn's state block sees a clean tree and the
@@ -616,19 +736,24 @@ async function checkpoint(
 	return true;
 }
 
-function buildCodingSystemPrompt(base: string, session: CodeSession): string {
+/** Exported for tests. */
+export function buildCodingSystemPrompt(base: string, session: CodeSession): string {
 	const modeNote =
 		session.mode === 'plan'
 			? `You are in PLAN mode: only read-only tools are available. Explore the repository and produce a concrete, numbered implementation plan as your final answer. Do NOT attempt changes; the user must approve the plan first.`
-			: [
-					`You are in IMPLEMENT mode: make the changes. Read before you write, keep diffs minimal, run relevant checks with bash when available, then commit with git_commit and push with git_push. Finish with a short summary of what changed.`,
-					// Both of these target ways a turn used to end mid-task: running
-					// out of steps holding uncommitted edits, and answering with a
-					// description of an edit instead of making it.
-					`Never end a turn with uncommitted changes. If you are running short, commit what you have before you stop.`,
-					`Never describe an action you have not taken: if you say you are going to edit a file, call the tool in the same turn.`,
-					`Committing and pushing run the repository's own checks. A refusal carries their output: fix what it reports and try again, rather than working around the check.`
-				].join(' ');
+			: session.mode === 'orchestrate'
+				// The mock provider picks its script by these substrings, so each mode's
+				// note must carry its own marker and neither of the others.
+				? `You are in ORCHESTRATE mode. You cannot write or edit files and you have no shell. Workers write the code; you plan, delegate, verify and ship. Delegate with dispatch_task, one task at a time, each with a check command. Read the diff yourself before you commit. Committing and pushing run the repository's own checks; when one refuses, send a task whose check is that command. If dispatch_task is not among your tools, say so and stop.`
+				: [
+						`You are in IMPLEMENT mode: make the changes. Read before you write, keep diffs minimal, run relevant checks with bash when available, then commit with git_commit and push with git_push. Finish with a short summary of what changed.`,
+						// Both of these target ways a turn used to end mid-task: running
+						// out of steps holding uncommitted edits, and answering with a
+						// description of an edit instead of making it.
+						`Never end a turn with uncommitted changes. If you are running short, commit what you have before you stop.`,
+						`Never describe an action you have not taken: if you say you are going to edit a file, call the tool in the same turn.`,
+						`Committing and pushing run the repository's own checks. A refusal carries their output: fix what it reports and try again, rather than working around the check.`
+					].join(' ');
 	return [
 		base,
 		'',

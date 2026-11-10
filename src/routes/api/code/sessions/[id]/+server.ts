@@ -2,7 +2,14 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireCoder } from '$lib/server/api';
 import { getChat, getMessages } from '$lib/server/chats';
-import { destroySession, getSession, setSessionMode } from '$lib/server/engine/coding/session';
+import { CODE_MODES } from '$lib/server/db/schema';
+import {
+	destroySession,
+	getSession,
+	setOrchestrateModels,
+	setSessionMode,
+	usableWorkerModel
+} from '$lib/server/engine/coding/session';
 import { findRunningJobForChat } from '$lib/server/engine/jobs';
 import { resolveOpened } from '$lib/server/notifications';
 
@@ -36,9 +43,21 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	const session = getSession(params.id, user.id);
 	if (!session) error(404, 'Session not found');
 	const body = await request.json().catch(() => ({}));
-	if (body.mode === 'plan' || body.mode === 'implement') {
-		setSessionMode(session, body.mode);
+	// Validated before anything is written, so a bad tier id does not leave the
+	// mode changed behind a 400.
+	const tiers: { tier1?: string | null; tier2?: string | null } = {};
+	if (body.tierModels !== undefined) {
+		const t = body.tierModels;
+		if (!t || typeof t !== 'object' || Array.isArray(t)) error(400, 'tierModels must be an object');
+		for (const tier of ['tier1', 'tier2'] as const) {
+			if (!(tier in t)) continue;
+			if (t[tier] === null) tiers[tier] = null;
+			else if (typeof t[tier] === 'string' && usableWorkerModel(t[tier])) tiers[tier] = t[tier];
+			else error(400, `${tier} must be the id of an enabled model that supports tools, or null`);
+		}
 	}
+	if (CODE_MODES.includes(body.mode)) setSessionMode(session, body.mode);
+	if (Object.keys(tiers).length) setOrchestrateModels(session.chatId, tiers);
 	return json(getSession(params.id, user.id));
 };
 

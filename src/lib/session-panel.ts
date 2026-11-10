@@ -63,6 +63,18 @@ export interface SessionOverview {
 		prUrl: string | null;
 	};
 	checks: OverviewChecks[];
+	mode: 'plan' | 'implement' | 'orchestrate';
+	/** Only for an orchestrate session: the models the three roles run on right now. */
+	orchestrate?: {
+		orchestratorModel: string | null;
+		tier1: OverviewModel | null;
+		tier2: OverviewModel | null;
+	};
+}
+
+export interface OverviewModel {
+	modelId: string;
+	name: string;
 }
 
 /** A sub-agent the run has out, as the stream reports it. */

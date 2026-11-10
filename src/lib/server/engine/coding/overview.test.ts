@@ -9,11 +9,13 @@ import {
 	mcpTools,
 	models,
 	providers,
+	taskConfigs,
 	toolSettings,
 	usageLog
 } from '$lib/server/db/schema';
 import { setSetting } from '$lib/server/settings';
 import { loadState, recordChecks, setPlan } from './state';
+import { setOrchestrateModels } from './session';
 import { sessionOverview, windowFor } from './overview';
 import type { CodeSession } from './session';
 
@@ -150,6 +152,61 @@ describe('sessionOverview context and window selection', () => {
 			promptTokens: 0
 		});
 		expect(sessionOverview(session, userId).context).toBeNull();
+	});
+});
+
+describe('sessionOverview in an orchestrate session', () => {
+	it('reads coding-orchestrator rows for the context and never the tiers', () => {
+		const { chatId, userId, session } = fixture();
+		const base = Date.now();
+		usage(`usage-${randomUUID()}`, chatId, userId, {
+			ts: base,
+			task: 'coding-orchestrator',
+			promptTokens: 400,
+			completionTokens: 40,
+			modelKey: 'orchestrator-key'
+		});
+		// Newer, but a worker's window is a different model's.
+		usage(`usage-${randomUUID()}`, chatId, userId, { ts: base + 5, task: 'coding-tier2', promptTokens: 9000 });
+		usage(`usage-${randomUUID()}`, chatId, userId, { ts: base + 6, task: 'coding-tier1', promptTokens: 9000 });
+		expect(sessionOverview({ ...session, mode: 'orchestrate' }, userId).context).toMatchObject({
+			usedTokens: 440,
+			modelKey: 'orchestrator-key',
+			at: base
+		});
+	});
+
+	it('names the effective model for each role after overrides and defaults', () => {
+		const { chatId, userId, session } = fixture();
+		providerAndModel('ov-orch', 'ov-orch-key', 1000);
+		providerAndModel('ov-t1-default', 'ov-t1-key', 1000);
+		providerAndModel('ov-t2-default', 'ov-t2-key', 1000);
+		providerAndModel('ov-t2-chosen', 'ov-t2-chosen-key', 1000);
+		for (const [task, primaryModelId] of [
+			['coding-orchestrator', 'ov-orch'],
+			['coding-tier1', 'ov-t1-default'],
+			['coding-tier2', 'ov-t2-default']
+		]) {
+			db.insert(taskConfigs)
+				.values({ task, systemPrompt: '', promptOverride: null, options: null, primaryModelId })
+				.onConflictDoUpdate({ target: taskConfigs.task, set: { primaryModelId } })
+				.run();
+		}
+		setOrchestrateModels(chatId, { tier2: 'ov-t2-chosen' });
+		const overview = sessionOverview({ ...session, mode: 'orchestrate' }, userId);
+		expect(overview.mode).toBe('orchestrate');
+		expect(overview.orchestrate).toEqual({
+			orchestratorModel: 'ov-orch',
+			tier1: { modelId: 'ov-t1-default', name: 'ov-t1-default' },
+			tier2: { modelId: 'ov-t2-chosen', name: 'ov-t2-chosen' }
+		});
+	});
+
+	it('leaves the orchestrate block out of other modes', () => {
+		const { userId, session } = fixture();
+		const overview = sessionOverview(session, userId);
+		expect(overview.mode).toBe('implement');
+		expect(overview).not.toHaveProperty('orchestrate');
 	});
 });
 
