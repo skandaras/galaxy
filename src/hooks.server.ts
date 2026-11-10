@@ -54,7 +54,21 @@ export const handle: Handle = async ({ event, resolve }) => {
 	if (PUBLIC_PATHS.has(event.url.pathname)) {
 		return resolve(event);
 	}
+	return withBaseHeaders(await authorise({ event, resolve }));
+};
 
+/**
+ * On every response, API included: a body is never sniffed into a type it was
+ * not served as, and the address of a chat or a document is not handed to
+ * another site as a referrer.
+ */
+function withBaseHeaders(response: Response): Response {
+	response.headers.set('x-content-type-options', 'nosniff');
+	response.headers.set('referrer-policy', 'same-origin');
+	return response;
+}
+
+const authorise: Handle = async ({ event, resolve }) => {
 	const authMode = env.AUTH_MODE || 'authelia';
 	const adminGroup = env.ADMIN_GROUP || 'galaxy-admins';
 

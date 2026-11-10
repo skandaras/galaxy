@@ -1,7 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import { existsSync, readFileSync } from 'node:fs';
 import type { RequestHandler } from './$types';
-import { requireUser } from '$lib/server/api';
+import { contentDisposition, requireUser } from '$lib/server/api';
 import { deleteCardAttachment, getCard } from '$lib/server/boards';
 
 export const GET: RequestHandler = ({ locals, params }) => {
@@ -15,7 +15,8 @@ export const GET: RequestHandler = ({ locals, params }) => {
 			'content-type': row.mime,
 			// Attachments are user uploads served from our own origin, so they are
 			// never rendered inline.
-			'content-disposition': `attachment; filename="${row.name.replace(/"/g, '')}"`
+			'content-disposition': contentDisposition('attachment', row.name),
+			'x-content-type-options': 'nosniff'
 		}
 	});
 };
