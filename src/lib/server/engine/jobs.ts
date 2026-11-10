@@ -9,6 +9,9 @@ import { emitEvent } from './events';
 // is erased at build time.
 import type { StopReason } from './loop';
 
+/** Which kind of nested agent an `agent` chunk describes. */
+export type AgentKind = 'explore' | 'tier1' | 'tier2';
+
 export type JobChunk =
 	| { type: 'meta'; model: string }
 	| { type: 'delta'; text: string }
@@ -97,7 +100,7 @@ export type JobChunk =
 	| {
 			type: 'agent';
 			id: string;
-			kind: 'explore';
+			kind: AgentKind;
 			label: string;
 			status: 'running' | 'ok' | 'error';
 			detail?: string;

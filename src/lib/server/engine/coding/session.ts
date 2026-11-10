@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { codeSessions, type AttachmentRef } from '$lib/server/db/schema';
+import { codeSessions, type AttachmentRef, type CodeMode } from '$lib/server/db/schema';
 import {
 	appendMessage,
 	createChat,
@@ -93,7 +93,7 @@ export async function createSession(opts: {
 	userId: string;
 	repoUrl: string;
 	repoName: string;
-	mode: 'plan' | 'implement';
+	mode: CodeMode;
 }): Promise<CodeSession> {
 	const ws = await createWorkspace(opts.repoUrl);
 	const chat = createChat({ userId: opts.userId, mode: 'code', title: opts.repoName });
@@ -113,12 +113,13 @@ export async function createSession(opts: {
 	return row;
 }
 
-export function setSessionMode(session: CodeSession, mode: 'plan' | 'implement'): void {
+export function setSessionMode(session: CodeSession, mode: CodeMode): void {
 	// Leaving plan mode is the moment the plan becomes a commitment, so capture
 	// it here rather than in the browser: it then holds however the mode was
 	// switched, and survives the compaction that would otherwise summarise the
-	// plan away halfway through building it.
-	if (mode === 'implement' && session.mode === 'plan') {
+	// plan away halfway through building it. Any exit counts: orchestrate
+	// dispatches work against the plan just as implement builds it.
+	if (mode !== 'plan' && session.mode === 'plan') {
 		const lastReply = getMessages(session.chatId)
 			.filter((m) => m.role === 'assistant' && m.content.trim())
 			.at(-1);

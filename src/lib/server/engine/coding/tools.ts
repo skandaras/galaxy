@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
+import type { CodeMode } from '$lib/server/db/schema';
 import type { LoopTool } from '../loop';
 import { toolResultMaxChars } from '../limits';
 import { getExecutor } from './executor';
@@ -32,7 +33,7 @@ export interface CodingToolContext {
 	 */
 	chatId?: string;
 	workspaceRel: string;
-	mode: 'plan' | 'implement';
+	mode: CodeMode;
 	repoUrl: string;
 	/** Branch the session was cut from — the base a pull request targets. */
 	baseBranch: string;
@@ -304,15 +305,9 @@ export function readOnlyCodingTools(ctx: CodingToolContext): LoopTool[] {
 	];
 }
 
-/**
- * The coding toolset. In plan mode only the read-only tools are offered, so
- * a planning session physically cannot modify anything.
- */
-export function codingTools(ctx: CodingToolContext): LoopTool[] {
-	const readOnly = readOnlyCodingTools(ctx);
-	if (ctx.mode === 'plan') return readOnly;
-
-	const writeTools: LoopTool[] = [
+/** File writes only, so the worker set can take them without the git tools. */
+export function fileWriteTools(ctx: CodingToolContext): LoopTool[] {
+	return [
 		{
 			def: {
 				name: 'write_file',
@@ -391,32 +386,42 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 					: `Edited ${String(a.path)}`;
 			}
 		},
-		{
-			def: {
-				name: 'bash',
-				description:
-					'Run a shell command in the repository root (tests, builds, scripts). 120s timeout. ' +
-					'Each call runs in a fresh shell, so cd, exported variables and background processes ' +
-					'do not carry over — chain steps with && in one command. The workspace itself does ' +
-					'persist, so installed dependencies and build output survive between calls.',
-				parameters: {
-					type: 'object',
-					properties: { command: { type: 'string' } },
-					required: ['command']
-				}
-			},
-			describe: (a) => String(a.command ?? '').slice(0, 120),
-			execute: async (a) => {
-				const res = await getExecutor().exec(String(a.command), {
-					cwdRel: ctx.workspaceRel,
-					timeoutMs: 120_000
-				});
-				const out = scrubSecrets(
-					`exit ${res.code}\n${res.stdout}${res.stderr ? `\n--- stderr ---\n${res.stderr}` : ''}`
-				);
-				return out.slice(0, maxFileChars());
+	];
+}
+
+/** Shell access. Not offered to the orchestrator, which must not be able to write code by any route. */
+export function bashTool(ctx: CodingToolContext): LoopTool {
+	return {
+		def: {
+			name: 'bash',
+			description:
+				'Run a shell command in the repository root (tests, builds, scripts). 120s timeout. ' +
+				'Each call runs in a fresh shell, so cd, exported variables and background processes ' +
+				'do not carry over — chain steps with && in one command. The workspace itself does ' +
+				'persist, so installed dependencies and build output survive between calls.',
+			parameters: {
+				type: 'object',
+				properties: { command: { type: 'string' } },
+				required: ['command']
 			}
 		},
+		describe: (a) => String(a.command ?? '').slice(0, 120),
+		execute: async (a) => {
+			const res = await getExecutor().exec(String(a.command), {
+				cwdRel: ctx.workspaceRel,
+				timeoutMs: 120_000
+			});
+			const out = scrubSecrets(
+				`exit ${res.code}\n${res.stdout}${res.stderr ? `\n--- stderr ---\n${res.stderr}` : ''}`
+			);
+			return out.slice(0, maxFileChars());
+		}
+	};
+}
+
+/** Everything that leaves the workspace or records progress: the orchestrator keeps these and no others. */
+export function shipTools(ctx: CodingToolContext): LoopTool[] {
+	return [
 		{
 			def: {
 				name: 'git_commit',
@@ -545,7 +550,24 @@ export function codingTools(ctx: CodingToolContext): LoopTool[] {
 				})
 		}
 	];
-	return [...readOnly, ...writeTools];
+}
+
+/**
+ * The coding toolset. Plan mode offers only the read-only tools, so a planning
+ * session physically cannot modify anything. Orchestrate adds the ship tools but
+ * no file or shell tool: its changes arrive through dispatched workers, whose
+ * writes the check protocol can verify and revert.
+ */
+export function codingTools(ctx: CodingToolContext): LoopTool[] {
+	const readOnly = readOnlyCodingTools(ctx);
+	if (ctx.mode === 'plan') return readOnly;
+	if (ctx.mode === 'orchestrate') return [...readOnly, ...shipTools(ctx)];
+	return [...readOnly, ...fileWriteTools(ctx), bashTool(ctx), ...shipTools(ctx)];
+}
+
+/** What a dispatched worker gets: no git, no plan, so it cannot ship or rewrite the overseer's checklist. */
+export function workerTools(ctx: CodingToolContext): LoopTool[] {
+	return [...readOnlyCodingTools(ctx), ...fileWriteTools(ctx), bashTool(ctx)];
 }
 
 function walk(dir: string, root: string, out: string[]): void {

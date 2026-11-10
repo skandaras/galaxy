@@ -36,7 +36,11 @@ export const ADMIN_SECTIONS = [
 		tasks: ['chat', 'visual', 'vision', 'chat-title', 'run-summary']
 	},
 	{ label: 'Research', group: 'Features', tasks: ['deep-research'] },
-	{ label: 'Coding', group: 'Features', tasks: ['coding', 'subagent'] },
+	{
+		label: 'Coding',
+		group: 'Features',
+		tasks: ['coding', 'coding-orchestrator', 'coding-tier1', 'coding-tier2', 'subagent']
+	},
 	{
 		label: 'Profile and skills',
 		group: 'Features',
@@ -59,6 +63,17 @@ export const ADMIN_SECTION_LABELS: readonly AdminSectionLabel[] = ADMIN_SECTIONS
 /** "Admin → Coding → GitHub", for a message that sends someone there. */
 export function adminPath(section: AdminSectionLabel, card?: string): string {
 	return card ? `Admin → ${section} → ${card}` : `Admin → ${section}`;
+}
+
+/** Names for tasks whose id reads badly as a heading; the rest show their id. */
+export const TASK_LABELS: Record<string, string> = {
+	'coding-orchestrator': 'Orchestrator',
+	'coding-tier1': 'Tier 1 worker',
+	'coding-tier2': 'Tier 2 worker'
+};
+
+export function taskLabel(task: string): string {
+	return TASK_LABELS[task] ?? task;
 }
 
 /** The section a task's prompt and models are edited in. */

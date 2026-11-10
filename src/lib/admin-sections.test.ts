@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CORE_TASKS } from '$lib/server/db/schema';
-import { ADMIN_SECTIONS, adminPath, sectionOfTask, taskPath } from './admin-sections';
+import { ADMIN_SECTIONS, adminPath, sectionOfTask, taskLabel, taskPath } from './admin-sections';
 
 describe('admin sections', () => {
 	it('edits every core task in exactly one place', () => {
@@ -21,6 +21,13 @@ describe('admin sections', () => {
 	it('has unique labels, since the label is the URL', () => {
 		const labels = ADMIN_SECTIONS.map((s) => s.label.toLowerCase());
 		expect(new Set(labels).size).toBe(labels.length);
+	});
+
+	it('labels the orchestration tasks and leaves the rest as their id', () => {
+		expect(taskLabel('coding-tier1')).toBe('Tier 1 worker');
+		expect(taskLabel('coding-orchestrator')).toBe('Orchestrator');
+		expect(taskLabel('vision')).toBe('vision');
+		expect(sectionOfTask('coding-tier2')).toBe('Coding');
 	});
 
 	it('writes paths the way the rest of the app reads them', () => {

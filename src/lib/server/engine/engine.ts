@@ -88,6 +88,49 @@ export function taskPrompt(task: string): string {
 }
 
 /**
+ * What the orchestrator is told each worker tier is for, when the owner has not
+ * written their own.
+ *
+ * Held here rather than seeded into `task_configs`, for the reason prompts are:
+ * a stored copy of the default stops tracking the code the day it is written.
+ */
+export const DEFAULT_TASK_DESCRIPTIONS: Record<string, string> = {
+	'coding-tier1':
+		'Changes that need judgement inside one area of the code: a new function or component with its tests, a refactor across a few files, a failing test whose cause is unclear, anything that needs reading beyond the files named.',
+	'coding-tier2':
+		'Mechanical, fully specified changes: rename a symbol, add a field and thread it through the files named, update copy or config, write a test from a clear example, copy a pattern that already sits next to it. The task names the files and the result.'
+};
+
+const MAX_TASK_DESCRIPTION_CHARS = 600;
+
+/** The owner's description of a tier where they wrote one, otherwise the default. */
+export function taskDescription(task: string): string {
+	const custom = (getTaskConfig(task)?.options as { description?: unknown } | null | undefined)
+		?.description;
+	return typeof custom === 'string' && custom.trim() ? custom : (DEFAULT_TASK_DESCRIPTIONS[task] ?? '');
+}
+
+/**
+ * Clean the options a task config is saved with.
+ *
+ * A description equal to the default is dropped, so saving the form without
+ * touching it does not freeze today's wording and cut the tier off from later
+ * improvements. Capped because it is appended to a tool description that the
+ * orchestrator pays for on every iteration.
+ */
+export function normaliseTaskOptions(task: string, options: unknown): unknown {
+	if (!options || typeof options !== 'object' || Array.isArray(options)) return null;
+	const { description, ...rest } = options as Record<string, unknown>;
+	if (task in DEFAULT_TASK_DESCRIPTIONS && description !== undefined) {
+		const text = typeof description === 'string' ? description.trim().slice(0, MAX_TASK_DESCRIPTION_CHARS).trim() : '';
+		if (text && text !== DEFAULT_TASK_DESCRIPTIONS[task]) rest.description = text;
+	} else if (description !== undefined) {
+		rest.description = description;
+	}
+	return Object.keys(rest).length ? rest : null;
+}
+
+/**
  * The tasks whose output a person reads as prose, and the only ones the
  * Language voice reaches.
  *
@@ -104,12 +147,19 @@ export function taskPrompt(task: string): string {
  *   is a first-class answer. Its prompt carries its own version of these rules.
  * - `board`: it arrives as a supplement to `chat`, which is in the set, so
  *   listing it here would compose the block twice.
+ *
+ * Included: the orchestrator and both worker tiers. Their commit messages, pull
+ * request text and reports are prose a person ends up reading, and a worker
+ * tier on a small model is the one most likely to pad it.
  */
 export const PROSE_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[number]>([
 	'chat',
 	'coding',
 	'deep-research',
 	'subagent',
+	'coding-orchestrator',
+	'coding-tier1',
+	'coding-tier2',
 	'ux-audit',
 	'skill-optimiser',
 	'alignment-synthesis'
@@ -124,10 +174,13 @@ export const PROSE_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[numb
  * in a few sentences, where headings and bold lead-ins are cost with no reader.
  * `deep-research` is out because research.ts adds the layout at its synthesis
  * call: four other phases share that task's prompt and answer in JSON.
+ * `coding-orchestrator` is in because it answers a person; the tiers are out
+ * for the same reason `subagent` is, since they report to another agent.
  */
 export const LAYOUT_TASKS: ReadonlySet<string> = new Set<(typeof CORE_TASKS)[number]>([
 	'chat',
-	'coding'
+	'coding',
+	'coding-orchestrator'
 ]);
 
 /**
