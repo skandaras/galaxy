@@ -3,16 +3,16 @@ import type { RequestHandler } from './$types';
 import { requireUser } from '$lib/server/api';
 import { candidatePreview, listCandidatesOf } from '$lib/server/skills';
 import { learningStatus, readingStatus, setLearning } from '$lib/server/engine/profile-learn';
-import { listProposals, MAX_WAITING } from '$lib/server/profile';
+import { recentLearned } from '$lib/server/profile';
 import { profileSettings } from '$lib/server/settings';
 
-/** What is waiting for the caller, and where learning from their conversations has got to. */
+/** What was learned about the caller lately, the skills waiting on them, and where learning has got to. */
 export const GET: RequestHandler = ({ locals }) => {
 	const user = requireUser(locals);
 	const cfg = profileSettings();
 	const status = learningStatus(user.id);
 	return json({
-		proposals: listProposals(user.id),
+		learned: recentLearned(user.id),
 		candidates: listCandidatesOf(user.id).map((c) => ({
 			id: c.id,
 			name: c.name,
@@ -31,8 +31,7 @@ export const GET: RequestHandler = ({ locals }) => {
 		intervalHours: cfg.intervalHours,
 		lastRun: status.lastRun,
 		nextDue: status.lastRun + cfg.intervalHours * 3_600_000,
-		reading: readingStatus(user.id),
-		maxWaiting: MAX_WAITING
+		reading: readingStatus(user.id)
 	});
 };
 

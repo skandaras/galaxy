@@ -548,7 +548,7 @@ export const profileEntries = sqliteTable(
 		subdomain: text('subdomain').notNull(),
 		/** The entity the claim is about, wherever it is filed. */
 		about: text('about'),
-		kind: text('kind', { enum: ['fact', 'preference', 'constraint', 'goal'] }).notNull(),
+		kind: text('kind', { enum: ['fact', 'preference', 'constraint', 'goal', 'pattern'] }).notNull(),
 		claim: text('claim').notNull(),
 		/** In the brief every agent sees. The person's choice, held to a char budget. */
 		pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
@@ -575,7 +575,7 @@ export const profileEntries = sqliteTable(
 			.default('active'),
 		supersedes: text('supersedes'),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-		/** When the person last said it is still true; creation counts. */
+		/** When it was last borne out: written, or seen again by the learning job. */
 		confirmedAt: integer('confirmed_at', { mode: 'timestamp_ms' }).notNull()
 	},
 	// Every read is "this person's active entries, in some part of the tree".
@@ -634,25 +634,30 @@ export const profileSubdomains = sqliteTable(
 );
 
 /**
- * What the learning job thinks a person's profile should gain, change or
- * lose, waiting on that person. Nothing it reads reaches an agent until they
- * approve it, and a rejection stays here as "never propose this again".
+ * What the learning job did to a person's profile, and what it is watching.
+ *
+ * `approved` is a change that was applied, with the entry it made in
+ * `appliedEntryId` so the person can undo it. `undone` and `rejected` are
+ * "never learn this again". `watching` is something seen once that did not
+ * meet the bar: no agent sees it, and it is applied only if a later
+ * conversation bears it out. `pending` is what the approval queue left behind;
+ * the next run applies it.
  *
  * The place is a path in text (`people/Nikau`, `interests/sailing`) rather
- * than ids, and resolved when the person says yes: someone new, or a
- * subdomain of their own, is created only then, so a proposal turned down
- * leaves nothing behind.
+ * than ids, and resolved when the line is applied: someone new, or a
+ * subdomain of their own, is created only then, so a line that is only
+ * watched leaves nothing behind.
  */
 export const profileProposals = sqliteTable(
 	'profile_proposals',
 	{
 		id: text('id').primaryKey(),
 		userId: text('user_id').notNull(),
-		action: text('action', { enum: ['add', 'update', 'retire', 'confirm'] }).notNull(),
-		/** The entry an update, retire or "still true?" is about. */
+		action: text('action', { enum: ['add', 'update', 'retire'] }).notNull(),
+		/** The entry an update or retire is about. */
 		entryId: text('entry_id'),
 		path: text('path'),
-		kind: text('kind', { enum: ['fact', 'preference', 'constraint', 'goal'] }),
+		kind: text('kind', { enum: ['fact', 'preference', 'constraint', 'goal', 'pattern'] }),
 		claim: text('claim'),
 		/** A person's name, someone already here or in `person`. */
 		about: text('about'),
@@ -663,9 +668,13 @@ export const profileProposals = sqliteTable(
 		quote: text('quote'),
 		messageId: text('message_id'),
 		why: text('why').notNull().default(''),
-		status: text('status', { enum: ['pending', 'approved', 'rejected'] })
+		/** How the job came by it: `stated` in the quote, `repeated` across chats, or `implied`. */
+		basis: text('basis', { enum: ['stated', 'repeated', 'implied'] }),
+		status: text('status', { enum: ['pending', 'approved', 'rejected', 'undone', 'watching'] })
 			.notNull()
 			.default('pending'),
+		/** The entry an applied add or update wrote, which is what an undo removes. */
+		appliedEntryId: text('applied_entry_id'),
 		/** The run that raised it. */
 		source: text('source').notNull().default(''),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),

@@ -4,7 +4,7 @@ import {
 	entryMarks,
 	pathOptions,
 	placeLabel,
-	proposalWords,
+	learnedWords,
 	readingText
 } from './profile-view';
 
@@ -34,30 +34,24 @@ describe('entryMarks', () => {
 		expect(entryMarks({ pinned: false, sensitivity: 'normal', source: 'stated', expiresAt: null })).toEqual([]);
 		expect(
 			entryMarks({ pinned: true, sensitivity: 'private', source: 'inferred', expiresAt: '2026-11-01T00:00:00.000Z' })
-		).toEqual(['pinned', 'private', 'inferred', 'until 2026-11-01']);
+		).toEqual(['always in brief', 'private', 'inferred', 'until 2026-11-01']);
 	});
 });
 
-describe('proposalWords', () => {
-	it('says what each kind of proposal asks, and only lets the wording of a line be edited', () => {
-		expect(proposalWords('add')).toMatchObject({ badge: 'New', editable: true });
-		expect(proposalWords('update')).toMatchObject({ badge: 'Change', editable: true });
-		expect(proposalWords('retire')).toEqual({ badge: 'Retire', yes: 'Retire it', no: 'Keep it', editable: false });
-		expect(proposalWords('confirm')).toEqual({
-			badge: 'Still true?',
-			yes: 'Still true',
-			no: 'Not any more',
-			editable: false
-		});
+describe('learnedWords', () => {
+	it('says what each kind of learned change is called, and what undoing it reports', () => {
+		expect(learnedWords('add')).toEqual({ badge: 'New', undo: 'Undo', done: 'Taken back. It will not be learned again.' });
+		expect(learnedWords('update')).toEqual({ badge: 'Changed', undo: 'Undo', done: 'Put back as it was.' });
+		expect(learnedWords('retire')).toEqual({ badge: 'Retired', undo: 'Bring it back', done: 'Back in your profile.' });
 		expect(placeLabel('people/Nikau')).toBe('people / Nikau');
 	});
 });
 
 describe('readingText', () => {
-	const r = { running: true, done: 2, total: 5, proposals: 3, failed: 0 };
+	const r = { running: true, done: 2, total: 5, learned: 3, failed: 0 };
 	it('follows a reading, and says nothing once one ends well', () => {
 		expect(readingText(r)).toEqual({
-			text: 'Reading your past conversations: 2 of 5 batches, 3 proposed so far.',
+			text: 'Reading your past conversations: 2 of 5 batches, 3 learned so far.',
 			error: false
 		});
 		expect(readingText({ ...r, running: false, done: 5 })).toBeNull();

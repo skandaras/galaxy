@@ -100,8 +100,10 @@ export function profileTools(
 			description:
 				'Note something this person has just told you about themselves or their world, so their ' +
 				'agents know it from now on: where they live, who is in their life, what they work with, ' +
-				'a constraint such as a diet. Only what would change an answer on another day, never what ' +
-				'they asked about or something true of this conversation alone. Quote their own words from ' +
+				'a constraint such as a diet. How they ask to be answered from now on (length, tone, ' +
+				'format, units) is noted too, under "identity/replies". Only what is about them and would ' +
+				'change the answer to an unrelated question on another day, never the subject of this ' +
+				'conversation or something true of it alone. Quote their own words from ' +
 				'this conversation; a note whose quote they did not write is refused. To correct an entry, ' +
 				'pass its id as replaces. To file something under a person not yet in the profile, use the ' +
 				'path "people/<name>" with their relation. At most three a turn.',

@@ -443,13 +443,23 @@ export interface ProfileSettings {
 	 * what each one costs.
 	 */
 	briefChars: number;
+	/**
+	 * How much it takes for the learning job to write something down. Nobody
+	 * approves a line any more, so this is the owner's say over what gets in;
+	 * what each position does is `BAR` in profile-learn.ts.
+	 */
+	bar: LearningBar;
 }
+
+export const LEARNING_BARS = ['strict', 'balanced', 'open'] as const;
+export type LearningBar = (typeof LEARNING_BARS)[number];
 
 export const DEFAULT_PROFILE: ProfileSettings = {
 	enabled: true,
 	intervalHours: 12,
 	timeoutSeconds: 180,
-	briefChars: 2_400
+	briefChars: 2_400,
+	bar: 'balanced'
 };
 
 const clamp = (v: unknown, min: number, max: number, fallback: number) =>
@@ -462,7 +472,8 @@ export function normaliseProfileSettings(raw: Record<string, unknown>): ProfileS
 		enabled: typeof raw.enabled === 'boolean' ? raw.enabled : d.enabled,
 		intervalHours: clamp(raw.intervalHours, 1, 168, d.intervalHours),
 		timeoutSeconds: clamp(raw.timeoutSeconds, 30, 900, d.timeoutSeconds),
-		briefChars: clamp(raw.briefChars, 800, 4_000, d.briefChars)
+		briefChars: clamp(raw.briefChars, 800, 4_000, d.briefChars),
+		bar: (LEARNING_BARS as readonly string[]).includes(raw.bar as string) ? (raw.bar as LearningBar) : d.bar
 	};
 }
 

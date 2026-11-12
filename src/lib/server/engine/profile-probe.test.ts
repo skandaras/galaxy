@@ -49,7 +49,7 @@ beforeEach(() => {
 
 const profile = {
 	names: ['Aroha', 'Ro', 'Pip'],
-	pinned: ['Vegetarian; trains for the Tarawera ultramarathon on weekends.']
+	brief: ['Vegetarian; trains for the Tarawera ultramarathon on weekends.']
 };
 
 describe('profileIntrusion', () => {
@@ -58,7 +58,7 @@ describe('profileIntrusion', () => {
 		expect(profileIntrusion('Its rotation is slow.', 'Why?', profile)).toEqual([]);
 	});
 
-	it('flags a distinctive word from the pinned brief, and not a common one', () => {
+	it('flags a distinctive word from the brief, and not a common one', () => {
 		expect(profileIntrusion('Here is a vegetarian version for your ultramarathon training.', 'Give me a recipe.', profile)).toEqual([
 			'vegetarian',
 			'ultramarathon'

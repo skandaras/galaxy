@@ -18,7 +18,7 @@ import {
 } from '$lib/server/settings';
 import { getSynthesisStatus, runAlignmentSynthesis } from './alignment';
 import { emitEvent } from './events';
-import { expireDue, raiseStillTrue } from '$lib/server/profile';
+import { expireDue, lapseStale } from '$lib/server/profile';
 import { runSkillOptimiser } from './skill-optimiser';
 import { learningStatus, runLearning } from './profile-learn';
 import { runUxAudit } from './ux-audit';
@@ -132,15 +132,15 @@ async function sweepLearning(): Promise<void> {
 }
 
 /**
- * Entries past their date, and the yearly "still true?". No model call, so it
- * runs every tick: an expired line stays out of every prompt by its date
- * either way, and this only makes its status and the person's queue say so.
+ * Entries past their date, and those nothing has borne out for months. No
+ * model call, so it runs every tick: a dated line stays out of every prompt
+ * by its date either way, and this makes its status say so.
  */
 async function sweepProfile(): Promise<void> {
 	await runSweep('profile', undefined, async () => {
 		const now = new Date();
 		expireDue(now);
-		for (const user of db.select({ id: users.id }).from(users).all()) raiseStillTrue(user.id, now);
+		lapseStale(now);
 	});
 }
 

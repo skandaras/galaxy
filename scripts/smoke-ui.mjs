@@ -1199,10 +1199,10 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 	await adminContext.close();
 }
 
-// N2. Learning waits for its owner. It only proposes, so the Profile page is
-//     where anything learnt becomes part of a profile at all: approving,
-//     rewording, turning down and reading the past all have to work from the
-//     page, not just from the API. The mock proposes from "alpha-topic".
+// N2. Learning writes what a person says outright and lists it where they can
+//     take it back. Seeing what was learned, undoing it and reading the past
+//     all have to work from the page, not just from the API. The mock learns
+//     from "alpha-topic".
 {
 	problems = [];
 	const learning = () => as(ALICE, '/api/profile/learning');
@@ -1212,22 +1212,19 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 		body: JSON.stringify({ content: 'These days I sail most weekends, alpha-topic.', webSearch: false })
 	});
 	const ran = await as(ALICE, '/api/profile/learning/run', { method: 'POST' });
-	check('learning proposes what the person said', ran.proposals, 1);
+	check('learning writes what the person said', ran.learned, 1);
 	await page.goto(`${B}/profile`);
-	const waiting = page.locator('.profile-page .card', { hasText: 'Waiting for you' });
-	// Found by its quote, which stays on screen while the claim is being edited.
+	const waiting = page.locator('.profile-page .card', { hasText: 'Recently learned' });
 	const proposal = waiting.locator('.proposal', { has: page.locator('.quote', { hasText: 'alpha-topic' }) });
 	await proposal.waitFor();
 	check('it shows the words it rests on', await proposal.locator('.quote').innerText(), 'You said: “alpha-topic”');
 	const learnt = page.locator('.profile-page ul.entries > li', { hasText: 'ALPHA-LEARN' });
-	check('nothing is in the profile before it is approved', await learnt.count(), 0);
-	await proposal.getByRole('button', { name: 'Edit' }).click();
-	await proposal.getByLabel('What is true').fill('Follows ALPHA-LEARN sailing closely.');
-	await proposal.getByRole('button', { name: 'Approve' }).click();
-	await learnt.waitFor();
-	check('approving, reworded, puts it in the profile', await learnt.locator('.claim').innerText(), 'Follows ALPHA-LEARN sailing closely.');
-	check('marked as inferred', await learnt.locator('.badge', { hasText: 'inferred' }).count(), 1);
-	check('and takes it out of the queue', await proposal.count(), 0);
+	check('and it is in the profile already', await learnt.count(), 1);
+	check(
+		'what was only read between the lines is not',
+		await page.locator('.profile-page ul.entries > li', { hasText: 'LEARN-GUESS' }).count(),
+		0
+	);
 
 	const skill = waiting.locator('.proposal', { hasText: 'alpha-learn-checklist' });
 	await skill.getByRole('button', { name: 'Approve skill' }).click();
@@ -1238,8 +1235,8 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 		'approved'
 	);
 
-	// And changed afterwards: an agent proposes an edit to it, and the Waiting
-	// card draws the edit as a diff the owner applies from the page.
+	// And changed afterwards: an agent proposes an edit to it, and the card
+	// draws the edit as a diff the owner applies from the page.
 	const patchChat = await as(ALICE, '/api/chats', { method: 'POST', body: '{}' });
 	await as(ALICE, `/api/chats/${patchChat.id}/messages`, {
 		method: 'POST',
@@ -1256,7 +1253,7 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 	await change.waitFor({ state: 'detached' });
 	check('applying it changes the skill', (await as(ALICE, '/api/skills/alpha-learn-checklist')).body.includes('PATCH-APPLIED'), true);
 
-	// Something to turn down: the mock proposes from "beta-topic" as well.
+	// Something to take back: the mock learns from "beta-topic" as well.
 	const again = await as(ALICE, '/api/chats', { method: 'POST', body: '{}' });
 	await as(ALICE, `/api/chats/${again.id}/messages`, {
 		method: 'POST',
@@ -1265,20 +1262,21 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 	await waiting.getByRole('button', { name: 'Look now' }).click();
 	const beta = waiting.locator('.proposal', { has: page.locator('.quote', { hasText: 'beta-topic' }) });
 	await beta.waitFor();
-	await beta.getByRole('button', { name: 'Reject' }).click();
+	const betaEntry = page.locator('.profile-page ul.entries > li', { hasText: 'BETA-LEARN' });
+	check('a second look learns the new thing', await betaEntry.count(), 1);
+	await beta.getByRole('button', { name: 'Undo' }).click();
 	await beta.waitFor({ state: 'detached' });
-	check('turning one down keeps it out of the profile', await page.locator('.profile-page ul.entries > li', { hasText: 'BETA-LEARN' }).count(), 0);
+	check('undoing it takes it out of the profile', await betaEntry.count(), 0);
 
-	// Reading the whole past again proposes nothing approved or turned down.
+	// Reading the whole past again learns nothing held or taken back.
 	await waiting.getByRole('button', { name: 'Read my past conversations' }).click();
 	for (let i = 0; i < 40 && (await learning()).reading?.running !== false; i++) await page.waitForTimeout(250);
 	const after = await learning();
 	check('reading the past finishes', after.reading?.running, false);
-	check(
-		'and offers nothing already decided again',
-		after.proposals.filter((p) => /ALPHA-LEARN|BETA-LEARN/.test(p.claim ?? '')).length,
-		0
-	);
+	await page.goto(`${B}/profile`);
+	await page.locator('.profile-page h1').waitFor();
+	check('and learns nothing a second time', await learnt.count(), 1);
+	check('nor what was taken back', await betaEntry.count(), 0);
 
 	check('learning renders quietly throughout', problems, []);
 	if (fail.length) await shot('learning');
@@ -1303,9 +1301,9 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 	const row = page.locator('.profile-page ul.entries > li', { hasText: 'SMOKE-PEANUTS' });
 	await row.waitFor();
 	check('an entry added on the page appears under its domain', await row.count(), 1);
-	await row.getByRole('button', { name: 'Pin', exact: true }).click();
-	await row.locator('.badge', { hasText: 'pinned' }).waitFor();
-	check('pinning it says so', await row.locator('.badge', { hasText: 'pinned' }).count(), 1);
+	await row.getByRole('button', { name: 'Always in brief', exact: true }).click();
+	await row.locator('.badge', { hasText: 'always in brief' }).waitFor();
+	check('marking it always says so', await row.locator('.badge', { hasText: 'always in brief' }).count(), 1);
 	const chatBlock = page.locator('.profile-page details', { hasText: 'Chat' });
 	await chatBlock.locator('summary').click();
 	check(
@@ -1365,7 +1363,7 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 // N+0d. The survey and an import. Both make a draft the person reads line by
 //       line, and only saving it writes anything. The mock's parse files a
 //       line from the PARSE-ALPHA marker, invents one that must be left out,
-//       and returns any line about bullet points as not carried over.
+//       and files any line about bullet points under identity/replies.
 {
 	problems = [];
 	const held = async () =>
@@ -1396,11 +1394,7 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 	check('a longer one is sorted by the model', lines.includes('Sails a dinghy called PARSE-ALPHA.'), true);
 	check('a line the person never wrote is left out', lines.some((l) => l.includes('PARSE-INVENTED')), false);
 	check('and the review says so', await review.locator('.hint', { hasText: 'not in what you wrote' }).count(), 1);
-	check(
-		'how to reply is set apart, not filed',
-		await review.locator('.carried li').allInnerTexts(),
-		['Prefers replies as bullet points.']
-	);
+	check('how to reply is a line like any other', lines.includes('Prefers replies as bullet points.'), true);
 	check('nothing is saved before the person says so', (await held()).length, 0);
 	await review.getByRole('button', { name: /^Save / }).click();
 	await page.locator('.survey-page .notice', { hasText: 'Saved' }).waitFor();
