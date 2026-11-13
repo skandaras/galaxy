@@ -1273,10 +1273,17 @@ check('/ivory now redirects to chat', new URL(page.url()).pathname, '/chat');
 	for (let i = 0; i < 40 && (await learning()).reading?.running !== false; i++) await page.waitForTimeout(250);
 	const after = await learning();
 	check('reading the past finishes', after.reading?.running, false);
+	// Counted from the API. The page's heading renders before its data, and
+	// waiting on it failed CI with a count of 0 on a slow runner; a count of 0
+	// on the page proves nothing about what is held anyway.
+	const claims = (await as(ALICE, '/api/profile')).domains.flatMap((d) =>
+		d.subdomains.flatMap((s) => s.entries.map((e) => e.claim))
+	);
+	check('and learns nothing a second time', claims.filter((c) => c.includes('ALPHA-LEARN')).length, 1);
+	check('nor what was taken back', claims.filter((c) => c.includes('BETA-LEARN')).length, 0);
 	await page.goto(`${B}/profile`);
-	await page.locator('.profile-page h1').waitFor();
-	check('and learns nothing a second time', await learnt.count(), 1);
-	check('nor what was taken back', await betaEntry.count(), 0);
+	await learnt.first().waitFor();
+	check('and the page shows it once', await learnt.count(), 1);
 
 	check('learning renders quietly throughout', problems, []);
 	if (fail.length) await shot('learning');
