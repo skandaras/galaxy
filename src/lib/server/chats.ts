@@ -26,6 +26,8 @@ import {
 	notifications,
 	usageLog,
 	settings,
+	profileEntries,
+	profileProposals,
 	type AttachmentRef,
 	type EvidenceItem
 } from '$lib/server/db/schema';
@@ -537,6 +539,17 @@ function purgeChatTrail(tx: Tx, chatId: string): void {
  */
 function eraseChatRows(chatId: string): void {
 	db.transaction((tx) => {
+		// Before the messages go, while their ids can still be found. A profile
+		// line learned from this chat kept the person's words and the message
+		// they came from, so hiding a conversation left quotes from it on the
+		// Profile page. The claim stays: it is theirs, and Forget is one click.
+		const said = tx.select({ id: messages.id }).from(messages).where(eq(messages.chatId, chatId));
+		tx.update(profileEntries).set({ quote: null, messageId: null }).where(inArray(profileEntries.messageId, said)).run();
+		// Something only watched is nothing without the words it rests on.
+		tx.delete(profileProposals)
+			.where(and(inArray(profileProposals.messageId, said), inArray(profileProposals.status, ['watching', 'pending'])))
+			.run();
+		tx.update(profileProposals).set({ quote: null, messageId: null }).where(inArray(profileProposals.messageId, said)).run();
 		tx.delete(messages).where(eq(messages.chatId, chatId)).run();
 		tx.delete(attachments).where(eq(attachments.chatId, chatId)).run();
 		tx.delete(chats).where(eq(chats.id, chatId)).run();

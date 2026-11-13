@@ -669,8 +669,8 @@ check "deleting a folder drops its documents into Unfiled" "$(api $B/api/library
 check "rather than deleting them" "$(api $B/api/library/$KID)" 'Smoke Child'
 
 api -X POST $B/api/skills -d '{"name":"smoke-skill","description":"smoke","body":"body"}' > /dev/null
-# Learning: what the person says reaches their Profile only through a proposal
-# they approve, quoting them. Its own topic: the two-person instance below
+# Learning: what the person says outright reaches their Profile at once,
+# quoting them, and is listed where they can undo it. Its own topic: the two-person instance below
 # shares this data directory, and a skill name once proposed is never
 # proposed again.
 LC=$(api -X POST $B/api/chats -d '{}' | jqn .id)
@@ -678,12 +678,14 @@ LJ=$(api -X POST $B/api/chats/$LC/messages -d '{"content":"These days I sail mos
 curl -sN --max-time 20 $B/api/jobs/$LJ/stream > /dev/null
 LEARN=$(api -X POST $B/api/profile/learning/run)
 check "learning runs" "$LEARN" '"ran":true'
-check "and proposes rather than writes" "$LEARN" '"proposals":1'
+check "and writes the one line that clears the bar" "$LEARN" '"learned":1'
 LWAIT=$(api $B/api/profile/learning)
-check "what it proposes quotes the person" "$LWAIT" '"quote":"gamma-topic"'
-check_absent "and is never a line they did not say" "$LWAIT" 'LEARN-INVENTED'
-check_absent "or anything private" "$LWAIT" 'LEARN-PRIVATE'
-check_absent "so the profile holds none of it yet" "$(api $B/api/profile)" 'GAMMA-LEARN'
+check "what it learned quotes the person" "$LWAIT" '"quote":"gamma-topic"'
+LPROFILE=$(api $B/api/profile)
+check "and is in the profile at once" "$LPROFILE" 'GAMMA-LEARN closely'
+check_absent "a line they did not say is never written" "$LPROFILE" 'LEARN-INVENTED'
+check_absent "nor anything private" "$LPROFILE" 'LEARN-PRIVATE'
+check_absent "nor something only read between the lines" "$LPROFILE" 'LEARN-GUESS'
 
 # ---------------------------------------------------------------------------
 # Profile: what a person has told Galaxy about themselves, reaching their
@@ -744,10 +746,10 @@ check "the survey makes a line from a short answer" "$SUR" 'Goes by Tama.'
 check "and has the model sort a longer one" "$SUR" 'Sails a dinghy called PARSE-ALPHA.'
 check_absent "leaving out a line the person never wrote" "$SUR" 'PARSE-INVENTED'
 check "and saying so" "$SUR" 'not in what you wrote'
-check "with how to reply set apart" "$SUR" '"notCarried":["Prefers replies as bullet points."]'
+check "with how to reply filed in its own place" "$SUR" '"path":"identity/replies","kind":"fact","claim":"Prefers replies as bullet points."'
 check "saving the survey" "$(api -X POST $B/api/profile/confirm -d "$(draft_body "$SUR" survey)")" '"ok":true'
 check "puts it in the profile" "$(api $B/api/profile)" 'Sails a dinghy called PARSE-ALPHA.'
-check_absent "and not how to reply" "$(api $B/api/profile)" 'bullet points'
+check "and how to reply, kept as a preference whatever it was filed as" "$(api $B/api/profile)" '"kind":"preference","claim":"Prefers replies as bullet points."'
 PROBE=$(api -X POST $B/api/admin/profile/probe)
 check "the over-personalisation check asks every question" "$PROBE" '"asked":12'
 check "and the mock's plain answers intrude on none" "$PROBE" '"flagged":0'
@@ -830,23 +832,27 @@ done
 
 ALICE_WAIT=$(as alice $M/api/profile/learning)
 BOB_WAIT=$(as bob $M/api/profile/learning)
-check "alice's proposals come from her own words" "$ALICE_WAIT" 'ALPHA-LEARN'
+check "what alice's profile learned comes from her own words" "$ALICE_WAIT" 'ALPHA-LEARN'
 check_absent "and none from bob's" "$ALICE_WAIT" 'BETA-LEARN'
 check "bob's come from his" "$BOB_WAIT" 'BETA-LEARN'
 check_absent "and none from alice's" "$BOB_WAIT" 'ALPHA-LEARN'
 
-# Someone else's proposal is not found, exactly like a missing one.
-ALICE_PROPOSAL=$(echo "$ALICE_WAIT" | node -pe 'JSON.parse(require("fs").readFileSync(0)).proposals[0].id')
-check "bob cannot approve alice's proposal" \
-  "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Remote-User: bob' -H 'content-type: application/json' \
-     -d '{"approve":true}' $M/api/profile/proposals/$ALICE_PROPOSAL)" "404"
-check "alice approves her own" \
-  "$(as alice -X POST $M/api/profile/proposals/$ALICE_PROPOSAL -d '{"approve":true}')" '"status":"approved"'
+# Someone else's learned line is not found, exactly like a missing one.
+ALICE_PROPOSAL=$(echo "$ALICE_WAIT" | node -pe 'JSON.parse(require("fs").readFileSync(0)).learned[0].id')
+check "bob cannot undo what alice's profile learned" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'Remote-User: bob' $M/api/profile/proposals/$ALICE_PROPOSAL)" "404"
 ALICE_PROFILE=$(as alice $M/api/profile)
-check "it is in her profile, marked as inferred" "$ALICE_PROFILE" '"source":"inferred"'
-check "with the words it came from" "$ALICE_PROFILE" '"quote":"alpha-topic"'
+check "it is in her profile with the words it came from" "$ALICE_PROFILE" '"quote":"alpha-topic"'
 check_absent "and not in bob's" "$(as bob $M/api/profile)" 'ALPHA-LEARN'
-# Pinned, so the brief every agent gets carries it.
+# Bob takes his back, and it is not learned again from the same words.
+BOB_PROPOSAL=$(echo "$BOB_WAIT" | node -pe 'JSON.parse(require("fs").readFileSync(0)).learned[0].id')
+check "bob undoes his own" "$(as bob -X DELETE $M/api/profile/proposals/$BOB_PROPOSAL)" '"status":"undone"'
+check_absent "which takes it out of his profile" "$(as bob $M/api/profile)" 'BETA-LEARN'
+C=$(as bob -X POST $M/api/chats -d '{}' | jqn .id)
+J=$(as bob -X POST $M/api/chats/$C/messages -d '{"content":"more about beta-topic","webSearch":false}' | jqn .jobId)
+curl -sN --max-time 20 -H 'Remote-User: bob' $M/api/jobs/$J/stream > /dev/null
+check "and it is not learned again" "$(as bob -X POST $M/api/profile/learning/run)" '"learned":0'
+# Marked "always", so the brief every agent gets carries it.
 LEARNT=$(echo "$ALICE_PROFILE" | node -pe '
   const d = JSON.parse(require("fs").readFileSync(0));
   d.domains.flatMap((x) => x.subdomains.flatMap((s) => s.entries)).find((e) => e.claim.includes("ALPHA-LEARN")).id')
@@ -918,7 +924,7 @@ check "bob's prompt carries none of alice's profile" "$BSYS" 'pmark=false'
 AC=$(as alice -X POST $M/api/chats -d '{}' | jqn .id)
 AJ=$(as alice -X POST $M/api/chats/$AC/messages -d '{"content":"echo-system","webSearch":false}' | jqn .jobId)
 ASYS=$(curl -sN --max-time 20 -H 'Remote-User: alice' $M/api/jobs/$AJ/stream | grep -o 'SYSCHECK[^"]*' | head -1)
-check "alice's prompt carries what she approved and pinned" "$ASYS" 'alpha=true'
+check "alice's prompt carries what her profile learned and she marked always" "$ASYS" 'alpha=true'
 check "and nothing learnt from bob" "$ASYS" 'beta=false'
 check "alice's prompt carries her profile" "$ASYS" 'pmark=true'
 # The Language text is composed at call time rather than seeded into the prompt

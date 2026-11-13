@@ -42,8 +42,6 @@ export interface DraftEntry {
 export interface Draft {
 	people: DraftPerson[];
 	entries: DraftEntry[];
-	/** Lines about how an assistant should reply, which the profile doesn't hold; the review lists them apart. */
-	notCarried: string[];
 	/** What reading the text left out, and why, a sentence each. */
 	leftOut: string[];
 }
@@ -56,7 +54,7 @@ export interface ParsePart {
 	text: string;
 }
 
-export const emptyDraft = (): Draft => ({ people: [], entries: [], notCarried: [], leftOut: [] });
+export const emptyDraft = (): Draft => ({ people: [], entries: [], leftOut: [] });
 
 /** Two drafts as one. Someone named twice is kept once, as first given. */
 export function mergeDrafts(a: Draft, b: Draft): Draft {
@@ -70,7 +68,6 @@ export function mergeDrafts(a: Draft, b: Draft): Draft {
 	return {
 		people,
 		entries: [...a.entries, ...b.entries],
-		notCarried: [...a.notCarried, ...b.notCarried],
 		leftOut: [...a.leftOut, ...b.leftOut]
 	};
 }

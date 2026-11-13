@@ -239,10 +239,11 @@ async function scriptedReply(userText, maxTokens = 0) {
 				neglected: neglected.slice(0, 1)
 			});
 		} else if (userText.includes('PROFILE-LEARN')) {
-			// Learning about the person. One proposal quoting a marker they wrote,
-			// so a test can prove each profile learns only from its owner's chats;
-			// one quoting words nobody wrote and one for a private place, both of
-			// which code must drop; and a skill candidate.
+			// Learning about the person. One line quoting a marker they wrote and
+			// labelled as said outright, so a test can prove each profile learns
+			// only from its owner's chats; one read between the lines, which the
+			// default bar only watches; one quoting words nobody wrote and one for
+			// a private place, both of which code must drop; and a skill candidate.
 			const activity = userText.slice(userText.indexOf('--- BEGIN ACTIVITY ---'));
 			const topic = ['alpha-topic', 'beta-topic', 'gamma-topic'].find((t) => activity.includes(t)) ?? null;
 			const marker = topic ? `${topic.split('-')[0].toUpperCase()}-LEARN` : null;
@@ -250,11 +251,12 @@ async function scriptedReply(userText, maxTokens = 0) {
 				add: [
 					...(topic
 						? [
-								{ path: 'interests/pursuits', kind: 'fact', claim: `Follows ${marker} closely.`, quote: topic, why: `They brought up ${topic}.` },
-								{ path: 'life/health', kind: 'constraint', claim: 'Allergic to LEARN-PRIVATE.', quote: topic }
+								{ path: 'interests/pursuits', kind: 'fact', claim: `Follows ${marker} closely.`, quote: topic, basis: 'stated', span: 'lasting', why: `They brought up ${topic}.` },
+								{ path: 'interests/taste', kind: 'preference', claim: `Probably enjoys ${marker} films, LEARN-GUESS.`, quote: topic, basis: 'implied', span: 'lasting' },
+								{ path: 'life/health', kind: 'constraint', claim: 'Allergic to LEARN-PRIVATE.', quote: topic, basis: 'stated', span: 'lasting' }
 							]
 						: []),
-					{ path: 'work/role', kind: 'fact', claim: 'Flew to the moon, LEARN-INVENTED.', quote: 'flew to the moon last year' }
+					{ path: 'work/role', kind: 'fact', claim: 'Flew to the moon, LEARN-INVENTED.', quote: 'flew to the moon last year', basis: 'stated', span: 'lasting' }
 				],
 				skill_candidates: [
 					{
@@ -273,17 +275,19 @@ async function scriptedReply(userText, maxTokens = 0) {
 			// Sorting a survey's free answers or a pasted memory. One entry drawn
 			// from a marker in the text, so a smoke can see it came from what was
 			// written; one that quotes words nobody wrote, which code must drop; and
-			// a line about replying, which must come back as not carried over.
+			// a line about replying, which is filed where a profile keeps those.
 			const text = userText.slice(userText.indexOf('--- BEGIN TEXT ---'));
 			content = JSON.stringify({
 				entries: [
 					...(text.includes('PARSE-ALPHA')
 						? [{ path: 'interests/pursuits', kind: 'fact', claim: 'Sails a dinghy called PARSE-ALPHA.', quote: 'PARSE-ALPHA' }]
 						: []),
+					...(text.includes('bullet')
+						? [{ path: 'identity/replies', kind: 'fact', claim: 'Prefers replies as bullet points.', quote: 'replies as bullet points' }]
+						: []),
 					{ path: 'work/role', kind: 'fact', claim: 'Flew to the moon, PARSE-INVENTED.', quote: 'flew to the moon last year' }
 				],
-				people: [],
-				not_carried: text.includes('bullet') ? ['Prefers replies as bullet points.'] : []
+				people: []
 			});
 		} else if (userText.includes('CHAT-TITLE')) {
 			// Titling happens after the reply, so a real (remote) model takes a

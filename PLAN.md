@@ -90,7 +90,7 @@ Internet ─► Proxy ──┤
 
 10. **Library** — flat `/data/library/*.md` per spec; a shelf of folders with documents nested inside documents beneath them, drag to re-file; documents open formatted and are edited as a second step; uploads converted to markdown; a cached **snippet** per doc (first lines or a one-time model summary) so the on-load digest stays cheap; FTS5 full-text search; docs readable by all agents; agent-authored docs flagged as such.
 
-11. **Learning job** (task `profile-learn`): cron (default 12 h, editable in Admin → Profile and skills) with a per-person **watermark**: only new, non-hidden chats since the last run, skipping hand-offs from boards, and skipping entirely when idle. It reads the person's own messages in full and replies only as context, never tool output, and **proposes** additions, changes and retirements for their Profile, each quoting the person's own words, checked in code. Proposals wait in the Profile page's Waiting card, where the person approves, rewords or turns each down; nothing reaches a prompt before that, a rejection is remembered, nothing private is shown to the model or proposed, and at most 30 wait at once. **Read my past conversations** reads a person's whole history into the queue without clearing anything. Entries past their date expire, and entries nobody has confirmed for a year come back as "still true?". Candidate skills land in the same Waiting card, never auto-activated (the main defence against prompt-injection poisoning the skill set).
+11. **Learning job** (task `profile-learn`): cron (default 12 h, editable in Admin → Profile and skills) with a per-person **watermark**: only new, non-hidden chats since the last run, skipping hand-offs from boards, and skipping entirely when idle. It reads the person's own messages in full and replies only as context, never tool output. Each line it returns quotes the person's own words, checked in code, and carries two labels: how the model came by it (stated, repeated, implied) and how long it holds (lasting, current, once). Code decides from the labels under the owner's **bar** setting (strict, balanced, open): what clears it is written to the Profile at once, what was only read between the lines is **watched** where no agent sees it until another conversation bears it out, and a single occasion is dropped. "Repeated" is counted from the chats the quotes are in, never taken from the label. The Profile page lists what was learned with the words behind each line and an Undo, and an undo is remembered as never-again. Nothing private is shown to the model or written. **Read my past conversations** reads a person's whole history the same way without clearing anything. Dated entries expire; goals, projects, patterns and inferred lines lapse when nothing bears them out for 180 days, and what a person stated as fact stays until they say otherwise. Candidate skills still wait for approval in the same card, never auto-activated (the main defence against prompt-injection poisoning the skill set). Admin has a check that shows the job twenty messages whose answer is known and reports what the bar let through.
 
 12. **Context bootstrap** — on every turn each agent receives: its system prompt + the **profile block** first (a map of what the person's profile holds, the names that matter and what they pinned, within that agent's scope; `profile_lookup` reaches the rest and `profile_note` writes what the person says, quoted from their own message) + the tool/skill **index** (names + one-line descriptions only — bodies load on demand, progressive disclosure) + MCP/connector inventory + Library snippet digest + the boards digest. The profile block comes first because it changes least, so the cached prompt prefix survives a Library or board write.
 
@@ -142,15 +142,19 @@ Internet ─► Proxy ──┤
 - ~~**Profile**~~ — **shipped**: a structured, capped record of the person, their world and how they relate
   to it, which replaced Memory. Five fixed domains (identity, work, people, life, interests) with
   seed subdomains, named entities that claims link to across domains, and one-line claims
-  bounded in code. Agents get a small deterministic block (a map of what is held, the names
-  that matter, the pinned brief) and look up the rest; a stated fact is noted with a quote
-  from the person's own message, and anything inferred waits for their sign-off. It holds
-  nothing about how agents should reply: that is platform configuration. An onboarding
-  survey, a Profile export or another assistant's memory seeds it, each as a draft the
-  person reads line by line before any of it is saved; lines about how to reply are set
-  apart rather than filed. Admin → Profile and skills has a check that asks the chat model
-  twelve everyday questions with the admin's own profile in the prompt, and counts the
-  replies that name their people or reach for a word from their pinned brief.
+  bounded in code. Two tiers, derived from what an entry is: a fact or constraint the person
+  stated is durable and changes only on their word; preferences, goals, projects, patterns
+  and anything inferred are fluid, reworded as the picture shifts and lapsing when nothing
+  bears them out. Agents get a small deterministic block (a map of what is held, the names
+  that matter, and a brief that fills itself by a fixed ranking with anything the person
+  marked "always" first) and look up the rest. A stated fact is noted with a quote from the
+  person's own message, and the learning job writes what clears its bar with an undo beside
+  it. How a person likes to be answered is held in one small place, `identity/replies`, and
+  rendered apart from the facts. An onboarding survey, a Profile export or another
+  assistant's memory seeds it, each as a draft the person reads line by line before any of
+  it is saved. Admin → Profile and skills has a check that asks the chat model twelve
+  everyday questions with the admin's own profile in the prompt, and counts the replies that
+  name their people or reach for a word from their brief.
 - **GitHub App + PR watching** — review agent, CI auto-fix via webhooks, replacing the PAT. Opening the pull request itself is shipped (`open_pull_request`, and a button on the session header).
 - **Artifacts pane** — sandboxed iframe rendering of interactive HTML/SVG the agents produce.
 - **Image generation providers** + a gallery surface in the Library; deep image analysis (OCR, structured extraction).

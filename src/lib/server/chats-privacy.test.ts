@@ -8,6 +8,8 @@ import {
 	jobs,
 	messages,
 	notifications,
+	profileEntries,
+	profileProposals,
 	usageLog
 } from '$lib/server/db/schema';
 import { rmSync } from 'node:fs';
@@ -23,6 +25,7 @@ import {
 } from './chats';
 import { emitEvent } from './engine/events';
 import { recentRuns } from './engine/run-history';
+import { addEntry, applyLearned, saveProposals, wipeProfile } from './profile';
 
 /**
  * What hiding a chat is supposed to mean, asserted against the tables that used
@@ -48,6 +51,8 @@ beforeEach(() => {
 	for (const t of [messages, attachments, chats, events, jobs, notifications, usageLog]) {
 		db.delete(t).run();
 	}
+	wipeProfile(USER);
+	db.delete(profileProposals).run();
 });
 
 /** A chat that has been used: messages, a run, its events and its spending. */
@@ -205,5 +210,64 @@ describe('deleting a chat', () => {
 		expect(db.select().from(jobs).all()).toHaveLength(0);
 		expect(db.select().from(notifications).all()).toHaveLength(0);
 		expect(db.select().from(usageLog).all()[0].chatId).toBeNull();
+	});
+});
+
+describe('what the profile learned from a chat', () => {
+	/** One entry and one applied proposal quoting this chat, and one watched line from it. */
+	function learnedFrom(chatId: string, messageId: string) {
+		const kept = addEntry(
+			USER,
+			{ domain: 'work', subdomain: 'tools', kind: 'fact', claim: 'Uses Neovim daily.', quote: 'I use neovim', messageId },
+			{ source: 'inferred' }
+		).entry;
+		const applied = applyLearned(USER, {
+			source: 'test',
+			action: 'add',
+			path: 'work/tools',
+			claim: 'Uses Docker at work.',
+			quote: 'we run docker',
+			messageId
+		})!;
+		saveProposals(
+			USER,
+			[{ source: 'test', action: 'add', path: 'work/tools', claim: 'Uses Emacs at home.', quote: 'emacs', messageId }],
+			new Date(),
+			'watching'
+		);
+		return { chatId, kept, applied };
+	}
+
+	const rows = () => ({
+		entries: db.select().from(profileEntries).all(),
+		proposals: db.select().from(profileProposals).all()
+	});
+
+	it.each([
+		['hiding', (id: string) => setHidden(id, USER, true)],
+		['deleting', (id: string) => deleteChat(id, USER)]
+	])('%s it scrubs the quote and message id but keeps the claim', (_how, erase) => {
+		const chat = usedChat();
+		const msgId = getMessages(chat.id)[0].id;
+		const { kept, applied } = learnedFrom(chat.id, msgId);
+		// A line from another conversation is not touched.
+		const other = addEntry(
+			USER,
+			{ domain: 'work', subdomain: 'tools', kind: 'fact', claim: 'Uses Helix on weekends.', quote: 'helix', messageId: 'm-elsewhere' },
+			{ source: 'inferred' }
+		).entry;
+
+		erase(chat.id);
+
+		const { entries, proposals } = rows();
+		expect(entries.find((e) => e.id === kept.id)).toMatchObject({ claim: 'Uses Neovim daily.', quote: null, messageId: null });
+		const appliedNow = proposals.find((p) => p.id === applied.id)!;
+		expect(appliedNow).toMatchObject({ status: 'approved', claim: 'Uses Docker at work.', quote: null, messageId: null });
+		// The entry the proposal wrote is scrubbed too.
+		expect(entries.find((e) => e.id === applied.appliedEntryId)).toMatchObject({ claim: 'Uses Docker at work.', quote: null, messageId: null });
+		expect(entries.find((e) => e.id === other.id)).toMatchObject({ quote: 'helix', messageId: 'm-elsewhere' });
+		// Nothing left to hold the words: the watched line is gone with the chat.
+		expect(proposals.filter((p) => p.status === 'watching')).toEqual([]);
+		expect(JSON.stringify(rows())).not.toContain(msgId);
 	});
 });

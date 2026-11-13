@@ -202,18 +202,6 @@
 		<p class="hint">Nothing to add from this.</p>
 	{/if}
 
-	{#if draft.notCarried.length}
-		<h4>Not carried over</h4>
-		<p class="hint">
-			These are about how an assistant should reply rather than about you, so they stay out of
-			your profile. Nothing else in Galaxy stores them either: copy any you want to keep before
-			you leave this page.
-		</p>
-		<ul class="carried">
-			{#each draft.notCarried as line, i (i)}<li>{line}</li>{/each}
-		</ul>
-	{/if}
-
 	<div class="row">
 		<button class="btn primary" disabled={blocked || empty} onclick={save}>
 			{saving ? 'Saving…' : saveLabel}
@@ -229,8 +217,7 @@
 		font-size: var(--text-base);
 		color: var(--fg-dim);
 	}
-	.lines,
-	.carried {
+	.lines {
 		list-style: none;
 		margin: 0;
 		padding: 0;
@@ -238,10 +225,6 @@
 	.lines > li {
 		border-top: 1px solid var(--border);
 		padding: 0.55rem 0;
-	}
-	.carried > li {
-		font-size: var(--text-base);
-		padding: 0.2rem 0;
 	}
 	.claim {
 		width: 100%;

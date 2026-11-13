@@ -1,4 +1,4 @@
-import { listEntities, listEntries, profileBlock, scopeAllows } from '$lib/server/profile';
+import { briefOf, listEntities, profileBlock } from '$lib/server/profile';
 import { getBudgetStatus } from './budget';
 import { getTaskConfig, pickModel, systemPromptFor } from './engine';
 import { emitEvent } from './events';
@@ -10,7 +10,7 @@ import { logUsage } from './usage';
  * The block tells agents to use a fact only when it changes the answer. This
  * checks whether the chat model listens: everyday questions a profile should
  * not touch, asked with the admin's own block in the prompt, and a reply that
- * names one of their people or reaches for a word from their pinned brief is
+ * names one of their people or reaches for a word from their brief is
  * counted. A word match is crude, so every flag shows what matched and the
  * admin judges it.
  *
@@ -61,13 +61,13 @@ const words = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N
 export interface ProbeProfile {
 	/** People's and things' names and other names. */
 	names: string[];
-	/** The pinned brief, the one part of the profile every agent carries. */
-	pinned: string[];
+	/** The brief, the one part of the profile every agent carries. */
+	brief: string[];
 }
 
 /**
  * What in a reply came from the profile rather than the question: a name of
- * someone in it, or a distinctive word from the pinned brief. A word the
+ * someone in it, or a distinctive word from the brief. A word the
  * question itself uses is the question's, not the profile's.
  */
 export function profileIntrusion(reply: string, question: string, profile: ProbeProfile): string[] {
@@ -80,7 +80,7 @@ export function profileIntrusion(reply: string, question: string, profile: Probe
 		if (said.includes(` ${key} `)) found.add(name);
 	}
 	const replyWords = new Set(words(reply));
-	for (const claim of profile.pinned) {
+	for (const claim of profile.brief) {
 		for (const w of words(claim)) {
 			if (w.length < 5 || COMMON.has(w) || asked.has(w)) continue;
 			if (replyWords.has(w)) found.add(w);
@@ -124,9 +124,7 @@ export async function runProbe(userId: string): Promise<ProbeOutcome> {
 	const entities = listEntities(userId);
 	const profile: ProbeProfile = {
 		names: entities.filter((e) => e.named).flatMap((e) => [e.name, ...e.aka]),
-		pinned: listEntries(userId)
-			.filter((e) => e.pinned && scopeAllows('chat', e.domain, e.subdomain))
-			.map((e) => e.claim)
+		brief: briefOf(userId, 'chat').map((e) => e.claim)
 	};
 	const system = `${systemPromptFor('chat')}\n\n${block}`;
 

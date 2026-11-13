@@ -83,9 +83,9 @@ describe('parseIntoDraft', () => {
 				{ path: 'life/health', kind: 'constraint', claim: 'Coeliac.', quote: 'I am  coeliac' },
 				{ path: 'life/hobbies', kind: 'fact', claim: 'Plays chess.', quote: 'I live in Grey Lynn' },
 				{ path: 'work/role', kind: 'fact', claim: 'Is a surgeon.', quote: 'I am a surgeon' },
-				{ path: 'people/Hemi', kind: 'fact', claim: 'Is a builder.', quote: 'I live' }
-			],
-			not_carried: ['Keep replies short and use bullet points.', { text: 'Wants British spelling.' }, 7]
+				{ path: 'people/Hemi', kind: 'fact', claim: 'Is a builder.', quote: 'I live' },
+				{ path: 'identity/replies', kind: 'preference', claim: 'Keeps replies short, in bullet points.', quote: 'keep replies short and use bullet points' }
+			]
 		});
 		const draft = await parseIntoDraft(ALICE, part(), NOW);
 
@@ -98,9 +98,9 @@ describe('parseIntoDraft', () => {
 			['life/home', 'Lives in Grey Lynn.', null],
 			['people/Aroha', 'Swims on Mondays.', null],
 			['life/routines', 'Takes Nikau to school.', 'Nikau'],
-			['life/health', 'Coeliac.', null]
+			['life/health', 'Coeliac.', null],
+			['identity/replies', 'Keeps replies short, in bullet points.', null]
 		]);
-		expect(draft.notCarried).toEqual(['Keep replies short and use bullet points.', 'Wants British spelling.']);
 		expect(draft.leftOut).toEqual([
 			'Left out 2 lines that were not in what you wrote.',
 			'Left out 2 lines filed somewhere your profile does not have.'

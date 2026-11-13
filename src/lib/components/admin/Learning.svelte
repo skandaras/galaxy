@@ -8,7 +8,9 @@
 		nextDue: number;
 		enabled: boolean;
 		entries: number;
-		waiting: number;
+		learned: number;
+		undone: number;
+		watching: number;
 	}
 	interface Candidate {
 		id: string;
@@ -37,7 +39,7 @@
 			| null;
 	}
 
-	let profile = $state({ enabled: true, intervalHours: 12, timeoutSeconds: 180, briefChars: 2400 });
+	let profile = $state({ enabled: true, intervalHours: 12, timeoutSeconds: 180, briefChars: 2400, bar: 'balanced' });
 	let userStatus = $state<UserStatus[]>([]);
 	let candidates = $state<Candidate[]>([]);
 	let expandedCand = $state<string | null>(null);
@@ -127,6 +129,27 @@
 		probe = res?.ok ? await res.json() : { ran: false, reason: 'The check did not run. Try again.' };
 	}
 
+	interface BarCheck {
+		ran: boolean;
+		reason?: string;
+		bar?: string;
+		kept?: number;
+		worth?: number;
+		missed?: string[];
+		letThrough?: string[];
+		watched?: string[];
+	}
+	let barCheck = $state<BarCheck | null>(null);
+	let checkingBar = $state(false);
+
+	async function runBarCheck() {
+		checkingBar = true;
+		barCheck = null;
+		const res = await fetch('/api/admin/profile/bar', { method: 'POST' }).catch(() => null);
+		checkingBar = false;
+		barCheck = res?.ok ? await res.json() : { ran: false, reason: 'The check did not run. Try again.' };
+	}
+
 	const when = (ts: number) => (ts ? new Date(ts).toLocaleString() : 'never');
 	const pending = $derived(candidates.filter((c) => c.status === 'pending'));
 	const decided = $derived(candidates.filter((c) => c.status !== 'pending'));
@@ -150,8 +173,16 @@
 				<input type="number" min="30" max="900" bind:value={profile.timeoutSeconds} />
 			</label>
 			<label>
-				pinned brief (characters)
+				brief (characters)
 				<input type="number" min="800" max="4000" step="100" bind:value={profile.briefChars} />
+			</label>
+			<label>
+				what it takes to be learned
+				<select bind:value={profile.bar}>
+					<option value="strict">strict</option>
+					<option value="balanced">balanced</option>
+					<option value="open">open</option>
+				</select>
 			</label>
 		</div>
 		<div class="row-buttons">
@@ -162,13 +193,19 @@
 		</div>
 		<p class="hint">
 			Applies to every user. Learning reads each person's own messages, never hidden chats and
-			never tool output, and only proposes: they approve, edit or reject each line on their
-			Profile page, and nothing reaches their agents before that. Each person can turn it off for
-			themselves, or run it on demand.
+			never tool output. What clears the bar is written to their profile at once and listed on
+			their Profile page, where they can undo it; an undo is never learned again. Each person
+			can turn it off for themselves, or run it on demand.
 		</p>
 		<p class="hint">
-			The pinned brief reaches every agent on every turn; lowering it unpins nothing, but no
-			one can pin more until they are back under. The time limit is the whole of one model call:
+			Strict writes only what a person says outright about themselves as lasting, two lines a
+			run. Balanced also writes goals and projects they state and anything that shows in two
+			separate conversations, four a run, and watches what it only read between the lines.
+			Open writes that too, eight a run. A single occasion is never written.
+		</p>
+		<p class="hint">
+			The brief reaches every agent on every turn and fills itself, with anything a person marked
+			"always" first; lowering it drops nothing they marked. The time limit is the whole of one model call:
 			a background call is not streamed, so unlike a chat turn it gets no allowance for going
 			quiet.
 		</p>
@@ -182,7 +219,7 @@
 		</p>
 		<table>
 			<thead>
-				<tr><th>User</th><th>Learning</th><th>Entries</th><th>Waiting</th><th>Last run</th><th>Next due</th></tr>
+				<tr><th>User</th><th>Learning</th><th>Entries</th><th>Learned, 30 days</th><th>Undone</th><th>Watching</th><th>Last run</th><th>Next due</th></tr>
 			</thead>
 			<tbody>
 				{#each userStatus as s (s.userId)}
@@ -190,15 +227,43 @@
 						<td>{s.username}</td>
 						<td>{s.enabled ? 'on' : 'turned off'}</td>
 						<td class="num">{s.entries}</td>
-						<td class="num">{s.waiting}</td>
+						<td class="num">{s.learned}</td>
+						<td class="num">{s.undone}</td>
+						<td class="num">{s.watching}</td>
 						<td class="num">{when(s.lastRun)}</td>
 						<td class="num">{s.enabled && profile.enabled ? when(s.nextDue) : '—'}</td>
 					</tr>
 				{:else}
-					<tr><td colspan="6" class="hint">No users yet.</td></tr>
+					<tr><td colspan="8" class="hint">No users yet.</td></tr>
 				{/each}
 			</tbody>
 		</table>
+	</article>
+
+	<article class="card bar-check">
+		<h3>Is the bar in the right place?</h3>
+		<p class="hint">
+			Shows the learning job twenty short messages: ten that say something worth keeping and ten
+			of the trivia a profile fills with when the bar is low. It reads them as it would a
+			person's conversations, under the setting above, and writes nothing. One model call. Run
+			it after changing the setting, the model or the learning prompt. In the table above, many
+			undone lines for the number learned says tighten, and a profile that stays empty says
+			loosen.
+		</p>
+		<button class="btn" disabled={checkingBar} onclick={runBarCheck}>
+			{checkingBar ? 'Reading…' : 'Run the check'}
+		</button>
+		{#if barCheck && !barCheck.ran}
+			<p class="notice error" role="alert">{barCheck.reason}</p>
+		{:else if barCheck}
+			<p class="notice" role="status">
+				On {barCheck.bar}: kept {barCheck.kept} of {barCheck.worth} worth keeping, and let through
+				{barCheck.letThrough?.length} of the trivia.
+			</p>
+			{#if barCheck.letThrough?.length}<p class="hint">Let through: {barCheck.letThrough.join(', ')}.</p>{/if}
+			{#if barCheck.missed?.length}<p class="hint">Not written: {barCheck.missed.join(', ')}.</p>{/if}
+			{#if barCheck.watched?.length}<p class="hint">Trivia it would watch for again: {barCheck.watched.join(', ')}.</p>{/if}
+		{/if}
 	</article>
 
 	<article class="card probe">
@@ -206,7 +271,7 @@
 		<p class="hint">
 			Asks the chat model twelve everyday questions a profile has no bearing on, with your own profile
 			in the prompt, and counts the replies that name one of your people or reach for a word from
-			your pinned brief. A word match is crude, so each flag shows what matched. Twelve chat calls,
+			your brief. A word match is crude, so each flag shows what matched. Twelve chat calls,
 			one at a time, counted against the budget like any other.
 		</p>
 		<button class="btn" disabled={probing} onclick={runProbe}>

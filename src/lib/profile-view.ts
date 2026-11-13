@@ -45,31 +45,24 @@ export function entryMarks(e: {
 	expiresAt: string | null;
 }): string[] {
 	return [
-		e.pinned ? 'pinned' : '',
+		e.pinned ? 'always in brief' : '',
 		e.sensitivity === 'private' ? 'private' : '',
 		e.source === 'inferred' ? 'inferred' : '',
 		e.expiresAt ? `until ${e.expiresAt.slice(0, 10)}` : ''
 	].filter(Boolean);
 }
 
-export type ProposalAction = 'add' | 'update' | 'retire' | 'confirm';
+export type LearnedAction = 'add' | 'update' | 'retire';
 
-/** What a proposal is called on the page, and what its two buttons say. */
-export function proposalWords(action: ProposalAction): {
-	badge: string;
-	yes: string;
-	no: string;
-	editable: boolean;
-} {
+/** What a learned change is called on the page, what its undo says, and what undoing it reports. */
+export function learnedWords(action: LearnedAction): { badge: string; undo: string; done: string } {
 	switch (action) {
 		case 'add':
-			return { badge: 'New', yes: 'Approve', no: 'Reject', editable: true };
+			return { badge: 'New', undo: 'Undo', done: 'Taken back. It will not be learned again.' };
 		case 'update':
-			return { badge: 'Change', yes: 'Approve', no: 'Reject', editable: true };
+			return { badge: 'Changed', undo: 'Undo', done: 'Put back as it was.' };
 		case 'retire':
-			return { badge: 'Retire', yes: 'Retire it', no: 'Keep it', editable: false };
-		case 'confirm':
-			return { badge: 'Still true?', yes: 'Still true', no: 'Not any more', editable: false };
+			return { badge: 'Retired', undo: 'Bring it back', done: 'Back in your profile.' };
 	}
 }
 
@@ -80,7 +73,7 @@ export interface ReadingView {
 	running: boolean;
 	done: number;
 	total: number;
-	proposals: number;
+	learned: number;
 	failed: number;
 	stopped?: string;
 }
@@ -91,7 +84,7 @@ export function readingText(r: ReadingView | null): { text: string; error: boole
 	const batches = `${r.total} ${r.total === 1 ? 'batch' : 'batches'}`;
 	if (r.running) {
 		return {
-			text: `Reading your past conversations: ${r.done} of ${batches}, ${r.proposals} proposed so far.`,
+			text: `Reading your past conversations: ${r.done} of ${batches}, ${r.learned} learned so far.`,
 			error: false
 		};
 	}

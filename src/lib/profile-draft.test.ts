@@ -17,13 +17,11 @@ describe('mergeDrafts', () => {
 		const b: Draft = {
 			people: [{ name: 'aroha', kind: 'person', relation: '', aka: [] }, { name: 'Pip', kind: 'pet', relation: 'dog', aka: [] }],
 			entries: [line({ claim: 'Uses Docker at work.' })],
-			notCarried: ['Prefers bullet points.'],
 			leftOut: ['1 line was left out.']
 		};
 		const merged = mergeDrafts(a, b);
 		expect(merged.people.map((p) => p.name)).toEqual(['Aroha', 'Pip']);
 		expect(merged.entries).toHaveLength(2);
-		expect(merged.notCarried).toEqual(['Prefers bullet points.']);
 		expect(merged.leftOut).toEqual(['1 line was left out.']);
 	});
 });

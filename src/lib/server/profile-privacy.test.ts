@@ -257,7 +257,6 @@ describe('a draft', () => {
 					{ ...line, path: `people/${PARTNER}`, claim: 'Was told about by Bob.', about: null },
 					{ ...line, path: 'life/routines', claim: 'Swims with them on Fridays.', about: PARTNER }
 				],
-				notCarried: [],
 				leftOut: []
 			},
 			'imported',

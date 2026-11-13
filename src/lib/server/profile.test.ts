@@ -15,16 +15,21 @@ import {
 	createEntity,
 	deleteEntity,
 	deleteEntry,
+	applyLearned,
+	applyPending,
+	briefOf,
 	exportMarkdown,
 	findEntity,
 	history,
 	LIMITS,
 	listEntries,
-	listProposals,
+	lapseStale,
 	lookup,
+	recentLearned,
+	touchSeen,
+	undoLearned,
 	parseExport,
 	proposalsWith,
-	raiseStillTrue,
 	ProfileError,
 	ProfileNotFound,
 	profileBlock,
@@ -316,15 +321,21 @@ describe('entities', () => {
 });
 
 describe('the block', () => {
+	// Written a second apart: inside a rank the brief orders by when an entry was
+	// written, and entries sharing a timestamp would sort by random id.
+	let tick = 0;
+	const addAt = (input: Parameters<typeof add>[0], source: 'stated' | 'survey' | 'inferred' | 'imported' = 'stated') =>
+		add(input, source, ALICE, new Date(NOW.getTime() - 3_600_000 + tick++ * 1000));
 	const seed = () => {
+		tick = 0;
 		createEntity(ALICE, { kind: 'person', name: 'Aroha', relation: 'partner' });
 		createEntity(ALICE, { kind: 'project', name: 'Galaxy', relation: 'project' });
-		add({ domain: 'identity', subdomain: 'basics', claim: 'Tama; lives in Auckland (NZDT).', pinned: true });
-		add({ domain: 'life', subdomain: 'constraints', kind: 'constraint', claim: 'Vegetarian.', pinned: true });
-		add({ domain: 'life', subdomain: 'health', kind: 'constraint', claim: 'Coeliac; avoids gluten.' });
-		for (let i = 0; i < 5; i++) add({ claim: nth(i) });
-		add({ claim: 'Uses Neovim daily.', pinned: true });
-		add({
+		addAt({ domain: 'identity', subdomain: 'basics', claim: 'Tama; lives in Auckland (NZDT).', pinned: true });
+		addAt({ domain: 'life', subdomain: 'constraints', kind: 'constraint', claim: 'Vegetarian.', pinned: true });
+		addAt({ domain: 'life', subdomain: 'health', kind: 'constraint', claim: 'Coeliac; avoids gluten.' });
+		for (let i = 0; i < 5; i++) addAt({ claim: nth(i) });
+		addAt({ claim: 'Uses Neovim daily.', pinned: true });
+		addAt({
 			domain: 'life',
 			subdomain: 'home',
 			kind: 'goal',
@@ -332,7 +343,7 @@ describe('the block', () => {
 			pinned: true,
 			expiresAt: new Date('2026-11-01T00:00:00Z')
 		});
-		add({ domain: 'interests', subdomain: 'pursuits', claim: 'Trail runs most weekends.', quote: 'I run the trails' }, 'inferred');
+		addAt({ domain: 'interests', subdomain: 'pursuits', claim: 'Trail runs most weekends.', quote: 'I run the trails' }, 'inferred');
 	};
 
 	it('is empty for an empty profile and for a task with no scope', () => {
@@ -349,17 +360,20 @@ describe('the block', () => {
 		expect(profileBlock(ALICE, 'chat', NOW)).not.toBe(a);
 	});
 
-	it('maps what is held, names who matters, and carries what is pinned in a fixed order', () => {
+	it('maps what is held, names who matters, and carries the pinned lines first, then the rest by rank', () => {
 		seed();
 		const lines = profileBlock(ALICE, 'chat', NOW).split('\n');
 		expect(lines[0]).toMatch(/^\[Profile: .*profile_lookup\.\]$/);
 		expect(lines[1]).toBe('map: identity: basics | work: tools 6 | life: home · constraints · health | interests: pursuits | now 1');
 		expect(lines[2]).toBe('names: Aroha (partner)');
 		expect(lines.slice(3)).toEqual([
-			'- Tama; lives in Auckland (NZDT).',
-			'- Uses Neovim daily.',
+			// All four are pinned, newest written first. Nothing unpinned qualifies:
+			// Coeliac is private, and the tools facts and the running line are the
+			// chat agent's long tail, left to the lookup.
 			'- until 2026-11-01: Moving house to Raglan.',
-			'- Vegetarian.'
+			'- Uses Neovim daily.',
+			'- Vegetarian.',
+			'- Tama; lives in Auckland (NZDT).',
 		]);
 	});
 
@@ -563,7 +577,6 @@ describe('saving a draft', () => {
 	const draftOf = (entries: DraftEntry[], people: Draft['people'] = []): Draft => ({
 		people,
 		entries,
-		notCarried: [],
 		leftOut: []
 	});
 
@@ -643,7 +656,6 @@ describe('saving a draft', () => {
 		expect(draft).toEqual({
 			people: [],
 			entries: [{ path: 'work/tools', kind: '', claim: '', pinned: false, until: null, about: null, sensitivity: null }],
-			notCarried: [],
 			leftOut: []
 		});
 		expect(() => cleanDraft({ entries: Array(LIMITS.entriesPerUser + 1).fill({}) })).toThrow(ProfileError);
@@ -702,15 +714,26 @@ describe('deciding a proposal', () => {
 		expect(history(ALICE, entry.id)).toHaveLength(3);
 	});
 
-	it('retires an entry, and asks whether one is still true', () => {
+	it('retires an entry on a yes and leaves it active on a no', () => {
 		const a = add({ claim: 'Plays squash weekly.' }).entry;
 		const b = add({ claim: 'Uses Neovim daily.' }).entry;
-		const c = add({ claim: 'Uses Docker at work.' }).entry;
-		decideProposal(ALICE, propose({ action: 'retire', entryId: a.id }).id, true, {}, later);
-		decideProposal(ALICE, propose({ action: 'confirm', entryId: b.id }).id, true, {}, later);
-		decideProposal(ALICE, propose({ action: 'confirm', entryId: c.id }).id, false, {}, later);
+		const yes = propose({ action: 'retire', entryId: a.id });
+		decideProposal(ALICE, yes.id, true, {}, later);
+		decideProposal(ALICE, propose({ action: 'retire', entryId: b.id }).id, false, {}, later);
 		expect(listEntries(ALICE, later).map((e) => e.claim)).toEqual(['Uses Neovim daily.']);
-		expect(listEntries(ALICE, later)[0].confirmedAt).toEqual(later);
+		expect(proposalsWith(ALICE, 'approved').map((p) => p.id)).toEqual([yes.id]);
+	});
+
+	it('records the entry an approval wrote, and an update’s is the new version', () => {
+		const add1 = propose({ action: 'add', path: 'work/tools', claim: 'Uses Neovim daily.', quote: 'I use neovim' });
+		const done = decideProposal(ALICE, add1.id, true, {}, later);
+		const [written] = listEntries(ALICE, later);
+		expect(done.appliedEntryId).toBe(written.id);
+		expect(proposalsWith(ALICE, 'approved')[0].appliedEntryId).toBe(written.id);
+		const upd = propose({ action: 'update', entryId: written.id, claim: 'Uses Helix daily.', quote: 'moved to helix' });
+		const changed = decideProposal(ALICE, upd.id, true, {}, later);
+		expect(changed.appliedEntryId).toBe(listEntries(ALICE, later)[0].id);
+		expect(changed.appliedEntryId).not.toBe(written.id);
 	});
 
 	it('closes a proposal whose entry has gone, and treats someone else’s as not found', () => {
@@ -727,9 +750,89 @@ describe('deciding a proposal', () => {
 		propose({ action: 'retire', entryId: entry.id });
 		propose({ action: 'add', path: 'work/tools', claim: 'Uses Emacs at home.', quote: 'emacs' });
 		deleteEntry(ALICE, entry.id);
-		expect(listProposals(ALICE).map((p) => p.action)).toEqual(['add']);
+		expect(proposalsWith(ALICE, 'pending').map((p) => p.action)).toEqual(['add']);
 		wipeProfile(ALICE);
 		expect(db.select().from(profileProposals).all()).toEqual([]);
+	});
+});
+
+describe('learning applied in one step', () => {
+	const later = new Date(NOW.getTime() + 1000);
+	const learn = (row: Parameters<typeof applyLearned>[1], user = ALICE) =>
+		applyLearned(user, { source: 'test', ...row }, later)!;
+
+	it('writes the entry and records its id, as inferred unless the person said it outright', () => {
+		const implied = learn({ action: 'add', path: 'work/tools', claim: 'Uses Neovim daily.', quote: 'I use neovim', basis: 'implied' });
+		const stated = learn({ action: 'add', path: 'work/tools', claim: 'Uses Docker at work.', quote: 'I use docker at work', basis: 'stated' });
+		const byClaim = (c: string) => listEntries(ALICE, later).find((e) => e.claim === c)!;
+		expect(implied).toMatchObject({ status: 'approved', appliedEntryId: byClaim('Uses Neovim daily.').id });
+		expect(byClaim('Uses Neovim daily.').source).toBe('inferred');
+		expect(stated.appliedEntryId).toBe(byClaim('Uses Docker at work.').id);
+		expect(byClaim('Uses Docker at work.').source).toBe('stated');
+	});
+
+	it('returns null and leaves no row when the store refuses the line', () => {
+		expect(applyLearned(ALICE, { source: 'test', action: 'add', path: 'work/tools', claim: 'short', quote: 'q' }, later)).toBeNull();
+		expect(applyLearned(ALICE, { source: 'test', action: 'add', path: 'hobbies/knitting', claim: 'Uses Neovim daily.', quote: 'q' }, later)).toBeNull();
+		expect(db.select().from(profileProposals).all()).toEqual([]);
+	});
+
+	it('applies what was left pending, and counts only what went in', () => {
+		saveProposals(ALICE, [
+			{ source: 't', action: 'add', path: 'work/tools', claim: 'Uses Neovim daily.', quote: 'nvim' },
+			{ source: 't', action: 'add', path: 'work/tools', claim: 'x', quote: 'nvim' }
+		], NOW);
+		expect(applyPending(ALICE, later)).toBe(1);
+		expect(listEntries(ALICE, later).map((e) => e.claim)).toEqual(['Uses Neovim daily.']);
+		expect(proposalsWith(ALICE, 'pending')).toEqual([]);
+	});
+
+	it('takes back an add by deleting the entry, and marks the row undone', () => {
+		const p = learn({ action: 'add', path: 'work/tools', claim: 'Uses Neovim daily.', quote: 'nvim' });
+		const undone = undoLearned(ALICE, p.id, later);
+		expect(undone.status).toBe('undone');
+		expect(listEntries(ALICE, later)).toEqual([]);
+		expect(proposalsWith(ALICE, 'undone').map((r) => r.id)).toEqual([p.id]);
+		expect(() => undoLearned(ALICE, p.id, later)).toThrow(ProfileNotFound);
+	});
+
+	it('takes back an update by making the previous version active again', () => {
+		const { entry } = add({ claim: 'Works at Acme in sales.' }, 'survey');
+		const p = learn({ action: 'update', entryId: entry.id, claim: 'Works at Acme in marketing.', quote: 'marketing now' });
+		expect(listEntries(ALICE, later)[0].claim).toBe('Works at Acme in marketing.');
+		undoLearned(ALICE, p.id, later);
+		expect(listEntries(ALICE, later).map((e) => [e.id, e.claim])).toEqual([[entry.id, 'Works at Acme in sales.']]);
+	});
+
+	it('takes back a retirement by making the entry active again', () => {
+		const { entry } = add({ claim: 'Plays squash weekly.' });
+		const p = learn({ action: 'retire', entryId: entry.id });
+		expect(listEntries(ALICE, later)).toEqual([]);
+		undoLearned(ALICE, p.id, later);
+		expect(listEntries(ALICE, later).map((e) => e.id)).toEqual([entry.id]);
+	});
+
+	it('answers as not found for someone else’s change', () => {
+		const p = learn({ action: 'add', path: 'work/tools', claim: 'Uses Neovim daily.', quote: 'nvim' });
+		expect(() => undoLearned(BOB, p.id, later)).toThrow(ProfileNotFound);
+		expect(listEntries(ALICE, later)).toHaveLength(1);
+	});
+
+	it('lists what can still be undone, and leaves out a change whose entry was since forgotten', () => {
+		const kept = learn({ action: 'add', path: 'work/tools', claim: 'Uses Neovim daily.', quote: 'nvim' });
+		const gone = learn({ action: 'add', path: 'work/tools', claim: 'Uses Docker at work.', quote: 'docker' });
+		expect(recentLearned(ALICE).map((c) => c.id).sort()).toEqual([kept.id, gone.id].sort());
+		deleteEntry(ALICE, gone.appliedEntryId!);
+		const [only, ...rest] = recentLearned(ALICE);
+		expect(rest).toEqual([]);
+		expect(only).toMatchObject({ id: kept.id, entry: { claim: 'Uses Neovim daily.' } });
+		expect(recentLearned(BOB)).toEqual([]);
+	});
+
+	it('shows an update with the line it replaced', () => {
+		const { entry } = add({ claim: 'Works at Acme in sales.' });
+		learn({ action: 'update', entryId: entry.id, claim: 'Works at Acme in marketing.', quote: 'marketing now' });
+		expect(recentLearned(ALICE)[0]).toMatchObject({ was: 'Works at Acme in sales.' });
 	});
 });
 
@@ -739,16 +842,159 @@ describe('time passing', () => {
 		saveProposals(ALICE, [{ action: 'retire', entryId: entry.id, source: 't' }], NOW);
 		expect(expireDue(new Date(NOW.getTime() + 2 * DAY))).toBe(1);
 		expect(db.select().from(profileEntries).all()[0].status).toBe('expired');
-		expect(listProposals(ALICE)).toEqual([]);
+		expect(proposalsWith(ALICE, 'pending')).toEqual([]);
+	});
+});
+
+describe('lapsing', () => {
+	const old = new Date(NOW.getTime() - (LIMITS.lapseDays + 1) * DAY);
+	const statusOf = (id: string) => db.select().from(profileEntries).where(eqId(id)).get()!.status;
+
+	it('retires an old goal and an old inferred line, and keeps what a person stated', () => {
+		const goal = add({ domain: 'life', subdomain: 'commitments', kind: 'goal', claim: 'Training for a marathon.' }, 'stated', ALICE, old).entry;
+		const inferred = add({ claim: 'Uses Neovim daily.', quote: 'I use nvim' }, 'inferred', ALICE, old).entry;
+		const fact = add({ claim: 'Works at Acme in sales.' }, 'stated', ALICE, old).entry;
+		const pref = add({ domain: 'interests', subdomain: 'taste', kind: 'preference', claim: 'Prefers trains to flying.' }, 'stated', ALICE, old).entry;
+		expect(lapseStale(NOW)).toBe(2);
+		expect(statusOf(goal.id)).toBe('expired');
+		expect(statusOf(inferred.id)).toBe('expired');
+		expect(statusOf(fact.id)).toBe('active');
+		expect(statusOf(pref.id)).toBe('active');
 	});
 
-	it('asks about a few entries nobody has confirmed for a year, once each', () => {
-		for (let i = 0; i < 5; i++) add({ claim: nth(i) });
-		const nextYear = new Date(NOW.getTime() + 366 * DAY);
-		expect(raiseStillTrue(ALICE, nextYear)).toBe(3);
-		expect(raiseStillTrue(ALICE, nextYear)).toBe(0);
-		expect(listProposals(ALICE).every((p) => p.action === 'confirm' && p.entry)).toBe(true);
-		expect(raiseStillTrue(ALICE, new Date(NOW.getTime() + DAY))).toBe(0);
+	it('keeps a pinned goal, and an entry the learning job saw again', () => {
+		const pinned = add({ domain: 'life', subdomain: 'commitments', kind: 'goal', claim: 'Training for a marathon.', pinned: true }, 'stated', ALICE, old).entry;
+		const seen = add({ domain: 'life', subdomain: 'commitments', kind: 'goal', claim: 'Learning to sail this year.' }, 'stated', ALICE, old).entry;
+		touchSeen(ALICE, [seen.id], new Date(NOW.getTime() - DAY));
+		expect(lapseStale(NOW)).toBe(0);
+		expect(statusOf(pinned.id)).toBe('active');
+		expect(statusOf(seen.id)).toBe('active');
+	});
+
+	it('keeps a goal that is not yet old enough', () => {
+		const young = add({ domain: 'life', subdomain: 'commitments', kind: 'goal', claim: 'Training for a marathon.' }, 'stated', ALICE, new Date(NOW.getTime() - (LIMITS.lapseDays - 1) * DAY)).entry;
+		expect(lapseStale(NOW)).toBe(0);
+		expect(statusOf(young.id)).toBe('active');
+	});
+
+	it('drops what was being watched for more than sixty days, and nothing else', () => {
+		saveProposals(ALICE, [{ source: 't', action: 'add', path: 'work/tools', claim: 'Uses Emacs at home.', quote: 'emacs' }], new Date(NOW.getTime() - 61 * DAY), 'watching');
+		saveProposals(ALICE, [{ source: 't', action: 'add', path: 'work/tools', claim: 'Uses Zed at home.', quote: 'zed' }], new Date(NOW.getTime() - 59 * DAY), 'watching');
+		saveProposals(ALICE, [{ source: 't', action: 'add', path: 'work/tools', claim: 'Uses Vim at home.', quote: 'vim' }], new Date(NOW.getTime() - 90 * DAY));
+		lapseStale(NOW);
+		expect(proposalsWith(ALICE, 'watching').map((p) => p.claim)).toEqual(['Uses Zed at home.']);
+		expect(proposalsWith(ALICE, 'pending')).toHaveLength(1);
+	});
+});
+
+describe('replies', () => {
+	const reply = (claim: string, source: 'stated' | 'survey' | 'inferred' | 'imported' = 'stated') =>
+		add({ domain: 'identity', subdomain: 'replies', kind: 'fact', claim, quote: source === 'inferred' ? 'said so' : undefined }, source);
+
+	it('is stored as a preference whatever kind it was filed as', () => {
+		expect(reply('Wants short answers.').entry.kind).toBe('preference');
+		expect(add({ domain: 'identity', subdomain: 'replies', kind: 'constraint', claim: 'Never use bullet lists.' }).entry.kind).toBe('preference');
+	});
+
+	it('holds eight entries and refuses a ninth that was not stated', () => {
+		for (let i = 0; i < 8; i++) reply(`Reply preference number ${i}.`, 'survey');
+		expect(() => reply('Reply preference number 8.', 'survey')).toThrow(/already holds 8/);
+		expect(() => reply('Reply preference number 9.', 'inferred')).toThrow(/already holds 8/);
+		expect(reply('Reply preference number 10.').overCap).toBe(true);
+	});
+});
+
+describe('the brief', () => {
+	let tick = 0;
+	const addAt = (input: Parameters<typeof add>[0], source: 'stated' | 'survey' | 'inferred' | 'imported' = 'stated') =>
+		add(input, source, ALICE, new Date(NOW.getTime() - 3_600_000 + tick++ * 1000));
+	const briefLines = (task = 'chat') =>
+		profileBlock(ALICE, task, NOW).split('\n').filter((l) => l.startsWith('- '));
+	const sample = () => {
+		tick = 0;
+		addAt({ domain: 'work', subdomain: 'organisation', claim: 'Works at Acme.' });
+		addAt({ domain: 'work', subdomain: 'role', claim: 'Staff engineer.' });
+		addAt({ domain: 'interests', subdomain: 'pursuits', kind: 'goal', claim: 'Wants to run a marathon.' });
+		addAt({ domain: 'life', subdomain: 'constraints', kind: 'constraint', claim: 'Vegetarian.' });
+		addAt({ domain: 'identity', subdomain: 'basics', claim: 'Tama; lives in Auckland.' });
+		addAt({ domain: 'identity', subdomain: 'replies', kind: 'preference', claim: 'Keep replies short.' });
+		addAt({ domain: 'interests', subdomain: 'taste', kind: 'preference', claim: 'Likes strong coffee.' });
+		addAt({ domain: 'work', subdomain: 'tools', claim: 'Uses Neovim daily.' });
+	};
+
+	it('fills itself by rank when nothing is pinned', () => {
+		sample();
+		const block = profileBlock(ALICE, 'chat', NOW).split('\n');
+		expect(block.filter((l) => l.startsWith('- ') && !l.includes('short'))).toEqual([
+			'- Tama; lives in Auckland.',
+			'- Vegetarian.',
+			'- Wants to run a marathon.',
+			// Role and organisation share a rank, newest written first.
+			'- Staff engineer.',
+			'- Works at Acme.',
+			'- Likes strong coffee.'
+		]);
+		// Neovim is a tools fact: the chat agent finds it by lookup.
+		expect(block.join('\n')).not.toContain('Neovim');
+	});
+
+	it('puts a pinned entry ahead of better-ranked ones', () => {
+		sample();
+		addAt({ domain: 'work', subdomain: 'tools', claim: 'Uses Docker for every service.', pinned: true });
+		const lines = briefLines();
+		expect(lines[0]).toBe('- Uses Docker for every service.');
+		expect(lines[1]).toBe('- Tama; lives in Auckland.');
+	});
+
+	it('never carries a private or personal unpinned entry, or anything on a person’s card', () => {
+		sample();
+		const aroha = createEntity(ALICE, { kind: 'person', name: 'Aroha', relation: 'partner' });
+		addAt({ domain: 'life', subdomain: 'health', kind: 'constraint', claim: 'Coeliac; avoids gluten.' });
+		addAt({ domain: 'life', subdomain: 'home', kind: 'goal', claim: 'Wants to buy in Raglan.' });
+		addAt({ domain: 'identity', subdomain: 'culture', kind: 'constraint', claim: 'Observes Ramadan each year.' });
+		addAt({ domain: 'people', subdomain: aroha.id, kind: 'constraint', claim: 'Aroha is allergic to shellfish.' });
+		const text = profileBlock(ALICE, 'chat', NOW);
+		for (const absent of ['Coeliac', 'Raglan', 'Ramadan', 'shellfish']) expect(text).not.toContain(absent);
+		expect(briefOf(ALICE, 'chat', NOW).every((e) => e.sensitivity === 'normal' && e.domain !== 'people')).toBe(true);
+	});
+
+	it(`stays within ${LIMITS.briefChars} characters however much qualifies`, () => {
+		tick = 0;
+		for (const sub of ['pursuits', 'taste', 'learning']) {
+			for (let i = 0; i < 20; i++) addAt({ domain: 'interests', subdomain: sub, kind: 'goal', claim: `Goal ${sub} number ${i}, worded at some length.` });
+		}
+		const lines = briefLines();
+		expect(lines.length).toBeGreaterThan(10);
+		expect(lines.length).toBeLessThan(60);
+		expect(lines.reduce((n, l) => n + l.length + 1, 0)).toBeLessThanOrEqual(LIMITS.briefChars);
+	});
+
+	it('is identical across two calls, and across a touch from the learning job', () => {
+		sample();
+		const first = profileBlock(ALICE, 'chat', NOW);
+		expect(profileBlock(ALICE, 'chat', NOW)).toBe(first);
+		touchSeen(ALICE, listEntries(ALICE, NOW).map((e) => e.id), new Date(NOW.getTime() + DAY));
+		expect(profileBlock(ALICE, 'chat', NOW)).toBe(first);
+	});
+
+	it('renders reply preferences last, under their own line', () => {
+		sample();
+		const lines = profileBlock(ALICE, 'chat', NOW).split('\n');
+		const at = lines.findIndex((l) => l.startsWith('How they like to be answered.'));
+		expect(at).toBeGreaterThan(0);
+		expect(lines.slice(at + 1)).toEqual(['- Keep replies short.']);
+		expect(lines.slice(0, at)).not.toContain('- Keep replies short.');
+	});
+
+	it('shows a coding agent its tools and reply preferences and nothing from life', () => {
+		sample();
+		addAt({ domain: 'life', subdomain: 'routines', kind: 'preference', claim: 'Runs before breakfast.' });
+		const text = profileBlock(ALICE, 'coding', NOW);
+		expect(text).toContain('- Uses Neovim daily.');
+		expect(text).toContain('- Keep replies short.');
+		for (const absent of ['Vegetarian', 'Tama', 'Runs before', 'marathon', 'coffee', 'Acme', 'Staff engineer']) {
+			expect(text).not.toContain(absent);
+		}
 	});
 });
 

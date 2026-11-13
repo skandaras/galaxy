@@ -8,9 +8,9 @@
 		entryMarks,
 		pathOptions,
 		placeLabel,
-		proposalWords,
+		learnedWords,
 		readingText,
-		type ProposalAction,
+		type LearnedAction,
 		type ReadingView
 	} from '$lib/profile-view';
 	import { stepFor } from '$lib/survey';
@@ -44,16 +44,14 @@
 		limits: { briefChars: number; claimMax: number };
 	}
 
-	interface Proposal {
+	interface Learned {
 		id: string;
-		action: ProposalAction;
-		path: string | null;
-		kind: string | null;
-		claim: string | null;
-		person: { kind: string; relation: string } | null;
+		action: LearnedAction;
 		quote: string | null;
 		why: string;
+		decidedAt: string | null;
 		entry: { id: string; claim: string; place: string } | null;
+		was: string | null;
 	}
 	interface Candidate {
 		id: string;
@@ -80,7 +78,7 @@
 			| null;
 	}
 	interface Learning {
-		proposals: Proposal[];
+		learned: Learned[];
 		candidates: Candidate[];
 		enabled: boolean;
 		scheduleEnabled: boolean;
@@ -103,7 +101,6 @@
 	let editing = $state<{ id: string; claim: string } | null>(null);
 	let versions = $state<{ id: string; list: { claim: string; status: string }[] } | null>(null);
 	let learning = $state<Learning | null>(null);
-	let deciding = $state<{ id: string; claim: string; path: string; kind: string } | null>(null);
 	let busy = $state<'look' | 'read' | null>(null);
 
 	let draft = $state({ path: '', kind: 'fact', claim: '', pinned: false, until: '' });
@@ -114,9 +111,7 @@
 	const blank = $derived(!!view && view.count === 0 && view.entities.length === 0);
 	const paths = $derived(view ? pathOptions(view.domains) : []);
 	const skillsWaiting = $derived(learning?.candidates.filter((c) => c.status === 'pending') ?? []);
-	const waiting = $derived((learning?.proposals.length ?? 0) + skillsWaiting.length);
 	const reading = $derived(readingText(learning?.reading ?? null));
-	const known = (path: string | null) => paths.some((p) => p.value.toLowerCase() === (path ?? '').toLowerCase());
 
 	async function load() {
 		const [res, agents, learnt] = await Promise.all([
@@ -162,16 +157,9 @@
 		return true;
 	}
 
-	async function decideProposal(p: Proposal, approve: boolean) {
-		const edits = deciding?.id === p.id ? deciding : null;
-		const body = edits ? { approve, claim: edits.claim, path: edits.path, kind: edits.kind } : { approve };
-		const words = proposalWords(p.action);
-		if (await send(p.id, `/api/profile/proposals/${p.id}`, 'POST', body, approve ? `${words.yes}: done.` : `${words.no}: done.`)) {
-			if (edits) deciding = null;
-		} else {
-			// Gone or refused, the list may have moved under it.
-			await load();
-		}
+	async function undo(p: Learned) {
+		// Gone or refused, the list may have moved under it.
+		if (!(await send(p.id, `/api/profile/proposals/${p.id}`, 'DELETE', undefined, learnedWords(p.action).done))) await load();
 	}
 
 	async function decideSkill(c: Candidate, approve: boolean) {
@@ -203,12 +191,12 @@
 			notice = { at: 'learning', text: 'That did not run. Try again.', error: true };
 			return;
 		}
-		const n = result.proposals ?? 0;
+		const n = result.learned ?? 0;
 		notice = {
 			at: 'learning',
 			text: result.ran
 				? n
-					? `${n} waiting for you above.`
+					? `Learned ${n} ${n === 1 ? 'thing' : 'things'}, listed above.`
 					: 'Nothing new worth adding.'
 				: `Nothing to do: ${result.reason}.`
 		};
@@ -343,11 +331,12 @@
 			<article class="card">
 				<h3>Your profile</h3>
 				<p class="hint">
-					What you have told Galaxy about yourself and your world. Every agent gets the pinned brief
-					and a map of the rest, and looks up the rest only when it would change an answer. Agents
-					note things here when you tell them, in your own words; you can undo a note from the reply
-					or change it here. The coding agent sees only your tools and expertise. Private entries
-					reach only a chat agent, and only when it looks them up.
+					What Galaxy knows about you and your world. Every agent gets a short brief and a map of
+					the rest, and looks up the rest only when it would change an answer. The brief fills
+					itself with what matters most, and anything you mark "always" is in it first. Agents note
+					things here when you tell them, and Galaxy learns more from your conversations; either
+					can be undone. The coding agent sees only your tools, your expertise and how you like to
+					be answered. Private entries reach only a chat agent, and only when it looks them up.
 				</p>
 				<div class="row">
 					<span class="meta">{view.count} {view.count === 1 ? 'entry' : 'entries'}</span>
@@ -366,65 +355,29 @@
 			</article>
 
 			{#if learning}
-				<article class="card" class:waiting={waiting > 0}>
-					<h3>Waiting for you{waiting ? ` (${waiting})` : ''}</h3>
-					{#each learning.proposals as p (p.id)}
-						{@const words = proposalWords(p.action)}
+				<article class="card" class:waiting={skillsWaiting.length > 0}>
+					<h3>Recently learned</h3>
+					{#each learning.learned as p (p.id)}
+						{@const words = learnedWords(p.action)}
 						<div class="proposal">
 							<div class="row">
 								<span class="badge">{words.badge}</span>
 								<span class="meta">
-									{p.action === 'add' ? placeLabel(p.path) : p.entry?.place ? placeLabel(p.entry.place) : ''}
-									{#if p.action === 'add' && p.kind} · {p.kind}{/if}
+									{p.entry ? placeLabel(p.entry.place) : ''}
+									{#if p.decidedAt} · {when(new Date(p.decidedAt).getTime())}{/if}
 								</span>
-								{#if p.person}<span class="badge">someone new</span>
-								{:else if p.action === 'add' && !known(p.path)}<span class="badge">new place</span>{/if}
 							</div>
-							{#if deciding?.id === p.id}
-								<input class="claim-edit" aria-label="What is true" bind:value={deciding.claim} maxlength={view.limits.claimMax} />
-								{#if p.action === 'add'}
-									<div class="form">
-										<label>
-											Where
-											<select bind:value={deciding.path}>
-												{#if !known(deciding.path)}<option value={deciding.path}>{placeLabel(deciding.path)}</option>{/if}
-												{#each paths as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
-											</select>
-										</label>
-										<label>
-											Kind
-											<select bind:value={deciding.kind}>
-												{#each KINDS as k (k)}<option value={k}>{k}</option>{/each}
-											</select>
-										</label>
-									</div>
-								{/if}
-							{:else if p.action === 'add' || p.action === 'update'}
-								<div class="claim">{p.claim}</div>
-								{#if p.action === 'update' && p.entry}<div class="was">was: {p.entry.claim}</div>{/if}
-							{:else}
-								<div class="claim">{p.entry?.claim}</div>
-							{/if}
+							<div class="claim">{p.entry?.claim}</div>
+							{#if p.was}<div class="was">was: {p.was}</div>{/if}
 							{#if p.quote}<p class="quote">You said: “{p.quote}”</p>{/if}
 							{#if p.why}<p class="hint why">{p.why}</p>{/if}
 							<div class="row actions">
-								<button class="btn primary" onclick={() => decideProposal(p, true)}>{words.yes}</button>
-								{#if words.editable && deciding?.id !== p.id}
-									<button
-										class="btn"
-										onclick={() =>
-											(deciding = { id: p.id, claim: p.claim ?? '', path: p.path ?? '', kind: p.kind ?? 'fact' })}
-										>Edit</button
-									>
-								{/if}
-								{#if deciding?.id === p.id}
-									<button class="btn" onclick={() => (deciding = null)}>Cancel edit</button>
-								{/if}
-								<button class="btn" onclick={() => decideProposal(p, false)}>{words.no}</button>
+								<button class="btn" onclick={() => undo(p)}>{words.undo}</button>
 							</div>
 							{@render said(p.id)}
 						</div>
 					{/each}
+					{#if skillsWaiting.length}<h4>Skills waiting for you</h4>{/if}
 					{#each skillsWaiting as c (c.id)}
 						<div class="proposal" data-skill-candidate={c.kind}>
 							<div class="row">
@@ -466,11 +419,11 @@
 							{@render said(c.id)}
 						</div>
 					{/each}
-					{#if !waiting}
+					{#if !learning.learned.length && !skillsWaiting.length}
 						<p class="hint">
-							Nothing waiting. Galaxy reads your new conversations for things about you and your
-							world, and anything it finds waits here: nothing reaches your agents until you approve
-							it, and what you turn down is not proposed again.
+							Nothing yet. Galaxy reads your new conversations for things about you and your world
+							and adds the few that will matter later. Each one is listed here with the words it
+							came from, and undoing one means it is not learned again.
 						</p>
 					{/if}
 					<div class="row learn">
@@ -526,7 +479,7 @@
 						True until (optional)
 						<input type="date" bind:value={draft.until} />
 					</label>
-					<label class="chk"><input type="checkbox" bind:checked={draft.pinned} /> pin to the brief</label>
+					<label class="chk"><input type="checkbox" bind:checked={draft.pinned} /> always in the brief</label>
 				</div>
 				<button class="btn primary" disabled={!draft.claim.trim() || !draft.path} onclick={add}>Add</button>
 				{@render said('add')}
@@ -587,9 +540,9 @@
 												class="btn ghost"
 												disabled={e.sensitivity === 'private'}
 												onclick={() =>
-													send(e.id, `/api/profile/entries/${e.id}`, 'PATCH', { pinned: !e.pinned }, e.pinned ? 'Unpinned.' : 'Pinned.')}
+													send(e.id, `/api/profile/entries/${e.id}`, 'PATCH', { pinned: !e.pinned }, e.pinned ? 'Back to automatic.' : 'Always in the brief now.')}
 											>
-												{e.pinned ? 'Unpin' : 'Pin'}
+												{e.pinned ? 'Automatic' : 'Always in brief'}
 											</button>
 											<select
 												aria-label="Who may see it"

@@ -15,8 +15,11 @@ import {
 	KINDS,
 	LIMITS,
 	PATH_SENSITIVITY,
+	REPLIES_PATH,
 	SEED_SUBDOMAINS,
 	SENSITIVITIES,
+	capFor,
+	lapses,
 	type Domain,
 	type EntityKind,
 	type Kind,
@@ -27,9 +30,11 @@ import { emptyDraft, type Draft, type DraftEntry, type DraftPerson } from '$lib/
 /**
  * The Profile: what a person has told Galaxy about themselves and their world.
  *
- * Descriptive only. How an agent should reply is platform configuration, and a
- * store that held both would have the person's facts competing with
- * instructions about tone in the same block.
+ * Descriptive, with one exception: `identity/replies` holds how this person
+ * likes to be answered. It was left out for platform settings to carry, which
+ * were never written, so a person who said "keep it short" was heard by one
+ * chat and no other. It is one small place rendered apart from the rest, so
+ * their facts do not compete with it in the block.
  *
  * Every bound is enforced here rather than left to a prompt, because a prompt
  * is a request and a model under a long context does not always honour it.
@@ -64,9 +69,9 @@ interface ProfileScope {
  */
 export const PROFILE_SCOPES: Record<string, ProfileScope> = {
 	chat: { paths: '*', private: true, names: true, tools: true },
-	coding: { paths: ['work/tools', 'work/expertise'], private: false, names: false, tools: true },
+	coding: { paths: ['work/tools', 'work/expertise', REPLIES_PATH], private: false, names: false, tools: true },
 	'deep-research': {
-		paths: ['work/expertise', 'interests'],
+		paths: ['work/expertise', 'interests', REPLIES_PATH],
 		private: false,
 		names: false,
 		tools: false
@@ -526,7 +531,7 @@ export function addEntry(
 			`This profile is full at ${LIMITS.entriesPerUser} entries. Remove or merge some first.`
 		);
 	}
-	const cap = prepared.domain === 'people' ? LIMITS.entriesPerPerson : LIMITS.entriesPerSubdomain;
+	const cap = capFor(prepared.domain, prepared.subdomain);
 	const inSubdomain = countActive(
 		userId,
 		now,
@@ -609,7 +614,9 @@ function prepareEntry(userId: string, input: EntryInput, source: Source, now: Da
 		domain: input.domain,
 		subdomain,
 		about,
-		kind: input.kind,
+		// Whatever it was filed as, a line about replies is a preference: the
+		// block words that place as theirs to prefer, never as a fact or a rule.
+		kind: `${input.domain}/${subdomain}` === REPLIES_PATH ? 'preference' : input.kind,
 		claim,
 		pinned,
 		sensitivity,
@@ -872,8 +879,64 @@ export function renderLine(e: ProfileEntry, entities: Map<string, ProfileEntity>
 const entityMap = (userId: string) => new Map(listEntities(userId).map((e) => [e.id, e]));
 
 /**
+ * Where an entry stands in the brief, or null for one that is only looked up.
+ *
+ * The brief was what the person pinned and nothing else, so a profile nobody
+ * had curated gave agents a map and a tool they were told most turns do not
+ * need. Now it fills itself in this order and a pin means "always".
+ *
+ * People's cards and anything personal stay behind the lookup unless pinned:
+ * a name on every turn is what makes a reply mention someone for show.
+ */
+function briefRank(e: ProfileEntry, narrow: boolean): number | null {
+	if (e.pinned) return 0;
+	if (e.sensitivity !== 'normal' || e.domain === 'people') return null;
+	const path = `${e.domain}/${e.subdomain}`;
+	if (path === REPLIES_PATH) return 1;
+	if (path === 'identity/basics') return 2;
+	if (e.kind === 'constraint') return 3;
+	if (e.expiresAt) return 4;
+	if (e.kind === 'goal' || path === 'work/projects') return 5;
+	if (path === 'work/role' || path === 'work/organisation') return 6;
+	if (e.kind === 'preference' || e.kind === 'pattern') return 7;
+	// A task that sees two or three places is shown what is in them. The chat
+	// agent sees everything, and its long tail stays behind the lookup.
+	return narrow ? 8 : null;
+}
+
+/**
+ * The entries a task's brief carries, within the budget. Newest first inside a
+ * rank by when the entry was written, not when it was last borne out: the
+ * learning job touches that on every run, and an order that moved with it
+ * would change the prompt prefix twice a day for nothing.
+ */
+function briefEntries(entries: ProfileEntry[], narrow: boolean): ProfileEntry[] {
+	const ranked = entries
+		.map((e) => ({ e, rank: briefRank(e, narrow) }))
+		.filter((x): x is { e: ProfileEntry; rank: number } => x.rank !== null)
+		.sort(
+			(a, b) =>
+				a.rank - b.rank ||
+				b.e.createdAt.getTime() - a.e.createdAt.getTime() ||
+				(a.e.id < b.e.id ? -1 : 1)
+		);
+	const budget = briefBudget();
+	const chosen: ProfileEntry[] = [];
+	let used = 0;
+	for (const { e } of ranked) {
+		const size = briefLine(e).length + 1;
+		// A pin is the person's decision and was checked against the budget when
+		// it was made; lowering the budget since must not drop it.
+		if (!e.pinned && used + size > budget) continue;
+		chosen.push(e);
+		used += size;
+	}
+	return chosen;
+}
+
+/**
  * The block every turn of a task carries: what is held, the names that matter,
- * and what the person pinned.
+ * the brief, and how the person likes to be answered.
  *
  * Built from the rows alone, with no model and no clock beyond expiry, so an
  * unchanged profile gives the same bytes every time and the prompt prefix it
@@ -923,8 +986,24 @@ export function profileBlock(userId: string, task: string, now = new Date()): st
 		lines.push(`names: ${shown.join(' · ')}`);
 	}
 
-	for (const e of entries) if (e.pinned) lines.push(briefLine(e));
+	const brief = briefEntries(entries, scope.paths !== '*');
+	const isReply = (e: ProfileEntry) => `${e.domain}/${e.subdomain}` === REPLIES_PATH;
+	for (const e of brief) if (!isReply(e)) lines.push(briefLine(e));
+	const replies = brief.filter(isReply);
+	if (replies.length) {
+		// Last and labelled, because the header calls everything above it
+		// background and these are the one part meant to be acted on.
+		lines.push('How they like to be answered. Follow these where the writing rules for this instance leave room:');
+		for (const e of replies) lines.push(briefLine(e));
+	}
 	return lines.join('\n');
+}
+
+/** The entries a task's brief carries, for the check that asks whether they intrude. */
+export function briefOf(userId: string, task: string, now = new Date()): ProfileEntry[] {
+	const scope = PROFILE_SCOPES[task];
+	if (!scope) return [];
+	return briefEntries(sortEntries(userId, inScope(userId, scope, now)), scope.paths !== '*');
 }
 
 export interface LookupResult {
@@ -1270,7 +1349,7 @@ export function cleanDraft(raw: unknown): Draft {
 			`A draft holds at most ${LIMITS.entriesPerUser} entries and ${LIMITS.entitiesPerUser} people.`
 		);
 	}
-	return { people, entries, notCarried: [], leftOut: [] };
+	return { people, entries, leftOut: [] };
 }
 
 export interface DraftRefusal {
@@ -1385,35 +1464,45 @@ export function confirmDraft(
 export type ProfileProposal = typeof profileProposals.$inferSelect;
 export type NewProposal = Omit<typeof profileProposals.$inferInsert, 'id' | 'userId' | 'status' | 'createdAt'>;
 
-/**
- * At most this many wait for a person at once. Past it the learning job stops
- * proposing, because every proposal costs the person a decision and a queue
- * of a hundred is one nobody reads.
- */
-export const MAX_WAITING = 30;
+/** Things watched at once. Past it the oldest give way, since a watch nothing bears out is noise. */
+export const WATCH_MAX = 40;
+const WATCH_DAYS = 60;
+const DAY_MS = 86_400_000;
 
-/** "Still true?" questions waiting at once: a few at a time, not a year's worth in one go. */
-const MAX_STILL_TRUE = 3;
-const STILL_TRUE_AFTER_MS = 365 * 86_400_000;
-
-export interface WaitingProposal extends ProfileProposal {
-	/** The entry an update, retire or "still true?" is about, as it stands. */
+export interface LearnedChange extends ProfileProposal {
+	/** The entry the change left, or for a retirement the one it retired. */
 	entry: { id: string; claim: string; place: string } | null;
+	/** What an update replaced. */
+	was: string | null;
 }
 
-/** Pending proposals, newest first, with the entry each is about. */
-export function listProposals(userId: string): WaitingProposal[] {
+/**
+ * What the learning job changed lately that can still be undone, newest first.
+ * A change whose entry has since been edited or forgotten is left out: there
+ * is nothing an undo could put back.
+ */
+export function recentLearned(userId: string, limit = 20): LearnedChange[] {
 	const rows = db
 		.select()
 		.from(profileProposals)
-		.where(and(eq(profileProposals.userId, userId), eq(profileProposals.status, 'pending')))
-		.orderBy(desc(profileProposals.createdAt), asc(profileProposals.id))
+		.where(and(eq(profileProposals.userId, userId), eq(profileProposals.status, 'approved')))
+		.orderBy(desc(profileProposals.decidedAt), asc(profileProposals.id))
+		.limit(limit * 3)
 		.all();
 	const entities = entityMap(userId);
-	return rows.map((p) => {
-		const e = p.entryId ? ownEntry(userId, p.entryId) : null;
-		return { ...p, entry: e ? { id: e.id, claim: e.claim, place: pathLabel(e, entities) } : null };
-	});
+	const out: LearnedChange[] = [];
+	for (const p of rows) {
+		const e = ownEntry(userId, (p.action === 'retire' ? p.entryId : p.appliedEntryId) ?? '');
+		if (!e || e.status !== (p.action === 'retire' ? 'expired' : 'active')) continue;
+		const before = p.action === 'update' && e.supersedes ? ownEntry(userId, e.supersedes) : null;
+		out.push({
+			...p,
+			entry: { id: e.id, claim: e.claim, place: pathLabel(e, entities) },
+			was: before?.claim ?? null
+		});
+		if (out.length >= limit) break;
+	}
+	return out;
 }
 
 /** Proposals by status, newest first, for the learning job's dedup and its prompt. */
@@ -1427,19 +1516,91 @@ export function proposalsWith(userId: string, status: ProfileProposal['status'],
 		.all();
 }
 
-export function countWaiting(userId: string): number {
-	const [{ n }] = db
-		.select({ n: count() })
-		.from(profileProposals)
-		.where(and(eq(profileProposals.userId, userId), eq(profileProposals.status, 'pending')))
-		.all();
-	return n;
-}
-
-export function saveProposals(userId: string, rows: NewProposal[], now = new Date()): void {
+export function saveProposals(
+	userId: string,
+	rows: NewProposal[],
+	now = new Date(),
+	status: 'pending' | 'watching' = 'pending'
+): void {
 	if (!rows.length) return;
 	db.insert(profileProposals)
-		.values(rows.map((r) => ({ ...r, id: newId(), userId, status: 'pending' as const, createdAt: now })))
+		.values(rows.map((r) => ({ ...r, id: newId(), userId, status, createdAt: now })))
+		.run();
+}
+
+/**
+ * Write one thing the learning job decided on, and keep the record of it.
+ * Goes through `decideProposal`, so a learned line passes every check an
+ * approved one did. A line the store refuses (a full place, a claim out of
+ * bounds) leaves nothing behind and returns null.
+ */
+export function applyLearned(userId: string, row: NewProposal, now = new Date()): ProfileProposal | null {
+	const id = newId();
+	db.insert(profileProposals).values({ ...row, id, userId, status: 'pending', createdAt: now }).run();
+	return settle(userId, id, now);
+}
+
+function settle(userId: string, id: string, now: Date): ProfileProposal | null {
+	try {
+		return decideProposal(userId, id, true, {}, now);
+	} catch (err) {
+		if (!(err instanceof ProfileError)) throw err;
+		db.delete(profileProposals).where(eq(profileProposals.id, id)).run();
+		return null;
+	}
+}
+
+/** Apply what the approval queue left waiting. It held thirty and then stopped the job. */
+export function applyPending(userId: string, now = new Date()): number {
+	return proposalsWith(userId, 'pending').filter((p) => settle(userId, p.id, now)).length;
+}
+
+/**
+ * Take back something the learning job did, and never have it learned again:
+ * an undone row is shown to the job with the rejections.
+ */
+export function undoLearned(userId: string, id: string, now = new Date()): ProfileProposal {
+	const p = db
+		.select()
+		.from(profileProposals)
+		.where(
+			and(
+				eq(profileProposals.userId, userId),
+				eq(profileProposals.id, id),
+				eq(profileProposals.status, 'approved')
+			)
+		)
+		.get();
+	if (!p) throw new ProfileNotFound('Nothing like that was learned.');
+	db.transaction(() => {
+		if (p.action === 'retire') {
+			const e = p.entryId ? ownEntry(userId, p.entryId) : null;
+			if (e?.status === 'expired') {
+				db.update(profileEntries)
+					.set({ status: 'active', confirmedAt: now })
+					.where(and(eq(profileEntries.userId, userId), eq(profileEntries.id, e.id)))
+					.run();
+			}
+		} else if (p.appliedEntryId && ownEntry(userId, p.appliedEntryId)) {
+			if (p.action === 'add') deleteEntry(userId, p.appliedEntryId);
+			else if (!undoNote(userId, p.appliedEntryId)) {
+				throw new ProfileError('That line has changed since, so there is nothing to put back. Edit it instead.');
+			}
+		}
+		db.update(profileProposals)
+			.set({ status: 'undone', decidedAt: now })
+			.where(eq(profileProposals.id, id))
+			.run();
+	});
+	return { ...p, status: 'undone', decidedAt: now };
+}
+
+/** Held entries the learning job saw borne out again, which is what keeps a lapsing one. */
+export function touchSeen(userId: string, ids: string[], now = new Date()): void {
+	if (!ids.length) return;
+	db.update(profileEntries)
+		.set({ confirmedAt: now })
+		.where(and(eq(profileEntries.userId, userId), inArray(profileEntries.id, ids)))
 		.run();
 }
 
@@ -1451,13 +1612,13 @@ function expire(userId: string, id: string): void {
 }
 
 /**
- * Approve or turn down something the learning job proposed.
+ * Apply or turn down something the learning job raised.
  *
- * Approving an addition is the only way an `inferred` entry is written, and
- * the person may reword it, move it or change its kind first. A rejection is
- * kept, so the job never proposes it again. A proposal about an entry that has
- * since gone is closed as not found rather than kept as a rejection: the
- * person did not turn it down.
+ * This is the only way an `inferred` entry is written. The job calls it as
+ * soon as a line clears the bar; it used to wait for the person to, and the
+ * edits are what they could change first. A rejection is kept, so the job
+ * never raises it again. A change to an entry that has since gone is closed
+ * as not found rather than kept as a rejection: nobody turned it down.
  */
 export function decideProposal(
 	userId: string,
@@ -1483,20 +1644,20 @@ export function decideProposal(
 		db.delete(profileProposals).where(eq(profileProposals.id, id)).run();
 		throw new ProfileNotFound('That entry has gone, so there is nothing left to decide.');
 	}
+	let appliedEntryId: string | null = null;
 	const close = (status: 'approved' | 'rejected') =>
 		db.update(profileProposals)
-			.set({ status, decidedAt: now })
+			.set({ status, decidedAt: now, appliedEntryId })
 			.where(eq(profileProposals.id, id))
 			.run();
 
 	if (!approve) {
-		// "Not any more" to a "still true?" is the person saying it has ended.
-		db.transaction(() => {
-			if (p.action === 'confirm') expire(userId, entry!.id);
-			close('rejected');
-		});
+		close('rejected');
 		return { ...p, status: 'rejected', decidedAt: now };
 	}
+	// What the person said outright is theirs to have said: it is durable and
+	// carries no "(inferred)" mark. Anything else was read into what they wrote.
+	const source: Source = p.basis === 'stated' ? 'stated' : 'inferred';
 
 	db.transaction(() => {
 		if (p.action === 'add') {
@@ -1513,7 +1674,7 @@ export function decideProposal(
 				);
 			}
 			const place = draftPlace(userId, path, now);
-			addEntry(
+			appliedEntryId = addEntry(
 				userId,
 				{
 					...place,
@@ -1526,12 +1687,12 @@ export function decideProposal(
 					messageId: p.messageId,
 					expiresAt: untilDate(p.until)
 				},
-				{ source: 'inferred', now }
-			);
+				{ source, now }
+			).entry.id;
 		} else if (p.action === 'update') {
 			// A merge proposed to bring a full place back under its cap has no quote
 			// of its own; the merged line keeps the words and source it had.
-			correctEntry(
+			appliedEntryId = correctEntry(
 				userId,
 				entry!.id,
 				{
@@ -1539,19 +1700,14 @@ export function decideProposal(
 					quote: p.quote ?? entry!.quote,
 					messageId: p.quote ? p.messageId : entry!.messageId
 				},
-				{ source: p.quote ? 'inferred' : entry!.source, now }
-			);
-		} else if (p.action === 'retire') {
-			expire(userId, entry!.id);
+				{ source: p.quote ? source : entry!.source, now }
+			).id;
 		} else {
-			db.update(profileEntries)
-				.set({ confirmedAt: now })
-				.where(and(eq(profileEntries.userId, userId), eq(profileEntries.id, entry!.id)))
-				.run();
+			expire(userId, entry!.id);
 		}
 		close('approved');
 	});
-	return { ...p, status: 'approved', decidedAt: now };
+	return { ...p, status: 'approved', decidedAt: now, appliedEntryId };
 }
 
 /**
@@ -1577,28 +1733,39 @@ export function expireDue(now = new Date()): number {
 }
 
 /**
- * Ask about entries nobody has confirmed for a year. A few at a time, and
- * none about an entry something is already waiting on.
+ * Retire what nothing has borne out: a goal, a project or an inferred line
+ * the learning job has not seen again in `lapseDays`, and anything it has
+ * been watching for two months. This replaced asking the person, once a year,
+ * whether each entry was still true, which was a queue of questions about
+ * things they had stopped thinking about.
+ *
+ * A durable entry never lapses. It goes when the person says otherwise.
  */
-export function raiseStillTrue(userId: string, now = new Date()): number {
-	const pending = proposalsWith(userId, 'pending');
-	const asking = pending.filter((p) => p.action === 'confirm').length;
-	const room = Math.min(MAX_STILL_TRUE - asking, MAX_WAITING - pending.length);
-	if (room <= 0) return 0;
-	const spoken = new Set(pending.map((p) => p.entryId).filter(Boolean));
-	const stale = listEntries(userId, now)
-		.filter((e) => e.confirmedAt.getTime() < now.getTime() - STILL_TRUE_AFTER_MS && !spoken.has(e.id))
-		.sort((a, b) => a.confirmedAt.getTime() - b.confirmedAt.getTime())
-		.slice(0, room);
-	saveProposals(
-		userId,
-		stale.map((e) => ({
-			action: 'confirm' as const,
-			entryId: e.id,
-			why: 'Nobody has said this is still true for a year.',
-			source: `still-true ${isoDate(now)}`
-		})),
-		now
-	);
+export function lapseStale(now = new Date()): number {
+	const stale = db
+		.select()
+		.from(profileEntries)
+		.where(
+			and(
+				eq(profileEntries.status, 'active'),
+				lte(profileEntries.confirmedAt, new Date(now.getTime() - LIMITS.lapseDays * DAY_MS))
+			)
+		)
+		.all()
+		.filter(lapses)
+		.map((e) => e.id);
+	db.transaction((tx) => {
+		if (stale.length) {
+			tx.update(profileEntries).set({ status: 'expired' }).where(inArray(profileEntries.id, stale)).run();
+		}
+		tx.delete(profileProposals)
+			.where(
+				and(
+					eq(profileProposals.status, 'watching'),
+					lte(profileProposals.createdAt, new Date(now.getTime() - WATCH_DAYS * DAY_MS))
+				)
+			)
+			.run();
+	});
 	return stale.length;
 }

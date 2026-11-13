@@ -10,7 +10,8 @@
 export const DOMAINS = ['identity', 'work', 'people', 'life', 'interests'] as const;
 export type Domain = (typeof DOMAINS)[number];
 
-export const KINDS = ['fact', 'preference', 'constraint', 'goal'] as const;
+/** A pattern is something seen across separate conversations, never said outright. */
+export const KINDS = ['fact', 'preference', 'constraint', 'goal', 'pattern'] as const;
 export type Kind = (typeof KINDS)[number];
 
 export const ENTITY_KINDS = ['person', 'pet', 'organisation', 'project', 'place'] as const;
@@ -25,7 +26,7 @@ export type Sensitivity = (typeof SENSITIVITIES)[number];
  * son and a dog together and a partner alone.
  */
 export const SEED_SUBDOMAINS: Record<Exclude<Domain, 'people'>, readonly string[]> = {
-	identity: ['basics', 'background', 'culture'],
+	identity: ['basics', 'background', 'culture', 'replies'],
 	work: ['role', 'organisation', 'expertise', 'tools', 'projects'],
 	life: ['home', 'routines', 'commitments', 'logistics', 'constraints', 'health', 'money'],
 	interests: ['pursuits', 'taste', 'learning']
@@ -43,6 +44,50 @@ export const PATH_SENSITIVITY: Record<string, Sensitivity> = {
 	'life/health': 'private',
 	'life/money': 'private'
 };
+
+/**
+ * Where a person's preferences about replies are kept: length, tone, units,
+ * spelling. The one place in a profile that is about the assistant rather
+ * than the person, so it is held small and rendered apart from the rest.
+ */
+export const REPLIES_PATH = 'identity/replies';
+
+/** Places held tighter than the subdomain cap. */
+const PATH_CAPS: Record<string, number> = { [REPLIES_PATH]: 8 };
+
+export function capFor(domain: string, subdomain: string): number {
+	if (domain === 'people') return LIMITS.entriesPerPerson;
+	return PATH_CAPS[`${domain}/${subdomain}`] ?? LIMITS.entriesPerSubdomain;
+}
+
+type Tiered = { kind: string; domain: string; subdomain: string; source: string; expiresAt: unknown };
+
+const FLUID_KINDS: readonly string[] = ['preference', 'goal', 'pattern'];
+const isProject = (e: Tiered) => e.domain === 'work' && e.subdomain === 'projects';
+
+/**
+ * The two tiers. A fact or a constraint the person told Galaxy is durable: it
+ * changes only when they say otherwise. Everything else is fluid, and the
+ * learning job may reword or retire it as the picture shifts.
+ *
+ * Derived from what an entry is rather than stored beside it. A tier column
+ * would have to be kept in step with the kind and the path, and an entry
+ * moved or re-kinded would carry the wrong one.
+ */
+export function isFluid(e: Tiered): boolean {
+	return FLUID_KINDS.includes(e.kind) || isProject(e) || !!e.expiresAt || e.source === 'inferred';
+}
+
+/**
+ * Whether an entry goes when nothing has borne it out for `lapseDays`. Narrower
+ * than fluid: a preference the person stated ("prefers trains to flying")
+ * stays true for years with nobody repeating it, where a goal, a project and
+ * anything read between the lines do not.
+ */
+export function lapses(e: Tiered & { pinned: boolean }): boolean {
+	if (e.pinned || e.expiresAt) return false;
+	return e.source === 'inferred' || e.kind === 'goal' || e.kind === 'pattern' || isProject(e);
+}
 
 export const LIMITS = {
 	entriesPerUser: 500,
@@ -63,6 +108,8 @@ export const LIMITS = {
 	relationMax: 32,
 	subdomainMax: 24,
 	expiryDays: 90,
+	/** A lapsing entry nothing has borne out for this long is retired. */
+	lapseDays: 180,
 	searchLines: 12,
 	/** A subdomain read shows the whole subdomain, so it is held to the subdomain's cap. */
 	pathLines: 25,
