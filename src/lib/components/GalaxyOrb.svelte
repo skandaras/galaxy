@@ -108,6 +108,32 @@
 	 * update and written back after it, as a time in the new duration.
 	 */
 	let orbEl = $state<HTMLElement | null>(null);
+	let desktop = $state(false);
+	let orbWidth = $state(0);
+	let composited: (Animation | null)[] = [];
+	let previousTiming: { duration: number; delay: number }[] = [];
+	$effect(() => {
+		if (!orbEl) return;
+		const media = matchMedia(
+			'(min-width: 721px) and (pointer: fine) and (prefers-reduced-motion: no-preference)'
+		);
+		const sync = () => {
+			desktop = media.matches;
+		};
+		sync();
+		media.addEventListener('change', sync);
+		const observer = new ResizeObserver(([entry]) => {
+			orbWidth = entry.contentRect.width;
+		});
+		observer.observe(orbEl);
+		return () => {
+			media.removeEventListener('change', sync);
+			observer.disconnect();
+			composited.forEach((a) => a?.cancel());
+			composited = [];
+			previousTiming = [];
+		};
+	});
 	let held: (number | null)[] = [];
 	// The orbit itself, not the morph: a dot mid-glide also carries a transition
 	// per orbit property, and getAnimations lists those alongside the orbit, so
@@ -121,12 +147,13 @@
 	$effect.pre(() => {
 		void dots;
 		void swirl;
+		if (desktop) return;
 		held = orbEl ? pipAnimations(orbEl).map((a) => a?.effect?.getComputedTiming().progress ?? null) : [];
 	});
 	$effect(() => {
 		void dots;
 		void swirl;
-		if (!orbEl || !held.length) return;
+		if (desktop || !orbEl || !held.length) return;
 		pipAnimations(orbEl).forEach((a, i) => {
 			const progress = held[i];
 			const timing = a?.effect?.getTiming();
@@ -134,6 +161,72 @@
 			const at = Number(timing.delay ?? 0) + progress * timing.duration;
 			a.currentTime = at < 0 ? at + timing.duration : at;
 		});
+	});
+	$effect(() => {
+		void dots;
+		void swirl;
+		void orbWidth;
+		if (!orbEl || (!desktop && !previousTiming.length)) return;
+		const nextTiming = dots.map((d) => {
+			const duration = swirl * d.period * 1000;
+			return { duration, delay: -duration * d.phase };
+		});
+		pipAnimations(orbEl).forEach((css, i) => {
+			if (!css) return;
+			const active = composited[i] ?? css;
+			const old = previousTiming[i] ?? active.effect?.getTiming();
+			const duration = Number(old?.duration ?? 0);
+			const turns = duration > 0
+				? (Number(active.currentTime ?? 0) - Number(old?.delay ?? 0)) / duration
+				: dots[i].phase;
+			const timing = nextTiming[i];
+			const at = timing.delay + (turns - Math.floor(turns)) * timing.duration;
+			const time = at < 0 ? at + timing.duration : at;
+			css.play();
+			css.currentTime = time;
+			css.startTime = Number(document.timeline.currentTime ?? 0) - time;
+		});
+		composited.forEach((a) => a?.cancel());
+		composited = [];
+		previousTiming = desktop ? nextTiming : [];
+		if (!desktop) return;
+		// Chromium re-resolves custom-property keyframes every frame even when
+		// their inputs are still. Snapshot the resolved transforms after the glide
+		// so steady desktop orbits can run without that style work.
+		let timer: ReturnType<typeof setTimeout>;
+		const frame = requestAnimationFrame(() => {
+			if (!orbEl) return;
+			const glides = orbEl.getAnimations({ subtree: true }).filter((a) => 'transitionProperty' in a);
+			const remaining = Math.max(0, ...glides.map((a) =>
+				Number(a.effect?.getComputedTiming().endTime ?? 0) - Number(a.currentTime ?? 0)
+			));
+			timer = setTimeout(() => {
+				if (!orbEl) return;
+				composited = pipAnimations(orbEl).map((css, i) => {
+					if (!(css?.effect instanceof KeyframeEffect)) return null;
+					const target = css.effect.target;
+					if (!(target instanceof HTMLElement)) return null;
+					const d = dots[i];
+					const frames = css.effect.getKeyframes().map((stop) => {
+						const angle = stop.computedOffset * 2 * Math.PI;
+						const c = Math.round(Math.cos(angle) * 1000) / 1000;
+						const s = Math.round(Math.sin(angle) * 1000) / 1000;
+						// getKeyframes clamps opacity at each stop. Keep the CSS track's
+						// unclamped depth values or interpolation dims the brightest dots.
+						return { ...stop, opacity: d.dim + 0.32 * d.rad * (d.uz * c + d.vz * s) };
+					});
+					const animation = target.animate(frames, css.effect.getTiming());
+					animation.currentTime = css.currentTime;
+					animation.startTime = css.startTime;
+					css.pause();
+					return animation;
+				});
+			}, remaining + 50);
+		});
+		return () => {
+			cancelAnimationFrame(frame);
+			clearTimeout(timer);
+		};
 	});
 </script>
 
@@ -298,11 +391,9 @@
 	 * every dot on its own composited layer, and a layer three or four pixels
 	 * across rasterises too coarsely to keep a border radius, so half the
 	 * sphere drew as little squares. Sampling the orbit as keyframes instead
-	 * keeps the dots in their parent's layer, where they paint at full device
-	 * resolution — and collapses three elements per dot to one. The cost is
-	 * that a transform built from custom properties cannot be handed to the
-	 * compositor; for thirty dots in a space this size that is not a trade
-	 * worth taking back.
+	 * collapses three elements per dot to one. Desktop snapshots the resolved
+	 * keyframes above to avoid evaluating their custom properties every frame;
+	 * the CSS track stays live during a morph and on mobile.
 	 */
 	.pip {
 		position: absolute;
