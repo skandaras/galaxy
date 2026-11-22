@@ -290,6 +290,27 @@ describe('a task that fails', () => {
 		expect(ledger.drain()).toEqual([]);
 	});
 
+	it('puts the worker edits back when the check leaves something it cannot undo', async () => {
+		// Fails the baseline cleanly; after the worker, it leaves a nested
+		// repository behind, which the check's own cleanup cannot remove.
+		const check =
+			'grep -q done src/a.txt || exit 1; echo nested/ >> .gitignore; mkdir nested && cd nested && git init -q && echo x > f && git add f && git -c user.email=t@t -c user.name=t commit -qm n; exit 1';
+		runs = [{ calls: [write('done\n')] }];
+		const { tool } = harness();
+		await expect(tool.execute({ tier: 1, task: 'Put done in a.txt', check })).rejects.toThrow(
+			/not all of it could be undone[\s\S]*read git_status before committing/
+		);
+		expect(readFileSync(abs('src', 'a.txt'), 'utf8')).not.toContain('done');
+	});
+
+	it('leaves nothing staged after a worker that staged its edit failed', async () => {
+		runs = [{ calls: [write('x\n'), { name: 'bash', args: { command: 'git add src/a.txt' } }] }, { calls: [write('y\n')] }];
+		const { tool } = harness();
+		const out = await tool.execute({ tier: 1, task: 'Put done in a.txt', check: CHECK });
+		expect(out).toContain('Task failed');
+		expect(git('diff --cached --name-only')).toBe('');
+	});
+
 	it('names every tier it tried', async () => {
 		const { tool } = harness();
 		const out = await tool.execute({ tier: 2, task: 'Put done in a.txt', check: CHECK });

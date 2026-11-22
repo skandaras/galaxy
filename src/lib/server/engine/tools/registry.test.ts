@@ -62,6 +62,8 @@ const EXPECTED = [
 	'read_file',
 	'grep_files',
 	'git_status',
+	// coding, plan and orchestrate: a shell whose writes are reverted
+	'run_command',
 	// coding, implement mode only
 	'write_file',
 	'edit_file',
@@ -96,6 +98,7 @@ describe('builtinDescriptors', () => {
 		expect(byName.get('read_file')?.note).toBeUndefined();
 		expect(byName.get('bash')?.note).toBe('implement mode only');
 		expect(byName.get('git_push')?.note).toBe('implement mode only');
+		expect(byName.get('run_command')?.note).toMatch(/^plan and orchestrate modes/);
 	});
 
 	it('scopes tools to the tasks that offer them', () => {

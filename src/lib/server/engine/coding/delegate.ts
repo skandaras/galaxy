@@ -13,9 +13,11 @@ import {
 	restoreHead,
 	restoreTree,
 	runCheck,
+	sameFingerprint,
 	treeFingerprint,
 	type CheckResult,
-	type Fingerprint
+	type Fingerprint,
+	fenced
 } from './snapshot';
 import type { ExploreContext } from './explore';
 import { workerTools } from './tools';
@@ -162,14 +164,6 @@ function judge(r: CheckResult): Verdict {
 	return { ok: r.code === 0, code: r.code, output: r.output };
 }
 
-/** Command output is attacker-reachable (test names, file contents), so it is quoted as data. */
-const OUTPUT_BEGIN = '--- BEGIN COMMAND OUTPUT ---';
-const OUTPUT_END = '--- END COMMAND OUTPUT ---';
-function fenced(text: string): string {
-	const safe = text.replaceAll(OUTPUT_END, '--- END COMMAND OUTPUT (quoted) ---').replaceAll(OUTPUT_BEGIN, '--- BEGIN COMMAND OUTPUT (quoted) ---');
-	return `${OUTPUT_BEGIN}\n${safe || '(no output)'}\n${OUTPUT_END}`;
-}
-
 function clip(text: string, max: number): string {
 	const t = text.trim();
 	return t.length > max ? `${t.slice(0, max)}…` : t;
@@ -251,7 +245,7 @@ async function dispatch(ctx: DelegateContext, a: Record<string, unknown>): Promi
 				// Before the first run nothing has changed; after it, earlier
 				// attempts are in the tree and no longer wanted.
 				if (i > 0) {
-					await restoreTree(ctx.workspaceRel, t0.tree);
+					await restoreTree(ctx.workspaceRel, t0.tree, t0);
 					throw new Error(`${err instanceof Error ? err.message : String(err)} The task's changes were reverted.`);
 				}
 				throw err;
@@ -284,7 +278,7 @@ async function dispatch(ctx: DelegateContext, a: Record<string, unknown>): Promi
 			lastRunTier = t;
 			if (aborted()) throw stopped();
 			if (res.failure) {
-				await restoreTree(ctx.workspaceRel, t0.tree);
+				await restoreTree(ctx.workspaceRel, t0.tree, t0);
 				throw new Error(`The worker could not run: ${res.failure} The task's changes were reverted.`);
 			}
 			report = res.answer;
@@ -303,7 +297,21 @@ async function dispatch(ctx: DelegateContext, a: Record<string, unknown>): Promi
 			}
 
 			announce('running', kind, 'checking');
-			verdict = judge(await runCheck(ctx.workspaceRel, check));
+			let checked;
+			try {
+				checked = await runCheck(ctx.workspaceRel, check);
+			} catch (err) {
+				// runCheck throws when it cannot undo what the check itself did. The
+				// worker's edits are still in the tree at that point, and leaving them
+				// there would let the next commit pick up a task that never passed.
+				await restoreTree(ctx.workspaceRel, t0.tree, t0).catch(() => {});
+				const back = await treeFingerprint(ctx.workspaceRel).catch(() => null);
+				const reverted = back !== null && sameFingerprint(back, t0);
+				throw new Error(
+					`${err instanceof Error ? err.message : String(err)} ${reverted ? "The task's changes were reverted." : "The task's changes could not all be reverted; read git_status before committing."}`
+				);
+			}
+			verdict = judge(checked);
 			if (aborted()) throw stopped();
 			if (verdict.ok) {
 				finalTier = t;
@@ -329,7 +337,7 @@ async function dispatch(ctx: DelegateContext, a: Record<string, unknown>): Promi
 		}
 
 		outcome = 'failed';
-		await restoreTree(ctx.workspaceRel, t0.tree);
+		await restoreTree(ctx.workspaceRel, t0.tree, t0);
 		announce('error', kind, 'check failed, reverted');
 		const tiers = [...new Set(ladder.slice(0, runs))].join(', ');
 		return finish([

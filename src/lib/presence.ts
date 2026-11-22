@@ -65,6 +65,7 @@ export const TOOL_KIND: Record<string, ToolKind> = {
 	write_file: 'code',
 	edit_file: 'code',
 	bash: 'code',
+	run_command: 'code',
 	git_commit: 'code',
 	git_push: 'code',
 	update_plan: 'code',

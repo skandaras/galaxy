@@ -10,13 +10,26 @@ export interface ExecResult {
 	stderr: string;
 }
 
+export interface ExecOptions {
+	cwdRel: string;
+	timeoutMs?: number;
+	/**
+	 * Paths under the working directory the command may read but not write.
+	 * Only the docker executor can enforce this; the local one runs in the app
+	 * process and ignores it, which is why `run_command` is withheld there.
+	 */
+	readOnly?: string[];
+}
+
 export interface CommandExecutor {
 	readonly kind: 'local' | 'docker';
 	/** Run a shell command with cwd given relative to the data dir. */
-	exec(command: string, opts: { cwdRel: string; timeoutMs?: number }): Promise<ExecResult>;
+	exec(command: string, opts: ExecOptions): Promise<ExecResult>;
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+/** One `/wait` request's share of a deadline: under undici's 300 s body timeout. */
+const WAIT_SLICE_MS = 240_000;
 const MAX_OUTPUT = 200_000;
 /**
  * How the cap is split when output overruns it.
@@ -177,7 +190,7 @@ async function withRunnerSlot<T>(fn: () => Promise<T>): Promise<T> {
 class LocalExecutor implements CommandExecutor {
 	readonly kind = 'local' as const;
 
-	exec(command: string, opts: { cwdRel: string; timeoutMs?: number }): Promise<ExecResult> {
+	exec(command: string, opts: ExecOptions): Promise<ExecResult> {
 		return new Promise((resolve) => {
 			cpExec(
 				command,
@@ -224,7 +237,8 @@ export class DockerExecutor implements CommandExecutor {
 		private apiUrl: string,
 		private image: string,
 		private volume: string,
-		private network: string | null
+		private network: string | null,
+		private waitSliceMs = WAIT_SLICE_MS
 	) {}
 
 	/**
@@ -240,7 +254,7 @@ export class DockerExecutor implements CommandExecutor {
 		});
 	}
 
-	exec(command: string, opts: { cwdRel: string; timeoutMs?: number }): Promise<ExecResult> {
+	exec(command: string, opts: ExecOptions): Promise<ExecResult> {
 		return withRunnerSlot(() => this.run(command, opts));
 	}
 
@@ -280,7 +294,7 @@ export class DockerExecutor implements CommandExecutor {
 	 * log rotation. Everything else is the isolation itself and is never optional:
 	 * the mount, the network, the memory cap, the process cap.
 	 */
-	private createBody(command: string, cwdRel: string, tuned: boolean): string {
+	private createBody(command: string, cwdRel: string, tuned: boolean, readOnly: string[] = []): string {
 		const cpus = runnerCpus();
 		return JSON.stringify({
 			Image: this.image,
@@ -294,7 +308,16 @@ export class DockerExecutor implements CommandExecutor {
 						Source: this.volume,
 						Target: `/data/${cwdRel}`,
 						VolumeOptions: { Subpath: cwdRel }
-					}
+					},
+					// Laid over the writable mount above; Docker mounts the shorter
+					// target first, so the read-only one wins for its subtree.
+					...readOnly.map((p) => ({
+						Type: 'volume',
+						Source: this.volume,
+						Target: `/data/${cwdRel}/${p}`,
+						ReadOnly: true,
+						VolumeOptions: { Subpath: `${cwdRel}/${p}` }
+					}))
 				],
 				...(this.network ? { NetworkMode: this.network } : {}),
 				Memory: 1024 * 1024 * 1024,
@@ -318,15 +341,13 @@ export class DockerExecutor implements CommandExecutor {
 		});
 	}
 
-	private async run(
-		command: string,
-		opts: { cwdRel: string; timeoutMs?: number }
-	): Promise<ExecResult> {
+	private async run(command: string, opts: ExecOptions): Promise<ExecResult> {
+		const readOnly = (opts.readOnly ?? []).map(normaliseSubpath);
 		const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		await this.requireSubpathMounts();
 		let create = await this.api('/containers/create', {
 			method: 'POST',
-			body: this.createBody(command, opts.cwdRel, true)
+			body: this.createBody(command, opts.cwdRel, true, readOnly)
 		});
 		// A tuning field the daemon will not take must cost a warning, not the
 		// feature. Shipping `NanoCpus: 2e9` to a one-CPU host 400'd every single
@@ -338,7 +359,7 @@ export class DockerExecutor implements CommandExecutor {
 			warnOnce(`Docker refused the runner's tuning fields, retrying without them: ${detail.slice(0, 200)}`);
 			create = await this.api('/containers/create', {
 				method: 'POST',
-				body: this.createBody(command, opts.cwdRel, false)
+				body: this.createBody(command, opts.cwdRel, false, readOnly)
 			});
 		}
 		if (!create.ok) {
@@ -350,20 +371,9 @@ export class DockerExecutor implements CommandExecutor {
 			if (!start.ok && start.status !== 304) {
 				throw new Error(`Runner start failed (${start.status})`);
 			}
-			// `AbortSignal.timeout` throws rather than returning a non-ok response,
-			// so the 124 below was unreachable: a command that ran over its deadline
-			// raised AbortError instead of reporting the timeout code the caller was
-			// written to expect.
-			let timedOut = false;
-			const wait = await this.api(`/containers/${Id}/wait`, {
-				method: 'POST',
-				signal: AbortSignal.timeout(timeoutMs)
-			}).catch((err) => {
-				if (!isAbort(err)) throw err;
-				timedOut = true;
-				return null;
-			});
-			const StatusCode: number = wait?.ok ? (await wait.json()).StatusCode : 124;
+			const exit = await this.waitForExit(Id, timeoutMs);
+			const timedOut = exit === null;
+			const StatusCode = exit ?? 124;
 			const { stdout, stderr } = await this.readLogs(Id);
 			return {
 				code: StatusCode,
@@ -374,6 +384,43 @@ export class DockerExecutor implements CommandExecutor {
 			};
 		} finally {
 			await this.api(`/containers/${Id}?force=true`, { method: 'DELETE' }).catch(() => {});
+		}
+	}
+
+	/**
+	 * The container's exit code, or null when the deadline passed first.
+	 *
+	 * Docker answers `/wait` with its headers at once and the body when the
+	 * container exits, and undici gives up on a body that has not arrived in
+	 * 300 seconds. So every command past five minutes failed with
+	 * UND_ERR_BODY_TIMEOUT, whatever timeout it had asked for, including this
+	 * repository's own 900-second pre-push hook. The wait is asked in slices
+	 * shorter than that instead; asking again after an exit answers at once,
+	 * and the container is never removed before the `finally` in run().
+	 *
+	 * The deadline also covers reading the body. It used to cover only the
+	 * request, which returns with the headers, so a command that ran over threw
+	 * from `json()` instead of reporting 124.
+	 */
+	private async waitForExit(id: string, timeoutMs: number): Promise<number | null> {
+		// Monotonic: one relative timer used to cover the whole wait, and a host
+		// clock stepping mid-command must not stretch or cut a deadline now split
+		// across requests.
+		const deadline = performance.now() + timeoutMs;
+		for (;;) {
+			const remaining = Math.ceil(deadline - performance.now());
+			if (remaining <= 0) return null;
+			try {
+				const res = await this.api(`/containers/${id}/wait`, {
+					method: 'POST',
+					signal: AbortSignal.timeout(Math.min(remaining, this.waitSliceMs))
+				});
+				if (!res.ok) return 124;
+				const { StatusCode } = (await res.json()) as { StatusCode?: number };
+				return typeof StatusCode === 'number' ? StatusCode : 124;
+			} catch (err) {
+				if (!isAbort(err)) throw err;
+			}
 		}
 	}
 
@@ -404,6 +451,13 @@ export class DockerExecutor implements CommandExecutor {
 		}
 		return demuxer.finish();
 	}
+}
+
+/** A read-only path must stay inside the working directory it is laid over. */
+function normaliseSubpath(p: string): string {
+	const parts = p.split('/').filter((s) => s && s !== '.');
+	if (!parts.length || parts.includes('..')) throw new Error(`Not a path under the working directory: ${p}`);
+	return parts.join('/');
 }
 
 /** Once per process: this is a host misconfiguration, not a per-command event. */

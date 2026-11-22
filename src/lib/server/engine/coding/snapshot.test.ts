@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataDir } from '$lib/server/db';
 import {
@@ -17,6 +17,8 @@ const abs = (...p: string[]) => join(dataDir, WS, ...p);
 const git = (cmd: string) =>
 	execSync(`git ${cmd}`, { cwd: abs(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const status = () => git('status --porcelain=v1 -uall');
+/** Paths marked with git add -N: against the index, the only kind that reads as added. */
+const intents = () => git('diff --name-only -z --diff-filter=A').split('\0').filter(Boolean);
 
 beforeEach(() => {
 	rmSync(abs(), { recursive: true, force: true });
@@ -81,6 +83,23 @@ describe('treeFingerprint', () => {
 		const before = status();
 		await fp();
 		expect(status()).toBe(before);
+	});
+
+	it('changes when only what is staged changed', async () => {
+		writeFileSync(abs('src', 'a.txt'), 'edited\n');
+		const before = await fp();
+		git('add src/a.txt');
+		const after = await fp();
+		expect(after.tree).toBe(before.tree);
+		expect(sameFingerprint(before, after)).toBe(false);
+	});
+
+	it('changes when an intent-to-add empty file becomes staged', async () => {
+		writeFileSync(abs('src', 'empty.txt'), '');
+		git('add -N src/empty.txt');
+		const before = await fp();
+		git('add src/empty.txt');
+		expect(sameFingerprint(before, await fp())).toBe(false);
 	});
 
 	it('reads a repository with no commits', async () => {
@@ -154,6 +173,240 @@ describe('restoreTree', () => {
 		expect(status()).toBe(statusAtT0);
 	});
 
+	it('keeps a file that was ignored before a worker deleted the rule', async () => {
+		mkdirSync(abs('cache'), { recursive: true });
+		writeFileSync(abs('cache', 'built.bin'), 'expensive');
+		const t0 = await fp();
+		writeFileSync(abs('.gitignore'), '');
+		await restoreTree(WS, t0.tree, t0);
+		expect(readFileSync(abs('cache', 'built.bin'), 'utf8')).toBe('expensive');
+		expect(readFileSync(abs('.gitignore'), 'utf8')).toBe('cache/\n');
+	});
+
+	it('removes a .gitignore the worker added, and what it hid', async () => {
+		const t0 = await fp();
+		const statusAtT0 = status();
+		mkdirSync(abs('sub'), { recursive: true });
+		writeFileSync(abs('sub', '.gitignore'), 'junk\n');
+		writeFileSync(abs('sub', 'junk'), 'x\n');
+		await restoreTree(WS, t0.tree, t0);
+		expect(existsSync(abs('sub', '.gitignore'))).toBe(false);
+		expect(existsSync(abs('sub', 'junk'))).toBe(false);
+		expect(status()).toBe(statusAtT0);
+	});
+
+	it('unstages an edit the worker staged to a tracked file', async () => {
+		const t0 = await fp();
+		writeFileSync(abs('src', 'a.txt'), 'worker\n');
+		git('add src/a.txt');
+		await restoreTree(WS, t0.tree, t0);
+		expect(git('diff --cached --name-only')).toBe('');
+		expect(readFileSync(abs('src', 'a.txt'), 'utf8')).toBe('one\n');
+		expect(status()).toBe('');
+	});
+
+	it('keeps what the person had staged before the task', async () => {
+		writeFileSync(abs('src', 'a.txt'), 'mine\n');
+		git('add src/a.txt');
+		const t0 = await fp();
+		const statusAtT0 = status();
+		writeFileSync(abs('src', 'b.txt'), 'worker\n');
+		git('add src/b.txt');
+		await restoreTree(WS, t0.tree, t0);
+		expect(git('diff --cached --name-only').trim()).toBe('src/a.txt');
+		expect(status()).toBe(statusAtT0);
+	});
+
+	it('keeps a path the person had marked with git add -N', async () => {
+		writeFileSync(abs('src', 'intended.txt'), 'later\n');
+		git('add -N src/intended.txt');
+		const t0 = await fp();
+		const statusAtT0 = status();
+		writeFileSync(abs('src', 'b.txt'), 'worker\n');
+		git('add src/b.txt');
+		await restoreTree(WS, t0.tree, t0);
+		expect(status()).toBe(statusAtT0);
+		expect(intents()).toEqual(['src/intended.txt']);
+	});
+
+	it('puts back a directory a worker replaced with a staged file', async () => {
+		mkdirSync(abs('dir'), { recursive: true });
+		writeFileSync(abs('dir', '.gitignore'), 'tmp\n');
+		writeFileSync(abs('dir', 'kept.txt'), 'k\n');
+		git('add -A');
+		git('commit -q -m dir');
+		const t0 = await fp();
+		rmSync(abs('dir'), { recursive: true, force: true });
+		writeFileSync(abs('dir'), 'now a file\n');
+		git('add -A');
+		await restoreTree(WS, t0.tree, t0);
+		expect(readFileSync(abs('dir', 'kept.txt'), 'utf8')).toBe('k\n');
+		expect(readFileSync(abs('dir', '.gitignore'), 'utf8')).toBe('tmp\n');
+		expect(status()).toBe('');
+	});
+
+	it('removes a rule that another added rule was hiding', async () => {
+		const t0 = await fp();
+		mkdirSync(abs('outer', 'inner'), { recursive: true });
+		writeFileSync(abs('outer', '.gitignore'), 'inner/.gitignore\n');
+		writeFileSync(abs('outer', 'inner', '.gitignore'), 'junk\n');
+		writeFileSync(abs('outer', 'inner', 'junk'), 'x\n');
+		await restoreTree(WS, t0.tree, t0);
+		expect(existsSync(abs('outer'))).toBe(false);
+	});
+
+	it('keeps index flags on other paths when the worker staged something', async () => {
+		git('update-index --skip-worktree src/b.txt');
+		const t0 = await fp();
+		writeFileSync(abs('src', 'a.txt'), 'worker\n');
+		git('add src/a.txt');
+		await restoreTree(WS, t0.tree, t0);
+		expect(git('ls-files -t src/b.txt').trim()).toBe('S src/b.txt');
+		expect(git('diff --cached --name-only')).toBe('');
+	});
+
+	it('keeps an intent-to-add entry whose file was deleted', async () => {
+		writeFileSync(abs('src', 'gone.txt'), 'g\n');
+		git('add -N src/gone.txt');
+		rmSync(abs('src', 'gone.txt'));
+		const t0 = await fp();
+		writeFileSync(abs('src', 'a.txt'), 'worker\n');
+		git('add src/a.txt');
+		await restoreTree(WS, t0.tree, t0);
+		expect(git('ls-files src/gone.txt').trim()).toBe('src/gone.txt');
+	});
+
+	it('keeps index flags when the worker did not touch staging', async () => {
+		git('update-index --skip-worktree src/b.txt');
+		const t0 = await fp();
+		writeFileSync(abs('src', 'made.txt'), 'x\n');
+		await restoreTree(WS, t0.tree, t0);
+		expect(git('ls-files -t src/b.txt').trim()).toBe('S src/b.txt');
+	});
+
+	it('round-trips an intent-to-add path whose name git would quote or match', async () => {
+		const name = 'we"ird\t*name';
+		writeFileSync(abs('src', name), 'later\n');
+		writeFileSync(abs('src', 'weXirdXname'), 'other\n');
+		git(`add -N -- ':(literal)src/${name}'`);
+		const t0 = await fp();
+		writeFileSync(abs('src', 'b.txt'), 'worker\n');
+		git('add src/b.txt');
+		await restoreTree(WS, t0.tree, t0);
+		expect(intents()).toEqual([`src/${name}`]);
+	});
+
+	it('removes a file deleted at capture that the worker unstaged and wrote again', async () => {
+		rmSync(abs('src', 'b.txt'));
+		const t0 = await fp();
+		const statusAtT0 = status();
+		git('rm -q --cached src/b.txt');
+		writeFileSync(abs('src', 'b.txt'), 'worker\n');
+		await restoreTree(WS, t0.tree, t0);
+		expect(existsSync(abs('src', 'b.txt'))).toBe(false);
+		expect(status()).toBe(statusAtT0);
+	});
+
+	it('restores ordinary files even when the worker left a repository git cannot stage', async () => {
+		const t0 = await fp();
+		writeFileSync(abs('src', 'a.txt'), 'worker\n');
+		git('add src/a.txt');
+		mkdirSync(abs('src', 'nested'), { recursive: true });
+		execSync('git init -q', { cwd: abs('src', 'nested') });
+		await restoreTree(WS, t0.tree, t0);
+		expect(readFileSync(abs('src', 'a.txt'), 'utf8')).toBe('one\n');
+		expect(git('diff --cached --name-only')).toBe('');
+	});
+
+	it('keeps a pre-existing ignored file the worker force-staged', async () => {
+		writeFileSync(abs('.git', 'info', 'exclude'), 'local.cfg\n');
+		writeFileSync(abs('local.cfg'), 'mine\n');
+		const t0 = await fp();
+		git('add -f local.cfg');
+		await restoreTree(WS, t0.tree, t0);
+		expect(readFileSync(abs('local.cfg'), 'utf8')).toBe('mine\n');
+		expect(git('diff --cached --name-only')).toBe('');
+	});
+
+	it('removes a tracked, ignored file deleted at capture that the worker wrote again', async () => {
+		writeFileSync(abs('cache.cfg'), 'tracked\n');
+		git('add cache.cfg');
+		git('commit -q -m cfg');
+		writeFileSync(abs('.git', 'info', 'exclude'), 'cache.cfg\n');
+		rmSync(abs('cache.cfg'));
+		const t0 = await fp();
+		writeFileSync(abs('cache.cfg'), 'worker\n');
+		git('add -f cache.cfg');
+		await restoreTree(WS, t0.tree, t0);
+		expect(existsSync(abs('cache.cfg'))).toBe(false);
+	});
+
+	it('puts back an index flag the worker cleared', async () => {
+		git('update-index --skip-worktree src/b.txt');
+		const t0 = await fp();
+		git('update-index --no-skip-worktree src/b.txt');
+		expect(sameFingerprint(t0, await fp())).toBe(false);
+		await restoreTree(WS, t0.tree, t0);
+		expect(git('ls-files -t src/b.txt').trim()).toBe('S src/b.txt');
+	});
+
+	it('keeps a directory that stands where the index still tracks a file', async () => {
+		writeFileSync(abs('config'), 'file\n');
+		git('add config');
+		git('commit -q -m config');
+		rmSync(abs('config'));
+		mkdirSync(abs('config'));
+		writeFileSync(abs('config', 'settings.json'), '{}\n');
+		const t0 = await fp();
+		writeFileSync(abs('src', 'a.txt'), 'worker\n');
+		await restoreTree(WS, t0.tree, t0);
+		expect(readFileSync(abs('config', 'settings.json'), 'utf8')).toBe('{}\n');
+	});
+
+	it('removes a symlink the worker put where a deleted, ignored file was', async () => {
+		writeFileSync(abs('cache.cfg'), 'tracked\n');
+		git('add cache.cfg');
+		git('commit -q -m cfg');
+		writeFileSync(abs('.git', 'info', 'exclude'), 'cache.cfg\n');
+		rmSync(abs('cache.cfg'));
+		const t0 = await fp();
+		symlinkSync('src', abs('cache.cfg'));
+		await restoreTree(WS, t0.tree, t0);
+		expect(existsSync(abs('cache.cfg'))).toBe(false);
+		expect(existsSync(abs('src', 'a.txt'))).toBe(true);
+	});
+
+	it('saves the index unchanged by attributes that would filter it', async () => {
+		writeFileSync(abs('.git', 'info', 'attributes'), '* filter=mangle\n');
+		git('config filter.mangle.clean "tr a-z A-Z"');
+		git('config filter.mangle.smudge cat');
+		const t0 = await fp();
+		writeFileSync(abs('src', 'a.txt'), 'worker\n');
+		git('add src/a.txt');
+		await restoreTree(WS, t0.tree, t0);
+		expect(git('diff --cached --name-only')).toBe('');
+	});
+
+	it('refuses to write the index while another git holds its lock', async () => {
+		const t0 = await fp();
+		writeFileSync(abs('src', 'a.txt'), 'worker\n');
+		git('add src/a.txt');
+		writeFileSync(abs('.git', 'index.lock'), '');
+		try {
+			await expect(restoreTree(WS, t0.tree, t0)).rejects.toThrow(/Could not restore/);
+		} finally {
+			rmSync(abs('.git', 'index.lock'), { force: true });
+		}
+	});
+
+	it('leaves no lock behind when the saved index cannot be read', async () => {
+		const t0 = await fp();
+		writeFileSync(abs('src', 'a.txt'), 'worker\n');
+		git('add src/a.txt');
+		await expect(restoreTree(WS, t0.tree, { ...t0, indexBlob: '0'.repeat(40) })).rejects.toThrow(/Could not restore/);
+		expect(existsSync(abs('.git', 'index.lock'))).toBe(false);
+	});
+
 	it('throws when it cannot restore', async () => {
 		await expect(restoreTree(WS, '0'.repeat(40))).rejects.toThrow(/Could not restore/);
 	});
@@ -218,6 +471,47 @@ describe('runCheck', () => {
 		expect(git('symbolic-ref HEAD').trim()).toBe('refs/heads/main');
 		expect(readFileSync(abs('src', 'a.txt'), 'utf8')).toBe('edited\n');
 		expect(status()).toBe(statusBefore);
+	});
+
+	it('removes a file hidden by an ignore rule the command added', async () => {
+		// The file is invisible to a fingerprint taken under the command's own
+		// .gitignore, so the report names only the rule; the restore puts the
+		// rules back before it cleans, which is what removes the file.
+		const r = await runCheck(WS, 'echo hidden/ >> .gitignore && mkdir hidden && echo x > hidden/f');
+		expect(r.wrote).toContain('.gitignore');
+		expect(existsSync(abs('hidden', 'f'))).toBe(false);
+		expect(readFileSync(abs('.gitignore'), 'utf8')).toBe('cache/\n');
+	});
+
+	it('counts a check that only marks a path with git add -N as a write', async () => {
+		writeFileSync(abs('src', 'untracked.txt'), 'u\n');
+		const r = await runCheck(WS, 'git add -N src/untracked.txt');
+		expect(r.wrote).toContain('staged');
+		expect(intents()).toEqual([]);
+	});
+
+	it('leaves local edits alone when the check changed only what is staged', async () => {
+		git('update-index --assume-unchanged src/b.txt');
+		writeFileSync(abs('src', 'b.txt'), 'local edit\n');
+		writeFileSync(abs('src', 'u.txt'), 'u\n');
+		const r = await runCheck(WS, 'git add -N src/u.txt');
+		expect(r.wrote).toContain('staged');
+		expect(readFileSync(abs('src', 'b.txt'), 'utf8')).toBe('local edit\n');
+		expect(intents()).toEqual([]);
+	});
+
+	it('says what it could not undo rather than reporting it reverted', async () => {
+		// git clean leaves a nested repository in place.
+		await expect(
+			runCheck(
+				WS,
+				'echo nested/ >> .gitignore && mkdir nested && cd nested && git init -q && echo x > f && git add f && git -c user.email=t@t -c user.name=t commit -qm n'
+			)
+		).rejects.toThrow(/not all of it could be undone[\s\S]*nested/);
+	});
+
+	it('refuses to report success when the command removed the git metadata', async () => {
+		await expect(runCheck(WS, 'rm -rf .git')).rejects.toThrow(/git metadata/);
 	});
 
 	it('keeps the tail of long output and scrubs credentials', async () => {

@@ -6,6 +6,7 @@ import { toolResultMaxChars } from '../limits';
 import { getExecutor } from './executor';
 import { HookFailure, runRepoHooks, type HookStage } from './hooks';
 import { openPullRequest, recordPullRequest } from './pull-request';
+import { fenced, runCheck } from './snapshot';
 import { setPlan, type PlanItem } from './state';
 import { gitAuthArgs, safeJoin, scrubSecrets, shellQuote, workspaceAbs } from './workspace';
 
@@ -39,6 +40,11 @@ export interface CodingToolContext {
 	baseBranch: string;
 	/** Branch this session works on, and the head of any pull request. */
 	workBranch: string;
+	/**
+	 * Whether a command can be kept from writing outside the work tree and into
+	 * `.git`. Defaults to whether the executor is docker; tests set it.
+	 */
+	probesIsolated?: boolean;
 }
 
 /**
@@ -419,6 +425,53 @@ export function bashTool(ctx: CodingToolContext): LoopTool {
 	};
 }
 
+/** Whether this host's executor can keep a probe out of `.git` and the rest of the data directory. */
+export function probesIsolated(): boolean {
+	return getExecutor().kind === 'docker';
+}
+
+/**
+ * A shell for the modes that must not change the repository.
+ *
+ * Plan mode and the overseer had no way to run anything, so "does this build",
+ * "what version of Blender is this script written for" or "what does the smoke
+ * test print" became a question for the person. The command runs bracketed by
+ * the same fingerprint as a task check: whatever it writes to a tracked or
+ * unignored path is put back, and only ignored output (a build cache, renders in
+ * an ignored directory) survives. The repository's content is unchanged either way.
+ */
+export function runCommandTool(ctx: CodingToolContext): LoopTool {
+	return {
+		def: {
+			name: 'run_command',
+			description:
+				'Run a shell command in the repository root to find something out: a test, a build, a ' +
+				'version check, a script that prints or renders. 120s timeout. Anything the command writes ' +
+				'to a file git tracks or would track is reverted afterwards and listed in the result; output ' +
+				'written under a git-ignored path is kept, so write renders and logs there. .git is read-only, ' +
+				'so git commands that write (add, commit, checkout) fail. Each call runs in a fresh shell; ' +
+				'chain steps with && in one command.',
+			parameters: {
+				type: 'object',
+				properties: { command: { type: 'string' } },
+				required: ['command']
+			}
+		},
+		describe: (a) => String(a.command ?? '').slice(0, 120),
+		execute: async (a) => {
+			const command = String(a.command ?? '').trim();
+			if (!command) throw new Error('command is required');
+			const r = await runCheck(ctx.workspaceRel, command, {
+				timeoutMs: 120_000,
+				outputChars: maxFileChars()
+			});
+			const parts = [`exit ${r.code}${r.timedOut ? ' (timed out after 120s and was killed)' : ''}`, fenced(r.output)];
+			if (r.wrote) parts.push(`The command changed the work tree, and these changes were undone:\n${fenced(r.wrote)}`);
+			return parts.join('\n');
+		}
+	};
+}
+
 /** Everything that leaves the workspace or records progress: the orchestrator keeps these and no others. */
 export function shipTools(ctx: CodingToolContext): LoopTool[] {
 	return [
@@ -553,15 +606,20 @@ export function shipTools(ctx: CodingToolContext): LoopTool[] {
 }
 
 /**
- * The coding toolset. Plan mode offers only the read-only tools, so a planning
- * session physically cannot modify anything. Orchestrate adds the ship tools but
- * no file or shell tool: its changes arrive through dispatched workers, whose
- * writes the check protocol can verify and revert.
+ * The coding toolset. Plan mode offers the read-only tools and `run_command`,
+ * whose writes are reverted, so a planning session cannot modify the repository.
+ * Orchestrate adds the ship tools but no file tool and no unrestricted shell: its
+ * changes arrive through dispatched workers, whose writes the check protocol can
+ * verify and revert.
  */
 export function codingTools(ctx: CodingToolContext): LoopTool[] {
 	const readOnly = readOnlyCodingTools(ctx);
-	if (ctx.mode === 'plan') return readOnly;
-	if (ctx.mode === 'orchestrate') return [...readOnly, ...shipTools(ctx)];
+	// The local executor runs commands in the app process with the whole data
+	// directory in reach, so the revert cannot cover what a probe might write.
+	// The modes that promise not to change anything go without, there.
+	const probe = (ctx.probesIsolated ?? probesIsolated()) ? [runCommandTool(ctx)] : [];
+	if (ctx.mode === 'plan') return [...readOnly, ...probe];
+	if (ctx.mode === 'orchestrate') return [...readOnly, ...probe, ...shipTools(ctx)];
 	return [...readOnly, ...fileWriteTools(ctx), bashTool(ctx), ...shipTools(ctx)];
 }
 
