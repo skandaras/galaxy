@@ -13,6 +13,7 @@ import {
 	restoreHead,
 	restoreTree,
 	runCheck,
+	sameFingerprint,
 	treeFingerprint,
 	type CheckResult,
 	type Fingerprint,
@@ -244,7 +245,7 @@ async function dispatch(ctx: DelegateContext, a: Record<string, unknown>): Promi
 				// Before the first run nothing has changed; after it, earlier
 				// attempts are in the tree and no longer wanted.
 				if (i > 0) {
-					await restoreTree(ctx.workspaceRel, t0.tree);
+					await restoreTree(ctx.workspaceRel, t0.tree, t0);
 					throw new Error(`${err instanceof Error ? err.message : String(err)} The task's changes were reverted.`);
 				}
 				throw err;
@@ -277,7 +278,7 @@ async function dispatch(ctx: DelegateContext, a: Record<string, unknown>): Promi
 			lastRunTier = t;
 			if (aborted()) throw stopped();
 			if (res.failure) {
-				await restoreTree(ctx.workspaceRel, t0.tree);
+				await restoreTree(ctx.workspaceRel, t0.tree, t0);
 				throw new Error(`The worker could not run: ${res.failure} The task's changes were reverted.`);
 			}
 			report = res.answer;
@@ -303,9 +304,9 @@ async function dispatch(ctx: DelegateContext, a: Record<string, unknown>): Promi
 				// runCheck throws when it cannot undo what the check itself did. The
 				// worker's edits are still in the tree at that point, and leaving them
 				// there would let the next commit pick up a task that never passed.
-				await restoreTree(ctx.workspaceRel, t0.tree).catch(() => {});
+				await restoreTree(ctx.workspaceRel, t0.tree, t0).catch(() => {});
 				const back = await treeFingerprint(ctx.workspaceRel).catch(() => null);
-				const reverted = back !== null && back.tree === t0.tree;
+				const reverted = back !== null && sameFingerprint(back, t0);
 				throw new Error(
 					`${err instanceof Error ? err.message : String(err)} ${reverted ? "The task's changes were reverted." : "The task's changes could not all be reverted; read git_status before committing."}`
 				);
@@ -336,7 +337,7 @@ async function dispatch(ctx: DelegateContext, a: Record<string, unknown>): Promi
 		}
 
 		outcome = 'failed';
-		await restoreTree(ctx.workspaceRel, t0.tree);
+		await restoreTree(ctx.workspaceRel, t0.tree, t0);
 		announce('error', kind, 'check failed, reverted');
 		const tiers = [...new Set(ladder.slice(0, runs))].join(', ');
 		return finish([

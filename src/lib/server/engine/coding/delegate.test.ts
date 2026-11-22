@@ -303,6 +303,14 @@ describe('a task that fails', () => {
 		expect(readFileSync(abs('src', 'a.txt'), 'utf8')).not.toContain('done');
 	});
 
+	it('leaves nothing staged after a worker that staged its edit failed', async () => {
+		runs = [{ calls: [write('x\n'), { name: 'bash', args: { command: 'git add src/a.txt' } }] }, { calls: [write('y\n')] }];
+		const { tool } = harness();
+		const out = await tool.execute({ tier: 1, task: 'Put done in a.txt', check: CHECK });
+		expect(out).toContain('Task failed');
+		expect(git('diff --cached --name-only')).toBe('');
+	});
+
 	it('names every tier it tried', async () => {
 		const { tool } = harness();
 		const out = await tool.execute({ tier: 2, task: 'Put done in a.txt', check: CHECK });
