@@ -740,11 +740,11 @@ async function checkpoint(
 export function buildCodingSystemPrompt(base: string, session: CodeSession): string {
 	const modeNote =
 		session.mode === 'plan'
-			? `You are in PLAN mode: only read-only tools are available. Explore the repository and produce a concrete, numbered implementation plan as your final answer. Do NOT attempt changes; the user must approve the plan first.`
+			? `You are in PLAN mode: you can read the repository and run commands with run_command, but not change it. Anything run_command writes to a tracked file is reverted, so write renders and logs under a git-ignored path. Explore, run what you need to answer your own questions, and produce a concrete, numbered implementation plan as your final answer. Do NOT attempt changes; the user must approve the plan first.`
 			: session.mode === 'orchestrate'
 				// The mock provider picks its script by these substrings, so each mode's
 				// note must carry its own marker and neither of the others.
-				? `You are in ORCHESTRATE mode. You cannot write or edit files and you have no shell. Workers write the code; you plan, delegate, verify and ship. Delegate with dispatch_task, one task at a time, each with a check command. Read the diff yourself before you commit. Committing and pushing run the repository's own checks; when one refuses, send a task whose check is that command. If dispatch_task is not among your tools, say so and stop.`
+				? `You are in ORCHESTRATE mode. You cannot write or edit files. run_command runs a command to find something out, and reverts whatever it writes to tracked files. Workers write the code; you plan, delegate, verify and ship. Delegate with dispatch_task, one task at a time, each with a check command. Read the diff yourself before you commit. Committing and pushing run the repository's own checks; when one refuses, send a task whose check is that command. If dispatch_task is not among your tools, say so and stop.`
 				: [
 						`You are in IMPLEMENT mode: make the changes. Read before you write, keep diffs minimal, run relevant checks with bash when available, then commit with git_commit and push with git_push. Finish with a short summary of what changed.`,
 						// Both of these target ways a turn used to end mid-task: running

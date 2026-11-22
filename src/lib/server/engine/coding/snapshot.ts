@@ -170,18 +170,27 @@ export async function restoreHead(workspaceRel: string, before: Fingerprint): Pr
 
 export interface CheckResult {
 	code: number;
-	/** stdout and stderr, scrubbed, the last 1500 characters. */
+	/** stdout and stderr, scrubbed, the last 1500 characters unless the caller asked for more. */
 	output: string;
 	timedOut: boolean;
 	/** What the command changed in the work tree or in HEAD, already reverted; null when it changed nothing. */
 	wrote: string | null;
 }
 
-export async function runCheck(workspaceRel: string, command: string): Promise<CheckResult> {
+/**
+ * `outputChars` is wider for a probe than for a task check: a check's output is
+ * evidence the overseer skims, and a probe's is the thing it ran the command to read.
+ */
+export async function runCheck(
+	workspaceRel: string,
+	command: string,
+	opts: { timeoutMs?: number; outputChars?: number } = {}
+): Promise<CheckResult> {
 	const before = await treeFingerprint(workspaceRel);
 	if (!before) throw new Error('The workspace is not a git work tree, so a check cannot be run safely.');
 
-	const timeoutMs = taskCheckTimeoutMs();
+	const timeoutMs = opts.timeoutMs ?? taskCheckTimeoutMs();
+	const outputChars = opts.outputChars ?? MAX_OUTPUT_CHARS;
 	const started = Date.now();
 	const res = await getExecutor().exec(command, { cwdRel: workspaceRel, timeoutMs });
 	// The docker executor reports 124; the local one reports whatever the
@@ -204,7 +213,7 @@ export async function runCheck(workspaceRel: string, command: string): Promise<C
 	const combined = scrubSecrets([res.stdout, res.stderr].filter(Boolean).join('\n')).trim();
 	return {
 		code: res.code,
-		output: combined.length > MAX_OUTPUT_CHARS ? `…${combined.slice(-MAX_OUTPUT_CHARS)}` : combined,
+		output: combined.length > outputChars ? `…${combined.slice(-outputChars)}` : combined,
 		timedOut,
 		wrote
 	};

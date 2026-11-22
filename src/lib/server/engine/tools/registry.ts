@@ -145,8 +145,21 @@ export function builtinDescriptors(): ToolDescriptor[] {
 		workBranch: ''
 	};
 	const planTools = codingTools(ctx);
+	const implementNames = new Set(codingTools({ ...ctx, mode: 'implement' }).map((t) => t.def.name));
 	const planNames = new Set(planTools.map((t) => t.def.name));
-	add(planTools, 'coding', ['coding']);
+	add(
+		planTools.filter((t) => implementNames.has(t.def.name)),
+		'coding',
+		['coding']
+	);
+	// The reverse case: run_command is how the modes without bash run anything,
+	// and implement has bash, so listing it with no caveat would say every mode has it.
+	add(
+		planTools.filter((t) => !implementNames.has(t.def.name)),
+		'coding',
+		['coding'],
+		'plan and orchestrate modes; implement mode runs commands with bash'
+	);
 	add(
 		codingTools({ ...ctx, mode: 'implement' }).filter((t) => !planNames.has(t.def.name)),
 		'coding',

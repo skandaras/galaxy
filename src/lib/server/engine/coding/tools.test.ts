@@ -206,10 +206,11 @@ describe('the toolset offered', () => {
 		expect(names).not.toContain('git_push');
 	});
 
-	it('offers exactly the read-only set in plan mode', () => {
-		expect(codingTools({ ...ctx, mode: 'plan' }).map((t) => t.def.name)).toEqual(
-			readOnlyCodingTools(ctx).map((t) => t.def.name)
-		);
+	it('offers the read-only set and run_command in plan mode', () => {
+		expect(codingTools({ ...ctx, mode: 'plan' }).map((t) => t.def.name)).toEqual([
+			...readOnlyCodingTools(ctx).map((t) => t.def.name),
+			'run_command'
+		]);
 	});
 
 	it('marks the read-only tools parallel-safe and the rest not', () => {
@@ -296,6 +297,7 @@ describe('tool sets by role', () => {
 	it('gives the orchestrator the git tools and nothing that writes code', () => {
 		const got = names(codingTools({ ...ctx, mode: 'orchestrate' }));
 		for (const n of ['write_file', 'edit_file', 'bash']) expect(got).not.toContain(n);
+		expect(got).toContain('run_command');
 		for (const n of ['git_commit', 'git_push', 'open_pull_request', 'update_plan']) {
 			expect(got).toContain(n);
 		}
@@ -307,5 +309,36 @@ describe('tool sets by role', () => {
 		for (const n of ['git_commit', 'git_push', 'open_pull_request', 'update_plan']) {
 			expect(got).not.toContain(n);
 		}
+	});
+});
+
+describe('run_command', () => {
+	const run = (command: string) =>
+		codingTools({ ...ctx, mode: 'plan' })
+			.find((t) => t.def.name === 'run_command')!
+			.execute({ command });
+
+	it('returns what the command printed and how it exited', async () => {
+		const out = await run('echo probing && exit 4');
+		expect(out).toMatch(/^exit 4/);
+		expect(out).toContain('probing');
+	});
+
+	it('puts back a tracked file the command changed, and says so', async () => {
+		const out = await run(`echo changed > notes.md`);
+		expect(out).toContain('reverted');
+		expect(out).toContain('notes.md');
+		expect(readFileSync(abs('notes.md'), 'utf8')).toBe('# notes\n');
+	});
+
+	it('removes a new unignored file the command created', async () => {
+		await run('echo x > stray.txt');
+		expect(() => readFileSync(abs('stray.txt'), 'utf8')).toThrow();
+	});
+
+	it('keeps output written to an ignored path, which is where renders go', async () => {
+		const out = await run('echo render > ignored.ts');
+		expect(out).not.toContain('reverted');
+		expect(readFileSync(abs('ignored.ts'), 'utf8')).toBe('render\n');
 	});
 });
