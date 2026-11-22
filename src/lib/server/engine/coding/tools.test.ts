@@ -21,7 +21,9 @@ const ctx: CodingToolContext = {
 	mode: 'implement',
 	repoUrl: 'https://example.invalid/x/y.git',
 	baseBranch: 'main',
-	workBranch: 'galaxy/session-test'
+	workBranch: 'galaxy/session-test',
+	// Tests run on the local executor; the revert logic is what they exercise.
+	probesIsolated: true
 };
 
 const tool = (name: string) => {
@@ -294,6 +296,13 @@ describe('tool sets by role', () => {
 		]);
 	});
 
+	it('withholds run_command where the executor cannot isolate it', () => {
+		for (const mode of ['plan', 'orchestrate'] as const) {
+			const got = names(codingTools({ ...ctx, mode, probesIsolated: false }));
+			expect(got).not.toContain('run_command');
+		}
+	});
+
 	it('gives the orchestrator the git tools and nothing that writes code', () => {
 		const got = names(codingTools({ ...ctx, mode: 'orchestrate' }));
 		for (const n of ['write_file', 'edit_file', 'bash']) expect(got).not.toContain(n);
@@ -321,12 +330,13 @@ describe('run_command', () => {
 	it('returns what the command printed and how it exited', async () => {
 		const out = await run('echo probing && exit 4');
 		expect(out).toMatch(/^exit 4/);
-		expect(out).toContain('probing');
+		// Fenced: what a command prints can come from the repository.
+		expect(out).toMatch(/BEGIN COMMAND OUTPUT ---\nprobing\n--- END COMMAND OUTPUT/);
 	});
 
 	it('puts back a tracked file the command changed, and says so', async () => {
 		const out = await run(`echo changed > notes.md`);
-		expect(out).toContain('reverted');
+		expect(out).toContain('were undone');
 		expect(out).toContain('notes.md');
 		expect(readFileSync(abs('notes.md'), 'utf8')).toBe('# notes\n');
 	});
@@ -338,7 +348,7 @@ describe('run_command', () => {
 
 	it('keeps output written to an ignored path, which is where renders go', async () => {
 		const out = await run('echo render > ignored.ts');
-		expect(out).not.toContain('reverted');
+		expect(out).not.toContain('were undone');
 		expect(readFileSync(abs('ignored.ts'), 'utf8')).toBe('render\n');
 	});
 });

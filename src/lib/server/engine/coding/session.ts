@@ -393,7 +393,7 @@ export function startCodingTurn(opts: {
 	// One ledger for the whole turn: tools are rebuilt per leg, and the paths a
 	// worker wrote in leg 1 are still owed to the state capture after it.
 	const ledger = new DelegationLedger();
-	const systemPrompt = buildCodingSystemPrompt(systemPromptFor(loopTask), session);
+	const basePrompt = systemPromptFor(loopTask);
 	// Read once, before the first leg: it describes the run *before* this one,
 	// and must not start describing this turn's own legs partway through.
 	const priorRun = previousRunNote(chat.id);
@@ -456,6 +456,13 @@ export function startCodingTurn(opts: {
 		let summary: TurnSummary | null = null;
 		let messageId: string | undefined;
 		const tools = buildTools();
+		// From this leg's tools rather than once per turn: the policy behind them
+		// is re-read every leg, and the note must not name a tool the leg lacks.
+		const systemPrompt = buildCodingSystemPrompt(
+			basePrompt,
+			session,
+			tools.some((t) => t.def.name === 'run_command')
+		);
 		await runAgentLoop({
 			job,
 			task: loopTask,
@@ -737,14 +744,18 @@ async function checkpoint(
 }
 
 /** Exported for tests. */
-export function buildCodingSystemPrompt(base: string, session: CodeSession): string {
+export function buildCodingSystemPrompt(base: string, session: CodeSession, canProbe = false): string {
+	// Only where run_command is offered: a note naming a tool the model does not
+	// have sends it looking for one instead of reading the repository.
 	const modeNote =
 		session.mode === 'plan'
-			? `You are in PLAN mode: you can read the repository and run commands with run_command, but not change it. Anything run_command writes to a tracked file is reverted, so write renders and logs under a git-ignored path. Explore, run what you need to answer your own questions, and produce a concrete, numbered implementation plan as your final answer. Do NOT attempt changes; the user must approve the plan first.`
+			? canProbe
+				? `You are in PLAN mode: you can read the repository and run commands with run_command, but not change it. Anything run_command writes to a tracked file is reverted, so write renders and logs under a git-ignored path. Explore, run what you need to answer your own questions, and produce a concrete, numbered implementation plan as your final answer. Do NOT attempt changes; the user must approve the plan first.`
+				: `You are in PLAN mode: only read-only tools are available. Explore the repository and produce a concrete, numbered implementation plan as your final answer. Do NOT attempt changes; the user must approve the plan first.`
 			: session.mode === 'orchestrate'
 				// The mock provider picks its script by these substrings, so each mode's
 				// note must carry its own marker and neither of the others.
-				? `You are in ORCHESTRATE mode. You cannot write or edit files. run_command runs a command to find something out, and reverts whatever it writes to tracked files. Workers write the code; you plan, delegate, verify and ship. Delegate with dispatch_task, one task at a time, each with a check command. Read the diff yourself before you commit. Committing and pushing run the repository's own checks; when one refuses, send a task whose check is that command. If dispatch_task is not among your tools, say so and stop.`
+				? `You are in ORCHESTRATE mode. ${canProbe ? 'You cannot write or edit files. run_command runs a command to find something out, and reverts whatever it writes to tracked files.' : 'You cannot write or edit files and you have no shell.'} Workers write the code; you plan, delegate, verify and ship. Delegate with dispatch_task, one task at a time, each with a check command. Read the diff yourself before you commit. Committing and pushing run the repository's own checks; when one refuses, send a task whose check is that command. If dispatch_task is not among your tools, say so and stop.`
 				: [
 						`You are in IMPLEMENT mode: make the changes. Read before you write, keep diffs minimal, run relevant checks with bash when available, then commit with git_commit and push with git_push. Finish with a short summary of what changed.`,
 						// Both of these target ways a turn used to end mid-task: running

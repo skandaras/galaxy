@@ -217,6 +217,15 @@ describe('orchestrate system prompt', () => {
 	});
 });
 
+describe('mode notes and run_command', () => {
+	it('mentions run_command only where it is offered', () => {
+		for (const mode of ['plan', 'orchestrate'] as const) {
+			expect(buildCodingSystemPrompt('base', sessionRow(mode), true)).toContain('run_command');
+			expect(buildCodingSystemPrompt('base', sessionRow(mode), false)).not.toContain('run_command');
+		}
+	});
+});
+
 describe('orchestrate turn setup', () => {
 	it('offers delegation and shipping and nothing that writes code', () => {
 		const session = sessionRow('orchestrate');

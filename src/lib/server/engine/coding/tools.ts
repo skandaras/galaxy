@@ -6,7 +6,7 @@ import { toolResultMaxChars } from '../limits';
 import { getExecutor } from './executor';
 import { HookFailure, runRepoHooks, type HookStage } from './hooks';
 import { openPullRequest, recordPullRequest } from './pull-request';
-import { runCheck } from './snapshot';
+import { fenced, runCheck } from './snapshot';
 import { setPlan, type PlanItem } from './state';
 import { gitAuthArgs, safeJoin, scrubSecrets, shellQuote, workspaceAbs } from './workspace';
 
@@ -40,6 +40,11 @@ export interface CodingToolContext {
 	baseBranch: string;
 	/** Branch this session works on, and the head of any pull request. */
 	workBranch: string;
+	/**
+	 * Whether a command can be kept from writing outside the work tree and into
+	 * `.git`. Defaults to whether the executor is docker; tests set it.
+	 */
+	probesIsolated?: boolean;
 }
 
 /**
@@ -420,6 +425,11 @@ export function bashTool(ctx: CodingToolContext): LoopTool {
 	};
 }
 
+/** Whether this host's executor can keep a probe out of `.git` and the rest of the data directory. */
+export function probesIsolated(): boolean {
+	return getExecutor().kind === 'docker';
+}
+
 /**
  * A shell for the modes that must not change the repository.
  *
@@ -438,8 +448,9 @@ export function runCommandTool(ctx: CodingToolContext): LoopTool {
 				'Run a shell command in the repository root to find something out: a test, a build, a ' +
 				'version check, a script that prints or renders. 120s timeout. Anything the command writes ' +
 				'to a file git tracks or would track is reverted afterwards and listed in the result; output ' +
-				'written under a git-ignored path is kept, so write renders and logs there. Each call runs ' +
-				'in a fresh shell; chain steps with && in one command.',
+				'written under a git-ignored path is kept, so write renders and logs there. .git is read-only, ' +
+				'so git commands that write (add, commit, checkout) fail. Each call runs in a fresh shell; ' +
+				'chain steps with && in one command.',
 			parameters: {
 				type: 'object',
 				properties: { command: { type: 'string' } },
@@ -454,9 +465,8 @@ export function runCommandTool(ctx: CodingToolContext): LoopTool {
 				timeoutMs: 120_000,
 				outputChars: maxFileChars()
 			});
-			const parts = [`exit ${r.code}${r.timedOut ? ' (timed out after 120s and was killed)' : ''}`];
-			if (r.output) parts.push(r.output);
-			if (r.wrote) parts.push(`--- reverted ---\nThe command changed the work tree, and these changes were undone:\n${r.wrote}`);
+			const parts = [`exit ${r.code}${r.timedOut ? ' (timed out after 120s and was killed)' : ''}`, fenced(r.output)];
+			if (r.wrote) parts.push(`The command changed the work tree, and these changes were undone:\n${fenced(r.wrote)}`);
 			return parts.join('\n');
 		}
 	};
@@ -604,8 +614,12 @@ export function shipTools(ctx: CodingToolContext): LoopTool[] {
  */
 export function codingTools(ctx: CodingToolContext): LoopTool[] {
 	const readOnly = readOnlyCodingTools(ctx);
-	if (ctx.mode === 'plan') return [...readOnly, runCommandTool(ctx)];
-	if (ctx.mode === 'orchestrate') return [...readOnly, runCommandTool(ctx), ...shipTools(ctx)];
+	// The local executor runs commands in the app process with the whole data
+	// directory in reach, so the revert cannot cover what a probe might write.
+	// The modes that promise not to change anything go without, there.
+	const probe = (ctx.probesIsolated ?? probesIsolated()) ? [runCommandTool(ctx)] : [];
+	if (ctx.mode === 'plan') return [...readOnly, ...probe];
+	if (ctx.mode === 'orchestrate') return [...readOnly, ...probe, ...shipTools(ctx)];
 	return [...readOnly, ...fileWriteTools(ctx), bashTool(ctx), ...shipTools(ctx)];
 }
 

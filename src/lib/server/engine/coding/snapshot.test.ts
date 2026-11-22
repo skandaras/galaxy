@@ -220,6 +220,30 @@ describe('runCheck', () => {
 		expect(status()).toBe(statusBefore);
 	});
 
+	it('removes a file hidden by an ignore rule the command added', async () => {
+		// The first fingerprint is taken under the command's own .gitignore, so
+		// the file is invisible until the original rules are back.
+		const r = await runCheck(WS, 'echo hidden/ >> .gitignore && mkdir hidden && echo x > hidden/f');
+		expect(r.wrote).toContain('.gitignore');
+		expect(r.wrote).toContain('hidden/f');
+		expect(existsSync(abs('hidden', 'f'))).toBe(false);
+		expect(readFileSync(abs('.gitignore'), 'utf8')).toBe('cache/\n');
+	});
+
+	it('says what it could not undo rather than reporting it reverted', async () => {
+		// git clean leaves a nested repository in place.
+		await expect(
+			runCheck(
+				WS,
+				'echo nested/ >> .gitignore && mkdir nested && cd nested && git init -q && echo x > f && git add f && git -c user.email=t@t -c user.name=t commit -qm n'
+			)
+		).rejects.toThrow(/not all of it could be undone[\s\S]*nested/);
+	});
+
+	it('refuses to report success when the command removed the git metadata', async () => {
+		await expect(runCheck(WS, 'rm -rf .git')).rejects.toThrow(/git metadata/);
+	});
+
 	it('keeps the tail of long output and scrubs credentials', async () => {
 		const r = await runCheck(
 			WS,

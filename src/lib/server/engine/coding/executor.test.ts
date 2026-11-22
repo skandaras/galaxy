@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { availableParallelism } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { DockerExecutor, demuxDockerLogs, resolveExecutorKind } from './executor';
@@ -400,5 +401,53 @@ describe('the runner mount', () => {
 		const { creates, outcome } = await attempt(null);
 		expect(creates).toHaveLength(0);
 		expect(outcome?.message).toMatch(/GET \/version/);
+	});
+});
+
+/**
+ * Against a real daemon, because only a daemon can say whether a nested
+ * read-only mount is accepted and holds; the stubs above cannot. Opt in with
+ * RUNNER_IT_API_URL, RUNNER_IT_IMAGE (an image with git and sh) and
+ * RUNNER_IT_VOLUME (a volume the test may write a workspace into).
+ */
+const it_ = {
+	api: process.env.RUNNER_IT_API_URL,
+	image: process.env.RUNNER_IT_IMAGE,
+	volume: process.env.RUNNER_IT_VOLUME
+};
+describe.skipIf(!it_.api || !it_.image || !it_.volume)('a read-only path on a real runner', () => {
+	const exec = () => new DockerExecutor(it_.api!, it_.image!, it_.volume!, null);
+	const ws = `workspaces/it-${randomUUID().slice(0, 8)}`;
+
+	it('lets the command read .git and write the work tree, but not change .git', async () => {
+		// The directory has to exist before a runner can be started in it, and
+		// only a runner can make it inside the volume, so the parent is mounted.
+		const seed = await exec().exec(
+			`mkdir -p ${ws} && cd ${ws} && git init -q -b main && git config user.email t@t && git config user.name t && echo one > a.txt && git add -A && git commit -qm init`,
+			{ cwdRel: '.', timeoutMs: 60_000 }
+		);
+		expect(seed.code, seed.stderr).toBe(0);
+
+		try {
+			const r = await exec().exec(
+				'echo two > a.txt && cat a.txt; git rev-parse HEAD >/dev/null && echo read-ok; git add a.txt; echo add=$?; rm -rf .git 2>/dev/null; test -f .git/HEAD && echo meta-kept',
+				{ cwdRel: ws, timeoutMs: 60_000, readOnly: ['.git'] }
+			);
+			expect(r.stdout).toContain('two');
+			expect(r.stdout).toContain('read-ok');
+			expect(r.stdout).not.toContain('add=0');
+			expect(r.stdout).toContain('meta-kept');
+		} finally {
+			await exec().exec(`rm -rf ${ws}`, { cwdRel: '.', timeoutMs: 60_000 });
+		}
+	}, 120_000);
+});
+
+describe('a read-only path', () => {
+	it('must stay inside the working directory', async () => {
+		const exec = new DockerExecutor('http://docker', 'runner:latest', 'vol', null);
+		await expect(exec.exec('true', { cwdRel: 'workspaces/ab12', readOnly: ['../other'] })).rejects.toThrow(
+			/Not a path under the working directory/
+		);
 	});
 });

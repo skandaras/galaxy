@@ -31,6 +31,14 @@ const MAX_OUTPUT_CHARS = 1_500;
 /** Exit code the scripts below use for "not a work tree", apart from a git failure. */
 const NOT_A_REPO = 3;
 
+/** Command output is attacker-reachable (test names, file names, file contents), so it is quoted as data. */
+const OUTPUT_BEGIN = '--- BEGIN COMMAND OUTPUT ---';
+const OUTPUT_END = '--- END COMMAND OUTPUT ---';
+export function fenced(text: string): string {
+	const safe = text.replaceAll(OUTPUT_END, '--- END COMMAND OUTPUT (quoted) ---').replaceAll(OUTPUT_BEGIN, '--- BEGIN COMMAND OUTPUT (quoted) ---');
+	return `${OUTPUT_BEGIN}\n${safe || '(no output)'}\n${OUTPUT_END}`;
+}
+
 /**
  * Run git against a private copy of the index.
  *
@@ -62,7 +70,7 @@ echo "ref $(git symbolic-ref -q HEAD 2>/dev/null)"
 	);
 	if (res.code === NOT_A_REPO) return null;
 	if (res.code !== 0) {
-		throw new Error(`Could not read the work tree: ${scrubSecrets(res.stderr || res.stdout).trim()}`);
+		throw new Error(`Could not read the work tree. Git said, as data:\n${fenced(scrubSecrets(res.stderr || res.stdout).trim())}`);
 	}
 	const field = (name: string) =>
 		res.stdout.split('\n').find((l) => l.startsWith(`${name} `))?.slice(name.length + 1).trim() ?? '';
@@ -117,7 +125,7 @@ GIT_INDEX_FILE="$tmp" git checkout-index -a -f || exit 1
 		{ cwdRel: workspaceRel, timeoutMs: 60_000 }
 	);
 	if (res.code !== 0) {
-		throw new Error(`Could not restore the work tree: ${scrubSecrets(res.stderr || res.stdout).trim()}`);
+		throw new Error(`Could not restore the work tree. Git said, as data:\n${fenced(scrubSecrets(res.stderr || res.stdout).trim())}`);
 	}
 }
 
@@ -164,7 +172,7 @@ export async function restoreHead(workspaceRel: string, before: Fingerprint): Pr
 		timeoutMs: 30_000
 	});
 	if (res.code !== 0) {
-		throw new Error(`Could not put HEAD back: ${scrubSecrets(res.stderr || res.stdout).trim()}`);
+		throw new Error(`Could not put HEAD back. Git said, as data:\n${fenced(scrubSecrets(res.stderr || res.stdout).trim())}`);
 	}
 }
 
@@ -192,22 +200,49 @@ export async function runCheck(
 	const timeoutMs = opts.timeoutMs ?? taskCheckTimeoutMs();
 	const outputChars = opts.outputChars ?? MAX_OUTPUT_CHARS;
 	const started = Date.now();
-	const res = await getExecutor().exec(command, { cwdRel: workspaceRel, timeoutMs });
+	// `.git` is read-only to the command itself, on an executor that can enforce
+	// it. Without that, a command could stage an edit the restore below leaves
+	// in the index, or remove the metadata the restore depends on.
+	const res = await getExecutor().exec(command, { cwdRel: workspaceRel, timeoutMs, readOnly: ['.git'] });
 	// The docker executor reports 124; the local one reports whatever the
 	// killed process left, which is 1, so the clock is the second witness.
 	const timedOut = res.code === 124 || (res.code !== 0 && Date.now() - started >= timeoutMs - 250);
 
-	const after = await treeFingerprint(workspaceRel);
+	let after = await treeFingerprint(workspaceRel);
+	if (!after) {
+		throw new Error(
+			'The command removed the git metadata of the workspace, so what it changed cannot be undone. The workspace needs to be recreated.'
+		);
+	}
 	let wrote: string | null = null;
-	if (after && !sameFingerprint(before, after)) {
+	if (!sameFingerprint(before, after)) {
 		const lines: string[] = [];
 		if (before.head !== after.head || before.ref !== after.ref) {
 			lines.push('HEAD moved: the command made a commit or switched branch.');
 		}
 		if (before.tree !== after.tree) lines.push(await changedPaths(workspaceRel, before.tree, after.tree));
-		wrote = lines.join('\n');
 		if (before.head !== after.head || before.ref !== after.ref) await restoreHead(workspaceRel, before);
 		await restoreTree(workspaceRel, before.tree);
+		// The fingerprint above was taken under the command's ignore rules. One
+		// that added a rule and then wrote a file under it hid that file from the
+		// first pass; with the original .gitignore back, the file shows, so the
+		// tree is measured and cleaned again under the rules it started with.
+		after = await treeFingerprint(workspaceRel);
+		if (after && after.tree !== before.tree) {
+			lines.push(await changedPaths(workspaceRel, before.tree, after.tree));
+			await restoreTree(workspaceRel, before.tree);
+		}
+		// The clean leaves a nested repository alone, and widening it to -ff would
+		// also take one that was there before the command ran. So the result is
+		// measured rather than assumed, and a leftover is reported as one.
+		after = await treeFingerprint(workspaceRel);
+		if (!after || !sameFingerprint(before, after)) {
+			const left = after ? await changedPaths(workspaceRel, before.tree, after.tree) : '';
+			throw new Error(
+				`The command changed the work tree and not all of it could be undone.${left ? ` What is still changed follows as data:\n${fenced(left)}` : ''}`
+			);
+		}
+		wrote = lines.join('\n');
 	}
 
 	const combined = scrubSecrets([res.stdout, res.stderr].filter(Boolean).join('\n')).trim();

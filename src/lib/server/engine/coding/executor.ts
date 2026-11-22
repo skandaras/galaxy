@@ -10,10 +10,21 @@ export interface ExecResult {
 	stderr: string;
 }
 
+export interface ExecOptions {
+	cwdRel: string;
+	timeoutMs?: number;
+	/**
+	 * Paths under the working directory the command may read but not write.
+	 * Only the docker executor can enforce this; the local one runs in the app
+	 * process and ignores it, which is why `run_command` is withheld there.
+	 */
+	readOnly?: string[];
+}
+
 export interface CommandExecutor {
 	readonly kind: 'local' | 'docker';
 	/** Run a shell command with cwd given relative to the data dir. */
-	exec(command: string, opts: { cwdRel: string; timeoutMs?: number }): Promise<ExecResult>;
+	exec(command: string, opts: ExecOptions): Promise<ExecResult>;
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -177,7 +188,7 @@ async function withRunnerSlot<T>(fn: () => Promise<T>): Promise<T> {
 class LocalExecutor implements CommandExecutor {
 	readonly kind = 'local' as const;
 
-	exec(command: string, opts: { cwdRel: string; timeoutMs?: number }): Promise<ExecResult> {
+	exec(command: string, opts: ExecOptions): Promise<ExecResult> {
 		return new Promise((resolve) => {
 			cpExec(
 				command,
@@ -240,7 +251,7 @@ export class DockerExecutor implements CommandExecutor {
 		});
 	}
 
-	exec(command: string, opts: { cwdRel: string; timeoutMs?: number }): Promise<ExecResult> {
+	exec(command: string, opts: ExecOptions): Promise<ExecResult> {
 		return withRunnerSlot(() => this.run(command, opts));
 	}
 
@@ -280,7 +291,7 @@ export class DockerExecutor implements CommandExecutor {
 	 * log rotation. Everything else is the isolation itself and is never optional:
 	 * the mount, the network, the memory cap, the process cap.
 	 */
-	private createBody(command: string, cwdRel: string, tuned: boolean): string {
+	private createBody(command: string, cwdRel: string, tuned: boolean, readOnly: string[] = []): string {
 		const cpus = runnerCpus();
 		return JSON.stringify({
 			Image: this.image,
@@ -294,7 +305,16 @@ export class DockerExecutor implements CommandExecutor {
 						Source: this.volume,
 						Target: `/data/${cwdRel}`,
 						VolumeOptions: { Subpath: cwdRel }
-					}
+					},
+					// Laid over the writable mount above; Docker mounts the shorter
+					// target first, so the read-only one wins for its subtree.
+					...readOnly.map((p) => ({
+						Type: 'volume',
+						Source: this.volume,
+						Target: `/data/${cwdRel}/${p}`,
+						ReadOnly: true,
+						VolumeOptions: { Subpath: `${cwdRel}/${p}` }
+					}))
 				],
 				...(this.network ? { NetworkMode: this.network } : {}),
 				Memory: 1024 * 1024 * 1024,
@@ -318,15 +338,13 @@ export class DockerExecutor implements CommandExecutor {
 		});
 	}
 
-	private async run(
-		command: string,
-		opts: { cwdRel: string; timeoutMs?: number }
-	): Promise<ExecResult> {
+	private async run(command: string, opts: ExecOptions): Promise<ExecResult> {
+		const readOnly = (opts.readOnly ?? []).map(normaliseSubpath);
 		const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		await this.requireSubpathMounts();
 		let create = await this.api('/containers/create', {
 			method: 'POST',
-			body: this.createBody(command, opts.cwdRel, true)
+			body: this.createBody(command, opts.cwdRel, true, readOnly)
 		});
 		// A tuning field the daemon will not take must cost a warning, not the
 		// feature. Shipping `NanoCpus: 2e9` to a one-CPU host 400'd every single
@@ -338,7 +356,7 @@ export class DockerExecutor implements CommandExecutor {
 			warnOnce(`Docker refused the runner's tuning fields, retrying without them: ${detail.slice(0, 200)}`);
 			create = await this.api('/containers/create', {
 				method: 'POST',
-				body: this.createBody(command, opts.cwdRel, false)
+				body: this.createBody(command, opts.cwdRel, false, readOnly)
 			});
 		}
 		if (!create.ok) {
@@ -404,6 +422,13 @@ export class DockerExecutor implements CommandExecutor {
 		}
 		return demuxer.finish();
 	}
+}
+
+/** A read-only path must stay inside the working directory it is laid over. */
+function normaliseSubpath(p: string): string {
+	const parts = p.split('/').filter((s) => s && s !== '.');
+	if (!parts.length || parts.includes('..')) throw new Error(`Not a path under the working directory: ${p}`);
+	return parts.join('/');
 }
 
 /** Once per process: this is a host misconfiguration, not a per-command event. */

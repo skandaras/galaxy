@@ -142,7 +142,9 @@ export function builtinDescriptors(): ToolDescriptor[] {
 		mode: 'plan' as const,
 		repoUrl: '',
 		baseBranch: '',
-		workBranch: ''
+		workBranch: '',
+		// Listed whatever this host's executor, so Admin can see and configure it.
+		probesIsolated: true
 	};
 	const planTools = codingTools(ctx);
 	const implementNames = new Set(codingTools({ ...ctx, mode: 'implement' }).map((t) => t.def.name));
@@ -158,7 +160,7 @@ export function builtinDescriptors(): ToolDescriptor[] {
 		planTools.filter((t) => !implementNames.has(t.def.name)),
 		'coding',
 		['coding'],
-		'plan and orchestrate modes; implement mode runs commands with bash'
+		'plan and orchestrate modes, docker executor only; implement mode runs commands with bash'
 	);
 	add(
 		codingTools({ ...ctx, mode: 'implement' }).filter((t) => !planNames.has(t.def.name)),
