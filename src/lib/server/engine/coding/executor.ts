@@ -28,6 +28,8 @@ export interface CommandExecutor {
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+/** One `/wait` request's share of a deadline: under undici's 300 s body timeout. */
+const WAIT_SLICE_MS = 240_000;
 const MAX_OUTPUT = 200_000;
 /**
  * How the cap is split when output overruns it.
@@ -235,7 +237,8 @@ export class DockerExecutor implements CommandExecutor {
 		private apiUrl: string,
 		private image: string,
 		private volume: string,
-		private network: string | null
+		private network: string | null,
+		private waitSliceMs = WAIT_SLICE_MS
 	) {}
 
 	/**
@@ -368,20 +371,9 @@ export class DockerExecutor implements CommandExecutor {
 			if (!start.ok && start.status !== 304) {
 				throw new Error(`Runner start failed (${start.status})`);
 			}
-			// `AbortSignal.timeout` throws rather than returning a non-ok response,
-			// so the 124 below was unreachable: a command that ran over its deadline
-			// raised AbortError instead of reporting the timeout code the caller was
-			// written to expect.
-			let timedOut = false;
-			const wait = await this.api(`/containers/${Id}/wait`, {
-				method: 'POST',
-				signal: AbortSignal.timeout(timeoutMs)
-			}).catch((err) => {
-				if (!isAbort(err)) throw err;
-				timedOut = true;
-				return null;
-			});
-			const StatusCode: number = wait?.ok ? (await wait.json()).StatusCode : 124;
+			const exit = await this.waitForExit(Id, timeoutMs);
+			const timedOut = exit === null;
+			const StatusCode = exit ?? 124;
 			const { stdout, stderr } = await this.readLogs(Id);
 			return {
 				code: StatusCode,
@@ -392,6 +384,43 @@ export class DockerExecutor implements CommandExecutor {
 			};
 		} finally {
 			await this.api(`/containers/${Id}?force=true`, { method: 'DELETE' }).catch(() => {});
+		}
+	}
+
+	/**
+	 * The container's exit code, or null when the deadline passed first.
+	 *
+	 * Docker answers `/wait` with its headers at once and the body when the
+	 * container exits, and undici gives up on a body that has not arrived in
+	 * 300 seconds. So every command past five minutes failed with
+	 * UND_ERR_BODY_TIMEOUT, whatever timeout it had asked for, including this
+	 * repository's own 900-second pre-push hook. The wait is asked in slices
+	 * shorter than that instead; asking again after an exit answers at once,
+	 * and the container is never removed before the `finally` in run().
+	 *
+	 * The deadline also covers reading the body. It used to cover only the
+	 * request, which returns with the headers, so a command that ran over threw
+	 * from `json()` instead of reporting 124.
+	 */
+	private async waitForExit(id: string, timeoutMs: number): Promise<number | null> {
+		// Monotonic: one relative timer used to cover the whole wait, and a host
+		// clock stepping mid-command must not stretch or cut a deadline now split
+		// across requests.
+		const deadline = performance.now() + timeoutMs;
+		for (;;) {
+			const remaining = Math.ceil(deadline - performance.now());
+			if (remaining <= 0) return null;
+			try {
+				const res = await this.api(`/containers/${id}/wait`, {
+					method: 'POST',
+					signal: AbortSignal.timeout(Math.min(remaining, this.waitSliceMs))
+				});
+				if (!res.ok) return 124;
+				const { StatusCode } = (await res.json()) as { StatusCode?: number };
+				return typeof StatusCode === 'number' ? StatusCode : 124;
+			} catch (err) {
+				if (!isAbort(err)) throw err;
+			}
 		}
 	}
 

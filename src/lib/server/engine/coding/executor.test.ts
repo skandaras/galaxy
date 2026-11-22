@@ -75,6 +75,11 @@ describe('DockerExecutor against a stubbed daemon', () => {
 		logs: Buffer;
 		chunkSize?: number;
 		waitDelayMs?: number;
+		/**
+		 * Answer `/wait` the way the real daemon does: headers at once, the body
+		 * after this long. One entry per call, the last repeating.
+		 */
+		waitBodyDelaysMs?: number[];
 		statusCode?: number;
 		/** Refuse a create whose HostConfig carries this key, as Docker does. */
 		refuseHostConfigKey?: string;
@@ -97,6 +102,26 @@ describe('DockerExecutor against a stubbed daemon', () => {
 			}
 			if (path.endsWith('/start')) return new Response(null, { status: 204 });
 			if (path.endsWith('/wait')) {
+				if (opts.waitBodyDelaysMs) {
+					const n = calls.filter((c) => c.path.endsWith('/wait')).length - 1;
+					const delay = opts.waitBodyDelaysMs[Math.min(n, opts.waitBodyDelaysMs.length - 1)];
+					const body = JSON.stringify({ StatusCode: opts.statusCode ?? 0 });
+					const stream = new ReadableStream<Uint8Array>({
+						start(controller) {
+							const timer = setTimeout(() => {
+								controller.enqueue(new TextEncoder().encode(body));
+								controller.close();
+							}, delay);
+							init?.signal?.addEventListener('abort', () => {
+								clearTimeout(timer);
+								const err = new Error('aborted');
+								err.name = 'TimeoutError';
+								controller.error(err);
+							});
+						}
+					});
+					return new Response(stream, { status: 200 });
+				}
 				if (opts.waitDelayMs) {
 					// Respect the caller's deadline the way fetch does: reject.
 					await new Promise((resolve, reject) => {
@@ -128,13 +153,17 @@ describe('DockerExecutor against a stubbed daemon', () => {
 		return { calls, fetchStub };
 	}
 
-	async function runWith(opts: Parameters<typeof stubDocker>[0], command = 'echo hi') {
+	async function runWith(
+		opts: Parameters<typeof stubDocker>[0],
+		command = 'echo hi',
+		timing: { timeoutMs?: number; waitSliceMs?: number } = {}
+	) {
 		const { calls, fetchStub } = stubDocker(opts);
 		const original = globalThis.fetch;
 		globalThis.fetch = fetchStub as typeof globalThis.fetch;
 		try {
-			const exec = new DockerExecutor('http://docker', 'runner:latest', 'vol', null);
-			const result = await exec.exec(command, { cwdRel: 'work', timeoutMs: 50 });
+			const exec = new DockerExecutor('http://docker', 'runner:latest', 'vol', null, timing.waitSliceMs);
+			const result = await exec.exec(command, { cwdRel: 'work', timeoutMs: timing.timeoutMs ?? 50 });
 			return { result, calls };
 		} finally {
 			globalThis.fetch = original;
@@ -176,6 +205,31 @@ describe('DockerExecutor against a stubbed daemon', () => {
 		expect(result.code).toBe(124);
 		expect(result.stderr).toContain('timed out');
 		expect(result.stdout).toBe('partial');
+	});
+
+	it('waits past one request for a command that outlasts it', async () => {
+		// The real daemon's shape, scaled down: undici drops a body slower than
+		// 300 s, so a ten-minute command has to be waited for more than once.
+		const { result, calls } = await runWith(
+			{ logs: frame(1, 'done'), waitBodyDelaysMs: [500, 500, 10], statusCode: 7 },
+			'sleep',
+			{ timeoutMs: 2_000, waitSliceMs: 40 }
+		);
+		expect(result.code).toBe(7);
+		expect(result.stdout).toBe('done');
+		expect(calls.filter((c) => c.path.endsWith('/wait')).length).toBeGreaterThan(1);
+	});
+
+	it('reports 124 when the deadline passes while the exit code is still to come', async () => {
+		// Headers arrive at once; the deadline used to cover only those, so this
+		// threw from json() instead.
+		const { result, calls } = await runWith({ logs: frame(1, ''), waitBodyDelaysMs: [5_000] }, 'sleep', {
+			timeoutMs: 100,
+			waitSliceMs: 30
+		});
+		expect(result.code).toBe(124);
+		expect(result.stderr).toContain('timed out');
+		expect(calls.some((c) => c.path === '/containers/abc?force=true')).toBe(true);
 	});
 
 	it('puts a deadline on every Docker call, not just the wait', async () => {
